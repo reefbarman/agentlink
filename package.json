@@ -1,0 +1,165 @@
+{
+  "name": "native-claude",
+  "displayName": "Native Claude",
+  "description": "MCP server that provides Claude Code with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
+  "version": "0.5.1",
+  "publisher": "native-claude",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nativeClaude",
+          "title": "Native Claude",
+          "icon": "media/claude.svg"
+        }
+      ]
+    },
+    "views": {
+      "nativeClaude": [
+        {
+          "type": "webview",
+          "id": "nativeClaude.statusView",
+          "name": "Status"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "native-claude.startServer",
+        "title": "Native Claude: Start MCP Server"
+      },
+      {
+        "command": "native-claude.stopServer",
+        "title": "Native Claude: Stop MCP Server"
+      },
+      {
+        "command": "native-claude.showStatus",
+        "title": "Native Claude: Show Server Status"
+      },
+      {
+        "command": "native-claude.acceptDiff",
+        "title": "Accept Changes",
+        "icon": "$(check)"
+      },
+      {
+        "command": "native-claude.acceptDiffMore",
+        "title": "Accept with Options...",
+        "icon": "$(ellipsis)"
+      },
+      {
+        "command": "native-claude.rejectDiff",
+        "title": "Reject Changes",
+        "icon": "$(close)"
+      },
+      {
+        "command": "native-claude.addTrustedCommand",
+        "title": "Native Claude: Add Trusted Command Pattern"
+      },
+      {
+        "command": "native-claude.clearSessionApprovals",
+        "title": "Native Claude: Clear Session Approvals"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "native-claude.acceptDiff",
+          "group": "navigation@1",
+          "when": "nativeClaude.diffPending"
+        },
+        {
+          "command": "native-claude.acceptDiffMore",
+          "group": "navigation@2",
+          "when": "nativeClaude.diffPending"
+        },
+        {
+          "command": "native-claude.rejectDiff",
+          "group": "navigation@3",
+          "when": "nativeClaude.diffPending"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Native Claude",
+      "properties": {
+        "native-claude.port": {
+          "type": "number",
+          "default": 0,
+          "description": "HTTP port for the MCP server. Use 0 (default) for an OS-assigned port — required for multi-window support. Set a fixed port only if you need a stable URL."
+        },
+        "native-claude.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the MCP server on extension activation"
+        },
+        "native-claude.masterBypass": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip ALL approval prompts (file writes and commands auto-approved). Use with caution."
+        },
+        "native-claude.diagnosticDelay": {
+          "type": "number",
+          "default": 1500,
+          "description": "Max milliseconds to wait after file save for diagnostics to settle"
+        },
+        "native-claude.requireAuth": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require auth token on the MCP endpoint (recommended)"
+        },
+        "native-claude.semanticSearchEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable semantic codebase search via Qdrant index (built by Roo Code)"
+        },
+        "native-claude.qdrantUrl": {
+          "type": "string",
+          "default": "http://localhost:6333",
+          "description": "Qdrant vector database URL for semantic codebase search"
+        },
+        "native-claude.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key for embedding queries (semantic search). Falls back to OPENAI_API_KEY env var."
+        },
+        "native-claude.writeRules": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Glob patterns for files that are always auto-approved for writes without showing a diff view. Supports workspace-relative paths (e.g. \"**/*.test.ts\") and absolute paths (e.g. \"/tmp/**\")."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "diff": "^5.2.0",
+    "picomatch": "^4.0.3",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.2.0",
+    "@types/node": "^20.0.0",
+    "@types/picomatch": "^4.0.2",
+    "@types/vscode": "^1.93.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0"
+  }
+}

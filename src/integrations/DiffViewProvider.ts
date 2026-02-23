@@ -1,0 +1,686 @@
+import * as vscode from "vscode";
+import * as path from "path";
+import * as fs from "fs/promises";
+import * as diffLib from "diff";
+
+import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
+
+export type DiffDecision =
+  | "accept"
+  | "accept-session"
+  | "accept-project"
+  | "accept-always"
+  | "reject";
+
+// Module-level pending decision resolver — allows editor title bar commands to resolve the diff
+let pendingDecisionResolve: ((decision: DiffDecision) => void) | null = null;
+
+export function resolveCurrentDiff(decision: DiffDecision): boolean {
+  if (pendingDecisionResolve) {
+    pendingDecisionResolve(decision);
+    pendingDecisionResolve = null;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Show a QuickPick with session/always accept options.
+ * Called from the "more options" toolbar button command.
+ */
+export async function showDiffMoreOptions(): Promise<void> {
+  if (!pendingDecisionResolve) return;
+
+  const items: Array<vscode.QuickPickItem & { decision: DiffDecision }> = [
+    {
+      label: "$(bookmark) Accept for Session",
+      description:
+        "Accept this change and auto-accept future writes in this session",
+      decision: "accept-session",
+    },
+    {
+      label: "$(folder) Accept for Project",
+      description:
+        "Accept this change and auto-accept future writes for this project",
+      decision: "accept-project",
+    },
+    {
+      label: "$(globe) Always Accept",
+      description: "Accept this change and auto-accept all future writes",
+      decision: "accept-always",
+    },
+  ];
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: "Accept with options",
+    placeHolder: "Choose scope for auto-acceptance",
+    ignoreFocusOut: true,
+  });
+
+  if (picked) {
+    resolveCurrentDiff(picked.decision);
+  }
+}
+
+// Per-path mutex to prevent concurrent edits to the same file
+const pathLocks = new Map<string, Promise<void>>();
+const LOCK_TIMEOUT = 60_000; // 60 seconds
+
+export async function withFileLock<T>(
+  filePath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const existing = pathLocks.get(filePath);
+
+  // Create a deferred to control the lock
+  let releaseLock: () => void;
+  const lockPromise = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+  pathLocks.set(filePath, lockPromise);
+
+  // Wait for existing lock with timeout
+  if (existing) {
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(`Lock timeout: another edit to ${filePath} is pending`),
+          ),
+        LOCK_TIMEOUT,
+      ),
+    );
+    try {
+      await Promise.race([existing, timeout]);
+    } catch (err) {
+      pathLocks.delete(filePath);
+      throw err;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    releaseLock!();
+    if (pathLocks.get(filePath) === lockPromise) {
+      pathLocks.delete(filePath);
+    }
+  }
+}
+
+export interface DiffResult {
+  status: "accepted" | "rejected";
+  path: string;
+  operation?: "created" | "modified";
+  user_edits?: string;
+  new_diagnostics?: string;
+  finalContent?: string;
+  reason?: string;
+}
+
+export class DiffViewProvider {
+  private originalContent: string | undefined;
+  private newContent: string | undefined;
+  private relPath: string | undefined;
+  private absolutePath: string | undefined;
+  private activeDiffEditor: vscode.TextEditor | undefined;
+  private preDiagnostics: [vscode.Uri, vscode.Diagnostic[]][] = [];
+  private editType: "create" | "modify" | undefined;
+  private createdDirs: string[] = [];
+  private documentWasOpen = false;
+  private diagnosticDelay: number;
+  private outsideWorkspace = false;
+
+  constructor(diagnosticDelay?: number) {
+    this.diagnosticDelay = diagnosticDelay ?? 1500;
+  }
+
+  async open(
+    absolutePath: string,
+    relPath: string,
+    newContent: string,
+    options?: { outsideWorkspace?: boolean },
+  ): Promise<void> {
+    this.outsideWorkspace = options?.outsideWorkspace ?? false;
+    this.relPath = relPath;
+    this.newContent = newContent;
+    this.absolutePath = absolutePath;
+
+    // Determine create vs modify
+    let fileExists = false;
+    try {
+      await fs.access(this.absolutePath);
+      fileExists = true;
+    } catch {
+      fileExists = false;
+    }
+    this.editType = fileExists ? "modify" : "create";
+
+    // Save dirty document if file exists
+    if (fileExists) {
+      const existingDoc = vscode.workspace.textDocuments.find(
+        (doc) =>
+          doc.uri.scheme === "file" && doc.uri.fsPath === this.absolutePath,
+      );
+      if (existingDoc?.isDirty) {
+        await existingDoc.save();
+      }
+    }
+
+    // Capture pre-edit diagnostics
+    this.preDiagnostics = vscode.languages.getDiagnostics();
+
+    // Read original content
+    if (fileExists) {
+      this.originalContent = await fs.readFile(this.absolutePath, "utf-8");
+    } else {
+      this.originalContent = "";
+    }
+
+    // Create directories for new files
+    if (!fileExists) {
+      this.createdDirs = await createDirectoriesForFile(this.absolutePath);
+      await fs.writeFile(this.absolutePath, "");
+    }
+
+    // Close existing tabs showing this file
+    this.documentWasOpen = false;
+    const tabs = vscode.window.tabGroups.all
+      .flatMap((tg) => tg.tabs)
+      .filter(
+        (tab) =>
+          tab.input instanceof vscode.TabInputText &&
+          tab.input.uri.scheme === "file" &&
+          tab.input.uri.fsPath === this.absolutePath,
+      );
+
+    for (const tab of tabs) {
+      this.documentWasOpen = true;
+      if (!tab.isDirty) {
+        await vscode.window.tabGroups.close(tab);
+      }
+    }
+
+    // Open diff view
+    const fileName = path.basename(this.absolutePath);
+    const leftUri = vscode.Uri.parse(
+      `${DIFF_VIEW_URI_SCHEME}:${fileName}`,
+    ).with({
+      query: Buffer.from(this.originalContent).toString("base64"),
+    });
+    const rightUri = vscode.Uri.file(this.absolutePath);
+
+    const outsidePrefix = this.outsideWorkspace
+      ? "\u26a0 OUTSIDE WORKSPACE: "
+      : "";
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      leftUri,
+      rightUri,
+      `${outsidePrefix}${this.relPath}: ${fileExists ? "Proposed Changes" : "New File"} (Editable)`,
+      { preview: true, preserveFocus: false },
+    );
+
+    // Wait for the diff editor to open
+    await new Promise<void>((resolve) => setTimeout(resolve, 300));
+
+    // Find the diff editor
+    this.activeDiffEditor = vscode.window.visibleTextEditors.find(
+      (editor) =>
+        editor.document.uri.scheme === "file" &&
+        editor.document.uri.fsPath === this.absolutePath,
+    );
+
+    if (!this.activeDiffEditor) {
+      // Fallback: open the file and try again
+      const doc = await vscode.workspace.openTextDocument(this.absolutePath);
+      this.activeDiffEditor = await vscode.window.showTextDocument(doc, {
+        preserveFocus: true,
+      });
+    }
+
+    // Apply new content to the right side
+    const document = this.activeDiffEditor.document;
+    const edit = new vscode.WorkspaceEdit();
+    const fullRange = new vscode.Range(0, 0, document.lineCount, 0);
+    edit.replace(document.uri, fullRange, newContent);
+    await vscode.workspace.applyEdit(edit);
+
+    // Scroll to the first change
+    const firstChangeLine = findFirstChangeLine(
+      this.originalContent,
+      newContent,
+    );
+    if (firstChangeLine >= 0) {
+      const range = new vscode.Range(firstChangeLine, 0, firstChangeLine, 0);
+      this.activeDiffEditor.revealRange(
+        range,
+        vscode.TextEditorRevealType.InCenterIfOutsideViewport,
+      );
+    }
+  }
+
+  async waitForUserDecision(): Promise<DiffDecision> {
+    // Show toolbar buttons via context key
+    await vscode.commands.executeCommand(
+      "setContext",
+      "nativeClaude.diffPending",
+      true,
+    );
+
+    try {
+      return await new Promise<DiffDecision>((resolve) => {
+        let resolved = false;
+
+        const finish = (decision: DiffDecision) => {
+          if (resolved) return;
+          resolved = true;
+          pendingDecisionResolve = null;
+          editorCloseDisposable.dispose();
+          resolve(decision);
+        };
+
+        // Allow editor title bar commands to resolve this decision
+        pendingDecisionResolve = finish;
+
+        // Listen for diff editor being closed (treat as rejection)
+        const editorCloseDisposable =
+          vscode.window.onDidChangeVisibleTextEditors((editors) => {
+            if (resolved) return;
+            const stillOpen = editors.some(
+              (e) =>
+                e.document.uri.scheme === "file" &&
+                e.document.uri.fsPath === this.absolutePath,
+            );
+            if (!stillOpen && this.activeDiffEditor) {
+              finish("reject");
+            }
+          });
+
+        // Show modal dialog (can't be accidentally dismissed by clicking elsewhere)
+        const action = this.editType === "create" ? "create" : "modify";
+        const outsideWarning = this.outsideWorkspace
+          ? " [OUTSIDE WORKSPACE]"
+          : "";
+        const showModal = () => {
+          vscode.window
+            .showWarningMessage(
+              `Claude wants to ${action} ${this.relPath}${outsideWarning}`,
+              {
+                modal: true,
+                detail:
+                  "Review the diff in the editor. You can edit the right side before accepting.",
+              },
+              "Review",
+              "Accept",
+              "For Session",
+              "For Project",
+              "Always",
+              "Reject",
+            )
+            .then(async (choice) => {
+              if (resolved) return;
+              if (choice === "Review") {
+                // Dismiss the modal — user will use editor title bar buttons
+                return;
+              }
+              if (choice === "Accept") finish("accept");
+              else if (choice === "For Session") finish("accept-session");
+              else if (choice === "For Project") finish("accept-project");
+              else if (choice === "Always") finish("accept-always");
+              else if (choice === "Reject") finish("reject");
+              else {
+                // Escape / dismiss — treat as rejection
+                finish("reject");
+              }
+            });
+        };
+        showModal();
+      });
+    } finally {
+      await vscode.commands.executeCommand(
+        "setContext",
+        "nativeClaude.diffPending",
+        false,
+      );
+    }
+  }
+
+  async saveChanges(): Promise<DiffResult> {
+    if (!this.relPath || !this.newContent || !this.activeDiffEditor) {
+      return { status: "accepted", path: this.relPath ?? "" };
+    }
+
+    const document = this.activeDiffEditor.document;
+    const editedContent = document.getText();
+
+    // Save document (triggers format-on-save, etc.)
+    if (document.isDirty) {
+      await document.save();
+    }
+
+    // Show file in normal editor (not diff)
+    await vscode.window.showTextDocument(vscode.Uri.file(this.absolutePath!), {
+      preview: false,
+      preserveFocus: true,
+    });
+
+    // Close diff views
+    await this.closeAllDiffViews();
+
+    // Wait for diagnostics (event-driven with timeout fallback)
+    const newProblems = await this.waitForDiagnostics();
+
+    // Re-read the saved file to get the final content after format-on-save
+    const finalContent = await fs.readFile(this.absolutePath!, "utf-8");
+
+    // Detect user edits by comparing final saved content against what was proposed.
+    // This captures both manual user edits AND format-on-save changes — both are
+    // things Claude needs to know about since the file now differs from what it proposed.
+    // Use 1 line of context to keep the patch compact.
+    const eol = this.newContent.includes("\r\n") ? "\r\n" : "\n";
+    const normalizedFinal = finalContent.replace(/\r\n|\n/g, eol);
+    const normalizedNew = this.newContent.replace(/\r\n|\n/g, eol);
+
+    let userEdits: string | undefined;
+    if (normalizedFinal !== normalizedNew) {
+      userEdits = diffLib.createPatch(
+        this.relPath,
+        normalizedNew,
+        normalizedFinal,
+        "proposed",
+        "saved",
+        { context: 1 },
+      );
+    }
+
+    const result: DiffResult = {
+      status: "accepted",
+      path: this.relPath,
+      operation: this.editType === "create" ? "created" : "modified",
+      finalContent,
+    };
+
+    if (userEdits) {
+      result.user_edits = userEdits;
+    }
+    if (newProblems) {
+      result.new_diagnostics = newProblems;
+    }
+
+    return result;
+  }
+
+  async revertChanges(reason?: string): Promise<DiffResult> {
+    if (!this.absolutePath || !this.relPath) {
+      return {
+        status: "rejected",
+        path: this.relPath ?? "",
+        ...(reason && { reason }),
+      };
+    }
+
+    // Revert the in-memory document to match disk state before closing,
+    // so VS Code doesn't prompt "Do you want to save?"
+    const doc = vscode.workspace.textDocuments.find(
+      (d) => d.uri.scheme === "file" && d.uri.fsPath === this.absolutePath,
+    );
+    if (doc?.isDirty) {
+      const diskContent =
+        this.editType === "modify" ? (this.originalContent ?? "") : "";
+      const edit = new vscode.WorkspaceEdit();
+      const fullRange = new vscode.Range(0, 0, doc.lineCount, 0);
+      edit.replace(doc.uri, fullRange, diskContent);
+      await vscode.workspace.applyEdit(edit);
+      await doc.save();
+    }
+
+    // Close diff views — document is clean now, no save prompt
+    await this.closeAllDiffViews();
+
+    if (this.editType === "modify") {
+      // File on disk already has original content (saved back above)
+      if (this.documentWasOpen) {
+        const openDoc = await vscode.workspace.openTextDocument(
+          this.absolutePath,
+        );
+        await vscode.window.showTextDocument(openDoc, { preserveFocus: true });
+      }
+    } else if (this.editType === "create") {
+      // Delete the file we created
+      try {
+        await fs.unlink(this.absolutePath);
+      } catch {
+        // ignore
+      }
+      // Remove created directories in reverse order
+      for (const dir of this.createdDirs.reverse()) {
+        try {
+          await fs.rmdir(dir);
+        } catch {
+          break; // Directory not empty or doesn't exist
+        }
+      }
+    }
+
+    return {
+      status: "rejected",
+      path: this.relPath,
+      ...(reason && { reason }),
+    };
+  }
+
+  private async waitForDiagnostics(): Promise<string | undefined> {
+    return new Promise<string | undefined>((resolve) => {
+      const uri = vscode.Uri.file(this.absolutePath!);
+      let settled = false;
+
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        disposable.dispose();
+        clearTimeout(timer);
+
+        const postDiagnostics = vscode.languages.getDiagnostics();
+        const newProblems = getNewDiagnostics(
+          this.preDiagnostics,
+          postDiagnostics,
+        );
+
+        const errorDiags = newProblems.filter(([, diags]) =>
+          diags.some((d) => d.severity === vscode.DiagnosticSeverity.Error),
+        );
+
+        if (errorDiags.length === 0) {
+          resolve(undefined);
+          return;
+        }
+
+        const lines: string[] = [];
+        for (const [diagUri, diags] of errorDiags) {
+          for (const diag of diags) {
+            if (diag.severity !== vscode.DiagnosticSeverity.Error) continue;
+            const line = diag.range.start.line + 1;
+            lines.push(`Line ${line}: ${diag.message}`);
+          }
+        }
+        resolve(lines.join("\n"));
+      };
+
+      // Listen for diagnostic changes on our file
+      const disposable = vscode.languages.onDidChangeDiagnostics((e) => {
+        if (e.uris.some((u) => u.fsPath === this.absolutePath)) {
+          settle();
+        }
+      });
+
+      // Timeout fallback
+      const timer = setTimeout(settle, this.diagnosticDelay);
+    });
+  }
+
+  private async closeAllDiffViews(): Promise<void> {
+    const tabs = vscode.window.tabGroups.all
+      .flatMap((tg) => tg.tabs)
+      .filter((tab) => {
+        if (tab.input instanceof vscode.TabInputTextDiff) {
+          const diffInput = tab.input;
+          return (
+            diffInput.original.scheme === DIFF_VIEW_URI_SCHEME ||
+            diffInput.modified.fsPath === this.absolutePath
+          );
+        }
+        return false;
+      });
+
+    for (const tab of tabs) {
+      await vscode.window.tabGroups.close(tab);
+    }
+  }
+}
+
+/**
+ * Find the first line that differs between original and modified content.
+ * Returns -1 if the contents are identical.
+ */
+function findFirstChangeLine(original: string, modified: string): number {
+  const origLines = original.split("\n");
+  const modLines = modified.split("\n");
+  const maxLines = Math.max(origLines.length, modLines.length);
+  for (let i = 0; i < maxLines; i++) {
+    if (origLines[i] !== modLines[i]) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Create directories for a file path and return list of created dirs.
+ */
+async function createDirectoriesForFile(filePath: string): Promise<string[]> {
+  const dir = path.dirname(filePath);
+  const created: string[] = [];
+
+  // Walk up to find first existing directory
+  const parts: string[] = [];
+  let current = dir;
+  while (current !== path.dirname(current)) {
+    try {
+      await fs.access(current);
+      break;
+    } catch {
+      parts.unshift(current);
+      current = path.dirname(current);
+    }
+  }
+
+  // Create directories
+  for (const dirPath of parts) {
+    try {
+      await fs.mkdir(dirPath);
+      created.push(dirPath);
+    } catch {
+      // Already exists (race condition)
+    }
+  }
+
+  return created;
+}
+
+/**
+ * Compare two sets of diagnostics and return only new ones.
+ * Adapted from Roo Code's diagnostics integration.
+ */
+function getNewDiagnostics(
+  oldDiags: [vscode.Uri, vscode.Diagnostic[]][],
+  newDiags: [vscode.Uri, vscode.Diagnostic[]][],
+): [vscode.Uri, vscode.Diagnostic[]][] {
+  const oldMap = new Map<string, vscode.Diagnostic[]>();
+  for (const [uri, diags] of oldDiags) {
+    oldMap.set(uri.toString(), diags);
+  }
+
+  const result: [vscode.Uri, vscode.Diagnostic[]][] = [];
+
+  for (const [uri, diags] of newDiags) {
+    const oldFileDiags = oldMap.get(uri.toString()) ?? [];
+    const newFileDiags = diags.filter(
+      (newDiag) =>
+        !oldFileDiags.some(
+          (oldDiag) =>
+            oldDiag.message === newDiag.message &&
+            oldDiag.range.start.line === newDiag.range.start.line &&
+            oldDiag.severity === newDiag.severity,
+        ),
+    );
+    if (newFileDiags.length > 0) {
+      result.push([uri, newFileDiags]);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Standalone diagnostic collection for auto-approved writes.
+ * Snapshots diagnostics before a write, then waits for language services
+ * to update and returns any new errors as a formatted string.
+ *
+ * Usage:
+ *   const snap = snapshotDiagnostics();
+ *   // ... perform the write ...
+ *   const diagnostics = await snap.collectNewErrors(filePath, delay);
+ */
+export function snapshotDiagnostics(): {
+  collectNewErrors: (filePath: string, delayMs: number) => Promise<string | undefined>;
+} {
+  const preDiagnostics = vscode.languages.getDiagnostics();
+
+  return {
+    collectNewErrors(filePath: string, delayMs: number): Promise<string | undefined> {
+      return new Promise<string | undefined>((resolve) => {
+        let settled = false;
+
+        const settle = () => {
+          if (settled) return;
+          settled = true;
+          disposable.dispose();
+          clearTimeout(timer);
+
+          const postDiagnostics = vscode.languages.getDiagnostics();
+          const newProblems = getNewDiagnostics(preDiagnostics, postDiagnostics);
+
+          const errorDiags = newProblems.filter(([, diags]) =>
+            diags.some((d) => d.severity === vscode.DiagnosticSeverity.Error),
+          );
+
+          if (errorDiags.length === 0) {
+            resolve(undefined);
+            return;
+          }
+
+          const lines: string[] = [];
+          for (const [, diags] of errorDiags) {
+            for (const diag of diags) {
+              if (diag.severity !== vscode.DiagnosticSeverity.Error) continue;
+              const line = diag.range.start.line + 1;
+              lines.push(`Line ${line}: ${diag.message}`);
+            }
+          }
+          resolve(lines.join("\n"));
+        };
+
+        // Listen for diagnostic changes on our file
+        const disposable = vscode.languages.onDidChangeDiagnostics((e) => {
+          if (e.uris.some((u) => u.fsPath === filePath)) {
+            settle();
+          }
+        });
+
+        // Timeout fallback
+        const timer = setTimeout(settle, delayMs);
+      });
+    },
+  };
+}

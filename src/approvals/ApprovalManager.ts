@@ -1,0 +1,626 @@
+import * as vscode from "vscode";
+import picomatch from "picomatch";
+
+import { getFirstWorkspaceRoot, getRelativePath } from "../util/paths.js";
+import type { ConfigStore } from "./ConfigStore.js";
+
+export interface CommandRule {
+  pattern: string;
+  mode: "prefix" | "regex" | "exact";
+}
+
+export interface PathRule {
+  pattern: string;
+  mode: "glob" | "prefix" | "exact";
+}
+
+export type RuleScope = "session" | "project" | "global";
+
+interface SessionState {
+  writeApproved: boolean;
+  commandRules: CommandRule[];
+  pathRules: PathRule[];
+  writeRules: PathRule[];
+  lastActivity: number;
+}
+
+const SESSION_TTL = 24 * 60 * 60_000; // 24 hours
+const PRUNE_INTERVAL = 60 * 60_000; // 1 hour
+
+export class ApprovalManager {
+  private pruneTimer: ReturnType<typeof setInterval>;
+  private _onDidChange = new vscode.EventEmitter<void>();
+  readonly onDidChange = this._onDidChange.event;
+
+  // Sessions are now in-memory only (ephemeral, tied to MCP transport sessions)
+  private sessions = new Map<string, SessionState>();
+  private configStoreListener: vscode.Disposable;
+
+  constructor(
+    private globalState: vscode.Memento, // kept for migration
+    private configStore: ConfigStore,
+  ) {
+    this.pruneExpiredSessions();
+    this.pruneTimer = setInterval(() => this.pruneExpiredSessions(), PRUNE_INTERVAL);
+    // Forward config file changes to our own onDidChange
+    this.configStoreListener = configStore.onDidChange(() => this._onDidChange.fire());
+  }
+
+  dispose(): void {
+    clearInterval(this.pruneTimer);
+    this.configStoreListener.dispose();
+    this._onDidChange.dispose();
+  }
+
+  // --- Migration from globalState to config files ---
+
+  async migrateFromGlobalState(): Promise<void> {
+    if (this.globalState.get<boolean>("configMigrated")) return;
+
+    const oldCommands = this.globalState.get<CommandRule[]>("globalCommandRules", []);
+    const oldWriteApproved = this.globalState.get<boolean>("globalWriteApproved", false);
+    const oldPathRules = this.globalState.get<PathRule[]>("globalPathRules", []);
+    const oldWriteRules = this.globalState.get<PathRule[]>("globalWriteRules", []);
+
+    const hasData =
+      oldCommands.length > 0 || oldWriteApproved || oldPathRules.length > 0 || oldWriteRules.length > 0;
+
+    if (hasData) {
+      this.configStore.updateGlobalConfig((config) => {
+        config.writeApproved = config.writeApproved || oldWriteApproved;
+        config.commandRules = deduplicateRules([...(config.commandRules ?? []), ...oldCommands]);
+        config.pathRules = deduplicateRules([...(config.pathRules ?? []), ...oldPathRules]);
+        config.writeRules = deduplicateRules([...(config.writeRules ?? []), ...oldWriteRules]);
+      });
+
+      // Clear old globalState keys
+      await this.globalState.update("globalCommandRules", undefined);
+      await this.globalState.update("globalWriteApproved", undefined);
+      await this.globalState.update("globalPathRules", undefined);
+      await this.globalState.update("globalWriteRules", undefined);
+      await this.globalState.update("approvalSessions", undefined);
+    }
+
+    await this.globalState.update("configMigrated", true);
+  }
+
+  // --- Session management ---
+
+  touchSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId) ?? this.newSession();
+    session.lastActivity = Date.now();
+    this.sessions.set(sessionId, session);
+  }
+
+  clearSession(sessionId: string): void {
+    this.sessions.delete(sessionId);
+  }
+
+  pruneExpiredSessions(): void {
+    const now = Date.now();
+    for (const [id, session] of this.sessions) {
+      if (now - session.lastActivity > SESSION_TTL) {
+        this.sessions.delete(id);
+      }
+    }
+  }
+
+  // --- Write approval ---
+
+  isWriteApproved(sessionId: string, filePath?: string): boolean {
+    // Global blanket approval
+    if (this.configStore.getGlobalConfig().writeApproved) {
+      return true;
+    }
+    // Project blanket approval
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    if (projectConfig?.writeApproved) {
+      return true;
+    }
+    // Session blanket approval
+    const session = this.getSession(sessionId);
+    if (session.writeApproved) {
+      return true;
+    }
+    // File-level checks (only when filePath provided)
+    if (filePath) {
+      return this.isFileWriteApproved(sessionId, filePath);
+    }
+    return false;
+  }
+
+  setWriteApproval(sessionId: string, scope: RuleScope): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        c.writeApproved = true;
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        c.writeApproved = true;
+      });
+    } else {
+      const session = this.sessions.get(sessionId) ?? this.newSession();
+      session.writeApproved = true;
+      session.lastActivity = Date.now();
+      this.sessions.set(sessionId, session);
+    }
+    this._onDidChange.fire();
+  }
+
+  resetWriteApproval(): void {
+    this.configStore.updateGlobalConfig((c) => {
+      c.writeApproved = false;
+    });
+    // Also reset project-level
+    const folders = vscode.workspace.workspaceFolders;
+    if (folders) {
+      for (const folder of folders) {
+        const config = this.configStore.getProjectConfig(folder.uri.fsPath);
+        if (config.writeApproved) {
+          this.configStore.updateProjectConfig(folder.uri.fsPath, (c) => {
+            c.writeApproved = false;
+          });
+        }
+      }
+    }
+    // Also clear all session write approvals
+    for (const session of this.sessions.values()) {
+      session.writeApproved = false;
+    }
+    this._onDidChange.fire();
+  }
+
+  getWriteApprovalState(sessionId: string): "prompt" | "session" | "project" | "global" {
+    if (this.configStore.getGlobalConfig().writeApproved) {
+      return "global";
+    }
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    if (projectConfig?.writeApproved) {
+      return "project";
+    }
+    const session = this.getSession(sessionId);
+    if (session.writeApproved) {
+      return "session";
+    }
+    return "prompt";
+  }
+
+  // --- Path trust (outside-workspace access) ---
+
+  isPathTrusted(sessionId: string, filePath: string): boolean {
+    // Check session path rules first
+    const session = this.getSession(sessionId);
+    if ((session.pathRules ?? []).some((r) => this.matchesPathRule(filePath, r))) {
+      return true;
+    }
+    // Check project path rules
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    if (projectConfig && (projectConfig.pathRules ?? []).some((r) => this.matchesPathRule(filePath, r))) {
+      return true;
+    }
+    // Check global path rules
+    const globalConfig = this.configStore.getGlobalConfig();
+    if ((globalConfig.pathRules ?? []).some((r) => this.matchesPathRule(filePath, r))) {
+      return true;
+    }
+    return false;
+  }
+
+  addPathRule(sessionId: string, rule: PathRule, scope: RuleScope): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        const rules = c.pathRules ?? [];
+        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+          rules.push(rule);
+          c.pathRules = rules;
+        }
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        const rules = c.pathRules ?? [];
+        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+          rules.push(rule);
+          c.pathRules = rules;
+        }
+      });
+    } else {
+      const session = this.sessions.get(sessionId) ?? this.newSession();
+      const pathRules = session.pathRules ?? [];
+      if (!pathRules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+        pathRules.push(rule);
+        session.pathRules = pathRules;
+        session.lastActivity = Date.now();
+        this.sessions.set(sessionId, session);
+      }
+    }
+    this._onDidChange.fire();
+  }
+
+  removePathRule(pattern: string, scope: RuleScope, sessionId?: string): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        c.pathRules = (c.pathRules ?? []).filter((r) => r.pattern !== pattern);
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        c.pathRules = (c.pathRules ?? []).filter((r) => r.pattern !== pattern);
+      });
+    } else if (sessionId) {
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        session.pathRules = (session.pathRules ?? []).filter((r) => r.pattern !== pattern);
+      }
+    }
+    this._onDidChange.fire();
+  }
+
+  editPathRule(oldPattern: string, newRule: PathRule, scope: RuleScope, sessionId?: string): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        const rules = c.pathRules ?? [];
+        const idx = rules.findIndex((r) => r.pattern === oldPattern);
+        if (idx !== -1) rules[idx] = newRule;
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        const rules = c.pathRules ?? [];
+        const idx = rules.findIndex((r) => r.pattern === oldPattern);
+        if (idx !== -1) rules[idx] = newRule;
+      });
+    } else if (sessionId) {
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        const pathRules = session.pathRules ?? [];
+        const idx = pathRules.findIndex((r) => r.pattern === oldPattern);
+        if (idx !== -1) pathRules[idx] = newRule;
+      }
+    }
+    this._onDidChange.fire();
+  }
+
+  getPathRules(sessionId: string): { session: PathRule[]; project: PathRule[]; global: PathRule[] } {
+    const session = this.getSession(sessionId);
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    return {
+      session: [...(session.pathRules ?? [])],
+      project: [...(projectConfig?.pathRules ?? [])],
+      global: [...(this.configStore.getGlobalConfig().pathRules ?? [])],
+    };
+  }
+
+  // --- File-level write approval ---
+
+  isFileWriteApproved(sessionId: string, filePath: string): boolean {
+    const relPath = getRelativePath(filePath);
+    const candidates = relPath !== filePath ? [relPath, filePath] : [filePath];
+
+    // Settings-based patterns (match against both relative and absolute)
+    const settingsPatterns = vscode.workspace
+      .getConfiguration("native-claude")
+      .get<string[]>("writeRules", []);
+    if (
+      settingsPatterns.some((p) =>
+        candidates.some((c) => this.matchesPathRule(c, { pattern: p, mode: "glob" })),
+      )
+    ) {
+      return true;
+    }
+
+    // Session write rules
+    const session = this.getSession(sessionId);
+    if ((session.writeRules ?? []).some((r) => candidates.some((c) => this.matchesPathRule(c, r)))) {
+      return true;
+    }
+
+    // Project write rules
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    if (
+      projectConfig &&
+      (projectConfig.writeRules ?? []).some((r) => candidates.some((c) => this.matchesPathRule(c, r)))
+    ) {
+      return true;
+    }
+
+    // Global write rules
+    const globalConfig = this.configStore.getGlobalConfig();
+    if ((globalConfig.writeRules ?? []).some((r) => candidates.some((c) => this.matchesPathRule(c, r)))) {
+      return true;
+    }
+
+    return false;
+  }
+
+  addWriteRule(sessionId: string, rule: PathRule, scope: RuleScope): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        const rules = c.writeRules ?? [];
+        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+          rules.push(rule);
+          c.writeRules = rules;
+        }
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        const rules = c.writeRules ?? [];
+        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+          rules.push(rule);
+          c.writeRules = rules;
+        }
+      });
+    } else {
+      const session = this.sessions.get(sessionId) ?? this.newSession();
+      const writeRules = session.writeRules ?? [];
+      if (!writeRules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+        writeRules.push(rule);
+        session.writeRules = writeRules;
+        session.lastActivity = Date.now();
+        this.sessions.set(sessionId, session);
+      }
+    }
+    this._onDidChange.fire();
+  }
+
+  removeWriteRule(pattern: string, scope: RuleScope, sessionId?: string): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        c.writeRules = (c.writeRules ?? []).filter((r) => r.pattern !== pattern);
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        c.writeRules = (c.writeRules ?? []).filter((r) => r.pattern !== pattern);
+      });
+    } else if (sessionId) {
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        session.writeRules = (session.writeRules ?? []).filter((r) => r.pattern !== pattern);
+      }
+    }
+    this._onDidChange.fire();
+  }
+
+  editWriteRule(oldPattern: string, newRule: PathRule, scope: RuleScope, sessionId?: string): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        const rules = c.writeRules ?? [];
+        const idx = rules.findIndex((r) => r.pattern === oldPattern);
+        if (idx !== -1) rules[idx] = newRule;
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        const rules = c.writeRules ?? [];
+        const idx = rules.findIndex((r) => r.pattern === oldPattern);
+        if (idx !== -1) rules[idx] = newRule;
+      });
+    } else if (sessionId) {
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        const writeRules = session.writeRules ?? [];
+        const idx = writeRules.findIndex((r) => r.pattern === oldPattern);
+        if (idx !== -1) writeRules[idx] = newRule;
+      }
+    }
+    this._onDidChange.fire();
+  }
+
+  getWriteRules(sessionId: string): {
+    session: PathRule[];
+    project: PathRule[];
+    global: PathRule[];
+    settings: string[];
+  } {
+    const session = this.getSession(sessionId);
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    return {
+      session: [...(session.writeRules ?? [])],
+      project: [...(projectConfig?.writeRules ?? [])],
+      global: [...(this.configStore.getGlobalConfig().writeRules ?? [])],
+      settings: vscode.workspace.getConfiguration("native-claude").get<string[]>("writeRules", []),
+    };
+  }
+
+  // --- Command approval ---
+
+  isCommandApproved(sessionId: string, command: string): boolean {
+    const trimmed = command.trim();
+
+    // Check session rules first
+    const session = this.getSession(sessionId);
+    for (const rule of session.commandRules) {
+      if (this.matchesRule(trimmed, rule)) return true;
+    }
+
+    // Check project rules
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    if (projectConfig) {
+      for (const rule of projectConfig.commandRules ?? []) {
+        if (this.matchesRule(trimmed, rule)) return true;
+      }
+    }
+
+    // Check global rules
+    const globalConfig = this.configStore.getGlobalConfig();
+    for (const rule of globalConfig.commandRules ?? []) {
+      if (this.matchesRule(trimmed, rule)) return true;
+    }
+
+    return false;
+  }
+
+  addCommandRule(sessionId: string, rule: CommandRule, scope: RuleScope): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        const rules = c.commandRules ?? [];
+        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+          rules.push(rule);
+          c.commandRules = rules;
+        }
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        const rules = c.commandRules ?? [];
+        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+          rules.push(rule);
+          c.commandRules = rules;
+        }
+      });
+    } else {
+      const session = this.sessions.get(sessionId) ?? this.newSession();
+      if (!session.commandRules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+        session.commandRules.push(rule);
+        session.lastActivity = Date.now();
+        this.sessions.set(sessionId, session);
+      }
+    }
+    this._onDidChange.fire();
+  }
+
+  editCommandRule(oldPattern: string, newRule: CommandRule, scope: RuleScope, sessionId?: string): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        const rules = c.commandRules ?? [];
+        const idx = rules.findIndex((r) => r.pattern === oldPattern);
+        if (idx !== -1) rules[idx] = newRule;
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        const rules = c.commandRules ?? [];
+        const idx = rules.findIndex((r) => r.pattern === oldPattern);
+        if (idx !== -1) rules[idx] = newRule;
+      });
+    } else if (sessionId) {
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        const idx = session.commandRules.findIndex((r) => r.pattern === oldPattern);
+        if (idx !== -1) session.commandRules[idx] = newRule;
+      }
+    }
+    this._onDidChange.fire();
+  }
+
+  removeCommandRule(pattern: string, scope: RuleScope, sessionId?: string): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        c.commandRules = (c.commandRules ?? []).filter((r) => r.pattern !== pattern);
+      });
+    } else if (scope === "project") {
+      const folder = getFirstWorkspaceRoot();
+      this.configStore.updateProjectConfig(folder, (c) => {
+        c.commandRules = (c.commandRules ?? []).filter((r) => r.pattern !== pattern);
+      });
+    } else if (sessionId) {
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        session.commandRules = session.commandRules.filter((r) => r.pattern !== pattern);
+      }
+    }
+    this._onDidChange.fire();
+  }
+
+  getCommandRules(sessionId: string): {
+    session: CommandRule[];
+    project: CommandRule[];
+    global: CommandRule[];
+  } {
+    const session = this.getSession(sessionId);
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    return {
+      session: [...session.commandRules],
+      project: [...(projectConfig?.commandRules ?? [])],
+      global: [...(this.configStore.getGlobalConfig().commandRules ?? [])],
+    };
+  }
+
+  clearSessionCommandRules(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.commandRules = [];
+    }
+    this._onDidChange.fire();
+  }
+
+  // --- State for sidebar ---
+
+  getActiveSessions(): Array<{
+    id: string;
+    writeApproved: boolean;
+    commandRuleCount: number;
+    pathRuleCount: number;
+    writeRuleCount: number;
+    lastActivity: number;
+  }> {
+    return Array.from(this.sessions.entries()).map(([id, s]) => ({
+      id,
+      writeApproved: s.writeApproved,
+      commandRuleCount: s.commandRules.length,
+      pathRuleCount: (s.pathRules ?? []).length,
+      writeRuleCount: (s.writeRules ?? []).length,
+      lastActivity: s.lastActivity,
+    }));
+  }
+
+  // --- Internal ---
+
+  private matchesPathRule(filePath: string, rule: PathRule): boolean {
+    try {
+      switch (rule.mode) {
+        case "exact":
+          return filePath === rule.pattern;
+        case "prefix":
+          return filePath.startsWith(rule.pattern);
+        case "glob":
+          return picomatch.isMatch(filePath, rule.pattern);
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  private matchesRule(command: string, rule: CommandRule): boolean {
+    try {
+      switch (rule.mode) {
+        case "exact":
+          return command === rule.pattern.trim();
+        case "prefix":
+          return command.startsWith(rule.pattern.trim());
+        case "regex":
+          return new RegExp(rule.pattern).test(command);
+      }
+    } catch {
+      // Invalid regex — treat as no match
+      return false;
+    }
+  }
+
+  private getSession(sessionId: string): SessionState {
+    return this.sessions.get(sessionId) ?? this.newSession();
+  }
+
+  private newSession(): SessionState {
+    return {
+      writeApproved: false,
+      commandRules: [],
+      pathRules: [],
+      writeRules: [],
+      lastActivity: Date.now(),
+    };
+  }
+}
+
+function deduplicateRules<T extends { pattern: string; mode: string }>(rules: T[]): T[] {
+  const seen = new Set<string>();
+  return rules.filter((r) => {
+    const key = `${r.pattern}\0${r.mode}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
