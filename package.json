@@ -2,8 +2,13 @@
   "name": "native-claude",
   "displayName": "Native Claude",
   "description": "MCP server that provides Claude Code with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "0.5.1",
+  "version": "0.5.11",
   "publisher": "native-claude",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/reefbarman/native-claude.git"
+  },
+  "license": "MIT",
   "engines": {
     "vscode": "^1.93.0"
   },
@@ -146,7 +151,8 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "vsce package"
+    "package": "vsce package",
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",

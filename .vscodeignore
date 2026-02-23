@@ -3,5 +3,6 @@
 !dist/extension.js.map
 !package.json
 !README.md
+!LICENSE
 !CHANGELOG.md
 !media/**

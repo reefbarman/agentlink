@@ -9,6 +9,7 @@ import {
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
+import { SYMBOL_KIND_NAMES } from "./languageFeatures.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -206,35 +207,6 @@ function getDiagnosticsSummary(
 }
 
 // --- Symbol outline ---
-
-const SYMBOL_KIND_NAMES: Record<number, string> = {
-  [vscode.SymbolKind.File]: "file",
-  [vscode.SymbolKind.Module]: "module",
-  [vscode.SymbolKind.Namespace]: "namespace",
-  [vscode.SymbolKind.Package]: "package",
-  [vscode.SymbolKind.Class]: "class",
-  [vscode.SymbolKind.Method]: "method",
-  [vscode.SymbolKind.Property]: "property",
-  [vscode.SymbolKind.Field]: "field",
-  [vscode.SymbolKind.Constructor]: "constructor",
-  [vscode.SymbolKind.Enum]: "enum",
-  [vscode.SymbolKind.Interface]: "interface",
-  [vscode.SymbolKind.Function]: "function",
-  [vscode.SymbolKind.Variable]: "variable",
-  [vscode.SymbolKind.Constant]: "constant",
-  [vscode.SymbolKind.String]: "string",
-  [vscode.SymbolKind.Number]: "number",
-  [vscode.SymbolKind.Boolean]: "boolean",
-  [vscode.SymbolKind.Array]: "array",
-  [vscode.SymbolKind.Object]: "object",
-  [vscode.SymbolKind.Key]: "key",
-  [vscode.SymbolKind.Null]: "null",
-  [vscode.SymbolKind.EnumMember]: "enum member",
-  [vscode.SymbolKind.Struct]: "struct",
-  [vscode.SymbolKind.Event]: "event",
-  [vscode.SymbolKind.Operator]: "operator",
-  [vscode.SymbolKind.TypeParameter]: "type parameter",
-};
 
 async function getSymbolOutline(
   filePath: string,

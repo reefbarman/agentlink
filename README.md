@@ -8,16 +8,17 @@ Claude Code's built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`) o
 
 ### What you get over built-in tools
 
-| Capability            | Built-in tools              | Native Claude                                                                                                                                                                                    |
-| --------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **File editing**      | Writes directly to disk     | Opens a **diff view** — you see exactly what's changing, can edit inline, and accept or reject. Format-on-save applies automatically.                                                            |
-| **Terminal commands** | Runs in a hidden subprocess | Runs in VS Code's **integrated terminal** — visible, interactive, with shell integration for output capture. Supports named terminals for parallel tasks.                                        |
-| **Diagnostics**       | Not available               | Real **TypeScript errors, ESLint warnings**, etc. from VS Code's language services — returned after writes and available on-demand.                                                              |
-| **File reading**      | Raw file content            | Content plus **file metadata** (size, modified date), **language detection**, **git status**, **diagnostics summary**, and **symbol outlines** (functions, classes, interfaces grouped by kind). |
-| **Search**            | `grep`/`rg` via subprocess  | Same ripgrep engine, plus optional **semantic vector search** against an indexed codebase.                                                                                                       |
-| **File listing**      | `find`/`ls` via subprocess  | Native listing with ripgrep's `--files` mode for fast recursive listing with automatic `.gitignore` support.                                                                                     |
-| **Approval system**   | All-or-nothing permissions  | **Granular approval** — per-file write rules, per-command pattern matching, outside-workspace path trust with prefix/glob/exact patterns.                                                        |
-| **Rejection reasons** | Silent rejection            | When you reject a write or command, you can provide a **reason** that's returned to Claude so it can adjust its approach.                                                                        |
+| Capability                | Built-in tools              | Native Claude                                                                                                                                                                                    |
+| ------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **File editing**          | Writes directly to disk     | Opens a **diff view** — you see exactly what's changing, can edit inline, and accept or reject. Format-on-save applies automatically.                                                            |
+| **Terminal commands**     | Runs in a hidden subprocess | Runs in VS Code's **integrated terminal** — visible, interactive, with shell integration for output capture. Supports named terminals for parallel tasks.                                        |
+| **Diagnostics**           | Not available               | Real **TypeScript errors, ESLint warnings**, etc. from VS Code's language services — returned after writes and available on-demand.                                                              |
+| **File reading**          | Raw file content            | Content plus **file metadata** (size, modified date), **language detection**, **git status**, **diagnostics summary**, and **symbol outlines** (functions, classes, interfaces grouped by kind). |
+| **Search**                | `grep`/`rg` via subprocess  | Same ripgrep engine, plus optional **semantic vector search** against an indexed codebase.                                                                                                       |
+| **File listing**          | `find`/`ls` via subprocess  | Native listing with ripgrep's `--files` mode for fast recursive listing with automatic `.gitignore` support.                                                                                     |
+| **Language intelligence** | Not available               | **Go to definition**, **find references**, **hover types**, **completions**, **symbols**, and **rename** — all powered by VS Code's language server.                                             |
+| **Approval system**       | All-or-nothing permissions  | **Granular approval** — per-file write rules, per-command pattern matching, outside-workspace path trust with prefix/glob/exact patterns.                                                        |
+| **Rejection reasons**     | Silent rejection            | When you reject a write or command, you can provide a **reason** that's returned to Claude so it can adjust its approach.                                                                        |
 
 ## Quick Start
 
@@ -125,27 +126,135 @@ Edit an existing file using search/replace blocks. Opens a diff view for review.
 | `diff`    | string | Search/replace blocks (see format below) |
 
 ```
-<<<<<<< SEARCH
-exact content to find
-=======
 replacement content
->>>>>>> REPLACE
 ```
 
 Include multiple SEARCH/REPLACE blocks for multiple edits in one call.
+
+### go_to_definition
+
+Resolve the definition location of a symbol using VS Code's language server. Works across files and languages.
+
+| Parameter | Type   | Description                                        |
+| --------- | ------ | -------------------------------------------------- |
+| `path`    | string | File path (absolute or relative to workspace root) |
+| `line`    | number | Line number (1-indexed)                            |
+| `column`  | number | Column number (1-indexed)                          |
+
+Returns an array of `definitions`, each with `path`, `line`, `column`, `endLine`, `endColumn`. Handles both `Location` and `LocationLink` results from the language server.
+
+### get_references
+
+Find all references to a symbol using VS Code's language server. Returns locations across the workspace where the symbol is used.
+
+| Parameter             | Type     | Description                                               |
+| --------------------- | -------- | --------------------------------------------------------- |
+| `path`                | string   | File path (absolute or relative to workspace root)        |
+| `line`                | number   | Line number (1-indexed)                                   |
+| `column`              | number   | Column number (1-indexed)                                 |
+| `include_declaration` | boolean? | Include the declaration itself in results (default: true) |
+
+Returns `total_references`, `truncated` (capped at 200), and a `references` array with the same location format as `go_to_definition`.
+
+### get_symbols
+
+Get symbols from a document or search workspace symbols. Two modes:
+
+| Parameter | Type    | Description                                                                 |
+| --------- | ------- | --------------------------------------------------------------------------- |
+| `path`    | string? | File path for document symbols (full hierarchy with children)               |
+| `query`   | string? | Search query for workspace-wide symbol search (used when `path` is omitted) |
+
+**Document mode** (`path` provided): Returns the full symbol tree with `name`, `kind`, `line`, `endLine`, and recursive `children[]`.
+
+**Workspace mode** (`query` provided): Returns a flat list of matching symbols with `name`, `kind`, `path`, `line`, `containerName`. Capped at 100 results.
+
+### get_hover
+
+Get hover information (inferred types, documentation) for a symbol at a specific position. Provides the same information shown when hovering in the VS Code editor.
+
+| Parameter | Type   | Description                                        |
+| --------- | ------ | -------------------------------------------------- |
+| `path`    | string | File path (absolute or relative to workspace root) |
+| `line`    | number | Line number (1-indexed)                            |
+| `column`  | number | Column number (1-indexed)                          |
+
+Returns `hover` as a string (type info, documentation) or `null` if no hover info is available.
+
+### get_completions
+
+Get autocomplete suggestions at a cursor position. Useful for discovering available methods, properties, and APIs.
+
+| Parameter | Type    | Description                                                |
+| --------- | ------- | ---------------------------------------------------------- |
+| `path`    | string  | File path (absolute or relative to workspace root)         |
+| `line`    | number  | Line number (1-indexed)                                    |
+| `column`  | number  | Column number (1-indexed)                                  |
+| `limit`   | number? | Maximum number of completion items to return (default: 50) |
+
+Returns `is_incomplete`, `total_items`, `showing`, and an `items` array with `label`, `kind`, `detail`, `documentation`, and `insertText` (when different from label).
+
+### open_file
+
+Open a file in the VS Code editor, optionally scrolling to a specific line and placing the cursor.
+
+| Parameter | Type    | Description                                        |
+| --------- | ------- | -------------------------------------------------- |
+| `path`    | string  | File path (absolute or relative to workspace root) |
+| `line`    | number? | Line number to scroll to (1-indexed)               |
+| `column`  | number? | Column for cursor placement (1-indexed)            |
+
+### show_notification
+
+Show a notification message in VS Code. Best for important status updates or completion of long-running tasks.
+
+| Parameter | Type    | Description                                     |
+| --------- | ------- | ----------------------------------------------- |
+| `message` | string  | The notification message to display             |
+| `type`    | string? | `info`, `warning`, or `error` (default: `info`) |
+
+### rename_symbol
+
+Rename a symbol across the workspace using VS Code's language server. Performs a precise rename refactoring that updates all references, imports, and re-exports.
+
+| Parameter  | Type   | Description                             |
+| ---------- | ------ | --------------------------------------- |
+| `path`     | string | File path containing the symbol         |
+| `line`     | number | Line number of the symbol (1-indexed)   |
+| `column`   | number | Column number of the symbol (1-indexed) |
+| `new_name` | string | The new name for the symbol             |
+
+Shows affected files for approval before applying. Uses the same write approval flow as `write_file` — the user can accept once, for the session, for the project, or always.
 
 ### execute_command
 
 Run a command in VS Code's integrated terminal. Output is captured when shell integration is available. Terminal environment is configured to prevent interactive pagers (`PAGER=cat`, `GIT_PAGER=cat`, etc.).
 
-| Parameter       | Type     | Description                                      |
-| --------------- | -------- | ------------------------------------------------ |
-| `command`       | string   | Shell command to execute                         |
-| `cwd`           | string?  | Working directory                                |
-| `terminal_id`   | string?  | Reuse a specific terminal by ID                  |
-| `terminal_name` | string?  | Run in a named terminal (e.g. `Server`, `Tests`) |
-| `background`    | boolean? | Fire-and-forget for long-running processes       |
-| `timeout`       | number?  | Timeout in seconds (default: 60)                 |
+Output is capped to the **last 200 lines** by default to prevent context window bloat. Full output is saved to a temp file (returned as `output_file`) for on-demand access via `read_file`. Use `output_head`, `output_tail`, or `output_grep` to customize filtering — agents should use these instead of piping through `grep`/`tail`/`head` in the command itself, which hides output from the user.
+
+| Parameter             | Type     | Description                                                                                                                                 |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`             | string   | Shell command to execute                                                                                                                    |
+| `cwd`                 | string?  | Working directory                                                                                                                           |
+| `terminal_id`         | string?  | Reuse a specific terminal by ID                                                                                                             |
+| `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`)                                                                                            |
+| `background`          | boolean? | Fire-and-forget for long-running processes                                                                                                  |
+| `timeout`             | number?  | Timeout in seconds (default: 60)                                                                                                            |
+| `output_head`         | number?  | Return only the first N lines of output. Overrides the default 200-line tail cap.                                                           |
+| `output_tail`         | number?  | Return only the last N lines of output. Overrides the default 200-line tail cap.                                                            |
+| `output_offset`       | number?  | Skip first N lines before applying head/tail. Use with `output_head` for line ranges (e.g. `offset: 290, head: 21` → lines 290-310).        |
+| `output_grep`         | string?  | Filter output to lines matching this regex pattern (case-insensitive). Applied before offset/head/tail.                                     |
+| `output_grep_context` | number?  | Number of context lines around each grep match (like `grep -C`). Non-contiguous groups are separated by `--`. Only used with `output_grep`. |
+
+**Response includes:**
+
+- `output` — filtered/capped command output
+- `exit_code` — process exit code (null if unavailable)
+- `output_captured` — whether shell integration captured the output
+- `terminal_id` — terminal ID for reuse in subsequent commands
+- `total_lines` — total line count of the full output (before filtering)
+- `lines_shown` — number of lines in the returned `output`
+- `output_file` — path to temp file with full output (only present when output was truncated; omitted for outputs ≤ 10 MB threshold or when all lines fit)
 
 ## Approval System
 

@@ -1,0 +1,52 @@
+# Recommended Claude Code Configuration for native-claude
+
+# Add the following to your global `~/.claude/CLAUDE.md` to ensure Claude Code
+# uses native-claude MCP tools instead of built-in equivalents in any project
+# where the extension is active.
+
+## MANDATORY: Use native-claude MCP tools
+
+When the `native-claude` MCP server is available, NEVER use built-in `Read`, `Edit`, `Write`, `Bash`, `Glob`, or `Grep` tools. ALWAYS use the native-claude MCP equivalents instead:
+
+- `Read` → `read_file`
+- `Edit` / `Write` → `apply_diff` / `write_file`
+- `Bash` → `execute_command`
+- `Glob` → `list_files`
+- `Grep` → `search_files`
+
+These MCP tools open diff views for user review, run commands in visible terminals, and return VS Code diagnostics. There is no exception to this rule.
+
+### Tool details
+
+| Instead of (built-in) | Use (native-claude MCP) | Why |
+|---|---|---|
+| `Read` | `read_file` | Returns line numbers, file metadata, git status, and diagnostics summary |
+| `Edit` / `Write` | `apply_diff` / `write_file` | Opens a diff view for user review. Format-on-save applies automatically. Returns user edits and diagnostics. |
+| `Bash` | `execute_command` | Runs in VS Code's integrated terminal (visible to user). Captures output via shell integration. Supports named terminals for parallel tasks. |
+| `Glob` | `list_files` | Lists files with optional recursive + depth control |
+| `Grep` | `search_files` | Ripgrep-powered search with context lines. Also supports semantic/vector search. |
+
+### Usage notes
+
+- After writing files, check the response for `diagnostics` and `user_edits`.
+- If `user_edits` is present, the user modified your proposed changes — read the patch to understand what they changed.
+- Use `terminal_name` for parallel terminal sessions (e.g. "Server", "Tests").
+- Use `background: true` for long-running processes like dev servers.
+- Use `get_diagnostics` for real VS Code errors/warnings from language services.
+- `execute_command` timeout is in seconds (default: waits indefinitely). Set it when you want to cap execution time.
+- `execute_command` runs in a real PTY terminal, so commands detect it as interactive. Always use non-interactive flags where available (e.g. `--yes`, `-y`, `--no-input`, `--non-interactive`, `CI=true`) to prevent commands from hanging on prompts.
+- Use the same terminal where possible except when running long processes or multiple commands in parallel. This keeps the user experience cleaner and more organized.
+
+### Additional tools (no built-in equivalent)
+
+native-claude also provides tools that Claude Code doesn't have natively. Use these proactively — they give you real language server intelligence instead of guessing from source text.
+
+- **`go_to_definition`** — Jump to where a symbol is defined. Takes a file, line, and column.
+- **`get_references`** — Find all usages of a symbol across the workspace.
+- **`get_symbols`** — Get document symbol outline (pass `path`) or search workspace symbols (pass `query`).
+- **`get_hover`** — Get inferred types and documentation for a symbol at a position. Same info shown on editor hover.
+- **`get_completions`** — Get autocomplete suggestions at a cursor position. Useful for discovering available methods, properties, and APIs.
+- **`get_diagnostics`** — Get real VS Code diagnostics (errors, warnings) for a file or the whole workspace. Use after edits to check for problems without running a build.
+- **`rename_symbol`** — Rename a symbol across the entire workspace using the language server. Updates all references, imports, and re-exports.
+- **`open_file`** — Open a file in the VS Code editor, optionally scrolling to a specific line.
+- **`show_notification`** — Show a notification in VS Code. Use sparingly for important status updates.

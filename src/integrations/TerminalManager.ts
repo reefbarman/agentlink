@@ -26,6 +26,9 @@ export interface CommandResult {
   cwd: string;
   output_captured: boolean;
   terminal_id: string;
+  output_file?: string;
+  total_lines?: number;
+  lines_shown?: number;
 }
 
 export interface ExecuteOptions {
@@ -178,23 +181,37 @@ export class TerminalManager {
   ): Promise<CommandResult> {
     const terminal = managed.terminal;
     const shellIntegration = terminal.shellIntegration!;
-    const timeoutMs = timeout ?? 60_000;
     let timedOut = false;
+    const disposables: vscode.Disposable[] = [];
 
-    // Register exit code listener BEFORE executing to avoid race condition
+    // Register listeners BEFORE executing to avoid race conditions.
+    // exitCodePromise resolves when: (1) shell execution ends, (2) terminal
+    // closes, (3) user-specified timeout fires, or (4) grace period expires.
     const exitCodePromise = new Promise<number | undefined>((resolve) => {
-      const disposable = vscode.window.onDidEndTerminalShellExecution((e) => {
-        if (e.terminal === terminal) {
-          disposable.dispose();
-          resolve(e.exitCode);
-        }
-      });
+      disposables.push(
+        vscode.window.onDidEndTerminalShellExecution((e) => {
+          if (e.terminal === terminal) {
+            resolve(e.exitCode);
+          }
+        }),
+      );
 
-      setTimeout(() => {
-        disposable.dispose();
-        timedOut = true;
-        resolve(undefined);
-      }, timeoutMs);
+      // Terminal closed while command is running — exit event will never fire
+      disposables.push(
+        vscode.window.onDidCloseTerminal((t) => {
+          if (t === terminal) {
+            resolve(undefined);
+          }
+        }),
+      );
+
+      if (timeout !== undefined) {
+        const timer = setTimeout(() => {
+          timedOut = true;
+          resolve(undefined);
+        }, timeout);
+        disposables.push({ dispose: () => clearTimeout(timer) });
+      }
     });
 
     // Execute the command
@@ -218,9 +235,19 @@ export class TerminalManager {
     // Clean up the output
     output = cleanTerminalOutput(output);
 
-    // Exit code promise has either already resolved (command finished or
-    // timeout fired) or will resolve imminently after the stream ended.
-    const exitCode = await exitCodePromise;
+    // Bounded wait for exit code: if the promise hasn't resolved yet (e.g.
+    // stream finished but exit event is delayed), give it a short grace
+    // period rather than blocking forever.
+    const EXIT_CODE_GRACE_MS = 5_000;
+    const exitCode = await Promise.race([
+      exitCodePromise,
+      new Promise<undefined>((r) =>
+        setTimeout(() => r(undefined), EXIT_CODE_GRACE_MS),
+      ),
+    ]);
+
+    // Clean up all listeners
+    for (const d of disposables) d.dispose();
 
     const result: CommandResult = {
       exit_code: exitCode ?? null,
@@ -231,7 +258,7 @@ export class TerminalManager {
     };
 
     if (timedOut) {
-      result.output += `\n[Timed out after ${timeoutMs / 1000}s — command may still be running in terminal]`;
+      result.output += `\n[Timed out after ${timeout! / 1000}s — command may still be running in terminal]`;
     }
 
     return result;

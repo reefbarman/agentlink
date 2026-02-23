@@ -3,9 +3,13 @@ import * as path from "path";
 
 import { getFirstWorkspaceRoot } from "../util/paths.js";
 import { getTerminalManager } from "../integrations/TerminalManager.js";
-import type { ApprovalManager, CommandRule } from "../approvals/ApprovalManager.js";
+import type {
+  ApprovalManager,
+  CommandRule,
+} from "../approvals/ApprovalManager.js";
 import { splitCompoundCommand } from "../approvals/commandSplitter.js";
 import { promptRejectionReason } from "../util/rejectionReason.js";
+import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -17,6 +21,11 @@ export async function handleExecuteCommand(
     terminal_name?: string;
     background?: boolean;
     timeout?: number;
+    output_head?: number;
+    output_tail?: number;
+    output_offset?: number;
+    output_grep?: string;
+    output_grep_context?: number;
   },
   approvalManager: ApprovalManager,
   sessionId: string,
@@ -27,7 +36,9 @@ export async function handleExecuteCommand(
     // Resolve cwd
     let cwd = workspaceRoot;
     if (params.cwd) {
-      cwd = path.isAbsolute(params.cwd) ? params.cwd : path.resolve(workspaceRoot, params.cwd);
+      cwd = path.isAbsolute(params.cwd)
+        ? params.cwd
+        : path.resolve(workspaceRoot, params.cwd);
     }
 
     // Master bypass check
@@ -38,7 +49,11 @@ export async function handleExecuteCommand(
     if (!masterBypass) {
       // Split compound command and approve each sub-command
       const subCommands = splitCompoundCommand(params.command);
-      const result = await approveSubCommands(subCommands, approvalManager, sessionId);
+      const result = await approveSubCommands(
+        subCommands,
+        approvalManager,
+        sessionId,
+      );
 
       if (!result.approved) {
         return {
@@ -66,11 +81,42 @@ export async function handleExecuteCommand(
       timeout: params.timeout ? params.timeout * 1000 : undefined, // seconds → ms
     });
 
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    // Apply output filtering and temp file saving
+    if (result.output_captured && result.output) {
+      const { filtered, totalLines, linesShown } = filterOutput(result.output, {
+        output_head: params.output_head,
+        output_tail: params.output_tail,
+        output_offset: params.output_offset,
+        output_grep: params.output_grep,
+        output_grep_context: params.output_grep_context,
+      });
+
+      result.total_lines = totalLines;
+      result.lines_shown = linesShown;
+
+      // Only save temp file when output is actually being truncated
+      if (linesShown < totalLines) {
+        const outputFile = saveOutputTempFile(result.output);
+        if (outputFile) {
+          result.output_file = outputFile;
+        }
+      }
+
+      result.output = filtered;
+    }
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, command: params.command }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, command: params.command }),
+        },
+      ],
     };
   }
 }
@@ -101,54 +147,57 @@ async function approveSubCommands(
     const rule = await showPatternEditor(sub);
     if (!rule) continue; // cancelled → treat as run-once
 
-    const scope = decision === "session" ? "session" : decision === "project" ? "project" : "global";
+    const scope =
+      decision === "session"
+        ? "session"
+        : decision === "project"
+          ? "project"
+          : "global";
     approvalManager.addCommandRule(sessionId, rule, scope);
   }
 
   return { approved: true };
 }
 
-type ApprovalDecision = "run-once" | "session" | "project" | "global" | "reject";
+type ApprovalDecision =
+  | "run-once"
+  | "session"
+  | "project"
+  | "global"
+  | "reject";
 
 /**
- * Dialog 1: Show the command with action buttons.
+ * Dialog 1: Show the command with a modal warning (matches file-write approval UX).
  */
 async function showCommandApproval(command: string): Promise<ApprovalDecision> {
-  const items: Array<vscode.QuickPickItem & { decision: ApprovalDecision }> = [
+  const choice = await vscode.window.showWarningMessage(
+    `Claude wants to run a command`,
     {
-      label: "$(play) Run Once",
-      description: "Execute this command now, don't save a rule",
-      decision: "run-once",
+      modal: true,
+      detail: command,
     },
-    {
-      label: "$(bookmark) Accept for Session",
-      description: "Save a trusted pattern for this session",
-      decision: "session",
-    },
-    {
-      label: "$(folder) Accept for Project",
-      description: "Save a trusted pattern in .claude/native-claude.json",
-      decision: "project",
-    },
-    {
-      label: "$(globe) Accept Always",
-      description: "Save a trusted pattern permanently (~/.claude/native-claude.json)",
-      decision: "global",
-    },
-    {
-      label: "$(close) Reject",
-      description: "Do not run this command",
-      decision: "reject",
-    },
-  ];
+    "Run Once",
+    "For Session",
+    "For Project",
+    "Always",
+    "Reject",
+  );
 
-  const picked = await vscode.window.showQuickPick(items, {
-    title: `Command: ${command}`,
-    placeHolder: "Choose how to handle this command",
-    ignoreFocusOut: true,
-  });
-
-  return picked?.decision ?? "reject";
+  switch (choice) {
+    case "Run Once":
+      return "run-once";
+    case "For Session":
+      return "session";
+    case "For Project":
+      return "project";
+    case "Always":
+      return "global";
+    case "Reject":
+      return "reject";
+    default:
+      // Escape / dismiss — treat as rejection
+      return "reject";
+  }
 }
 
 /**
@@ -158,7 +207,9 @@ async function showCommandApproval(command: string): Promise<ApprovalDecision> {
  */
 function showPatternEditor(command: string): Promise<CommandRule | null> {
   return new Promise((resolve) => {
-    const qp = vscode.window.createQuickPick<vscode.QuickPickItem & { mode: CommandRule["mode"] }>();
+    const qp = vscode.window.createQuickPick<
+      vscode.QuickPickItem & { mode: CommandRule["mode"] }
+    >();
     qp.title = "Edit pattern, then pick match mode";
     qp.placeholder = "Edit the command above → then select how to match it";
     qp.value = command;
