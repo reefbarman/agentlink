@@ -30,21 +30,13 @@ The sidebar panel shows server status, active sessions, and approval rules. If a
 
 ### Configuring Claude Code
 
-Add the following to your project's `CLAUDE.md` to instruct Claude to prefer Native Claude tools:
+For best results, add instructions to your `~/.claude/CLAUDE.md` (global) or project-level `CLAUDE.md` telling Claude to prefer Native Claude tools over built-ins. A comprehensive example is included in the repo:
 
-```markdown
-## MCP Server: native-claude
-
-Use these MCP tools **instead of** the corresponding built-in tools:
-
-| Instead of (built-in) | Use (native-claude MCP)     |
-| --------------------- | --------------------------- |
-| `Read`                | `read_file`                 |
-| `Edit` / `Write`      | `apply_diff` / `write_file` |
-| `Bash`                | `execute_command`           |
-| `Glob`                | `list_files`                |
-| `Grep`                | `search_files`              |
+```sh
+cp CLAUDE.md.example ~/.claude/CLAUDE.md
 ```
+
+This covers tool mappings, usage notes, and descriptions of the additional language server tools. Review and edit it to fit your setup — for example, you may want to merge it with existing instructions in your `CLAUDE.md`.
 
 ## Tools
 
