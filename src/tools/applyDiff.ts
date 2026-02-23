@@ -23,12 +23,19 @@ interface SearchReplaceBlock {
   index: number;
 }
 
+const SEARCH_MARKER = "<<<<<<< SEARCH";
+const DIVIDER_MARKER = "======= DIVIDER =======";
+const REPLACE_MARKER = ">>>>>>> REPLACE";
+
+// Legacy delimiter for backward compatibility
+const LEGACY_DIVIDER = "=======";
+
 /**
  * Parse search/replace blocks from the diff string.
  * Format:
  * <<<<<<< SEARCH
  * content to find
- * =======
+ * ======= DIVIDER =======
  * replacement content
  * >>>>>>> REPLACE
  */
@@ -39,24 +46,33 @@ function parseSearchReplaceBlocks(diff: string): SearchReplaceBlock[] {
   let i = 0;
   let blockIndex = 0;
 
+  // Detect whether this diff uses the new or legacy delimiter.
+  // If the new delimiter appears anywhere, use strict mode (only match new delimiter).
+  // Otherwise fall back to the legacy bare "=======" for backward compatibility.
+  const useNewDelimiter = lines.some((l) => l.trimEnd() === DIVIDER_MARKER);
+
   while (i < lines.length) {
-    // Look for <<<<<<< SEARCH
-    if (lines[i].trim() === "<<<<<<< SEARCH") {
+    // Look for <<<<<<< SEARCH — compare without leading/trailing whitespace
+    if (lines[i].trimEnd() === SEARCH_MARKER) {
       i++;
       const searchLines: string[] = [];
       const replaceLines: string[] = [];
       let inReplace = false;
 
       while (i < lines.length) {
-        const line = lines[i].trim();
+        const trimmed = lines[i].trimEnd();
 
-        if (line === "=======" && !inReplace) {
+        const isDivider = useNewDelimiter
+          ? trimmed === DIVIDER_MARKER
+          : trimmed === LEGACY_DIVIDER || trimmed === DIVIDER_MARKER;
+
+        if (isDivider && !inReplace) {
           inReplace = true;
           i++;
           continue;
         }
 
-        if (line === ">>>>>>> REPLACE") {
+        if (trimmed === REPLACE_MARKER) {
           blocks.push({
             search: searchLines.join("\n"),
             replace: replaceLines.join("\n"),
@@ -249,7 +265,10 @@ export async function handleApplyDiff(
       });
 
       // Collect new diagnostics
-      const newDiagnostics = await snap.collectNewErrors(filePath, diagnosticDelay);
+      const newDiagnostics = await snap.collectNewErrors(
+        filePath,
+        diagnosticDelay,
+      );
 
       const response: Record<string, unknown> = {
         status: "accepted",
@@ -282,9 +301,17 @@ export async function handleApplyDiff(
       }
 
       // Handle session/always acceptance — scope choice
-      if (decision === "accept-session" || decision === "accept-project" || decision === "accept-always") {
+      if (
+        decision === "accept-session" ||
+        decision === "accept-project" ||
+        decision === "accept-always"
+      ) {
         const scope: "session" | "project" | "global" =
-          decision === "accept-session" ? "session" : decision === "accept-project" ? "project" : "global";
+          decision === "accept-session"
+            ? "session"
+            : decision === "accept-project"
+              ? "project"
+              : "global";
 
         if (!inWorkspace) {
           // Outside workspace: show pattern editor pre-filled with parent dir

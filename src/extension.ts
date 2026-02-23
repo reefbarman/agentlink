@@ -241,9 +241,7 @@ function cleanupProjectMcpConfigForFolder(folderPath: string): void {
 
   const project = projects[folderPath];
   if (!project) return;
-  const mcpServers = project.mcpServers as
-    | Record<string, unknown>
-    | undefined;
+  const mcpServers = project.mcpServers as Record<string, unknown> | undefined;
   if (!mcpServers || !("native-claude" in mcpServers)) return;
 
   delete mcpServers["native-claude"];
@@ -373,11 +371,11 @@ function updateStatusBar(
   claudeConfigured?: boolean,
 ): void {
   if (port !== null) {
-    statusBarItem.text = `$(radio-tower) Native Claude :${port}`;
+    statusBarItem.text = `$(star-full) Native Claude :${port}`;
     statusBarItem.tooltip = `Native Claude MCP server running on port ${port}`;
     statusBarItem.backgroundColor = undefined;
   } else {
-    statusBarItem.text = `$(circle-slash) Native Claude`;
+    statusBarItem.text = `$(star-full) Native Claude`;
     statusBarItem.tooltip = "Native Claude MCP server stopped";
     statusBarItem.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
@@ -430,7 +428,9 @@ async function addTrustedCommandViaUI(): Promise<void> {
   if (!picked) return;
 
   // Scope selection
-  const scopeItems: Array<vscode.QuickPickItem & { scope: "project" | "global" }> = [];
+  const scopeItems: Array<
+    vscode.QuickPickItem & { scope: "project" | "global" }
+  > = [];
   const roots = vscode.workspace.workspaceFolders;
   if (roots && roots.length > 0) {
     scopeItems.push({

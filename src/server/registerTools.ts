@@ -168,10 +168,10 @@ export function registerTools(
 
   server.tool(
     "apply_diff",
-    "Edit an existing file using search/replace blocks. Opens a diff view for user review. Each SEARCH block must match exactly one location. Supports multiple hunks in a single call — include multiple SEARCH/REPLACE blocks to make several edits at once. Format:\n<<<<<<< SEARCH\nexact content to find\n=======\nreplacement content\n>>>>>>> REPLACE",
+    "Edit an existing file using search/replace blocks. Opens a diff view for user review. Each SEARCH block must match exactly one location. Supports multiple hunks in a single call — include multiple SEARCH/REPLACE blocks to make several edits at once. Format:\n<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE",
     {
       path: z.string().describe("File path (absolute or relative to workspace root)"),
-      diff: z.string().describe("Search/replace blocks in <<<<<<< SEARCH / ======= / >>>>>>> REPLACE format"),
+      diff: z.string().describe("Search/replace blocks in <<<<<<< SEARCH / ======= DIVIDER ======= / >>>>>>> REPLACE format"),
     },
     (params) => { touch(); return handleApplyDiff(params, approvalManager, sid()); }
   );
