@@ -6,6 +6,7 @@ import * as os from "os";
 import { randomUUID } from "crypto";
 
 import { McpServerHost } from "./server/McpServerHost.js";
+import { disposeQuickPickQueue } from "./util/quickPickQueue.js";
 import {
   disposeTerminalManager,
   initializeTerminalManager,
@@ -371,11 +372,11 @@ function updateStatusBar(
   claudeConfigured?: boolean,
 ): void {
   if (port !== null) {
-    statusBarItem.text = `$(star-full) Native Claude :${port}`;
+    statusBarItem.text = `$(chip) Native Claude :${port}`;
     statusBarItem.tooltip = `Native Claude MCP server running on port ${port}`;
     statusBarItem.backgroundColor = undefined;
   } else {
-    statusBarItem.text = `$(star-full) Native Claude`;
+    statusBarItem.text = `$(chip) Native Claude`;
     statusBarItem.tooltip = "Native Claude MCP server stopped";
     statusBarItem.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
@@ -581,18 +582,35 @@ export function activate(context: vscode.ExtensionContext): void {
     dispose: () => {
       stopServer();
       disposeTerminalManager();
+      disposeQuickPickQueue();
     },
   });
 
-  // Auto-start
+  // Auto-start with retry
   const autoStart = getConfig<boolean>("autoStart");
   if (autoStart) {
-    startServer(context).catch((err) => {
-      log(`Failed to auto-start server: ${err}`);
-      vscode.window.showErrorMessage(
-        `Native Claude: Failed to start MCP server: ${err}`,
-      );
-    });
+    const MAX_RETRIES = 3;
+    const startWithRetry = async (attempt: number): Promise<void> => {
+      try {
+        await startServer(context);
+      } catch (err) {
+        if (attempt < MAX_RETRIES) {
+          const delay = 1000 * 2 ** attempt; // 2s, 4s, 8s
+          log(
+            `Server start attempt ${attempt + 1} failed, retrying in ${delay}ms: ${err}`,
+          );
+          setTimeout(() => startWithRetry(attempt + 1), delay);
+        } else {
+          log(
+            `Failed to start server after ${MAX_RETRIES + 1} attempts: ${err}`,
+          );
+          vscode.window.showErrorMessage(
+            `Native Claude: Failed to start MCP server after ${MAX_RETRIES + 1} attempts: ${err}`,
+          );
+        }
+      }
+    };
+    startWithRetry(0);
   } else {
     updateStatusBar(null);
   }

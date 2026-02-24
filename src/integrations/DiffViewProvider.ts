@@ -4,6 +4,8 @@ import * as fs from "fs/promises";
 import * as diffLib from "diff";
 
 import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
+import { showApprovalAlert } from "../util/approvalAlert.js";
+import { enqueueApproval } from "../util/quickPickQueue.js";
 
 export type DiffDecision =
   | "accept"
@@ -31,35 +33,40 @@ export function resolveCurrentDiff(decision: DiffDecision): boolean {
 export async function showDiffMoreOptions(): Promise<void> {
   if (!pendingDecisionResolve) return;
 
-  const items: Array<vscode.QuickPickItem & { decision: DiffDecision }> = [
-    {
-      label: "$(bookmark) Accept for Session",
-      description:
-        "Accept this change and auto-accept future writes in this session",
-      decision: "accept-session",
-    },
-    {
-      label: "$(folder) Accept for Project",
-      description:
-        "Accept this change and auto-accept future writes for this project",
-      decision: "accept-project",
-    },
-    {
-      label: "$(globe) Always Accept",
-      description: "Accept this change and auto-accept all future writes",
-      decision: "accept-always",
-    },
-  ];
+  await enqueueApproval("Write scope options", async () => {
+    // Re-check after waiting in queue — decision may have been resolved
+    if (!pendingDecisionResolve) return;
 
-  const picked = await vscode.window.showQuickPick(items, {
-    title: "Accept with options",
-    placeHolder: "Choose scope for auto-acceptance",
-    ignoreFocusOut: true,
+    const items: Array<vscode.QuickPickItem & { decision: DiffDecision }> = [
+      {
+        label: "$(bookmark) Accept for Session",
+        description:
+          "Accept this change and auto-accept future writes in this session",
+        decision: "accept-session",
+      },
+      {
+        label: "$(folder) Accept for Project",
+        description:
+          "Accept this change and auto-accept future writes for this project",
+        decision: "accept-project",
+      },
+      {
+        label: "$(globe) Always Accept",
+        description: "Accept this change and auto-accept all future writes",
+        decision: "accept-always",
+      },
+    ];
+
+    const picked = await vscode.window.showQuickPick(items, {
+      title: "Accept with options",
+      placeHolder: "Choose scope for auto-acceptance",
+      ignoreFocusOut: true,
+    });
+
+    if (picked) {
+      resolveCurrentDiff(picked.decision);
+    }
   });
-
-  if (picked) {
-    resolveCurrentDiff(picked.decision);
-  }
 }
 
 // Per-path mutex to prevent concurrent edits to the same file
@@ -268,6 +275,11 @@ export class DiffViewProvider {
       true,
     );
 
+    // Track UI elements for cleanup — when the decision comes from outside
+    // the QuickPick (title bar buttons, editor close), the QP and alert
+    // must still be disposed to avoid orphaned UI that blocks subsequent dialogs.
+    let disposeUI: (() => void) | undefined;
+
     try {
       return await new Promise<DiffDecision>((resolve) => {
         let resolved = false;
@@ -277,6 +289,7 @@ export class DiffViewProvider {
           resolved = true;
           pendingDecisionResolve = null;
           editorCloseDisposable.dispose();
+          disposeUI?.();
           resolve(decision);
         };
 
@@ -297,47 +310,111 @@ export class DiffViewProvider {
             }
           });
 
-        // Show modal dialog (can't be accidentally dismissed by clicking elsewhere)
+        // Show QuickPick approval (safer than modal — random keypresses go
+        // into the filter box instead of accidentally selecting a button).
         const action = this.editType === "create" ? "create" : "modify";
         const outsideWarning = this.outsideWorkspace
           ? " [OUTSIDE WORKSPACE]"
           : "";
-        const showModal = () => {
-          vscode.window
-            .showWarningMessage(
-              `Claude wants to ${action} ${this.relPath}${outsideWarning}`,
-              {
-                modal: true,
-                detail:
-                  "Review the diff in the editor. You can edit the right side before accepting.",
-              },
-              "Review",
-              "Accept",
-              "For Session",
-              "For Project",
-              "Always",
-              "Reject",
-            )
-            .then(async (choice) => {
-              if (resolved) return;
-              if (choice === "Review") {
-                // Dismiss the modal — user will use editor title bar buttons
-                return;
-              }
-              if (choice === "Accept") finish("accept");
-              else if (choice === "For Session") finish("accept-session");
-              else if (choice === "For Project") finish("accept-project");
-              else if (choice === "Always") finish("accept-always");
-              else if (choice === "Reject") finish("reject");
-              else {
-                // Escape / dismiss — treat as rejection
-                finish("reject");
-              }
-            });
+        type WriteItem = vscode.QuickPickItem & {
+          decision: DiffDecision | "review";
         };
-        showModal();
+        const writeItems: WriteItem[] = [
+          {
+            label: "$(eye) Review",
+            description: "Dismiss this and review the diff in the editor",
+            decision: "review",
+            alwaysShow: true,
+          },
+          {
+            label: "$(check) Accept",
+            description: "Save this file change",
+            decision: "accept",
+            alwaysShow: true,
+          },
+          {
+            label: "$(check) For Session",
+            description: "Auto-accept writes this session",
+            decision: "accept-session",
+            alwaysShow: true,
+          },
+          {
+            label: "$(folder) For Project",
+            description: "Auto-accept writes for this project",
+            decision: "accept-project",
+            alwaysShow: true,
+          },
+          {
+            label: "$(globe) Always",
+            description: "Auto-accept writes globally",
+            decision: "accept-always",
+            alwaysShow: true,
+          },
+          {
+            label: "$(close) Reject",
+            description: "Discard this change",
+            decision: "reject",
+            alwaysShow: true,
+          },
+        ];
+        const showApproval = () => {
+          // Enqueue to prevent collision with other concurrent approval dialogs.
+          // The queue entry resolves when the QP is dismissed or an action is
+          // chosen. The outer waitForUserDecision() promise stays pending if the
+          // user just dismisses (review) — it resolves via finish() from title
+          // bar buttons or editor close.
+          enqueueApproval("Write approval", () => new Promise<void>((releaseQueue) => {
+            // If already resolved (e.g., editor closed while waiting in queue),
+            // release immediately without showing a QP.
+            if (resolved) { releaseQueue(); return; }
+
+            let queueReleased = false;
+            const releaseOnce = () => {
+              if (queueReleased) return;
+              queueReleased = true;
+              releaseQueue();
+            };
+
+            const alert = showApprovalAlert(`Write approval: ${this.relPath}`);
+            const qp = vscode.window.createQuickPick<WriteItem>();
+            qp.title = `${action}: ${this.relPath}${outsideWarning}`;
+            qp.placeholder =
+              "Review the diff in the editor. You can edit the right side before accepting.";
+            qp.items = writeItems;
+            qp.activeItems = [];
+            qp.ignoreFocusOut = true;
+
+            // Store cleanup so finish() and finally can dispose these.
+            // Also releases the queue slot when called.
+            disposeUI = () => {
+              alert.dispose();
+              qp.dispose();
+              releaseOnce();
+            };
+
+            qp.onDidAccept(() => {
+              const selected = qp.selectedItems[0];
+              if (!selected) return;
+              disposeUI?.();
+              disposeUI = undefined;
+              if (resolved) return;
+              if (selected.decision === "review") return; // Dismiss — user uses title bar buttons
+              finish(selected.decision);
+            });
+            qp.onDidHide(() => {
+              // Escape/dismiss — treat as review (not rejection), since the diff is still open.
+              // Release queue slot so the next approval can show.
+              disposeUI?.();
+              disposeUI = undefined;
+            });
+            qp.show();
+            qp.activeItems = []; // Re-clear after show
+          }));
+        };
+        showApproval();
       });
     } finally {
+      disposeUI?.();
       await vscode.commands.executeCommand(
         "setContext",
         "nativeClaude.diffPending",
@@ -633,12 +710,18 @@ function getNewDiagnostics(
  *   const diagnostics = await snap.collectNewErrors(filePath, delay);
  */
 export function snapshotDiagnostics(): {
-  collectNewErrors: (filePath: string, delayMs: number) => Promise<string | undefined>;
+  collectNewErrors: (
+    filePath: string,
+    delayMs: number,
+  ) => Promise<string | undefined>;
 } {
   const preDiagnostics = vscode.languages.getDiagnostics();
 
   return {
-    collectNewErrors(filePath: string, delayMs: number): Promise<string | undefined> {
+    collectNewErrors(
+      filePath: string,
+      delayMs: number,
+    ): Promise<string | undefined> {
       return new Promise<string | undefined>((resolve) => {
         let settled = false;
 
@@ -649,7 +732,10 @@ export function snapshotDiagnostics(): {
           clearTimeout(timer);
 
           const postDiagnostics = vscode.languages.getDiagnostics();
-          const newProblems = getNewDiagnostics(preDiagnostics, postDiagnostics);
+          const newProblems = getNewDiagnostics(
+            preDiagnostics,
+            postDiagnostics,
+          );
 
           const errorDiags = newProblems.filter(([, diags]) =>
             diags.some((d) => d.severity === vscode.DiagnosticSeverity.Error),

@@ -10,6 +10,8 @@ import type {
 import { splitCompoundCommand } from "../approvals/commandSplitter.js";
 import { promptRejectionReason } from "../util/rejectionReason.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
+import { showApprovalAlert } from "../util/approvalAlert.js";
+import { enqueueApproval } from "../util/quickPickQueue.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -135,25 +137,36 @@ async function approveSubCommands(
       continue;
     }
 
-    const decision = await showCommandApproval(sub);
+    // Wrap entire approval flow (QP + follow-up pattern editor + rejection
+    // reason) in the queue so concurrent approvals don't collide.
+    const result = await enqueueApproval("Command approval", async () => {
+      const decision = await showCommandApproval(sub);
 
-    if (decision === "reject") {
-      const reason = await promptRejectionReason();
-      return { approved: false, reason };
+      if (decision === "reject") {
+        const reason = await promptRejectionReason();
+        return { action: "reject" as const, reason };
+      }
+      if (decision === "run-once") {
+        return { action: "continue" as const };
+      }
+
+      // "session", "project", or "global" — show pattern editor
+      const rule = await showPatternEditor(sub);
+      const scope: "session" | "project" | "global" =
+        decision === "session"
+          ? "session"
+          : decision === "project"
+            ? "project"
+            : "global";
+      return { action: "approve" as const, rule, scope };
+    });
+
+    if (result.action === "reject") {
+      return { approved: false, reason: result.reason };
     }
-    if (decision === "run-once") continue;
-
-    // "session", "project", or "global" — show pattern editor
-    const rule = await showPatternEditor(sub);
-    if (!rule) continue; // cancelled → treat as run-once
-
-    const scope =
-      decision === "session"
-        ? "session"
-        : decision === "project"
-          ? "project"
-          : "global";
-    approvalManager.addCommandRule(sessionId, rule, scope);
+    if (result.action === "approve" && result.rule) {
+      approvalManager.addCommandRule(sessionId, result.rule, result.scope!);
+    }
   }
 
   return { approved: true };
@@ -167,37 +180,48 @@ type ApprovalDecision =
   | "reject";
 
 /**
- * Dialog 1: Show the command with a modal warning (matches file-write approval UX).
+ * Dialog 1: QuickPick-based command approval.
+ * Uses a QuickPick instead of a modal dialog so that random keystrokes
+ * (from typing in other windows/apps) go into the filter box harmlessly
+ * rather than accidentally selecting a button.
  */
-async function showCommandApproval(command: string): Promise<ApprovalDecision> {
-  const choice = await vscode.window.showWarningMessage(
-    `Claude wants to run a command`,
-    {
-      modal: true,
-      detail: command,
-    },
-    "Run Once",
-    "For Session",
-    "For Project",
-    "Always",
-    "Reject",
-  );
+function showCommandApproval(command: string): Promise<ApprovalDecision> {
+  type Item = vscode.QuickPickItem & { decision: ApprovalDecision };
+  const items: Item[] = [
+    { label: "$(play) Run Once", description: "Execute this command, ask again next time", decision: "run-once", alwaysShow: true },
+    { label: "$(check) For Session", description: "Trust matching commands this session", decision: "session", alwaysShow: true },
+    { label: "$(folder) For Project", description: "Trust matching commands for this project", decision: "project", alwaysShow: true },
+    { label: "$(globe) Always", description: "Trust matching commands globally", decision: "global", alwaysShow: true },
+    { label: "$(close) Reject", description: "Do not run this command", decision: "reject", alwaysShow: true },
+  ];
 
-  switch (choice) {
-    case "Run Once":
-      return "run-once";
-    case "For Session":
-      return "session";
-    case "For Project":
-      return "project";
-    case "Always":
-      return "global";
-    case "Reject":
-      return "reject";
-    default:
-      // Escape / dismiss — treat as rejection
-      return "reject";
-  }
+  return new Promise<ApprovalDecision>((resolve) => {
+    const alert = showApprovalAlert("Command approval required");
+    const qp = vscode.window.createQuickPick<Item>();
+    qp.title = "Approve command?";
+    qp.placeholder = command;
+    qp.items = items;
+    qp.activeItems = []; // No pre-selection — prevents accidental Enter
+    qp.ignoreFocusOut = true;
+
+    let resolved = false;
+    qp.onDidAccept(() => {
+      const selected = qp.selectedItems[0];
+      if (selected) {
+        resolved = true;
+        alert.dispose();
+        resolve(selected.decision);
+        qp.dispose();
+      }
+    });
+    qp.onDidHide(() => {
+      alert.dispose();
+      if (!resolved) resolve("reject");
+      qp.dispose();
+    });
+    qp.show();
+    qp.activeItems = []; // Re-clear after show (VS Code may auto-select first item)
+  });
 }
 
 /**

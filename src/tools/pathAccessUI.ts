@@ -3,10 +3,16 @@ import * as path from "path";
 
 import type { ApprovalManager, PathRule } from "../approvals/ApprovalManager.js";
 import { promptRejectionReason } from "../util/rejectionReason.js";
+import { showApprovalAlert } from "../util/approvalAlert.js";
+import { enqueueApproval } from "../util/quickPickQueue.js";
+
+type PathDecision = "allow-once" | "allow-session" | "allow-project" | "allow-always" | "reject";
 
 /**
  * Gate for outside-workspace path access.
- * Shows a modal warning dialog that can't be accidentally dismissed.
+ * Uses a QuickPick instead of a modal dialog so that random keystrokes
+ * (from typing in other windows/apps) go into the filter box harmlessly
+ * rather than accidentally selecting a button.
  * On "For Session"/"Always", shows a pattern editor so the user can
  * widen the rule (e.g. to a directory prefix or glob).
  * On "Reject" or Escape, prompts for an optional reason.
@@ -16,34 +22,67 @@ export async function approveOutsideWorkspaceAccess(
   approvalManager: ApprovalManager,
   sessionId: string,
 ): Promise<{ approved: boolean; reason?: string }> {
-  const choice = await vscode.window.showWarningMessage(
-    `Outside workspace access:\n${filePath}`,
-    { modal: true, detail: "A tool is requesting access to a path outside your workspace. How would you like to handle this?" },
-    "Allow Once",
-    "Allow for Session",
-    "Allow for Project",
-    "Always Allow",
-  );
+  // Wrap entire approval flow in the queue so concurrent path approvals
+  // don't collide (QP + follow-up pattern editor + rejection reason).
+  return enqueueApproval("Path access approval", async () => {
+    const decision = await showPathApproval(filePath);
 
-  // Escape / X / no choice → reject
-  if (!choice) {
-    const reason = await promptRejectionReason();
-    return { approved: false, reason };
-  }
-
-  if (choice === "Allow for Session" || choice === "Allow for Project" || choice === "Always Allow") {
-    const scope =
-      choice === "Allow for Session" ? "session" : choice === "Allow for Project" ? "project" : "global";
-    // Show pattern editor pre-filled with the directory path + trailing slash
-    const dirPath = path.dirname(filePath) + "/";
-    const rule = await showPathPatternEditor(dirPath);
-    if (rule) {
-      approvalManager.addPathRule(sessionId, rule, scope);
+    if (decision === "reject") {
+      const reason = await promptRejectionReason();
+      return { approved: false, reason };
     }
-    // If dismissed: still allow this access, just don't save a rule
-  }
 
-  return { approved: true };
+    if (decision === "allow-session" || decision === "allow-project" || decision === "allow-always") {
+      const scope =
+        decision === "allow-session" ? "session" : decision === "allow-project" ? "project" : "global";
+      const dirPath = path.dirname(filePath) + "/";
+      const rule = await showPathPatternEditor(dirPath);
+      if (rule) {
+        approvalManager.addPathRule(sessionId, rule, scope);
+      }
+    }
+
+    return { approved: true };
+  });
+}
+
+function showPathApproval(filePath: string): Promise<PathDecision> {
+  type Item = vscode.QuickPickItem & { decision: PathDecision };
+  const items: Item[] = [
+    { label: "$(unlock) Allow Once", description: "Allow this access, ask again next time", decision: "allow-once", alwaysShow: true },
+    { label: "$(check) For Session", description: "Trust matching paths this session", decision: "allow-session", alwaysShow: true },
+    { label: "$(folder) For Project", description: "Trust matching paths for this project", decision: "allow-project", alwaysShow: true },
+    { label: "$(globe) Always", description: "Trust matching paths globally", decision: "allow-always", alwaysShow: true },
+    { label: "$(close) Reject", description: "Deny access to this path", decision: "reject", alwaysShow: true },
+  ];
+
+  return new Promise<PathDecision>((resolve) => {
+    const alert = showApprovalAlert("Path access approval required");
+    const qp = vscode.window.createQuickPick<Item>();
+    qp.title = "Outside workspace access";
+    qp.placeholder = filePath;
+    qp.items = items;
+    qp.activeItems = [];
+    qp.ignoreFocusOut = true;
+
+    let resolved = false;
+    qp.onDidAccept(() => {
+      const selected = qp.selectedItems[0];
+      if (selected) {
+        resolved = true;
+        alert.dispose();
+        resolve(selected.decision);
+        qp.dispose();
+      }
+    });
+    qp.onDidHide(() => {
+      alert.dispose();
+      if (!resolved) resolve("reject");
+      qp.dispose();
+    });
+    qp.show();
+    qp.activeItems = [];
+  });
 }
 
 /**

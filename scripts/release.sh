@@ -35,7 +35,7 @@ npm run build
 
 # Package VSIX into dist/
 mkdir -p dist
-npx @vscode/vsce package --no-dependencies --out dist/
+npx @vscode/vsce package --no-dependencies --allow-star-activation --out dist/
 VSIX=$(ls -t dist/*.vsix | head -1)
 echo "Built $VSIX"
 

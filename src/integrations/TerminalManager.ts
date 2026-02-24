@@ -121,10 +121,18 @@ export class TerminalManager {
       return this.createTerminal(cwd, terminal_name);
     }
 
-    // Default: reuse idle terminal with matching cwd
-    const existing = this.terminals.find((t) => !t.busy && t.cwd === cwd);
-    if (existing) {
-      return existing;
+    // Default: reuse any idle default terminal.
+    // Prefer one with matching cwd, but fall back to any idle one
+    // (the stored cwd is just the creation cwd — after commands run it may differ).
+    const idleDefaults = this.terminals.filter(
+      (t) => !t.busy && t.name === "Native Claude",
+    );
+    const cwdMatch = idleDefaults.find((t) => t.cwd === cwd);
+    if (cwdMatch) {
+      return cwdMatch;
+    }
+    if (idleDefaults.length > 0) {
+      return idleDefaults[0];
     }
 
     return this.createTerminal(cwd, "Native Claude");
@@ -184,9 +192,7 @@ export class TerminalManager {
     let timedOut = false;
     const disposables: vscode.Disposable[] = [];
 
-    // Register listeners BEFORE executing to avoid race conditions.
-    // exitCodePromise resolves when: (1) shell execution ends, (2) terminal
-    // closes, (3) user-specified timeout fires, or (4) grace period expires.
+    // --- Primary: shell integration events ---
     const exitCodePromise = new Promise<number | undefined>((resolve) => {
       disposables.push(
         vscode.window.onDidEndTerminalShellExecution((e) => {
@@ -221,16 +227,42 @@ export class TerminalManager {
     let output = "";
     const stream = execution.read();
 
-    // Race stream reading against exit code / timeout.
+    // Race stream reading against exit code / marker / timeout.
     // The stream's async iterator can hang even after the command finishes
     // (VS Code shell integration quirk), so we must not block on it alone.
+    // The marker fallback catches cases where the event is dropped but the
+    // shell did send the OSC 633;D completion sequence.
+    //
+    // We also check for the 633;D marker directly in the stream data itself:
+    // if the stream keeps delivering data past the command boundary (the bug),
+    // the shell's completion marker will appear in the chunks.
+    let resolveStreamMarker: ((code: number | undefined) => void) | undefined;
+    const streamMarkerPromise = new Promise<number | undefined>((resolve) => {
+      resolveStreamMarker = resolve;
+    });
+
+    const MARKER_RE = /\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/;
+
     const streamDone = (async () => {
       for await (const data of stream) {
         output += data;
+        // Check tail of accumulated output for the completion marker.
+        // Using the tail handles markers split across chunks.
+        const tail = output.slice(-50);
+        const match = tail.match(MARKER_RE);
+        if (match) {
+          // Truncate output to before the marker (strip prompt/protocol data)
+          const markerIdx = output.lastIndexOf("\x1b]633;D");
+          if (markerIdx >= 0) output = output.slice(0, markerIdx);
+          resolveStreamMarker!(
+            match[1] !== undefined ? parseInt(match[1], 10) : undefined,
+          );
+          break;
+        }
       }
     })();
 
-    await Promise.race([streamDone, exitCodePromise]);
+    await Promise.race([streamDone, exitCodePromise, streamMarkerPromise]);
 
     // Clean up the output
     output = cleanTerminalOutput(output);
@@ -241,6 +273,7 @@ export class TerminalManager {
     const EXIT_CODE_GRACE_MS = 5_000;
     const exitCode = await Promise.race([
       exitCodePromise,
+      streamMarkerPromise,
       new Promise<undefined>((r) =>
         setTimeout(() => r(undefined), EXIT_CODE_GRACE_MS),
       ),
@@ -302,6 +335,43 @@ export class TerminalManager {
       output_captured: false,
       terminal_id: managed.id,
     };
+  }
+
+  /**
+   * Close managed terminals. Returns the count of terminals closed.
+   * If names are specified, only closes terminals with matching names.
+   * Otherwise closes all managed terminals.
+   */
+  closeTerminals(names?: string[]): number {
+    const toClose = names
+      ? this.terminals.filter((t) => names.includes(t.name))
+      : [...this.terminals];
+
+    for (const managed of toClose) {
+      managed.terminal.dispose();
+    }
+
+    // The onDidCloseTerminal listener will clean up the array,
+    // but do it eagerly too for immediate consistency.
+    const closedIds = new Set(toClose.map((t) => t.id));
+    this.terminals = this.terminals.filter((t) => !closedIds.has(t.id));
+
+    return toClose.length;
+  }
+
+  /**
+   * List all managed terminals with their current state.
+   */
+  listTerminals(): Array<{
+    id: string;
+    name: string;
+    busy: boolean;
+  }> {
+    return this.terminals.map((t) => ({
+      id: t.id,
+      name: t.name,
+      busy: t.busy,
+    }));
   }
 
   dispose(): void {

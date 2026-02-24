@@ -610,11 +610,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         ? (globalWriteRules ?? [])
             .map((r) => {
               const ep = this.escapeHtml(r.pattern);
+              const up = encodeURIComponent(r.pattern);
               return `<div class="rule-row">
             <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editGlobalWriteRule', '${ep}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editGlobalWriteRule', '${ep}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeGlobalWriteRule', '${ep}')" title="Remove">✕</a>
+            <span class="rule-pattern" onclick="sendRule('editGlobalWriteRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
+            <a class="rule-action" onclick="sendRule('editGlobalWriteRule', '${up}', '${r.mode}')" title="Edit">✎</a>
+            <a class="rule-action rule-delete" onclick="sendData('removeGlobalWriteRule', '${up}')" title="Remove">✕</a>
           </div>`;
             })
             .join("")
@@ -630,13 +631,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               const shortId =
                 s.id.length > 12 ? s.id.substring(0, 12) + "..." : s.id;
               const eid = this.escapeHtml(s.id);
+              const uid = encodeURIComponent(s.id);
               const rules = s.writeRules
                 .map((r) => {
                   const ep = this.escapeHtml(r.pattern);
+                  const up = encodeURIComponent(r.pattern);
                   return `<div class="rule-row">
               <span class="rule-mode">${r.mode}</span>
               <span class="rule-pattern" title="${ep}">${ep}</span>
-              <a class="rule-action rule-delete" onclick="sendSessionData('removeSessionWriteRule', '${eid}', '${ep}')" title="Remove">✕</a>
+              <a class="rule-action rule-delete" onclick="sendSessionData('removeSessionWriteRule', '${uid}', '${up}')" title="Remove">✕</a>
             </div>`;
                 })
                 .join("");
@@ -663,11 +666,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         ? (projectWriteRules ?? [])
             .map((r) => {
               const ep = this.escapeHtml(r.pattern);
+              const up = encodeURIComponent(r.pattern);
               return `<div class="rule-row">
             <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editProjectWriteRule', '${ep}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editProjectWriteRule', '${ep}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeProjectWriteRule', '${ep}')" title="Remove">✕</a>
+            <span class="rule-pattern" onclick="sendRule('editProjectWriteRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
+            <a class="rule-action" onclick="sendRule('editProjectWriteRule', '${up}', '${r.mode}')" title="Edit">✎</a>
+            <a class="rule-action rule-delete" onclick="sendData('removeProjectWriteRule', '${up}')" title="Remove">✕</a>
           </div>`;
             })
             .join("")
@@ -705,11 +709,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         ? (globalPathRules ?? [])
             .map((r) => {
               const ep = this.escapeHtml(r.pattern);
+              const up = encodeURIComponent(r.pattern);
               return `<div class="rule-row">
             <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editGlobalPathRule', '${ep}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editGlobalPathRule', '${ep}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeGlobalPathRule', '${ep}')" title="Remove">✕</a>
+            <span class="rule-pattern" onclick="sendRule('editGlobalPathRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
+            <a class="rule-action" onclick="sendRule('editGlobalPathRule', '${up}', '${r.mode}')" title="Edit">✎</a>
+            <a class="rule-action rule-delete" onclick="sendData('removeGlobalPathRule', '${up}')" title="Remove">✕</a>
           </div>`;
             })
             .join("")
@@ -725,13 +730,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               const shortId =
                 s.id.length > 12 ? s.id.substring(0, 12) + "..." : s.id;
               const eid = this.escapeHtml(s.id);
+              const uid = encodeURIComponent(s.id);
               const rules = s.pathRules
                 .map((r) => {
                   const ep = this.escapeHtml(r.pattern);
+                  const up = encodeURIComponent(r.pattern);
                   return `<div class="rule-row">
               <span class="rule-mode">${r.mode}</span>
               <span class="rule-pattern" title="${ep}">${ep}</span>
-              <a class="rule-action rule-delete" onclick="sendSessionData('removeSessionPathRule', '${eid}', '${ep}')" title="Remove">✕</a>
+              <a class="rule-action rule-delete" onclick="sendSessionData('removeSessionPathRule', '${uid}', '${up}')" title="Remove">✕</a>
             </div>`;
                 })
                 .join("");
@@ -758,11 +765,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         ? (projectPathRules ?? [])
             .map((r) => {
               const ep = this.escapeHtml(r.pattern);
+              const up = encodeURIComponent(r.pattern);
               return `<div class="rule-row">
             <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editProjectPathRule', '${ep}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editProjectPathRule', '${ep}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeProjectPathRule', '${ep}')" title="Remove">✕</a>
+            <span class="rule-pattern" onclick="sendRule('editProjectPathRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
+            <a class="rule-action" onclick="sendRule('editProjectPathRule', '${up}', '${r.mode}')" title="Edit">✎</a>
+            <a class="rule-action rule-delete" onclick="sendData('removeProjectPathRule', '${up}')" title="Remove">✕</a>
           </div>`;
             })
             .join("")
@@ -792,11 +800,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         ? (globalCommandRules ?? [])
             .map((r) => {
               const ep = this.escapeHtml(r.pattern);
+              const up = encodeURIComponent(r.pattern);
               return `<div class="rule-row">
             <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editGlobalRule', '${ep}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editGlobalRule', '${ep}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeGlobalRule', '${ep}')" title="Remove">✕</a>
+            <span class="rule-pattern" onclick="sendRule('editGlobalRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
+            <a class="rule-action" onclick="sendRule('editGlobalRule', '${up}', '${r.mode}')" title="Edit">✎</a>
+            <a class="rule-action rule-delete" onclick="sendData('removeGlobalRule', '${up}')" title="Remove">✕</a>
           </div>`;
             })
             .join("")
@@ -812,21 +821,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               const shortId =
                 s.id.length > 12 ? s.id.substring(0, 12) + "..." : s.id;
               const eid = this.escapeHtml(s.id);
+              const uid = encodeURIComponent(s.id);
               const rules = s.commandRules
                 .map((r) => {
                   const ep = this.escapeHtml(r.pattern);
+                  const up = encodeURIComponent(r.pattern);
                   return `<div class="rule-row">
               <span class="rule-mode">${r.mode}</span>
-              <span class="rule-pattern" onclick="sendSessionRuleEdit('${eid}', '${ep}', '${r.mode}')" title="Click to edit">${ep}</span>
-              <a class="rule-action" onclick="sendSessionRuleEdit('${eid}', '${ep}', '${r.mode}')" title="Edit">✎</a>
-              <a class="rule-action rule-delete" onclick="sendSessionRule('${eid}', '${ep}')" title="Remove">✕</a>
+              <span class="rule-pattern" onclick="sendSessionRuleEdit('${uid}', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
+              <a class="rule-action" onclick="sendSessionRuleEdit('${uid}', '${up}', '${r.mode}')" title="Edit">✎</a>
+              <a class="rule-action rule-delete" onclick="sendSessionRule('${uid}', '${up}')" title="Remove">✕</a>
             </div>`;
                 })
                 .join("");
               return `<div class="session-block">
             <div class="info-row">
               <span class="label" title="${this.escapeHtml(s.id)}">Session ${shortId}</span>
-              <a class="link" onclick="sendSession('clearSessionRules', '${eid}')">Clear</a>
+              <a class="link" onclick="sendSession('clearSessionRules', '${uid}')">Clear</a>
             </div>
             ${rules}
           </div>`;
@@ -850,11 +861,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         ? (projectCommandRules ?? [])
             .map((r) => {
               const ep = this.escapeHtml(r.pattern);
+              const up = encodeURIComponent(r.pattern);
               return `<div class="rule-row">
             <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editProjectRule', '${ep}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editProjectRule', '${ep}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeProjectRule', '${ep}')" title="Remove">✕</a>
+            <span class="rule-pattern" onclick="sendRule('editProjectRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
+            <a class="rule-action" onclick="sendRule('editProjectRule', '${up}', '${r.mode}')" title="Edit">✎</a>
+            <a class="rule-action rule-delete" onclick="sendData('removeProjectRule', '${up}')" title="Remove">✕</a>
           </div>`;
             })
             .join("")
@@ -1134,12 +1146,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   <script>
     const vscode = acquireVsCodeApi();
     function send(command) { vscode.postMessage({ command }); }
-    function sendData(command, pattern) { vscode.postMessage({ command, pattern }); }
-    function sendSession(command, sessionId) { vscode.postMessage({ command, sessionId }); }
-    function sendRule(command, pattern, mode) { vscode.postMessage({ command, pattern, mode }); }
-    function sendSessionRule(sessionId, pattern) { vscode.postMessage({ command: 'removeSessionRule', sessionId, pattern }); }
-    function sendSessionRuleEdit(sessionId, pattern, mode) { vscode.postMessage({ command: 'editSessionRule', sessionId, pattern, mode }); }
-    function sendSessionData(command, sessionId, pattern) { vscode.postMessage({ command, sessionId, pattern }); }
+    function d(s) { return decodeURIComponent(s); }
+    function sendData(command, pattern) { vscode.postMessage({ command, pattern: d(pattern) }); }
+    function sendSession(command, sessionId) { vscode.postMessage({ command, sessionId: d(sessionId) }); }
+    function sendRule(command, pattern, mode) { vscode.postMessage({ command, pattern: d(pattern), mode }); }
+    function sendSessionRule(sessionId, pattern) { vscode.postMessage({ command: 'removeSessionRule', sessionId: d(sessionId), pattern: d(pattern) }); }
+    function sendSessionRuleEdit(sessionId, pattern, mode) { vscode.postMessage({ command: 'editSessionRule', sessionId: d(sessionId), pattern: d(pattern), mode }); }
+    function sendSessionData(command, sessionId, pattern) { vscode.postMessage({ command, sessionId: d(sessionId), pattern: d(pattern) }); }
   </script>
 </body>
 </html>`;

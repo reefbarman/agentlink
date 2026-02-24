@@ -6,6 +6,12 @@
 
 ## MANDATORY: Use native-claude MCP tools
 
+**STOP CHECK**: Before doing ANY work, verify the `native-claude` MCP server is connected by confirming you have access to its tools (e.g. `read_file`, `execute_command`, `apply_diff`). If native-claude tools are NOT available in your tool list, **STOP IMMEDIATELY** and tell the user:
+
+> "The native-claude MCP server is not connected. I cannot proceed without it. Please check that the native-claude VS Code extension is running and reload the MCP connection."
+
+**Do NOT fall back to built-in tools.** Do NOT silently continue with `Read`, `Edit`, `Write`, `Bash`, `Glob`, or `Grep`. Wait for the user to fix the connection.
+
 When the `native-claude` MCP server is available, NEVER use built-in `Read`, `Edit`, `Write`, `Bash`, `Glob`, or `Grep` tools. ALWAYS use the native-claude MCP equivalents instead:
 
 - `Read` → `read_file`
@@ -26,16 +32,23 @@ These MCP tools open diff views for user review, run commands in visible termina
 | `Glob` | `list_files` | Lists files with optional recursive + depth control |
 | `Grep` | `search_files` | Ripgrep-powered search with context lines. Also supports semantic/vector search. |
 
-### Usage notes
+### Terminal behavior — IMPORTANT
+
+`execute_command` automatically reuses an existing idle terminal. You do NOT need to pass `terminal_name` or `terminal_id` for normal sequential commands — just omit both and the tool will reuse the default terminal.
+
+- **DO NOT** pass `terminal_name` unless you specifically need a *separate* terminal (e.g. a long-running dev server alongside normal commands, or truly parallel tasks).
+- **DO NOT** invent terminal names like "Build", "Git", "Lint" for one-off commands — this creates unnecessary terminals that clutter the user's workspace.
+- `terminal_id` is only needed if a previous background command returned one and you need to interact with that specific terminal.
+- Use `background: true` for long-running processes (dev servers, watch modes). This is the primary reason to have a separate terminal.
+- After a session, use `close_terminals` to clean up any stale terminals.
+- `execute_command` runs in a real PTY terminal. Always use non-interactive flags where available (e.g. `--yes`, `-y`, `--no-input`, `--non-interactive`, `CI=true`) to prevent commands from hanging on prompts.
+- **Always set a `timeout`** for commands you expect to complete quickly (e.g. git, ls, npm test — use 10-30s). This prevents the session from hanging if a command unexpectedly blocks. Only omit timeout for long-running processes (dev servers, watch modes) where you want to wait indefinitely.
+
+### File editing notes
 
 - After writing files, check the response for `diagnostics` and `user_edits`.
 - If `user_edits` is present, the user modified your proposed changes — read the patch to understand what they changed.
-- Use `terminal_name` for parallel terminal sessions (e.g. "Server", "Tests").
-- Use `background: true` for long-running processes like dev servers.
 - Use `get_diagnostics` for real VS Code errors/warnings from language services.
-- `execute_command` timeout is in seconds (default: waits indefinitely). Set it when you want to cap execution time.
-- `execute_command` runs in a real PTY terminal, so commands detect it as interactive. Always use non-interactive flags where available (e.g. `--yes`, `-y`, `--no-input`, `--non-interactive`, `CI=true`) to prevent commands from hanging on prompts.
-- Use the same terminal where possible except when running long processes or multiple commands in parallel. This keeps the user experience cleaner and more organized.
 
 ### Additional tools (no built-in equivalent)
 
@@ -50,3 +63,4 @@ native-claude also provides tools that Claude Code doesn't have natively. Use th
 - **`rename_symbol`** — Rename a symbol across the entire workspace using the language server. Updates all references, imports, and re-exports.
 - **`open_file`** — Open a file in the VS Code editor, optionally scrolling to a specific line.
 - **`show_notification`** — Show a notification in VS Code. Use sparingly for important status updates.
+- **`codebase_search`** — Semantic search over the codebase using vector similarity. Pass a natural language query (e.g. "how does auth work", "where are API routes defined") and get ranked code chunks. **Prefer this over regex search when you're exploring unfamiliar code, looking for conceptual matches, or don't know exact function/variable names.** Requires Roo Code codebase index + OpenAI API key.

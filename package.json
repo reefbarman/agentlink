@@ -2,7 +2,7 @@
   "name": "native-claude",
   "displayName": "Native Claude",
   "description": "MCP server that provides Claude Code with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "0.5.13",
+  "version": "0.5.26",
   "publisher": "native-claude",
   "repository": {
     "type": "git",
@@ -14,7 +14,7 @@
   },
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "*"
   ],
   "categories": [
     "Other"
