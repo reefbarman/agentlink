@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { getRelativePath } from "../util/paths.js";
 import { resolveAndOpenDocument, SYMBOL_KIND_NAMES } from "./languageFeatures.js";
 
@@ -29,6 +30,7 @@ function serializeDocumentSymbol(sym: vscode.DocumentSymbol): SerializedSymbol {
 export async function handleGetSymbols(
   params: { path?: string; query?: string },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
@@ -40,7 +42,7 @@ export async function handleGetSymbols(
 
     // Document symbols mode
     if (params.path) {
-      const { uri, relPath } = await resolveAndOpenDocument(params.path, approvalManager, sessionId);
+      const { uri, relPath } = await resolveAndOpenDocument(params.path, approvalManager, approvalPanel, sessionId);
 
       const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
         "vscode.executeDocumentSymbolProvider",

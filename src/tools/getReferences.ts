@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { resolveAndOpenDocument, toPosition, serializeLocation } from "./languageFeatures.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
@@ -10,10 +11,11 @@ const MAX_REFERENCES = 200;
 export async function handleGetReferences(
   params: { path: string; line: number; column: number; include_declaration?: boolean },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, sessionId);
+    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, approvalPanel, sessionId);
     const position = toPosition(params.line, params.column);
 
     const locations = await vscode.commands.executeCommand<vscode.Location[]>(

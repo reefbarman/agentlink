@@ -2,7 +2,7 @@
   "name": "native-claude",
   "displayName": "Native Claude",
   "description": "MCP server that provides Claude Code with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "0.6.4",
+  "version": "0.6.12",
   "publisher": "native-claude",
   "repository": {
     "type": "git",
@@ -27,6 +27,13 @@
           "title": "Native Claude",
           "icon": "media/claude.svg"
         }
+      ],
+      "panel": [
+        {
+          "id": "nativeClaudePanel",
+          "title": "Native Claude",
+          "icon": "media/claude.svg"
+        }
       ]
     },
     "views": {
@@ -35,6 +42,13 @@
           "type": "webview",
           "id": "nativeClaude.statusView",
           "name": "Status"
+        }
+      ],
+      "nativeClaudePanel": [
+        {
+          "type": "webview",
+          "id": "nativeClaude.approvalView",
+          "name": "Approvals"
         }
       ]
     },
@@ -136,6 +150,19 @@
           "type": "string",
           "default": "",
           "description": "OpenAI API key for embedding queries (semantic search). Falls back to OPENAI_API_KEY env var."
+        },
+        "native-claude.approvalPosition": {
+          "type": "string",
+          "enum": [
+            "beside",
+            "panel"
+          ],
+          "default": "beside",
+          "enumDescriptions": [
+            "Opens an editor tab to the right of the active editor (split view). Closes when all approvals are handled.",
+            "Shows a tab in the bottom panel alongside Terminal/Problems. Can be dragged to the secondary sidebar."
+          ],
+          "description": "Where to show approval dialogs."
         },
         "native-claude.writeRules": {
           "type": "array",

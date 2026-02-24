@@ -3,15 +3,10 @@ import * as path from "path";
 
 import { getFirstWorkspaceRoot } from "../util/paths.js";
 import { getTerminalManager } from "../integrations/TerminalManager.js";
-import type {
-  ApprovalManager,
-  CommandRule,
-} from "../approvals/ApprovalManager.js";
+import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { splitCompoundCommand } from "../approvals/commandSplitter.js";
-import { promptRejectionReason } from "../util/rejectionReason.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
-import { showApprovalAlert } from "../util/approvalAlert.js";
-import { enqueueApproval } from "../util/quickPickQueue.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -30,6 +25,7 @@ export async function handleExecuteCommand(
     output_grep_context?: number;
   },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
@@ -57,6 +53,7 @@ export async function handleExecuteCommand(
         subCommands,
         params.command,
         approvalManager,
+        approvalPanel,
         sessionId,
       );
 
@@ -138,219 +135,71 @@ export async function handleExecuteCommand(
 }
 
 /**
- * Approve each sub-command in sequence.
- * Returns { approved: true } if ALL are approved, or { approved: false, reason? } if any is rejected.
- * If the user edits the command, returns { approved: true, editedCommand }.
+ * Approve sub-commands by showing a single dialog with the full command.
+ *
+ * - Run/Edit/Reject applies to the whole command at once.
+ * - Trust buttons (Session/Project/Always) show an inline multi-entry
+ *   pattern editor so the user can set per-sub-command rules in-place.
  */
 async function approveSubCommands(
   subCommands: string[],
   fullCommand: string,
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<{ approved: boolean; reason?: string; editedCommand?: string }> {
-  for (const sub of subCommands) {
-    if (approvalManager.isCommandApproved(sessionId, sub)) {
-      continue;
-    }
+  // Find which sub-commands still need approval
+  const unapproved = subCommands.filter(
+    (sub) => !approvalManager.isCommandApproved(sessionId, sub),
+  );
 
-    // Wrap entire approval flow (QP + follow-up pattern editor + rejection
-    // reason) in the queue so concurrent approvals don't collide.
-    const result = await enqueueApproval("Command approval", async () => {
-      const decision = await showCommandApproval(sub);
+  // All sub-commands already approved
+  if (unapproved.length === 0) return { approved: true };
 
-      if (decision === "reject") {
-        const reason = await promptRejectionReason();
-        return { action: "reject" as const, reason };
-      }
-      if (decision === "edit") {
-        const edited = await showCommandEditor(fullCommand);
-        if (edited === undefined) {
-          return { action: "reject" as const };
-        }
-        return { action: "edit" as const, editedCommand: edited };
-      }
-      if (decision === "run-once") {
-        return { action: "continue" as const };
-      }
+  // Show ONE dialog with the full command (passes sub-commands for multi-entry pattern editor)
+  const response = await approvalPanel.enqueueCommandApproval(
+    fullCommand,
+    fullCommand,
+    { subCommands: unapproved.length > 1 ? unapproved : undefined },
+  );
 
-      // "session", "project", or "global" — show pattern editor
-      const rule = await showPatternEditor(sub);
-      const scope: "session" | "project" | "global" =
-        decision === "session"
-          ? "session"
-          : decision === "project"
-            ? "project"
-            : "global";
-      return { action: "approve" as const, rule, scope };
-    });
-
-    if (result.action === "reject") {
-      return { approved: false, reason: result.reason };
+  if (response.decision === "reject") {
+    return { approved: false, reason: response.rejectionReason };
+  }
+  if (response.decision === "edit") {
+    return { approved: true, editedCommand: response.editedCommand };
+  }
+  if (response.decision === "run-once") {
+    if (response.editedCommand) {
+      return { approved: true, editedCommand: response.editedCommand };
     }
-    if (result.action === "edit") {
-      // User edited the full command — skip remaining sub-command approvals
-      return { approved: true, editedCommand: result.editedCommand };
-    }
-    if (result.action === "approve" && result.rule) {
-      approvalManager.addCommandRule(sessionId, result.rule, result.scope!);
-    }
+    return { approved: true };
   }
 
+  // Trust decision (session/project/global)
+  const trustScope = response.decision as "session" | "project" | "global";
+
+  // Compound command with per-sub-command rules from inline multi-entry editor
+  if (response.rules && response.rules.length > 0) {
+    for (const rule of response.rules) {
+      if (rule.mode === "skip" || !rule.pattern) continue;
+      approvalManager.addCommandRule(
+        sessionId,
+        { pattern: rule.pattern, mode: rule.mode },
+        trustScope,
+      );
+    }
+  } else if (response.rulePattern && response.ruleMode) {
+    // Single command — rule from inline pattern editor
+    approvalManager.addCommandRule(
+      sessionId,
+      { pattern: response.rulePattern, mode: response.ruleMode },
+      trustScope,
+    );
+  }
+
+  if (response.editedCommand) {
+    return { approved: true, editedCommand: response.editedCommand };
+  }
   return { approved: true };
-}
-
-type ApprovalDecision =
-  | "run-once"
-  | "edit"
-  | "session"
-  | "project"
-  | "global"
-  | "reject";
-
-/**
- * Dialog 1: QuickPick-based command approval.
- * Uses a QuickPick instead of a modal dialog so that random keystrokes
- * (from typing in other windows/apps) go into the filter box harmlessly
- * rather than accidentally selecting a button.
- */
-function showCommandApproval(command: string): Promise<ApprovalDecision> {
-  type Item = vscode.QuickPickItem & { decision: ApprovalDecision };
-  const items: Item[] = [
-    {
-      label: "$(play) Run Once",
-      description: "Execute this command, ask again next time",
-      decision: "run-once",
-      alwaysShow: true,
-    },
-    {
-      label: "$(edit) Edit & Run",
-      description: "Modify this command before executing",
-      decision: "edit",
-      alwaysShow: true,
-    },
-    {
-      label: "$(check) For Session",
-      description: "Trust matching commands this session",
-      decision: "session",
-      alwaysShow: true,
-    },
-    {
-      label: "$(folder) For Project",
-      description: "Trust matching commands for this project",
-      decision: "project",
-      alwaysShow: true,
-    },
-    {
-      label: "$(globe) Always",
-      description: "Trust matching commands globally",
-      decision: "global",
-      alwaysShow: true,
-    },
-    {
-      label: "$(close) Reject",
-      description: "Do not run this command",
-      decision: "reject",
-      alwaysShow: true,
-    },
-  ];
-
-  return new Promise<ApprovalDecision>((resolve) => {
-    const alert = showApprovalAlert("Command approval required");
-    const qp = vscode.window.createQuickPick<Item>();
-    qp.title = "Approve command?";
-    qp.placeholder = command;
-    qp.items = items;
-    qp.activeItems = []; // No pre-selection — prevents accidental Enter
-    qp.ignoreFocusOut = true;
-
-    let resolved = false;
-    qp.onDidAccept(() => {
-      const selected = qp.selectedItems[0];
-      if (selected) {
-        resolved = true;
-        alert.dispose();
-        resolve(selected.decision);
-        qp.dispose();
-      }
-    });
-    qp.onDidHide(() => {
-      alert.dispose();
-      if (!resolved) resolve("reject");
-      qp.dispose();
-    });
-    qp.show();
-    qp.activeItems = []; // Re-clear after show (VS Code may auto-select first item)
-  });
-}
-
-/**
- * Dialog 2: Pattern editor — the command is pre-filled in the input field
- * (user can edit it), and the items are match modes to pick from.
- * Selecting a mode accepts the current input text as the pattern.
- */
-function showPatternEditor(command: string): Promise<CommandRule | null> {
-  return new Promise((resolve) => {
-    const qp = vscode.window.createQuickPick<
-      vscode.QuickPickItem & { mode: CommandRule["mode"] }
-    >();
-    qp.title = "Edit pattern, then pick match mode";
-    qp.placeholder = "Edit the command above → then select how to match it";
-    qp.value = command;
-    qp.items = [
-      {
-        label: "$(symbol-text) Prefix Match",
-        description: "Trust commands starting with this text",
-        mode: "prefix" as const,
-        alwaysShow: true,
-      },
-      {
-        label: "$(symbol-key) Exact Match",
-        description: "Trust only this exact command",
-        mode: "exact" as const,
-        alwaysShow: true,
-      },
-      {
-        label: "$(regex) Regex Match",
-        description: "Trust commands matching this as a regex",
-        mode: "regex" as const,
-        alwaysShow: true,
-      },
-    ];
-    qp.ignoreFocusOut = true;
-
-    let resolved = false;
-
-    qp.onDidAccept(() => {
-      const selected = qp.selectedItems[0];
-      if (selected && qp.value.trim()) {
-        resolved = true;
-        resolve({ pattern: qp.value.trim(), mode: selected.mode });
-        qp.dispose();
-      }
-    });
-
-    qp.onDidHide(() => {
-      if (!resolved) resolve(null);
-      qp.dispose();
-    });
-
-    qp.show();
-  });
-}
-
-/**
- * Dialog: InputBox for editing a command before execution.
- * Returns the edited command string, or undefined if cancelled.
- */
-function showCommandEditor(command: string): Promise<string | undefined> {
-  return Promise.resolve(
-    vscode.window.showInputBox({
-      title: "Edit command",
-      value: command,
-      prompt: "Modify the command and press Enter to run",
-      ignoreFocusOut: true,
-      validateInput: (value) =>
-        value.trim() ? null : "Command cannot be empty",
-    }),
-  );
 }

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { resolveAndOpenDocument, toPosition, serializeLocation } from "./languageFeatures.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
@@ -8,10 +9,11 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 export async function handleGoToDefinition(
   params: { path: string; line: number; column: number },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, sessionId);
+    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, approvalPanel, sessionId);
     const position = toPosition(params.line, params.column);
 
     const results = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(

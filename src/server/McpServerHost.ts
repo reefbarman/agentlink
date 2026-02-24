@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import type * as http from "http";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { registerTools } from "./registerTools.js";
 
 interface Session {
@@ -20,10 +21,12 @@ export class McpServerHost {
   private cleanupInterval: ReturnType<typeof setInterval>;
   private authToken: string | undefined;
   private approvalManager: ApprovalManager;
+  private approvalPanel: ApprovalPanelProvider;
 
-  constructor(authToken: string | undefined, approvalManager: ApprovalManager) {
+  constructor(authToken: string | undefined, approvalManager: ApprovalManager, approvalPanel: ApprovalPanelProvider) {
     this.authToken = authToken;
     this.approvalManager = approvalManager;
+    this.approvalPanel = approvalPanel;
     this.cleanupInterval = setInterval(() => this.pruneIdleSessions(), CLEANUP_INTERVAL);
   }
 
@@ -59,7 +62,7 @@ export class McpServerHost {
       version: "0.1.0",
     });
 
-    registerTools(server, this.approvalManager, () => transport.sessionId);
+    registerTools(server, this.approvalManager, this.approvalPanel, () => transport.sessionId);
     await server.connect(transport);
 
     // Handle the initialization request

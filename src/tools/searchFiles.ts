@@ -7,6 +7,7 @@ import {
   parseRipgrepOutput,
 } from "../util/ripgrep.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
 const MAX_RESULTS = 300;
@@ -16,6 +17,7 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 export async function handleSearchFiles(
   params: { path: string; regex: string; file_pattern?: string; semantic?: boolean },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
@@ -23,7 +25,7 @@ export async function handleSearchFiles(
 
     // Outside-workspace gate
     if (!inWorkspace && !approvalManager.isPathTrusted(sessionId, dirPath)) {
-      const { approved, reason } = await approveOutsideWorkspaceAccess(dirPath, approvalManager, sessionId);
+      const { approved, reason } = await approveOutsideWorkspaceAccess(dirPath, approvalManager, approvalPanel, sessionId);
       if (!approved) {
         return {
           content: [{ type: "text", text: JSON.stringify({

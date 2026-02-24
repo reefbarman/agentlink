@@ -7,6 +7,7 @@ import {
   snapshotDiagnostics,
 } from "../integrations/DiffViewProvider.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import {
   showWriteApprovalScopeChoice,
   showWritePatternEditor,
@@ -19,6 +20,7 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 export async function handleWriteFile(
   params: { path: string; content: string },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
@@ -85,49 +87,73 @@ export async function handleWriteFile(
       await diffView.open(filePath, relPath, params.content, {
         outsideWorkspace: !inWorkspace,
       });
-      const decision = await diffView.waitForUserDecision();
+      const decision = await diffView.waitForUserDecision(approvalPanel);
 
       if (decision === "reject") {
-        // Enqueue rejection reason prompt so it doesn't collide with other approvals
-        const reason = await enqueueApproval("Rejection reason", () => promptRejectionReason());
+        const reason = diffView.writeApprovalResponse?.rejectionReason
+          ?? await enqueueApproval("Rejection reason", () => promptRejectionReason());
         return await diffView.revertChanges(reason);
       }
 
-      // Handle session/always acceptance — scope choice.
-      // Enqueue follow-up dialogs so they don't collide with other concurrent approvals.
+      // Handle session/always acceptance — save rules.
       if (decision === "accept-session" || decision === "accept-project" || decision === "accept-always") {
         const scope: "session" | "project" | "global" =
           decision === "accept-session" ? "session" : decision === "accept-project" ? "project" : "global";
 
-        await enqueueApproval("Write scope selection", async () => {
-          if (!inWorkspace) {
-            // Outside workspace: show pattern editor pre-filled with parent dir
-            const dirPath = (await import("path")).dirname(filePath) + "/";
-            const rule = await showWritePatternEditor(dirPath);
-            if (rule) {
-              approvalManager.addWriteRule(sessionId, rule, scope);
-              // Also ensure path trust for future reads
+        const panelResponse = diffView.writeApprovalResponse;
+        if (panelResponse?.trustScope) {
+          // Scope/pattern provided inline by the approval panel — no follow-up dialogs
+          if (panelResponse.trustScope === "all-files") {
+            approvalManager.setWriteApproval(sessionId, scope);
+          } else if (panelResponse.trustScope === "this-file") {
+            approvalManager.addWriteRule(
+              sessionId,
+              { pattern: relPath, mode: "exact" },
+              scope,
+            );
+          } else if (
+            panelResponse.trustScope === "pattern" &&
+            panelResponse.rulePattern &&
+            panelResponse.ruleMode
+          ) {
+            const rule = {
+              pattern: panelResponse.rulePattern,
+              mode: panelResponse.ruleMode,
+            };
+            approvalManager.addWriteRule(sessionId, rule, scope);
+            if (!inWorkspace) {
               approvalManager.addPathRule(sessionId, rule, scope);
             }
-          } else {
-            const choice = await showWriteApprovalScopeChoice(relPath);
-            if (choice === "all-files") {
-              approvalManager.setWriteApproval(sessionId, scope);
-            } else if (choice === "this-file") {
-              approvalManager.addWriteRule(
-                sessionId,
-                { pattern: relPath, mode: "exact" },
-                scope,
-              );
-            } else if (choice === "pattern") {
-              const rule = await showWritePatternEditor(relPath);
+          }
+        } else {
+          // QuickPick fallback — use follow-up dialogs
+          await enqueueApproval("Write scope selection", async () => {
+            if (!inWorkspace) {
+              const dirPath = (await import("path")).dirname(filePath) + "/";
+              const rule = await showWritePatternEditor(dirPath);
               if (rule) {
                 approvalManager.addWriteRule(sessionId, rule, scope);
+                approvalManager.addPathRule(sessionId, rule, scope);
+              }
+            } else {
+              const choice = await showWriteApprovalScopeChoice(relPath);
+              if (choice === "all-files") {
+                approvalManager.setWriteApproval(sessionId, scope);
+              } else if (choice === "this-file") {
+                approvalManager.addWriteRule(
+                  sessionId,
+                  { pattern: relPath, mode: "exact" },
+                  scope,
+                );
+              } else if (choice === "pattern") {
+                const rule = await showWritePatternEditor(relPath);
+                if (rule) {
+                  approvalManager.addWriteRule(sessionId, rule, scope);
+                }
               }
             }
-            // If dismissed (null): still accept this write, just don't save a rule
-          }
-        });
+          });
+        }
       }
 
       return await diffView.saveChanges();

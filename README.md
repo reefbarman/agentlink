@@ -218,6 +218,17 @@ Rename a symbol across the workspace using VS Code's language server. Performs a
 
 Shows affected files for approval before applying. Uses the same write approval flow as `write_file` — the user can accept once, for the session, for the project, or always.
 
+### codebase_search
+
+Search the codebase by meaning using vector similarity. Pass a natural language query and get ranked code chunks. Best for exploratory questions like "how does authentication work" or "where are database connections configured".
+
+| Parameter | Type    | Description                                                        |
+| --------- | ------- | ------------------------------------------------------------------ |
+| `query`   | string  | Natural language query describing what you're looking for          |
+| `path`    | string? | Directory to scope the search to (omit to search entire workspace) |
+
+Requires a Qdrant vector index (built by Roo Code) and an OpenAI API key. See [Semantic Search](#semantic-search).
+
 ### execute_command
 
 Run a command in VS Code's integrated terminal. Output is captured when shell integration is available. Terminal environment is configured to prevent interactive pagers (`PAGER=cat`, `GIT_PAGER=cat`, etc.).
@@ -247,6 +258,14 @@ Output is capped to the **last 200 lines** by default to prevent context window 
 - `total_lines` — total line count of the full output (before filtering)
 - `lines_shown` — number of lines in the returned `output`
 - `output_file` — path to temp file with full output (only present when output was truncated; omitted for outputs ≤ 10 MB threshold or when all lines fit)
+
+### close_terminals
+
+Close managed terminals to clean up clutter. With no arguments, closes all terminals created by native-claude. Pass specific names to close only those.
+
+| Parameter | Type      | Description                                                                      |
+| --------- | --------- | -------------------------------------------------------------------------------- |
+| `names`   | string[]? | Terminal names to close (e.g. `["Server", "Tests"]`). Omit to close all managed. |
 
 ## Approval System
 

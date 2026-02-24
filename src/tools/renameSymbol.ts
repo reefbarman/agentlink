@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { getRelativePath } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { promptRejectionReason } from "../util/rejectionReason.js";
 import { showApprovalAlert } from "../util/approvalAlert.js";
 import { enqueueApproval } from "../util/quickPickQueue.js";
@@ -16,12 +17,14 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 export async function handleRenameSymbol(
   params: { path: string; line: number; column: number; new_name: string },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
     const { uri, document, relPath } = await resolveAndOpenDocument(
       params.path,
       approvalManager,
+      approvalPanel,
       sessionId,
     );
     const position = toPosition(params.line, params.column);

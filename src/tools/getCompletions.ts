@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { resolveAndOpenDocument, toPosition, COMPLETION_KIND_NAMES } from "./languageFeatures.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
@@ -26,10 +27,11 @@ function extractInsertText(item: vscode.CompletionItem): string | undefined {
 export async function handleGetCompletions(
   params: { path: string; line: number; column: number; limit?: number },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, sessionId);
+    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, approvalPanel, sessionId);
     const position = toPosition(params.line, params.column);
     const limit = params.limit ?? DEFAULT_LIMIT;
 

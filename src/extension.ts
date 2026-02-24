@@ -20,6 +20,7 @@ import {
   ApprovalManager,
   type CommandRule,
 } from "./approvals/ApprovalManager.js";
+import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
 
 export const DIFF_VIEW_URI_SCHEME = "native-claude-diff";
@@ -30,6 +31,7 @@ let mcpHost: McpServerHost | null = null;
 let statusBarItem: vscode.StatusBarItem;
 let sidebarProvider: SidebarProvider;
 let approvalManager: ApprovalManager;
+let approvalPanel: ApprovalPanelProvider;
 let activePort: number | null = null;
 let activeAuthToken: string | undefined;
 
@@ -269,7 +271,7 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
   const requireAuth = getConfig<boolean>("requireAuth");
   const authToken = requireAuth ? getOrCreateAuthToken(context) : undefined;
 
-  mcpHost = new McpServerHost(authToken, approvalManager);
+  mcpHost = new McpServerHost(authToken, approvalManager, approvalPanel);
 
   httpServer = http.createServer(async (req, res) => {
     const url = req.url ?? "";
@@ -287,10 +289,23 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
         // GET/DELETE requests may have no body — that's fine
       }
 
+      // Detect client disconnect so tool handlers can react
+      let clientDisconnected = false;
+      res.on("close", () => {
+        if (!res.writableFinished) {
+          clientDisconnected = true;
+          log(`Client disconnected before response completed (${req.method} ${url})`);
+        }
+      });
+
       try {
         await mcpHost!.handleRequest(req, res, parsedBody);
       } catch (err) {
-        log(`MCP request error: ${err}`);
+        if (clientDisconnected) {
+          log(`MCP request aborted (client disconnected): ${err}`);
+        } else {
+          log(`MCP request error: ${err}`);
+        }
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Internal server error" }));
@@ -494,6 +509,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.registerTextDocumentContentProvider(
       DIFF_VIEW_URI_SCHEME,
       diffContentProvider,
+    ),
+  );
+
+  // Approval panel (WebView-based approval UI for commands and path access)
+  approvalPanel = new ApprovalPanelProvider(context.extensionUri);
+  context.subscriptions.push(approvalPanel);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      ApprovalPanelProvider.viewType,
+      approvalPanel,
     ),
   );
 

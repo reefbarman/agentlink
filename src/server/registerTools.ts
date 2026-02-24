@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { handleReadFile } from "../tools/readFile.js";
 import { handleListFiles } from "../tools/listFiles.js";
 import { handleSearchFiles } from "../tools/searchFiles.js";
@@ -22,6 +23,7 @@ import { handleCloseTerminals } from "../tools/closeTerminals.js";
 export function registerTools(
   server: McpServer,
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   getSessionId: () => string | undefined,
 ): void {
   const sid = () => getSessionId() ?? "unknown";
@@ -54,7 +56,7 @@ export function registerTools(
     { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
-      return handleReadFile(params, approvalManager, sid());
+      return handleReadFile(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -79,7 +81,7 @@ export function registerTools(
     { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
-      return handleListFiles(params, approvalManager, sid());
+      return handleListFiles(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -113,7 +115,7 @@ export function registerTools(
     { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
-      return handleSearchFiles(params, approvalManager, sid());
+      return handleSearchFiles(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -156,7 +158,7 @@ export function registerTools(
     { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
-      return handleGoToDefinition(params, approvalManager, sid());
+      return handleGoToDefinition(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -177,7 +179,7 @@ export function registerTools(
     { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
-      return handleGetReferences(params, approvalManager, sid());
+      return handleGetReferences(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -201,7 +203,7 @@ export function registerTools(
     { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
-      return handleGetSymbols(params, approvalManager, sid());
+      return handleGetSymbols(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -218,7 +220,7 @@ export function registerTools(
     { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
-      return handleGetHover(params, approvalManager, sid());
+      return handleGetHover(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -239,7 +241,7 @@ export function registerTools(
     { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
-      return handleGetCompletions(params, approvalManager, sid());
+      return handleGetCompletions(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -266,7 +268,7 @@ export function registerTools(
     { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
-      return handleOpenFile(params, approvalManager, sid());
+      return handleOpenFile(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -306,7 +308,7 @@ export function registerTools(
     },
     (params) => {
       touch();
-      return handleWriteFile(params, approvalManager, sid());
+      return handleWriteFile(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -326,7 +328,7 @@ export function registerTools(
     { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     (params) => {
       touch();
-      return handleApplyDiff(params, approvalManager, sid());
+      return handleApplyDiff(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -348,7 +350,7 @@ export function registerTools(
     { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     (params) => {
       touch();
-      return handleRenameSymbol(params, approvalManager, sid());
+      return handleRenameSymbol(params, approvalManager, approvalPanel, sid());
     },
   );
 
@@ -419,7 +421,7 @@ export function registerTools(
     { readOnlyHint: false, openWorldHint: true },
     (params) => {
       touch();
-      return handleExecuteCommand(params, approvalManager, sid());
+      return handleExecuteCommand(params, approvalManager, approvalPanel, sid());
     },
   );
 

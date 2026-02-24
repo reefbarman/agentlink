@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
 // --- Types ---
@@ -24,6 +25,7 @@ export interface ResolvedDocument {
 export async function resolveAndOpenDocument(
   inputPath: string,
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ResolvedDocument> {
   const { absolutePath, inWorkspace } = resolveAndValidatePath(inputPath);
@@ -33,6 +35,7 @@ export async function resolveAndOpenDocument(
     const { approved, reason } = await approveOutsideWorkspaceAccess(
       absolutePath,
       approvalManager,
+      approvalPanel,
       sessionId,
     );
     if (!approved) {

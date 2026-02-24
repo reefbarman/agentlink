@@ -8,6 +8,7 @@ import {
   getFirstWorkspaceRoot,
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { SYMBOL_KIND_NAMES } from "./languageFeatures.js";
 
@@ -261,6 +262,7 @@ export async function handleReadFile(
     include_symbols?: boolean;
   },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
@@ -273,6 +275,7 @@ export async function handleReadFile(
       const { approved, reason } = await approveOutsideWorkspaceAccess(
         filePath,
         approvalManager,
+        approvalPanel,
         sessionId,
       );
       if (!approved) {

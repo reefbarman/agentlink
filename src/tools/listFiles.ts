@@ -4,6 +4,7 @@ import * as path from "path";
 import { resolveAndValidatePath } from "../util/paths.js";
 import { getRipgrepBinPath, execRipgrepFiles } from "../util/ripgrep.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
 const MAX_ENTRIES = 500;
@@ -11,6 +12,7 @@ const MAX_ENTRIES = 500;
 export async function handleListFiles(
   params: { path: string; recursive?: boolean; depth?: number },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   try {
@@ -18,7 +20,7 @@ export async function handleListFiles(
 
     // Outside-workspace gate
     if (!inWorkspace && !approvalManager.isPathTrusted(sessionId, dirPath)) {
-      const { approved, reason } = await approveOutsideWorkspaceAccess(dirPath, approvalManager, sessionId);
+      const { approved, reason } = await approveOutsideWorkspaceAccess(dirPath, approvalManager, approvalPanel, sessionId);
       if (!approved) {
         return {
           content: [{ type: "text", text: JSON.stringify({

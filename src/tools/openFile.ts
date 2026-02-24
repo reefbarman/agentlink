@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
@@ -9,6 +10,7 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 export async function handleOpenFile(
   params: { path: string; line?: number; column?: number },
   approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
@@ -19,6 +21,7 @@ export async function handleOpenFile(
       const { approved, reason } = await approveOutsideWorkspaceAccess(
         absolutePath,
         approvalManager,
+        approvalPanel,
         sessionId,
       );
       if (!approved) {

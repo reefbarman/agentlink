@@ -6,6 +6,10 @@ import * as diffLib from "diff";
 import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 import { showApprovalAlert } from "../util/approvalAlert.js";
 import { enqueueApproval } from "../util/quickPickQueue.js";
+import type {
+  ApprovalPanelProvider,
+  WriteApprovalResponse,
+} from "../approvals/ApprovalPanelProvider.js";
 
 export type DiffDecision =
   | "accept"
@@ -138,6 +142,9 @@ export class DiffViewProvider {
   private diagnosticDelay: number;
   private outsideWorkspace = false;
 
+  /** Populated when the approval panel is used for write decisions */
+  writeApprovalResponse?: WriteApprovalResponse;
+
   constructor(diagnosticDelay?: number) {
     this.diagnosticDelay = diagnosticDelay ?? 1500;
   }
@@ -267,7 +274,9 @@ export class DiffViewProvider {
     }
   }
 
-  async waitForUserDecision(): Promise<DiffDecision> {
+  async waitForUserDecision(
+    approvalPanel?: ApprovalPanelProvider,
+  ): Promise<DiffDecision> {
     // Show toolbar buttons via context key
     await vscode.commands.executeCommand(
       "setContext",
@@ -276,8 +285,8 @@ export class DiffViewProvider {
     );
 
     // Track UI elements for cleanup — when the decision comes from outside
-    // the QuickPick (title bar buttons, editor close), the QP and alert
-    // must still be disposed to avoid orphaned UI that blocks subsequent dialogs.
+    // the panel/QuickPick (title bar buttons, editor close), the UI
+    // must still be disposed to avoid orphaned state.
     let disposeUI: (() => void) | undefined;
 
     try {
@@ -289,129 +298,162 @@ export class DiffViewProvider {
           resolved = true;
           pendingDecisionResolve = null;
           editorCloseDisposable.dispose();
-          disposeUI?.();
+          try {
+            disposeUI?.();
+          } catch {
+            // Ensure resolve() always runs even if UI cleanup throws
+          }
           resolve(decision);
         };
 
         // Allow editor title bar commands to resolve this decision
         pendingDecisionResolve = finish;
 
-        // Listen for diff editor being closed (treat as rejection)
+        // Listen for diff tab being closed (treat as rejection).
         const editorCloseDisposable =
-          vscode.window.onDidChangeVisibleTextEditors((editors) => {
+          vscode.window.tabGroups.onDidChangeTabs((e) => {
             if (resolved) return;
-            const stillOpen = editors.some(
-              (e) =>
-                e.document.uri.scheme === "file" &&
-                e.document.uri.fsPath === this.absolutePath,
-            );
-            if (!stillOpen && this.activeDiffEditor) {
+            if (e.closed.length === 0) return;
+            const diffStillOpen = vscode.window.tabGroups.all
+              .flatMap((tg) => tg.tabs)
+              .some((tab) => {
+                if (tab.input instanceof vscode.TabInputTextDiff) {
+                  return tab.input.modified.fsPath === this.absolutePath;
+                }
+                return false;
+              });
+            if (!diffStillOpen) {
               finish("reject");
             }
           });
 
-        // Show QuickPick approval (safer than modal — random keypresses go
-        // into the filter box instead of accidentally selecting a button).
-        const action = this.editType === "create" ? "create" : "modify";
-        const outsideWarning = this.outsideWorkspace
-          ? " [OUTSIDE WORKSPACE]"
-          : "";
-        type WriteItem = vscode.QuickPickItem & {
-          decision: DiffDecision | "review";
-        };
-        const writeItems: WriteItem[] = [
-          {
-            label: "$(eye) Review",
-            description: "Dismiss this and review the diff in the editor",
-            decision: "review",
-            alwaysShow: true,
-          },
-          {
-            label: "$(check) Accept",
-            description: "Save this file change",
-            decision: "accept",
-            alwaysShow: true,
-          },
-          {
-            label: "$(check) For Session",
-            description: "Auto-accept writes this session",
-            decision: "accept-session",
-            alwaysShow: true,
-          },
-          {
-            label: "$(folder) For Project",
-            description: "Auto-accept writes for this project",
-            decision: "accept-project",
-            alwaysShow: true,
-          },
-          {
-            label: "$(globe) Always",
-            description: "Auto-accept writes globally",
-            decision: "accept-always",
-            alwaysShow: true,
-          },
-          {
-            label: "$(close) Reject",
-            description: "Discard this change",
-            decision: "reject",
-            alwaysShow: true,
-          },
-        ];
-        const showApproval = () => {
-          // Enqueue to prevent collision with other concurrent approval dialogs.
-          // The queue entry resolves when the QP is dismissed or an action is
-          // chosen. The outer waitForUserDecision() promise stays pending if the
-          // user just dismisses (review) — it resolves via finish() from title
-          // bar buttons or editor close.
-          enqueueApproval("Write approval", () => new Promise<void>((releaseQueue) => {
-            // If already resolved (e.g., editor closed while waiting in queue),
-            // release immediately without showing a QP.
-            if (resolved) { releaseQueue(); return; }
-
-            let queueReleased = false;
-            const releaseOnce = () => {
-              if (queueReleased) return;
-              queueReleased = true;
-              releaseQueue();
-            };
-
-            const alert = showApprovalAlert(`Write approval: ${this.relPath}`);
-            const qp = vscode.window.createQuickPick<WriteItem>();
-            qp.title = `${action}: ${this.relPath}${outsideWarning}`;
-            qp.placeholder =
-              "Review the diff in the editor. You can edit the right side before accepting.";
-            qp.items = writeItems;
-            qp.activeItems = [];
-            qp.ignoreFocusOut = true;
-
-            // Store cleanup so finish() and finally can dispose these.
-            // Also releases the queue slot when called.
-            disposeUI = () => {
-              alert.dispose();
-              qp.dispose();
-              releaseOnce();
-            };
-
-            qp.onDidAccept(() => {
-              const selected = qp.selectedItems[0];
-              if (!selected) return;
-              disposeUI?.();
-              disposeUI = undefined;
-              if (resolved) return;
-              if (selected.decision === "review") return; // Dismiss — user uses title bar buttons
-              finish(selected.decision);
+        if (approvalPanel) {
+          // ── Approval panel mode ────────────────────────────────────────
+          const { promise: panelPromise, id: approvalId } =
+            approvalPanel.enqueueWriteApproval(this.relPath!, {
+              operation: this.editType!,
+              outsideWorkspace: this.outsideWorkspace,
             });
-            qp.onDidHide(() => {
-              // Escape/dismiss — treat as review (not rejection), since the diff is still open.
-              // Release queue slot so the next approval can show.
-              disposeUI?.();
-              disposeUI = undefined;
-            });
-            qp.show();
-            qp.activeItems = []; // Re-clear after show
-          }));
-        };
-        showApproval();
+
+          // If title bar or editor close resolves first, cancel the panel entry
+          disposeUI = () => {
+            approvalPanel.cancelApproval(approvalId);
+          };
+
+          // When panel resolves, store the rich response and map to DiffDecision
+          panelPromise.then((response) => {
+            if (resolved) return; // title bar or editor close already resolved
+            this.writeApprovalResponse = response;
+            const decisionMap: Record<string, DiffDecision> = {
+              accept: "accept",
+              reject: "reject",
+              "accept-session": "accept-session",
+              "accept-project": "accept-project",
+              "accept-always": "accept-always",
+            };
+            finish(decisionMap[response.decision] ?? "reject");
+          });
+        } else {
+          // ── QuickPick fallback ─────────────────────────────────────────
+          const action = this.editType === "create" ? "create" : "modify";
+          const outsideWarning = this.outsideWorkspace
+            ? " [OUTSIDE WORKSPACE]"
+            : "";
+          type WriteItem = vscode.QuickPickItem & {
+            decision: DiffDecision | "review";
+          };
+          const writeItems: WriteItem[] = [
+            {
+              label: "$(eye) Review",
+              description: "Dismiss this and review the diff in the editor",
+              decision: "review",
+              alwaysShow: true,
+            },
+            {
+              label: "$(check) Accept",
+              description: "Save this file change",
+              decision: "accept",
+              alwaysShow: true,
+            },
+            {
+              label: "$(check) For Session",
+              description: "Auto-accept writes this session",
+              decision: "accept-session",
+              alwaysShow: true,
+            },
+            {
+              label: "$(folder) For Project",
+              description: "Auto-accept writes for this project",
+              decision: "accept-project",
+              alwaysShow: true,
+            },
+            {
+              label: "$(globe) Always",
+              description: "Auto-accept writes globally",
+              decision: "accept-always",
+              alwaysShow: true,
+            },
+            {
+              label: "$(close) Reject",
+              description: "Discard this change",
+              decision: "reject",
+              alwaysShow: true,
+            },
+          ];
+          const showApproval = () => {
+            enqueueApproval(
+              "Write approval",
+              () =>
+                new Promise<void>((releaseQueue) => {
+                  if (resolved) {
+                    releaseQueue();
+                    return;
+                  }
+
+                  let queueReleased = false;
+                  const releaseOnce = () => {
+                    if (queueReleased) return;
+                    queueReleased = true;
+                    releaseQueue();
+                  };
+
+                  const alert = showApprovalAlert(
+                    `Write approval: ${this.relPath}`,
+                  );
+                  const qp = vscode.window.createQuickPick<WriteItem>();
+                  qp.title = `${action}: ${this.relPath}${outsideWarning}`;
+                  qp.placeholder =
+                    "Review the diff in the editor. You can edit the right side before accepting.";
+                  qp.items = writeItems;
+                  qp.activeItems = [];
+                  qp.ignoreFocusOut = true;
+
+                  disposeUI = () => {
+                    alert.dispose();
+                    qp.dispose();
+                    releaseOnce();
+                  };
+
+                  qp.onDidAccept(() => {
+                    const selected = qp.selectedItems[0];
+                    if (!selected) return;
+                    disposeUI?.();
+                    disposeUI = undefined;
+                    if (resolved) return;
+                    if (selected.decision === "review") return;
+                    finish(selected.decision);
+                  });
+                  qp.onDidHide(() => {
+                    disposeUI?.();
+                    disposeUI = undefined;
+                  });
+                  qp.show();
+                  qp.activeItems = [];
+                }),
+            );
+          };
+          showApproval();
+        }
       });
     } finally {
       disposeUI?.();
