@@ -48,16 +48,19 @@ export async function handleExecuteCommand(
       .getConfiguration("native-claude")
       .get<boolean>("masterBypass", false);
 
+    let commandToRun = params.command;
+
     if (!masterBypass) {
       // Split compound command and approve each sub-command
       const subCommands = splitCompoundCommand(params.command);
-      const result = await approveSubCommands(
+      const approvalResult = await approveSubCommands(
         subCommands,
+        params.command,
         approvalManager,
         sessionId,
       );
 
-      if (!result.approved) {
+      if (!approvalResult.approved) {
         return {
           content: [
             {
@@ -65,17 +68,21 @@ export async function handleExecuteCommand(
               text: JSON.stringify({
                 status: "rejected",
                 command: params.command,
-                ...(result.reason && { reason: result.reason }),
+                ...(approvalResult.reason && { reason: approvalResult.reason }),
               }),
             },
           ],
         };
       }
+
+      if (approvalResult.editedCommand) {
+        commandToRun = approvalResult.editedCommand;
+      }
     }
 
     const terminalManager = getTerminalManager();
     const result = await terminalManager.executeCommand({
-      command: params.command,
+      command: commandToRun,
       cwd,
       terminal_id: params.terminal_id,
       terminal_name: params.terminal_name,
@@ -107,6 +114,13 @@ export async function handleExecuteCommand(
       result.output = filtered;
     }
 
+    // If the user edited the command, include modification info
+    if (commandToRun !== params.command) {
+      result.command_modified = true;
+      result.original_command = params.command;
+      result.command = commandToRun;
+    }
+
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
@@ -126,12 +140,14 @@ export async function handleExecuteCommand(
 /**
  * Approve each sub-command in sequence.
  * Returns { approved: true } if ALL are approved, or { approved: false, reason? } if any is rejected.
+ * If the user edits the command, returns { approved: true, editedCommand }.
  */
 async function approveSubCommands(
   subCommands: string[],
+  fullCommand: string,
   approvalManager: ApprovalManager,
   sessionId: string,
-): Promise<{ approved: boolean; reason?: string }> {
+): Promise<{ approved: boolean; reason?: string; editedCommand?: string }> {
   for (const sub of subCommands) {
     if (approvalManager.isCommandApproved(sessionId, sub)) {
       continue;
@@ -145,6 +161,13 @@ async function approveSubCommands(
       if (decision === "reject") {
         const reason = await promptRejectionReason();
         return { action: "reject" as const, reason };
+      }
+      if (decision === "edit") {
+        const edited = await showCommandEditor(fullCommand);
+        if (edited === undefined) {
+          return { action: "reject" as const };
+        }
+        return { action: "edit" as const, editedCommand: edited };
       }
       if (decision === "run-once") {
         return { action: "continue" as const };
@@ -164,6 +187,10 @@ async function approveSubCommands(
     if (result.action === "reject") {
       return { approved: false, reason: result.reason };
     }
+    if (result.action === "edit") {
+      // User edited the full command — skip remaining sub-command approvals
+      return { approved: true, editedCommand: result.editedCommand };
+    }
     if (result.action === "approve" && result.rule) {
       approvalManager.addCommandRule(sessionId, result.rule, result.scope!);
     }
@@ -174,6 +201,7 @@ async function approveSubCommands(
 
 type ApprovalDecision =
   | "run-once"
+  | "edit"
   | "session"
   | "project"
   | "global"
@@ -188,11 +216,42 @@ type ApprovalDecision =
 function showCommandApproval(command: string): Promise<ApprovalDecision> {
   type Item = vscode.QuickPickItem & { decision: ApprovalDecision };
   const items: Item[] = [
-    { label: "$(play) Run Once", description: "Execute this command, ask again next time", decision: "run-once", alwaysShow: true },
-    { label: "$(check) For Session", description: "Trust matching commands this session", decision: "session", alwaysShow: true },
-    { label: "$(folder) For Project", description: "Trust matching commands for this project", decision: "project", alwaysShow: true },
-    { label: "$(globe) Always", description: "Trust matching commands globally", decision: "global", alwaysShow: true },
-    { label: "$(close) Reject", description: "Do not run this command", decision: "reject", alwaysShow: true },
+    {
+      label: "$(play) Run Once",
+      description: "Execute this command, ask again next time",
+      decision: "run-once",
+      alwaysShow: true,
+    },
+    {
+      label: "$(edit) Edit & Run",
+      description: "Modify this command before executing",
+      decision: "edit",
+      alwaysShow: true,
+    },
+    {
+      label: "$(check) For Session",
+      description: "Trust matching commands this session",
+      decision: "session",
+      alwaysShow: true,
+    },
+    {
+      label: "$(folder) For Project",
+      description: "Trust matching commands for this project",
+      decision: "project",
+      alwaysShow: true,
+    },
+    {
+      label: "$(globe) Always",
+      description: "Trust matching commands globally",
+      decision: "global",
+      alwaysShow: true,
+    },
+    {
+      label: "$(close) Reject",
+      description: "Do not run this command",
+      decision: "reject",
+      alwaysShow: true,
+    },
   ];
 
   return new Promise<ApprovalDecision>((resolve) => {
@@ -277,4 +336,21 @@ function showPatternEditor(command: string): Promise<CommandRule | null> {
 
     qp.show();
   });
+}
+
+/**
+ * Dialog: InputBox for editing a command before execution.
+ * Returns the edited command string, or undefined if cancelled.
+ */
+function showCommandEditor(command: string): Promise<string | undefined> {
+  return Promise.resolve(
+    vscode.window.showInputBox({
+      title: "Edit command",
+      value: command,
+      prompt: "Modify the command and press Enter to run",
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        value.trim() ? null : "Command cannot be empty",
+    }),
+  );
 }

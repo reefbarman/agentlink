@@ -51,6 +51,7 @@ export function registerTools(
           "Include top-level symbol outline (functions, classes, interfaces). Default: true. Set to false to suppress.",
         ),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleReadFile(params, approvalManager, sid());
@@ -75,6 +76,7 @@ export function registerTools(
           "Maximum directory depth for recursive listing (e.g. 2 for two levels deep). Only used when recursive=true.",
         ),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleListFiles(params, approvalManager, sid());
@@ -108,6 +110,7 @@ export function registerTools(
           "Use semantic/vector search instead of regex. Requires codebase index (Roo Code) and OpenAI API key. Default: false",
         ),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleSearchFiles(params, approvalManager, sid());
@@ -131,6 +134,7 @@ export function registerTools(
           "Comma-separated severity filter (e.g. 'error', 'error,warning'). Options: error, warning, info/information, hint. Default: all severities.",
         ),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleGetDiagnostics(params);
@@ -149,6 +153,7 @@ export function registerTools(
       line: z.number().describe("Line number (1-indexed)"),
       column: z.number().describe("Column number (1-indexed)"),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleGoToDefinition(params, approvalManager, sid());
@@ -169,6 +174,7 @@ export function registerTools(
         .optional()
         .describe("Include the declaration itself in results (default: true)"),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleGetReferences(params, approvalManager, sid());
@@ -192,6 +198,7 @@ export function registerTools(
           "Search query for workspace-wide symbol search. Used when path is omitted.",
         ),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleGetSymbols(params, approvalManager, sid());
@@ -208,6 +215,7 @@ export function registerTools(
       line: z.number().describe("Line number (1-indexed)"),
       column: z.number().describe("Column number (1-indexed)"),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleGetHover(params, approvalManager, sid());
@@ -228,6 +236,7 @@ export function registerTools(
         .optional()
         .describe("Maximum number of completion items to return (default: 50)"),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleGetCompletions(params, approvalManager, sid());
@@ -254,6 +263,7 @@ export function registerTools(
           "Column number for cursor placement (1-indexed, requires line)",
         ),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleOpenFile(params, approvalManager, sid());
@@ -270,6 +280,7 @@ export function registerTools(
         .optional()
         .describe("Notification type (default: 'info')"),
     },
+    { readOnlyHint: true, openWorldHint: false },
     (params) => {
       touch();
       return handleShowNotification(params);
@@ -286,6 +297,12 @@ export function registerTools(
         .string()
         .describe("File path (absolute or relative to workspace root)"),
       content: z.string().describe("Complete file content to write"),
+    },
+    {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
     },
     (params) => {
       touch();
@@ -306,6 +323,7 @@ export function registerTools(
           "Search/replace blocks in <<<<<<< SEARCH / ======= DIVIDER ======= / >>>>>>> REPLACE format",
         ),
     },
+    { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     (params) => {
       touch();
       return handleApplyDiff(params, approvalManager, sid());
@@ -327,6 +345,7 @@ export function registerTools(
       column: z.number().describe("Column number of the symbol (1-indexed)"),
       new_name: z.string().describe("The new name for the symbol"),
     },
+    { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     (params) => {
       touch();
       return handleRenameSymbol(params, approvalManager, sid());
@@ -397,6 +416,7 @@ export function registerTools(
           "Number of context lines around each grep match (like grep -C). Only used with output_grep.",
         ),
     },
+    { readOnlyHint: false, openWorldHint: true },
     (params) => {
       touch();
       return handleExecuteCommand(params, approvalManager, sid());
@@ -419,6 +439,7 @@ export function registerTools(
           "Directory to scope the search to (absolute or relative to workspace root). Omit to search the entire workspace.",
         ),
     },
+    { readOnlyHint: true, openWorldHint: false },
     async (params) => {
       touch();
       const { semanticSearch } = await import("../services/semanticSearch.js");
@@ -441,6 +462,11 @@ export function registerTools(
         .describe(
           "Terminal names to close (e.g. ['Server', 'Tests']). Omit to close all managed terminals.",
         ),
+    },
+    {
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
     },
     (params) => {
       touch();

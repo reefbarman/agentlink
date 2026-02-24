@@ -29,6 +29,9 @@ export interface CommandResult {
   output_file?: string;
   total_lines?: number;
   lines_shown?: number;
+  command?: string;
+  command_modified?: boolean;
+  original_command?: string;
 }
 
 export interface ExecuteOptions {
