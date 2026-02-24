@@ -22,6 +22,7 @@ import {
 } from "./approvals/ApprovalManager.js";
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
+import { ToolCallTracker } from "./server/ToolCallTracker.js";
 
 export const DIFF_VIEW_URI_SCHEME = "native-claude-diff";
 
@@ -32,6 +33,7 @@ let statusBarItem: vscode.StatusBarItem;
 let sidebarProvider: SidebarProvider;
 let approvalManager: ApprovalManager;
 let approvalPanel: ApprovalPanelProvider;
+let toolCallTracker: ToolCallTracker;
 let activePort: number | null = null;
 let activeAuthToken: string | undefined;
 
@@ -271,7 +273,7 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
   const requireAuth = getConfig<boolean>("requireAuth");
   const authToken = requireAuth ? getOrCreateAuthToken(context) : undefined;
 
-  mcpHost = new McpServerHost(authToken, approvalManager, approvalPanel);
+  mcpHost = new McpServerHost(authToken, approvalManager, approvalPanel, toolCallTracker);
 
   httpServer = http.createServer(async (req, res) => {
     const url = req.url ?? "";
@@ -512,6 +514,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   );
 
+  // Tool call tracker (wraps tool handlers for cancel/complete from sidebar)
+  toolCallTracker = new ToolCallTracker(log);
+
   // Approval panel (WebView-based approval UI for commands and path access)
   approvalPanel = new ApprovalPanelProvider(context.extensionUri);
   context.subscriptions.push(approvalPanel);
@@ -523,8 +528,9 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // Sidebar
-  sidebarProvider = new SidebarProvider(context.extensionUri);
+  sidebarProvider = new SidebarProvider(context.extensionUri, log);
   sidebarProvider.setApprovalManager(approvalManager);
+  sidebarProvider.setToolCallTracker(toolCallTracker);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       SidebarProvider.viewType,
@@ -553,6 +559,14 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("native-claude.addTrustedCommand", () =>
       addTrustedCommandViaUI(),
+    ),
+    vscode.commands.registerCommand(
+      "native-claude.cancelToolCall",
+      (id: string) => toolCallTracker.cancelCall(id, approvalPanel),
+    ),
+    vscode.commands.registerCommand(
+      "native-claude.completeToolCall",
+      (id: string) => toolCallTracker.completeCall(id, approvalPanel),
     ),
     vscode.commands.registerCommand(
       "native-claude.clearSessionApprovals",

@@ -1,6 +1,8 @@
 **/*
 !dist/extension.js
 !dist/extension.js.map
+!dist/sidebar.js
+!dist/sidebar.css
 !package.json
 !README.md
 !LICENSE

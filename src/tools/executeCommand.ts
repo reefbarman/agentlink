@@ -5,6 +5,7 @@ import { getFirstWorkspaceRoot } from "../util/paths.js";
 import { getTerminalManager } from "../integrations/TerminalManager.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import type { TrackerContext } from "../server/ToolCallTracker.js";
 import { splitCompoundCommand } from "../approvals/commandSplitter.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 
@@ -27,6 +28,7 @@ export async function handleExecuteCommand(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  trackerCtx?: TrackerContext,
 ): Promise<ToolResult> {
   try {
     const workspaceRoot = getFirstWorkspaceRoot();
@@ -85,6 +87,9 @@ export async function handleExecuteCommand(
       terminal_name: params.terminal_name,
       background: params.background,
       timeout: params.timeout ? params.timeout * 1000 : undefined, // seconds → ms
+      onTerminalAssigned: trackerCtx
+        ? (tid) => trackerCtx.setTerminalId(tid)
+        : undefined,
     });
 
     // Apply output filtering and temp file saving
@@ -157,11 +162,12 @@ async function approveSubCommands(
   if (unapproved.length === 0) return { approved: true };
 
   // Show ONE dialog with the full command (passes sub-commands for multi-entry pattern editor)
-  const response = await approvalPanel.enqueueCommandApproval(
+  const { promise, id: approvalId } = approvalPanel.enqueueCommandApproval(
     fullCommand,
     fullCommand,
     { subCommands: unapproved.length > 1 ? unapproved : undefined },
   );
+  const response = await promise;
 
   if (response.decision === "reject") {
     return { approved: false, reason: response.rejectionReason };

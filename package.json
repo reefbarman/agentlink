@@ -2,7 +2,7 @@
   "name": "native-claude",
   "displayName": "Native Claude",
   "description": "MCP server that provides Claude Code with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "0.6.12",
+  "version": "0.6.23",
   "publisher": "native-claude",
   "repository": {
     "type": "git",
@@ -87,6 +87,14 @@
       {
         "command": "native-claude.clearSessionApprovals",
         "title": "Native Claude: Clear Session Approvals"
+      },
+      {
+        "command": "native-claude.cancelToolCall",
+        "title": "Native Claude: Cancel Tool Call"
+      },
+      {
+        "command": "native-claude.completeToolCall",
+        "title": "Native Claude: Complete Tool Call"
       }
     ],
     "menus": {
@@ -185,6 +193,7 @@
     "@modelcontextprotocol/sdk": "^1.27.0",
     "diff": "^5.2.0",
     "picomatch": "^4.0.3",
+    "preact": "^10.28.4",
     "zod": "^3.25.0"
   },
   "devDependencies": {

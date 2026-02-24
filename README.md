@@ -26,7 +26,7 @@ Claude Code's built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`) o
 2. The MCP server starts automatically and configures `~/.claude.json`
 3. Start Claude Code — it will pick up the `native-claude` MCP server
 
-The sidebar panel shows server status, active sessions, and approval rules. If auto-configuration doesn't work, use the sidebar buttons to copy the config or run the CLI setup command.
+The sidebar panel shows server status, active tool calls, and approval rules. If auto-configuration doesn't work, use the sidebar buttons to copy the config or run the CLI setup command.
 
 ### Configuring Claude Code
 
@@ -267,6 +267,29 @@ Close managed terminals to clean up clutter. With no arguments, closes all termi
 | --------- | --------- | -------------------------------------------------------------------------------- |
 | `names`   | string[]? | Terminal names to close (e.g. `["Server", "Tests"]`). Omit to close all managed. |
 
+## Sidebar
+
+The sidebar (click the Native Claude icon in the activity bar) provides a live overview of the extension and controls for managing active tool calls and approval rules.
+
+### Sections
+
+- **Tool Calls** — Shows all in-progress MCP tool calls with elapsed time. Each call has **Complete** and **Cancel** buttons. Complete captures partial output and interrupts the process; Cancel sends SIGINT (Ctrl+C) and force-resolves with a cancellation result. Completed calls remain visible in a dimmed state for a few seconds before fading out.
+- **Server Status** — MCP server state (running/stopped, port, session count, auth, master bypass) with start/stop controls and links to settings, output log, and config files.
+- **Claude Code Integration** — Shows whether `~/.claude.json` is configured, with buttons for CLI setup, copying the CLI command, or copying the JSON config.
+- **Write Approval** — Current write approval mode (prompt/session/project/global) with reset button. Shows file-level write rules (settings, global, project, session scopes) with inline edit and delete.
+- **Trusted Paths** — Outside-workspace path trust rules (global, project, session scopes) with inline edit and delete.
+- **Trusted Commands** — Command pattern rules (global, project, session scopes) with inline edit and delete, plus an "Add Rule" button.
+- **Available Tools** — Quick reference list of all registered MCP tools.
+
+### Tool Call Tracking
+
+Every MCP tool call is tracked from start to finish. The sidebar's Tool Calls section lets you intervene in long-running operations:
+
+- **Complete** — For `execute_command`: captures current terminal output, sends Ctrl+C to stop the process, and returns partial results. For `write_file`/`apply_diff`: auto-accepts the pending diff view. For other tools: force-resolves immediately.
+- **Cancel** — Sends Ctrl+C to any linked terminal, cancels any pending approval dialog, rejects any pending diff view, and returns a cancellation result to Claude.
+
+The Output log (accessible from the sidebar) shows detailed lifecycle events for each tool call: `START`, `END`, `WAITING_APPROVAL`, `TERMINAL_ASSIGNED`, `CANCEL`, `COMPLETE`, etc.
+
 ## Approval System
 
 Native Claude includes a granular approval system to keep you in control.
@@ -375,7 +398,8 @@ The global `~/.claude.json` config is still updated as a fallback for running Cl
 - **Per-session isolation**: Each MCP session gets its own `McpServer` + `StreamableHTTPServerTransport` pair
 - **Session recovery**: Stale session IDs (e.g. after extension reload) are transparently reused instead of returning 404 errors
 - **Auth**: Optional Bearer token stored in VS Code's `globalState`, auto-written to `~/.claude.json` with atomic write (temp file + rename)
-- **Bundled**: Single-file output via esbuild, no runtime dependencies beyond VS Code
+- **Sidebar**: Preact-based webview with `postMessage` state bridge — no full HTML replacement, all updates are incremental via VDOM diffing
+- **Bundled**: Dual esbuild targets — extension (CJS/Node) and sidebar webview (ESM/browser with JSX). No runtime dependencies beyond VS Code and Preact (~3KB)
 
 ## Development
 

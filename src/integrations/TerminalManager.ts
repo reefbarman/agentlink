@@ -18,6 +18,8 @@ interface ManagedTerminal {
   name: string;
   cwd: string;
   busy: boolean;
+  /** Accumulated output from the current shell integration execution */
+  outputBuffer: string;
 }
 
 export interface CommandResult {
@@ -41,6 +43,8 @@ export interface ExecuteOptions {
   terminal_name?: string;
   background?: boolean;
   timeout?: number;
+  /** Called once the terminal is resolved, before execution begins */
+  onTerminalAssigned?: (terminalId: string) => void;
 }
 
 const SHELL_INTEGRATION_TIMEOUT = 5000; // 5 seconds
@@ -66,6 +70,7 @@ export class TerminalManager {
   async executeCommand(options: ExecuteOptions): Promise<CommandResult> {
     const managed = this.resolveTerminal(options);
     managed.busy = true;
+    options.onTerminalAssigned?.(managed.id);
 
     try {
       // Show the terminal so the user can see it
@@ -160,7 +165,14 @@ export class TerminalManager {
     });
 
     const id = `term_${nextTerminalId++}`;
-    const managed: ManagedTerminal = { id, terminal, name, cwd, busy: false };
+    const managed: ManagedTerminal = {
+      id,
+      terminal,
+      name,
+      cwd,
+      busy: false,
+      outputBuffer: "",
+    };
     this.terminals.push(managed);
     return managed;
   }
@@ -195,6 +207,9 @@ export class TerminalManager {
     let timedOut = false;
     const disposables: vscode.Disposable[] = [];
 
+    // Reset the output buffer for this execution
+    managed.outputBuffer = "";
+
     // --- Primary: shell integration events ---
     const exitCodePromise = new Promise<number | undefined>((resolve) => {
       disposables.push(
@@ -226,8 +241,7 @@ export class TerminalManager {
     // Execute the command
     const execution = shellIntegration.executeCommand(command);
 
-    // Collect output from the stream
-    let output = "";
+    // Collect output from the stream (stored on managed terminal for external access)
     const stream = execution.read();
 
     // Race stream reading against exit code / marker / timeout.
@@ -248,15 +262,16 @@ export class TerminalManager {
 
     const streamDone = (async () => {
       for await (const data of stream) {
-        output += data;
+        managed.outputBuffer += data;
         // Check tail of accumulated output for the completion marker.
         // Using the tail handles markers split across chunks.
-        const tail = output.slice(-50);
+        const tail = managed.outputBuffer.slice(-50);
         const match = tail.match(MARKER_RE);
         if (match) {
           // Truncate output to before the marker (strip prompt/protocol data)
-          const markerIdx = output.lastIndexOf("\x1b]633;D");
-          if (markerIdx >= 0) output = output.slice(0, markerIdx);
+          const markerIdx = managed.outputBuffer.lastIndexOf("\x1b]633;D");
+          if (markerIdx >= 0)
+            managed.outputBuffer = managed.outputBuffer.slice(0, markerIdx);
           resolveStreamMarker!(
             match[1] !== undefined ? parseInt(match[1], 10) : undefined,
           );
@@ -268,7 +283,7 @@ export class TerminalManager {
     await Promise.race([streamDone, exitCodePromise, streamMarkerPromise]);
 
     // Clean up the output
-    output = cleanTerminalOutput(output);
+    managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
 
     // Bounded wait for exit code: if the promise hasn't resolved yet (e.g.
     // stream finished but exit event is delayed), give it a short grace
@@ -287,7 +302,7 @@ export class TerminalManager {
 
     const result: CommandResult = {
       exit_code: exitCode ?? null,
-      output,
+      output: managed.outputBuffer,
       cwd,
       output_captured: true,
       terminal_id: managed.id,
@@ -360,6 +375,27 @@ export class TerminalManager {
     this.terminals = this.terminals.filter((t) => !closedIds.has(t.id));
 
     return toClose.length;
+  }
+
+  /**
+   * Get accumulated output from a busy terminal.
+   * Returns undefined if the terminal is not found or not busy.
+   */
+  getCurrentOutput(terminalId: string): string | undefined {
+    const managed = this.terminals.find((t) => t.id === terminalId);
+    if (!managed || !managed.busy) return undefined;
+    return cleanTerminalOutput(managed.outputBuffer);
+  }
+
+  /**
+   * Send Ctrl+C (SIGINT) to a managed terminal to interrupt the running process.
+   * Returns true if the terminal was found and interrupted.
+   */
+  interruptTerminal(terminalId: string): boolean {
+    const managed = this.terminals.find((t) => t.id === terminalId);
+    if (!managed) return false;
+    managed.terminal.sendText("\x03", false);
+    return true;
   }
 
   /**

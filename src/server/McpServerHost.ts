@@ -5,6 +5,7 @@ import type * as http from "http";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import type { ToolCallTracker } from "./ToolCallTracker.js";
 import { registerTools } from "./registerTools.js";
 
 interface Session {
@@ -23,10 +24,18 @@ export class McpServerHost {
   private approvalManager: ApprovalManager;
   private approvalPanel: ApprovalPanelProvider;
 
-  constructor(authToken: string | undefined, approvalManager: ApprovalManager, approvalPanel: ApprovalPanelProvider) {
+  private tracker: ToolCallTracker;
+
+  constructor(
+    authToken: string | undefined,
+    approvalManager: ApprovalManager,
+    approvalPanel: ApprovalPanelProvider,
+    tracker: ToolCallTracker,
+  ) {
     this.authToken = authToken;
     this.approvalManager = approvalManager;
     this.approvalPanel = approvalPanel;
+    this.tracker = tracker;
     this.cleanupInterval = setInterval(() => this.pruneIdleSessions(), CLEANUP_INTERVAL);
   }
 
@@ -62,7 +71,7 @@ export class McpServerHost {
       version: "0.1.0",
     });
 
-    registerTools(server, this.approvalManager, this.approvalPanel, () => transport.sessionId);
+    registerTools(server, this.approvalManager, this.approvalPanel, () => transport.sessionId, this.tracker);
     await server.connect(transport);
 
     // Handle the initialization request

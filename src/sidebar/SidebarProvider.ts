@@ -1,12 +1,17 @@
 import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
+import { randomUUID } from "crypto";
 import type {
   ApprovalManager,
   CommandRule,
   PathRule,
   RuleScope,
 } from "../approvals/ApprovalManager.js";
+import type {
+  ToolCallTracker,
+  TrackedCallInfo,
+} from "../server/ToolCallTracker.js";
 
 export interface SidebarState {
   serverRunning: boolean;
@@ -14,6 +19,7 @@ export interface SidebarState {
   sessions: number;
   authEnabled: boolean;
   claudeConfigured: boolean;
+  masterBypass: boolean;
   writeApproval?: "prompt" | "session" | "project" | "global";
   globalCommandRules?: CommandRule[];
   projectCommandRules?: CommandRule[];
@@ -41,14 +47,39 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     sessions: 0,
     authEnabled: true,
     claudeConfigured: false,
+    masterBypass: false,
   };
   private approvalManager: ApprovalManager | undefined;
+  private toolCallTracker: ToolCallTracker | undefined;
+  private activeToolCalls: TrackedCallInfo[] = [];
+  private log: (msg: string) => void;
 
-  constructor(private readonly extensionUri: vscode.Uri) {}
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    log?: (msg: string) => void,
+  ) {
+    this.log = log ?? (() => {});
+  }
 
   setApprovalManager(manager: ApprovalManager): void {
     this.approvalManager = manager;
     manager.onDidChange(() => this.refreshApprovalState());
+  }
+
+  setToolCallTracker(tracker: ToolCallTracker): void {
+    this.toolCallTracker = tracker;
+    tracker.on("change", () => this.refreshToolCalls());
+  }
+
+  private refreshToolCalls(): void {
+    if (!this.toolCallTracker) return;
+    this.activeToolCalls = this.toolCallTracker.getActiveCalls();
+    this.log(`refreshToolCalls: ${this.activeToolCalls.length} active calls, view=${!!this.view}`);
+    // Send lightweight update to client instead of full re-render
+    this.view?.webview.postMessage({
+      type: "updateToolCalls",
+      calls: this.activeToolCalls,
+    });
   }
 
   resolveWebviewView(
@@ -60,12 +91,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.options = {
       enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist")],
     };
 
     webviewView.webview.html = this.getHtml();
+    this.log("Webview resolved, HTML set");
 
     webviewView.webview.onDidReceiveMessage((message) => {
       switch (message.command) {
+        case "webviewReady":
+          this.log("Received webviewReady from Preact app");
+          this.refreshApprovalState();
+          this.refreshToolCalls();
+          break;
         case "startServer":
           vscode.commands.executeCommand("native-claude.startServer");
           break;
@@ -147,6 +185,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "clearSessionRules":
           if (message.sessionId) {
             this.approvalManager?.clearSessionCommandRules(message.sessionId);
+          }
+          break;
+        case "cancelToolCall":
+          if (message.id) {
+            vscode.commands.executeCommand(
+              "native-claude.cancelToolCall",
+              message.id,
+            );
+          }
+          break;
+        case "completeToolCall":
+          if (message.id) {
+            vscode.commands.executeCommand(
+              "native-claude.completeToolCall",
+              message.id,
+            );
           }
           break;
         case "clearAllSessions":
@@ -393,6 +447,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private refreshApprovalState(): void {
+    // Always sync tool call state before full re-render to avoid races
+    // where a postMessage update is lost during webview reload.
+    this.activeToolCalls = this.toolCallTracker?.getActiveCalls() ?? [];
+
     if (this.approvalManager) {
       const sessions = this.approvalManager.getActiveSessions();
       // Show the "best" write approval state across all sessions
@@ -424,9 +482,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         writeRules: this.approvalManager!.getWriteRules(s.id).session,
       }));
     }
-    if (this.view) {
-      this.view.webview.html = this.getHtml();
-    }
+    this.state.masterBypass = this.getMasterBypass();
+    // Send state via postMessage instead of full HTML replacement
+    this.view?.webview.postMessage({ type: "stateUpdate", state: this.state });
   }
 
   private copyClaudeConfig(): void {
@@ -498,662 +556,30 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       .get<boolean>("masterBypass", false);
   }
 
-  private escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
   private getHtml(): string {
-    const {
-      serverRunning,
-      port,
-      sessions,
-      authEnabled,
-      claudeConfigured,
-      writeApproval,
-      globalCommandRules,
-      activeSessions,
-    } = this.state;
+    const webview = this.view!.webview;
+    const nonce = randomUUID().replace(/-/g, "");
 
-    const statusDot = serverRunning
-      ? `<span class="dot running"></span>`
-      : `<span class="dot stopped"></span>`;
-
-    const statusText = serverRunning ? `Running on port ${port}` : "Stopped";
-
-    const serverButton = serverRunning
-      ? `<button class="btn btn-secondary" onclick="send('stopServer')">Stop Server</button>`
-      : `<button class="btn btn-primary" onclick="send('startServer')">Start Server</button>`;
-
-    const sessionText = serverRunning
-      ? `<div class="info-row"><span class="label">Sessions:</span><span class="value">${sessions}</span></div>`
-      : "";
-
-    const configStatus = claudeConfigured
-      ? `<span class="badge badge-ok">Configured</span>`
-      : `<span class="badge badge-warn">Not configured</span>`;
-
-    const setupSection = serverRunning
-      ? `
-        <div class="section">
-          <h3>Claude Code Integration</h3>
-          <div class="info-row">
-            <span class="label">~/.claude.json:</span>
-            ${configStatus}
-          </div>
-          <p class="help-text">
-            The extension auto-configures Claude Code on startup. If you need to set it up manually:
-          </p>
-          <div class="button-group">
-            <button class="btn btn-secondary" onclick="send('installCli')">Run CLI Setup</button>
-            <button class="btn btn-secondary" onclick="send('copyCliCommand')">Copy CLI Command</button>
-            <button class="btn btn-secondary" onclick="send('copyConfig')">Copy JSON Config</button>
-          </div>
-        </div>`
-      : `
-        <div class="section">
-          <h3>Claude Code Integration</h3>
-          <p class="help-text">Start the server to configure Claude Code integration.</p>
-        </div>`;
-
-    // Write approval section
-    const writeApprovalLabel =
-      writeApproval === "global"
-        ? "Always auto-accept"
-        : writeApproval === "project"
-          ? "Project auto-accept"
-          : writeApproval === "session"
-            ? "Session auto-accept"
-            : "Prompt each time";
-    const writeApprovalBadge =
-      writeApproval === "global"
-        ? `<span class="badge badge-warn">Global</span>`
-        : writeApproval === "project"
-          ? `<span class="badge badge-warn">Project</span>`
-          : writeApproval === "session"
-            ? `<span class="badge badge-warn">Session</span>`
-            : `<span class="badge badge-ok">Active</span>`;
-    const writeResetBtn =
-      writeApproval !== "prompt"
-        ? `<button class="btn btn-secondary" style="margin-top:6px" onclick="send('resetWriteApproval')">Reset to Prompt</button>`
-        : "";
-
-    // File-level write rules (shown inline in Write Approval section)
-    const {
-      globalPathRules,
-      projectPathRules,
-      globalWriteRules,
-      projectWriteRules,
-      settingsWriteRules,
-    } = this.state;
-
-    const settingsRulesHtml =
-      (settingsWriteRules ?? []).length > 0
-        ? (settingsWriteRules ?? [])
-            .map(
-              (p) =>
-                `<div class="rule-row">
-            <span class="rule-mode">glob</span>
-            <span class="rule-pattern">${this.escapeHtml(p)}</span>
-            <span class="help-text" style="margin:0;font-size:10px">(settings)</span>
-          </div>`,
-            )
-            .join("")
-        : "";
-
-    const globalWriteRulesHtml =
-      (globalWriteRules ?? []).length > 0
-        ? (globalWriteRules ?? [])
-            .map((r) => {
-              const ep = this.escapeHtml(r.pattern);
-              const up = encodeURIComponent(r.pattern);
-              return `<div class="rule-row">
-            <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editGlobalWriteRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editGlobalWriteRule', '${up}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeGlobalWriteRule', '${up}')" title="Remove">✕</a>
-          </div>`;
-            })
-            .join("")
-        : "";
-
-    const sessionsWithWriteRules = (activeSessions ?? []).filter(
-      (s) => s.writeRules.length > 0,
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "dist", "sidebar.js"),
     );
-    const sessionWriteRulesHtml =
-      sessionsWithWriteRules.length > 0
-        ? sessionsWithWriteRules
-            .map((s) => {
-              const shortId =
-                s.id.length > 12 ? s.id.substring(0, 12) + "..." : s.id;
-              const eid = this.escapeHtml(s.id);
-              const uid = encodeURIComponent(s.id);
-              const rules = s.writeRules
-                .map((r) => {
-                  const ep = this.escapeHtml(r.pattern);
-                  const up = encodeURIComponent(r.pattern);
-                  return `<div class="rule-row">
-              <span class="rule-mode">${r.mode}</span>
-              <span class="rule-pattern" title="${ep}">${ep}</span>
-              <a class="rule-action rule-delete" onclick="sendSessionData('removeSessionWriteRule', '${uid}', '${up}')" title="Remove">✕</a>
-            </div>`;
-                })
-                .join("");
-              return `<div class="session-block">
-            <div class="info-row">
-              <span class="label" title="${this.escapeHtml(s.id)}">Session ${shortId}</span>
-            </div>
-            ${rules}
-          </div>`;
-            })
-            .join("")
-        : "";
-
-    const sessionWriteSection =
-      sessionsWithWriteRules.length > 0
-        ? `<div style="margin-top:10px">
-          <div class="subsection-label">Session Rules</div>
-          ${sessionWriteRulesHtml}
-        </div>`
-        : "";
-
-    const projectWriteRulesHtml =
-      (projectWriteRules ?? []).length > 0
-        ? (projectWriteRules ?? [])
-            .map((r) => {
-              const ep = this.escapeHtml(r.pattern);
-              const up = encodeURIComponent(r.pattern);
-              return `<div class="rule-row">
-            <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editProjectWriteRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editProjectWriteRule', '${up}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeProjectWriteRule', '${up}')" title="Remove">✕</a>
-          </div>`;
-            })
-            .join("")
-        : "";
-
-    const hasAnyWriteRules =
-      (settingsWriteRules ?? []).length > 0 ||
-      (globalWriteRules ?? []).length > 0 ||
-      (projectWriteRules ?? []).length > 0 ||
-      sessionsWithWriteRules.length > 0;
-    const fileRulesHtml = hasAnyWriteRules
-      ? `<div style="margin-top:10px">
-          <p class="help-text">Files matching these rules skip the diff view.</p>
-          ${settingsRulesHtml}
-          ${globalWriteRulesHtml ? `<div class="subsection-label">Global Rules</div>${globalWriteRulesHtml}` : ""}
-          ${projectWriteRulesHtml ? `<div class="subsection-label">Project Rules</div>${projectWriteRulesHtml}` : ""}
-          ${sessionWriteSection}
-        </div>`
-      : "";
-
-    const approvalSection = `
-      <div class="section">
-        <h3>Write Approval</h3>
-        <div class="info-row">
-          <span class="label">${writeApprovalLabel}</span>
-          ${writeApprovalBadge}
-        </div>
-        ${writeResetBtn}
-        ${fileRulesHtml}
-      </div>`;
-
-    // Trusted paths section (outside-workspace access)
-    const globalPathRulesHtml =
-      (globalPathRules ?? []).length > 0
-        ? (globalPathRules ?? [])
-            .map((r) => {
-              const ep = this.escapeHtml(r.pattern);
-              const up = encodeURIComponent(r.pattern);
-              return `<div class="rule-row">
-            <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editGlobalPathRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editGlobalPathRule', '${up}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeGlobalPathRule', '${up}')" title="Remove">✕</a>
-          </div>`;
-            })
-            .join("")
-        : `<p class="help-text">No trusted paths configured.</p>`;
-
-    const sessionsWithPathRules = (activeSessions ?? []).filter(
-      (s) => s.pathRules.length > 0,
+    const styleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "dist", "sidebar.css"),
     );
-    const sessionPathRulesHtml =
-      sessionsWithPathRules.length > 0
-        ? sessionsWithPathRules
-            .map((s) => {
-              const shortId =
-                s.id.length > 12 ? s.id.substring(0, 12) + "..." : s.id;
-              const eid = this.escapeHtml(s.id);
-              const uid = encodeURIComponent(s.id);
-              const rules = s.pathRules
-                .map((r) => {
-                  const ep = this.escapeHtml(r.pattern);
-                  const up = encodeURIComponent(r.pattern);
-                  return `<div class="rule-row">
-              <span class="rule-mode">${r.mode}</span>
-              <span class="rule-pattern" title="${ep}">${ep}</span>
-              <a class="rule-action rule-delete" onclick="sendSessionData('removeSessionPathRule', '${uid}', '${up}')" title="Remove">✕</a>
-            </div>`;
-                })
-                .join("");
-              return `<div class="session-block">
-            <div class="info-row">
-              <span class="label" title="${this.escapeHtml(s.id)}">Session ${shortId}</span>
-            </div>
-            ${rules}
-          </div>`;
-            })
-            .join("")
-        : "";
-
-    const sessionPathSection =
-      sessionsWithPathRules.length > 0
-        ? `<div style="margin-top:10px">
-          <div class="subsection-label">Session Rules</div>
-          ${sessionPathRulesHtml}
-        </div>`
-        : "";
-
-    const projectPathRulesHtml =
-      (projectPathRules ?? []).length > 0
-        ? (projectPathRules ?? [])
-            .map((r) => {
-              const ep = this.escapeHtml(r.pattern);
-              const up = encodeURIComponent(r.pattern);
-              return `<div class="rule-row">
-            <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editProjectPathRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editProjectPathRule', '${up}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeProjectPathRule', '${up}')" title="Remove">✕</a>
-          </div>`;
-            })
-            .join("")
-        : "";
-
-    const projectPathSection =
-      (projectPathRules ?? []).length > 0
-        ? `<div style="margin-top:10px">
-          <div class="subsection-label">Project Rules</div>
-          ${projectPathRulesHtml}
-        </div>`
-        : "";
-
-    const trustedPathsSection = `
-      <div class="section">
-        <h3>Trusted Paths</h3>
-        <p class="help-text">Outside-workspace paths that tools can access.</p>
-        <div class="subsection-label">Global Rules</div>
-        ${globalPathRulesHtml}
-        ${projectPathSection}
-        ${sessionPathSection}
-      </div>`;
-
-    // Trusted commands section
-    const globalRulesHtml =
-      (globalCommandRules ?? []).length > 0
-        ? (globalCommandRules ?? [])
-            .map((r) => {
-              const ep = this.escapeHtml(r.pattern);
-              const up = encodeURIComponent(r.pattern);
-              return `<div class="rule-row">
-            <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editGlobalRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editGlobalRule', '${up}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeGlobalRule', '${up}')" title="Remove">✕</a>
-          </div>`;
-            })
-            .join("")
-        : `<p class="help-text">No global rules configured.</p>`;
-
-    const sessionsWithRules = (activeSessions ?? []).filter(
-      (s) => s.commandRules.length > 0,
-    );
-    const sessionRulesHtml =
-      sessionsWithRules.length > 0
-        ? sessionsWithRules
-            .map((s) => {
-              const shortId =
-                s.id.length > 12 ? s.id.substring(0, 12) + "..." : s.id;
-              const eid = this.escapeHtml(s.id);
-              const uid = encodeURIComponent(s.id);
-              const rules = s.commandRules
-                .map((r) => {
-                  const ep = this.escapeHtml(r.pattern);
-                  const up = encodeURIComponent(r.pattern);
-                  return `<div class="rule-row">
-              <span class="rule-mode">${r.mode}</span>
-              <span class="rule-pattern" onclick="sendSessionRuleEdit('${uid}', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
-              <a class="rule-action" onclick="sendSessionRuleEdit('${uid}', '${up}', '${r.mode}')" title="Edit">✎</a>
-              <a class="rule-action rule-delete" onclick="sendSessionRule('${uid}', '${up}')" title="Remove">✕</a>
-            </div>`;
-                })
-                .join("");
-              return `<div class="session-block">
-            <div class="info-row">
-              <span class="label" title="${this.escapeHtml(s.id)}">Session ${shortId}</span>
-              <a class="link" onclick="sendSession('clearSessionRules', '${uid}')">Clear</a>
-            </div>
-            ${rules}
-          </div>`;
-            })
-            .join("")
-        : "";
-
-    const sessionSection =
-      sessionsWithRules.length > 0
-        ? `<div style="margin-top:10px">
-          <div class="subsection-label">Session Rules</div>
-          ${sessionRulesHtml}
-          <a class="link" style="display:block;margin-top:6px" onclick="send('clearAllSessions')">Clear All Sessions</a>
-        </div>`
-        : "";
-
-    // Project command rules
-    const { projectCommandRules } = this.state;
-    const projectRulesHtml =
-      (projectCommandRules ?? []).length > 0
-        ? (projectCommandRules ?? [])
-            .map((r) => {
-              const ep = this.escapeHtml(r.pattern);
-              const up = encodeURIComponent(r.pattern);
-              return `<div class="rule-row">
-            <span class="rule-mode">${r.mode}</span>
-            <span class="rule-pattern" onclick="sendRule('editProjectRule', '${up}', '${r.mode}')" title="Click to edit">${ep}</span>
-            <a class="rule-action" onclick="sendRule('editProjectRule', '${up}', '${r.mode}')" title="Edit">✎</a>
-            <a class="rule-action rule-delete" onclick="sendData('removeProjectRule', '${up}')" title="Remove">✕</a>
-          </div>`;
-            })
-            .join("")
-        : "";
-
-    const projectCommandSection =
-      (projectCommandRules ?? []).length > 0
-        ? `<div style="margin-top:10px">
-          <div class="subsection-label">Project Rules</div>
-          ${projectRulesHtml}
-        </div>`
-        : "";
-
-    const trustedCommandsSection = `
-      <div class="section">
-        <h3>Trusted Commands</h3>
-        <div class="subsection-label">Global Rules</div>
-        ${globalRulesHtml}
-        ${projectCommandSection}
-        <button class="btn btn-secondary" style="margin-top:6px" onclick="send('addGlobalRule')">+ Add Rule</button>
-        ${sessionSection}
-      </div>`;
-
-    const toolsList = `
-      <div class="section">
-        <h3>Available Tools</h3>
-        <ul class="tools-list">
-          <li><code>write_file</code> — Create/overwrite with diff review</li>
-          <li><code>apply_diff</code> — Search/replace with diff review</li>
-          <li><code>execute_command</code> — Integrated terminal</li>
-          <li><code>read_file</code> — Read with line numbers</li>
-          <li><code>list_files</code> — Directory listing</li>
-          <li><code>search_files</code> — Regex search</li>
-          <li><code>get_diagnostics</code> — Errors &amp; warnings</li>
-        </ul>
-      </div>`;
 
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size);
-      color: var(--vscode-foreground);
-      background: var(--vscode-sideBar-background);
-      padding: 12px;
-      line-height: 1.5;
-    }
-
-    .section {
-      margin-bottom: 16px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
-    }
-    .section:last-child { border-bottom: none; }
-
-    h3 {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
-      margin-bottom: 8px;
-    }
-
-    .status-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-
-    .dot {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .dot.running { background: var(--vscode-testing-iconPassed, #4ec94e); }
-    .dot.stopped { background: var(--vscode-testing-iconFailed, #f44747); }
-
-    .status-text {
-      font-weight: 500;
-    }
-
-    .info-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 3px 0;
-      font-size: 12px;
-    }
-    .info-row .label { color: var(--vscode-descriptionForeground); }
-    .info-row .value { font-weight: 500; }
-
-    .badge {
-      font-size: 11px;
-      padding: 1px 6px;
-      border-radius: 3px;
-      font-weight: 500;
-    }
-    .badge-ok {
-      background: var(--vscode-testing-iconPassed, #4ec94e);
-      color: #fff;
-    }
-    .badge-warn {
-      background: var(--vscode-editorWarning-foreground, #cca700);
-      color: #000;
-    }
-
-    .btn {
-      display: block;
-      width: 100%;
-      padding: 6px 12px;
-      border: none;
-      border-radius: 3px;
-      font-family: var(--vscode-font-family);
-      font-size: 12px;
-      cursor: pointer;
-      text-align: center;
-    }
-    .btn + .btn { margin-top: 6px; }
-
-    .btn-primary {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-    }
-    .btn-primary:hover { background: var(--vscode-button-hoverBackground); }
-
-    .btn-secondary {
-      background: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
-    }
-    .btn-secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-
-    .button-group { margin-top: 8px; }
-
-    .help-text {
-      font-size: 12px;
-      color: var(--vscode-descriptionForeground);
-      margin: 6px 0;
-    }
-
-    .tools-list {
-      list-style: none;
-      padding: 0;
-    }
-    .tools-list li {
-      font-size: 12px;
-      padding: 3px 0;
-      color: var(--vscode-descriptionForeground);
-    }
-    .tools-list code {
-      font-family: var(--vscode-editor-font-family);
-      font-size: 11px;
-      color: var(--vscode-foreground);
-      background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
-      padding: 1px 4px;
-      border-radius: 3px;
-    }
-
-    .link-row {
-      font-size: 12px;
-      margin-top: 4px;
-    }
-    .link-row a {
-      color: var(--vscode-textLink-foreground);
-      text-decoration: none;
-      cursor: pointer;
-    }
-    .link-row a:hover { text-decoration: underline; }
-
-    .subsection-label {
-      font-size: 11px;
-      font-weight: 500;
-      color: var(--vscode-descriptionForeground);
-      margin-bottom: 4px;
-    }
-
-    .rule-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 3px 0;
-      font-size: 12px;
-    }
-    .rule-mode {
-      font-size: 10px;
-      padding: 1px 4px;
-      border-radius: 3px;
-      background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
-      color: var(--vscode-descriptionForeground);
-      flex-shrink: 0;
-    }
-    .rule-pattern {
-      font-family: var(--vscode-editor-font-family);
-      font-size: 11px;
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      cursor: pointer;
-    }
-    .rule-pattern:hover {
-      color: var(--vscode-textLink-foreground);
-    }
-    .rule-action {
-      cursor: pointer;
-      color: var(--vscode-descriptionForeground);
-      flex-shrink: 0;
-      font-size: 11px;
-    }
-    .rule-action:hover {
-      color: var(--vscode-textLink-foreground);
-    }
-    .rule-delete:hover {
-      color: var(--vscode-errorForeground, #f44747) !important;
-    }
-
-    .link {
-      font-size: 12px;
-      color: var(--vscode-textLink-foreground);
-      cursor: pointer;
-      text-decoration: none;
-    }
-    .link:hover { text-decoration: underline; }
-
-    .session-block {
-      margin-bottom: 8px;
-      padding: 6px;
-      border-radius: 4px;
-      background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.08));
-    }
-  </style>
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
+  <link rel="stylesheet" href="${styleUri}">
+  <title>Native Claude</title>
 </head>
 <body>
-  <div class="section">
-    <h3>Server Status</h3>
-    <div class="status-header">
-      ${statusDot}
-      <span class="status-text">${statusText}</span>
-    </div>
-    ${sessionText}
-    <div class="info-row">
-      <span class="label">Auth:</span>
-      <span class="value">${authEnabled ? "Enabled" : "Disabled"}</span>
-    </div>
-    <div class="info-row">
-      <span class="label">Master Bypass:</span>
-      <span class="value">${this.getMasterBypass() ? "ON" : "Off"}</span>
-    </div>
-    <div class="button-group">
-      ${serverButton}
-    </div>
-    <div class="link-row" style="margin-top:8px">
-      <a onclick="send('openSettings')">Settings</a> &middot;
-      <a onclick="send('openOutput')">Output Log</a>
-    </div>
-    <div class="link-row">
-      <a onclick="send('openGlobalConfig')">Global Config</a> &middot;
-      <a onclick="send('openProjectConfig')">Project Config</a>
-    </div>
-  </div>
-
-  ${setupSection}
-  ${approvalSection}
-  ${trustedPathsSection}
-  ${trustedCommandsSection}
-  ${toolsList}
-
-  <script>
-    const vscode = acquireVsCodeApi();
-    function send(command) { vscode.postMessage({ command }); }
-    function d(s) { return decodeURIComponent(s); }
-    function sendData(command, pattern) { vscode.postMessage({ command, pattern: d(pattern) }); }
-    function sendSession(command, sessionId) { vscode.postMessage({ command, sessionId: d(sessionId) }); }
-    function sendRule(command, pattern, mode) { vscode.postMessage({ command, pattern: d(pattern), mode }); }
-    function sendSessionRule(sessionId, pattern) { vscode.postMessage({ command: 'removeSessionRule', sessionId: d(sessionId), pattern: d(pattern) }); }
-    function sendSessionRuleEdit(sessionId, pattern, mode) { vscode.postMessage({ command: 'editSessionRule', sessionId: d(sessionId), pattern: d(pattern), mode }); }
-    function sendSessionData(command, sessionId, pattern) { vscode.postMessage({ command, sessionId: d(sessionId), pattern: d(pattern) }); }
-  </script>
+  <div id="root"></div>
+  <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
 </body>
 </html>`;
   }

@@ -109,9 +109,13 @@ export class ApprovalPanelProvider
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = this.getIdleHtml(webviewView.webview);
 
-    // If there's a pending approval waiting for the view to resolve, show it
+    // If there's a pending approval waiting for the view to resolve, show it.
+    // We need to show + focus explicitly since the initial showCurrentApproval()
+    // bailed out before the view existed, so it never got revealed.
     if (this.currentEntry && this.getPosition() !== "beside") {
       this.showCurrentApproval();
+      webviewView.show(false);
+      vscode.commands.executeCommand("nativeClaude.approvalView.focus");
     }
   }
 
@@ -121,22 +125,29 @@ export class ApprovalPanelProvider
     command: string,
     fullCommand: string,
     options?: { subCommands?: string[] },
-  ): Promise<CommandApprovalResponse> {
-    return this.enqueue({
+  ): { promise: Promise<CommandApprovalResponse>; id: string } {
+    const id = randomUUID();
+    const promise = this.enqueue({
       kind: "command",
-      id: randomUUID(),
+      id,
       command,
       fullCommand,
       subCommands: options?.subCommands,
     }) as Promise<CommandApprovalResponse>;
+    return { promise, id };
   }
 
-  enqueuePathApproval(filePath: string): Promise<PathApprovalResponse> {
-    return this.enqueue({
+  enqueuePathApproval(filePath: string): {
+    promise: Promise<PathApprovalResponse>;
+    id: string;
+  } {
+    const id = randomUUID();
+    const promise = this.enqueue({
       kind: "path",
-      id: randomUUID(),
+      id,
       filePath,
     }) as Promise<PathApprovalResponse>;
+    return { promise, id };
   }
 
   enqueueWriteApproval(
@@ -210,11 +221,28 @@ export class ApprovalPanelProvider
   private showCurrentApproval(): void {
     if (!this.currentEntry) return;
 
+    const { request } = this.currentEntry;
+
+    // Always show alert and focus window, even if webview isn't ready yet
+    this.alertDisposable?.dispose();
+    this.alertDisposable = this.showAlert(
+      request.kind === "command"
+        ? "Command approval required"
+        : request.kind === "write"
+          ? "Write approval required"
+          : "Path access approval required",
+    );
+    vscode.commands.executeCommand("workbench.action.focusWindow");
+
     const position = this.getPosition();
     const webview = this.ensureWebview(position);
-    if (!webview) return; // panel mode but view not yet resolved — will show when resolveWebviewView fires
+    if (!webview) {
+      // Panel mode but view not yet resolved — force VS Code to reveal the
+      // view container, which triggers resolveWebviewView, which re-calls us.
+      vscode.commands.executeCommand("nativeClaude.approvalView.focus");
+      return;
+    }
 
-    const { request } = this.currentEntry;
     const queuePosition = 1;
     const queueTotal = 1 + this.queue.length;
 
@@ -230,20 +258,8 @@ export class ApprovalPanelProvider
       this.panel!.reveal(vscode.ViewColumn.Beside, false);
     } else if (this.view) {
       this.view.show(false);
-      // show() reveals the panel container but may not focus the webview —
-      // explicitly focus the view to ensure the approval is front-and-center
       vscode.commands.executeCommand("nativeClaude.approvalView.focus");
     }
-
-    // Alert
-    this.alertDisposable?.dispose();
-    this.alertDisposable = this.showAlert(
-      request.kind === "command"
-        ? "Command approval required"
-        : "Path access approval required",
-    );
-
-    vscode.commands.executeCommand("workbench.action.focusWindow");
   }
 
   private handleMessage(message: {

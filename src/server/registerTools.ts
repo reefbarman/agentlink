@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import type { ToolCallTracker } from "./ToolCallTracker.js";
 import { handleReadFile } from "../tools/readFile.js";
 import { handleListFiles } from "../tools/listFiles.js";
 import { handleSearchFiles } from "../tools/searchFiles.js";
@@ -25,6 +26,7 @@ export function registerTools(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   getSessionId: () => string | undefined,
+  tracker: ToolCallTracker,
 ): void {
   const sid = () => getSessionId() ?? "unknown";
   const touch = () => approvalManager.touchSession(sid());
@@ -54,10 +56,15 @@ export function registerTools(
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleReadFile(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "read_file",
+      (params) => {
+        touch();
+        return handleReadFile(params, approvalManager, approvalPanel, sid());
+      },
+      (p) => String(p.path ?? ""),
+      sid,
+    ),
   );
 
   server.tool(
@@ -79,10 +86,15 @@ export function registerTools(
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleListFiles(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "list_files",
+      (params) => {
+        touch();
+        return handleListFiles(params, approvalManager, approvalPanel, sid());
+      },
+      (p) => String(p.path ?? ""),
+      sid,
+    ),
   );
 
   server.tool(
@@ -113,10 +125,20 @@ export function registerTools(
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleSearchFiles(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "search_files",
+      (params) => {
+        touch();
+        return handleSearchFiles(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => String(p.regex ?? "").slice(0, 60),
+      sid,
+    ),
   );
 
   server.tool(
@@ -137,10 +159,15 @@ export function registerTools(
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleGetDiagnostics(params);
-    },
+    tracker.wrapHandler(
+      "get_diagnostics",
+      (params) => {
+        touch();
+        return handleGetDiagnostics(params);
+      },
+      (p) => String(p.path ?? "workspace"),
+      sid,
+    ),
   );
 
   // --- Language intelligence tools ---
@@ -156,10 +183,20 @@ export function registerTools(
       column: z.number().describe("Column number (1-indexed)"),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleGoToDefinition(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "go_to_definition",
+      (params) => {
+        touch();
+        return handleGoToDefinition(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => `${p.path}:${p.line}`,
+      sid,
+    ),
   );
 
   server.tool(
@@ -177,10 +214,20 @@ export function registerTools(
         .describe("Include the declaration itself in results (default: true)"),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleGetReferences(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "get_references",
+      (params) => {
+        touch();
+        return handleGetReferences(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => `${p.path}:${p.line}`,
+      sid,
+    ),
   );
 
   server.tool(
@@ -201,10 +248,20 @@ export function registerTools(
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleGetSymbols(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "get_symbols",
+      (params) => {
+        touch();
+        return handleGetSymbols(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => String(p.path ?? p.query ?? ""),
+      sid,
+    ),
   );
 
   server.tool(
@@ -218,10 +275,15 @@ export function registerTools(
       column: z.number().describe("Column number (1-indexed)"),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleGetHover(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "get_hover",
+      (params) => {
+        touch();
+        return handleGetHover(params, approvalManager, approvalPanel, sid());
+      },
+      (p) => `${p.path}:${p.line}`,
+      sid,
+    ),
   );
 
   server.tool(
@@ -239,10 +301,20 @@ export function registerTools(
         .describe("Maximum number of completion items to return (default: 50)"),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleGetCompletions(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "get_completions",
+      (params) => {
+        touch();
+        return handleGetCompletions(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => `${p.path}:${p.line}`,
+      sid,
+    ),
   );
 
   // --- Editor actions ---
@@ -266,10 +338,15 @@ export function registerTools(
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleOpenFile(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "open_file",
+      (params) => {
+        touch();
+        return handleOpenFile(params, approvalManager, approvalPanel, sid());
+      },
+      (p) => String(p.path ?? ""),
+      sid,
+    ),
   );
 
   server.tool(
@@ -283,10 +360,15 @@ export function registerTools(
         .describe("Notification type (default: 'info')"),
     },
     { readOnlyHint: true, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleShowNotification(params);
-    },
+    tracker.wrapHandler(
+      "show_notification",
+      (params) => {
+        touch();
+        return handleShowNotification(params);
+      },
+      (p) => String(p.message ?? "").slice(0, 60),
+      sid,
+    ),
   );
 
   // --- Write tools (diff-view based) ---
@@ -306,10 +388,15 @@ export function registerTools(
       idempotentHint: true,
       openWorldHint: false,
     },
-    (params) => {
-      touch();
-      return handleWriteFile(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "write_file",
+      (params) => {
+        touch();
+        return handleWriteFile(params, approvalManager, approvalPanel, sid());
+      },
+      (p) => String(p.path ?? ""),
+      sid,
+    ),
   );
 
   server.tool(
@@ -326,10 +413,15 @@ export function registerTools(
         ),
     },
     { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleApplyDiff(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "apply_diff",
+      (params) => {
+        touch();
+        return handleApplyDiff(params, approvalManager, approvalPanel, sid());
+      },
+      (p) => String(p.path ?? ""),
+      sid,
+    ),
   );
 
   // --- Terminal ---
@@ -348,10 +440,20 @@ export function registerTools(
       new_name: z.string().describe("The new name for the symbol"),
     },
     { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    (params) => {
-      touch();
-      return handleRenameSymbol(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "rename_symbol",
+      (params) => {
+        touch();
+        return handleRenameSymbol(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => String(p.new_name ?? ""),
+      sid,
+    ),
   );
 
   server.tool(
@@ -419,10 +521,21 @@ export function registerTools(
         ),
     },
     { readOnlyHint: false, openWorldHint: true },
-    (params) => {
-      touch();
-      return handleExecuteCommand(params, approvalManager, approvalPanel, sid());
-    },
+    tracker.wrapHandler(
+      "execute_command",
+      (params, ctx) => {
+        touch();
+        return handleExecuteCommand(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+          ctx,
+        );
+      },
+      (p) => String(p.command ?? "").slice(0, 80),
+      sid,
+    ),
   );
 
   server.tool(
@@ -442,16 +555,24 @@ export function registerTools(
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
-    async (params) => {
-      touch();
-      const { semanticSearch } = await import("../services/semanticSearch.js");
-      const { resolveAndValidatePath, getFirstWorkspaceRoot } =
-        await import("../util/paths.js");
-      const dirPath = params.path
-        ? resolveAndValidatePath(params.path).absolutePath
-        : getFirstWorkspaceRoot();
-      return semanticSearch(dirPath, params.query);
-    },
+    tracker.wrapHandler(
+      "codebase_search",
+      async (params) => {
+        touch();
+        const { semanticSearch } = await import(
+          "../services/semanticSearch.js"
+        );
+        const { resolveAndValidatePath, getFirstWorkspaceRoot } = await import(
+          "../util/paths.js"
+        );
+        const dirPath = params.path
+          ? resolveAndValidatePath(String(params.path)).absolutePath
+          : getFirstWorkspaceRoot();
+        return semanticSearch(dirPath, String(params.query));
+      },
+      (p) => String(p.query ?? "").slice(0, 60),
+      sid,
+    ),
   );
 
   server.tool(
@@ -470,9 +591,15 @@ export function registerTools(
       destructiveHint: true,
       openWorldHint: false,
     },
-    (params) => {
-      touch();
-      return handleCloseTerminals(params);
-    },
+    tracker.wrapHandler(
+      "close_terminals",
+      (params) => {
+        touch();
+        return handleCloseTerminals(params);
+      },
+      (p) =>
+        Array.isArray(p.names) ? (p.names as string[]).join(", ") : "all",
+      sid,
+    ),
   );
 }
