@@ -12,7 +12,7 @@ export interface SubCommandEntry {
 }
 
 export interface ApprovalRequest {
-  kind: "command" | "path" | "write";
+  kind: "command" | "path" | "write" | "rename";
   id: string;
   /** For commands: the full compound command */
   command?: string;
@@ -24,6 +24,14 @@ export interface ApprovalRequest {
   writeOperation?: "create" | "modify";
   /** For writes: whether the file is outside workspace */
   outsideWorkspace?: boolean;
+  /** For renames: the current symbol name */
+  oldName?: string;
+  /** For renames: the new symbol name */
+  newName?: string;
+  /** For renames: list of affected files with change counts */
+  affectedFiles?: Array<{ path: string; changes: number }>;
+  /** For renames: total number of changes across all files */
+  totalChanges?: number;
   /** Queue position info */
   queuePosition?: number;
   queueTotal?: number;

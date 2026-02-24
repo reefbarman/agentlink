@@ -3,13 +3,6 @@ import * as vscode from "vscode";
 import { getRelativePath } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { promptRejectionReason } from "../util/rejectionReason.js";
-import { showApprovalAlert } from "../util/approvalAlert.js";
-import { enqueueApproval } from "../util/quickPickQueue.js";
-import {
-  showWriteApprovalScopeChoice,
-  showWritePatternEditor,
-} from "./writeApprovalUI.js";
 import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
@@ -71,83 +64,61 @@ export async function handleRenameSymbol(
     const canAutoApprove = masterBypass || approvalManager.isWriteApproved(sessionId);
 
     if (!canAutoApprove) {
-      const fileList = filesPreview.map((f) => `  ${f.path} (${f.changes} change${f.changes > 1 ? "s" : ""})`).join("\n");
-      const summary = `${totalChanges} change${totalChanges > 1 ? "s" : ""} across ${entries.length} file${entries.length > 1 ? "s" : ""}`;
+      const { promise } = approvalPanel.enqueueRenameApproval(
+        oldName,
+        params.new_name,
+        filesPreview,
+        totalChanges,
+      );
 
-      // Wrap entire approval flow in the queue so concurrent approvals
-      // don't collide (QP + follow-up scope/pattern + rejection reason).
-      type RenameDecision = "accept" | "session" | "project" | "global" | "reject";
-      const result = await enqueueApproval("Rename approval", async () => {
-        type Item = vscode.QuickPickItem & { decision: RenameDecision };
-        const items: Item[] = [
-          { label: "$(check) Accept", description: "Apply this rename", decision: "accept", alwaysShow: true },
-          { label: "$(check) For Session", description: "Auto-accept writes this session", decision: "session", alwaysShow: true },
-          { label: "$(folder) For Project", description: "Auto-accept writes for this project", decision: "project", alwaysShow: true },
-          { label: "$(globe) Always", description: "Auto-accept writes globally", decision: "global", alwaysShow: true },
-          { label: "$(close) Reject", description: "Cancel this rename", decision: "reject", alwaysShow: true },
-        ];
+      const response = await promise;
 
-        const choice = await new Promise<RenameDecision>((resolve) => {
-          const alert = showApprovalAlert("Rename approval required");
-          const qp = vscode.window.createQuickPick<Item>();
-          qp.title = `Rename "${oldName}" → "${params.new_name}"?`;
-          qp.placeholder = `${summary}: ${fileList.replace(/\n/g, ", ")}`;
-          qp.items = items;
-          qp.activeItems = [];
-          qp.ignoreFocusOut = true;
-
-          let resolved = false;
-          qp.onDidAccept(() => {
-            const selected = qp.selectedItems[0];
-            if (selected) {
-              resolved = true;
-              alert.dispose();
-              resolve(selected.decision);
-              qp.dispose();
-            }
-          });
-          qp.onDidHide(() => {
-            alert.dispose();
-            if (!resolved) resolve("reject");
-            qp.dispose();
-          });
-          qp.show();
-          qp.activeItems = [];
-        });
-
-        if (choice === "reject") {
-          const reason = await promptRejectionReason();
-          return { choice, reason };
-        }
-
-        // Handle scope-based approval (follow-up dialogs stay inside queue slot)
-        if (choice === "session" || choice === "project" || choice === "global") {
-          const scope: "session" | "project" | "global" = choice;
-
-          const scopeChoice = await showWriteApprovalScopeChoice(relPath);
-          if (scopeChoice === "all-files") {
-            approvalManager.setWriteApproval(sessionId, scope);
-          } else if (scopeChoice === "this-file") {
-            approvalManager.addWriteRule(
-              sessionId,
-              { pattern: relPath, mode: "exact" },
-              scope,
-            );
-          } else if (scopeChoice === "pattern") {
-            const rule = await showWritePatternEditor(relPath);
-            if (rule) {
-              approvalManager.addWriteRule(sessionId, rule, scope);
-            }
-          }
-        }
-
-        return { choice };
-      });
-
-      if (result.choice === "reject") {
+      if (response.decision === "reject") {
         return {
-          content: [{ type: "text", text: JSON.stringify({ status: "rejected", old_name: oldName, new_name: params.new_name, reason: result.reason }) }],
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              status: "rejected",
+              old_name: oldName,
+              new_name: params.new_name,
+              reason: response.rejectionReason,
+            }),
+          }],
         };
+      }
+
+      // Save trust rules for session/project/always decisions
+      if (
+        response.decision === "accept-session" ||
+        response.decision === "accept-project" ||
+        response.decision === "accept-always"
+      ) {
+        const scope: "session" | "project" | "global" =
+          response.decision === "accept-session"
+            ? "session"
+            : response.decision === "accept-project"
+              ? "project"
+              : "global";
+
+        if (response.trustScope === "all-files") {
+          approvalManager.setWriteApproval(sessionId, scope);
+        } else if (response.trustScope === "this-file") {
+          approvalManager.addWriteRule(
+            sessionId,
+            { pattern: relPath, mode: "exact" },
+            scope,
+          );
+        } else if (
+          response.trustScope === "pattern" &&
+          response.rulePattern &&
+          response.ruleMode
+        ) {
+          approvalManager.addWriteRule(
+            sessionId,
+            { pattern: response.rulePattern, mode: response.ruleMode },
+            scope,
+          );
+        }
       }
     }
 

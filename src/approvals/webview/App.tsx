@@ -3,6 +3,7 @@ import type { ApprovalRequest, ExtensionMessage, DecisionMessage } from "./types
 import { CommandCard } from "./components/CommandCard.js";
 import { PathCard } from "./components/PathCard.js";
 import { WriteCard } from "./components/WriteCard.js";
+import { RenameCard } from "./components/RenameCard.js";
 import { IdleState } from "./components/IdleState.js";
 
 interface VsCodeApi {
@@ -46,5 +47,7 @@ export function App({ vscodeApi }: AppProps) {
       return <PathCard request={request} submit={submit} />;
     case "write":
       return <WriteCard request={request} submit={submit} />;
+    case "rename":
+      return <RenameCard request={request} submit={submit} />;
   }
 }

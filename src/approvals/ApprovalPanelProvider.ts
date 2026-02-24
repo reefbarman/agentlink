@@ -44,10 +44,23 @@ export interface WriteApprovalResponse {
   ruleMode?: "glob" | "prefix" | "exact";
 }
 
+export interface RenameApprovalResponse {
+  decision:
+    | "accept"
+    | "reject"
+    | "accept-session"
+    | "accept-project"
+    | "accept-always";
+  rejectionReason?: string;
+  trustScope?: "all-files" | "this-file" | "pattern";
+  rulePattern?: string;
+  ruleMode?: "glob" | "prefix" | "exact";
+}
+
 // ── Internal types ──────────────────────────────────────────────────────────
 
 interface InternalRequest {
-  kind: "command" | "path" | "write";
+  kind: "command" | "path" | "write" | "rename";
   id: string;
   command?: string;
   fullCommand?: string;
@@ -55,6 +68,10 @@ interface InternalRequest {
   subCommands?: SubCommandEntry[];
   writeOperation?: "create" | "modify";
   outsideWorkspace?: boolean;
+  oldName?: string;
+  newName?: string;
+  affectedFiles?: Array<{ path: string; changes: number }>;
+  totalChanges?: number;
 }
 
 interface QueueEntry {
@@ -163,6 +180,24 @@ export class ApprovalPanelProvider
     return { promise, id };
   }
 
+  enqueueRenameApproval(
+    oldName: string,
+    newName: string,
+    affectedFiles: Array<{ path: string; changes: number }>,
+    totalChanges: number,
+  ): { promise: Promise<RenameApprovalResponse>; id: string } {
+    const id = randomUUID();
+    const promise = this.enqueue({
+      kind: "rename",
+      id,
+      oldName,
+      newName,
+      affectedFiles,
+      totalChanges,
+    }) as Promise<RenameApprovalResponse>;
+    return { promise, id };
+  }
+
   cancelApproval(id: string): void {
     if (this.currentEntry?.request.id === id) {
       this.alertDisposable?.dispose();
@@ -183,9 +218,14 @@ export class ApprovalPanelProvider
 
   private makeRejectResponse(
     kind: InternalRequest["kind"],
-  ): CommandApprovalResponse | PathApprovalResponse | WriteApprovalResponse {
+  ):
+    | CommandApprovalResponse
+    | PathApprovalResponse
+    | WriteApprovalResponse
+    | RenameApprovalResponse {
     if (kind === "command") return { decision: "reject" };
     if (kind === "write") return { decision: "reject" };
+    if (kind === "rename") return { decision: "reject" };
     return { decision: "reject" };
   }
 
@@ -223,7 +263,9 @@ export class ApprovalPanelProvider
         ? "Command approval required"
         : request.kind === "write"
           ? "Write approval required"
-          : "Path access approval required",
+          : request.kind === "rename"
+            ? "Rename approval required"
+            : "Path access approval required",
     );
     vscode.commands.executeCommand("workbench.action.focusWindow");
 
@@ -261,6 +303,10 @@ export class ApprovalPanelProvider
       filePath: request.filePath,
       writeOperation: request.writeOperation,
       outsideWorkspace: request.outsideWorkspace,
+      oldName: request.oldName,
+      newName: request.newName,
+      affectedFiles: request.affectedFiles,
+      totalChanges: request.totalChanges,
       queuePosition,
       queueTotal,
     };
@@ -321,6 +367,15 @@ export class ApprovalPanelProvider
         ruleMode: message.ruleMode as WriteApprovalResponse["ruleMode"],
       };
       entry.resolve(response);
+    } else if (entry.request.kind === "rename") {
+      const response: RenameApprovalResponse = {
+        decision: message.decision as RenameApprovalResponse["decision"],
+        rejectionReason: message.rejectionReason || undefined,
+        trustScope: message.trustScope as RenameApprovalResponse["trustScope"],
+        rulePattern: message.rulePattern || undefined,
+        ruleMode: message.ruleMode as RenameApprovalResponse["ruleMode"],
+      };
+      entry.resolve(response);
     } else {
       const response: PathApprovalResponse = {
         decision: message.decision as PathApprovalResponse["decision"],
@@ -344,27 +399,17 @@ export class ApprovalPanelProvider
     const entry = this.currentEntry;
     this.currentEntry = undefined;
 
-    if (entry.request.kind === "command") {
-      entry.resolve({
-        decision: "reject",
+    entry.resolve(
+      Object.assign(this.makeRejectResponse(entry.request.kind), {
         rejectionReason: reason,
-      } as CommandApprovalResponse);
-    } else {
-      entry.resolve({
-        decision: "reject",
-        rejectionReason: reason,
-      } as PathApprovalResponse);
-    }
+      }),
+    );
   }
 
   private rejectAll(): void {
     this.rejectCurrent();
     for (const entry of this.queue) {
-      if (entry.request.kind === "command") {
-        entry.resolve({ decision: "reject" } as CommandApprovalResponse);
-      } else {
-        entry.resolve({ decision: "reject" } as PathApprovalResponse);
-      }
+      entry.resolve(this.makeRejectResponse(entry.request.kind));
     }
     this.queue = [];
     this.updatePendingCount();

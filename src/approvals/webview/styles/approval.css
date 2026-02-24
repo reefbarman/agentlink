@@ -419,3 +419,96 @@ body {
   accent-color: var(--vscode-focusBorder);
   margin: 0 2px 0 0;
 }
+
+/* ── Rename card ─────────────────────────────────────────────────────── */
+
+.rename-box {
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.rename-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+.rename-header .codicon { font-size: 12px; }
+.rename-names {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  line-height: 1.5;
+  flex-wrap: wrap;
+}
+.rename-old {
+  color: var(--vscode-errorForeground, #f48771);
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+.rename-arrow {
+  color: var(--vscode-descriptionForeground);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.rename-new {
+  color: var(--vscode-terminal-ansiGreen, #4ec9b0);
+  font-weight: 600;
+}
+
+.rename-files { margin-bottom: 16px; }
+.rename-files-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 8px;
+}
+.rename-summary-badge { font-weight: 400; font-size: 11px; }
+.rename-files-list {
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.rename-file-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.rename-file-entry:last-child { border-bottom: none; }
+.rename-file-entry .codicon {
+  font-size: 14px;
+  color: var(--vscode-symbolIcon-fileForeground, var(--vscode-foreground));
+  flex-shrink: 0;
+}
+.rename-file-path {
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  word-break: break-all;
+  flex: 1;
+}
+.rename-change-count {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  flex-shrink: 0;
+}
