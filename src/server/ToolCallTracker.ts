@@ -7,6 +7,11 @@ import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.j
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
+const MAX_LOG_STRING_CHARS = 240;
+const MAX_LOG_JSON_CHARS = 1_200;
+const MAX_LOG_COLLECTION_ITEMS = 20;
+const MAX_LOG_DEPTH = 3;
+
 export interface TrackerContext {
   toolCallId: string;
   setApprovalId: (approvalId: string) => void;
@@ -39,6 +44,72 @@ function makeToolResult(payload: Record<string, unknown>): ToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
   };
+}
+
+function truncateLogString(input: string, max = MAX_LOG_STRING_CHARS): string {
+  if (input.length <= max) return input;
+  return `${input.slice(0, max)}… [truncated ${input.length - max} chars]`;
+}
+
+function sanitizeParamsForLog(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return truncateLogString(value);
+  if (
+    value === null ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "bigint") return `${value.toString()}n`;
+  if (typeof value === "undefined") return "[undefined]";
+  if (typeof value === "function") {
+    const fn = value as (...args: unknown[]) => unknown;
+    return `[function ${fn.name || "anonymous"}]`;
+  }
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: truncateLogString(value.message),
+    };
+  }
+
+  if (Array.isArray(value)) {
+    if (depth >= MAX_LOG_DEPTH) return `[array(${value.length})]`;
+    const items = value
+      .slice(0, MAX_LOG_COLLECTION_ITEMS)
+      .map((item) => sanitizeParamsForLog(item, depth + 1));
+    if (value.length > MAX_LOG_COLLECTION_ITEMS) {
+      items.push(`[${value.length - MAX_LOG_COLLECTION_ITEMS} more items]`);
+    }
+    return items;
+  }
+
+  if (typeof value === "object") {
+    if (depth >= MAX_LOG_DEPTH) return "[object]";
+    const entries = Object.entries(value as Record<string, unknown>);
+    const trimmed = entries.slice(0, MAX_LOG_COLLECTION_ITEMS);
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of trimmed) {
+      result[k] = sanitizeParamsForLog(v, depth + 1);
+    }
+    if (entries.length > MAX_LOG_COLLECTION_ITEMS) {
+      result.__truncated_keys__ = `${entries.length - MAX_LOG_COLLECTION_ITEMS} more keys`;
+    }
+    return result;
+  }
+
+  return String(value);
+}
+
+function formatParamsForLog(params: Record<string, unknown>): string {
+  try {
+    const json = JSON.stringify(sanitizeParamsForLog(params));
+    if (!json) return "{}";
+    return truncateLogString(json, MAX_LOG_JSON_CHARS);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `[unserializable params: ${truncateLogString(message)}]`;
+  }
 }
 
 // ── ToolCallTracker ──────────────────────────────────────────────────────────
@@ -89,7 +160,9 @@ export class ToolCallTracker extends EventEmitter {
     const call = this.activeCalls.get(toolCallId);
     if (call) {
       call.approvalId = approvalId;
-      this.log(`WAITING_APPROVAL ${call.toolName} (${toolCallId.slice(0, 8)}), approvalId=${approvalId.slice(0, 8)}`);
+      this.log(
+        `WAITING_APPROVAL ${call.toolName} (${toolCallId.slice(0, 8)}), approvalId=${approvalId.slice(0, 8)}`,
+      );
     }
   }
 
@@ -97,7 +170,9 @@ export class ToolCallTracker extends EventEmitter {
     const call = this.activeCalls.get(toolCallId);
     if (call) {
       call.terminalId = terminalId;
-      this.log(`TERMINAL_ASSIGNED ${call.toolName} (${toolCallId.slice(0, 8)}), terminalId=${terminalId}`);
+      this.log(
+        `TERMINAL_ASSIGNED ${call.toolName} (${toolCallId.slice(0, 8)}), terminalId=${terminalId}`,
+      );
     }
   }
 
@@ -139,8 +214,9 @@ export class ToolCallTracker extends EventEmitter {
       };
 
       this.activeCalls.set(id, tracked);
+      const paramsSummary = formatParamsForLog(params);
       this.log(
-        `START ${toolName} (${id.slice(0, 8)}), active=${this.activeCalls.size}, listeners=${this.listenerCount("change")}`,
+        `START ${toolName} (${id.slice(0, 8)}), active=${this.activeCalls.size}, listeners=${this.listenerCount("change")}, params=${paramsSummary}`,
       );
       this.emit("change");
 
@@ -181,7 +257,9 @@ export class ToolCallTracker extends EventEmitter {
 
     // Cancel any linked approval
     if (call.approvalId) {
-      this.log(`CANCEL_APPROVAL ${call.toolName} (${id.slice(0, 8)}), approvalId=${call.approvalId.slice(0, 8)}`);
+      this.log(
+        `CANCEL_APPROVAL ${call.toolName} (${id.slice(0, 8)}), approvalId=${call.approvalId.slice(0, 8)}`,
+      );
       approvalPanel.cancelApproval(call.approvalId);
     }
 
@@ -240,7 +318,9 @@ export class ToolCallTracker extends EventEmitter {
   }
 
   private async completeExecuteCommand(call: TrackedCall): Promise<void> {
-    this.log(`COMPLETE_EXEC ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId ?? "none"}`);
+    this.log(
+      `COMPLETE_EXEC ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId ?? "none"}`,
+    );
     const { getTerminalManager } =
       await import("../integrations/TerminalManager.js");
     const tm = getTerminalManager();
@@ -264,8 +344,7 @@ export class ToolCallTracker extends EventEmitter {
         output_captured: !!partialOutput,
         terminal_id: call.terminalId ?? null,
         status: "force-completed",
-        message:
-          "Command force-completed by user. Process was interrupted.",
+        message: "Command force-completed by user. Process was interrupted.",
       }),
     );
   }
@@ -281,7 +360,9 @@ export class ToolCallTracker extends EventEmitter {
       this.log(`COMPLETE_WRITE auto-accepted diff for ${call.toolName}`);
       return; // Original handler wins the Promise.race
     }
-    this.log(`COMPLETE_WRITE no pending diff, force-resolving ${call.toolName}`);
+    this.log(
+      `COMPLETE_WRITE no pending diff, force-resolving ${call.toolName}`,
+    );
 
     // No pending diff — force-resolve with fallback
     call.forceResolve(

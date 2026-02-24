@@ -273,7 +273,12 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
   const requireAuth = getConfig<boolean>("requireAuth");
   const authToken = requireAuth ? getOrCreateAuthToken(context) : undefined;
 
-  mcpHost = new McpServerHost(authToken, approvalManager, approvalPanel, toolCallTracker);
+  mcpHost = new McpServerHost(
+    authToken,
+    approvalManager,
+    approvalPanel,
+    toolCallTracker,
+  );
 
   httpServer = http.createServer(async (req, res) => {
     const url = req.url ?? "";
@@ -296,7 +301,9 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
       res.on("close", () => {
         if (!res.writableFinished) {
           clientDisconnected = true;
-          log(`Client disconnected before response completed (${req.method} ${url})`);
+          log(
+            `Client disconnected before response completed (${req.method} ${url})`,
+          );
         }
       });
 
@@ -484,7 +491,7 @@ export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel("Native Claude");
   context.subscriptions.push(outputChannel);
 
-  initializeTerminalManager(context.extensionUri);
+  initializeTerminalManager(context.extensionUri, log);
 
   log("Activating Native Claude extension");
 

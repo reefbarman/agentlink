@@ -11,7 +11,7 @@ Claude Code's built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`) o
 | Capability                | Built-in tools              | Native Claude                                                                                                                                                                                    |
 | ------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **File editing**          | Writes directly to disk     | Opens a **diff view** — you see exactly what's changing, can edit inline, and accept or reject. Format-on-save applies automatically.                                                            |
-| **Terminal commands**     | Runs in a hidden subprocess | Runs in VS Code's **integrated terminal** — visible, interactive, with shell integration for output capture. Supports named terminals for parallel tasks.                                        |
+| **Terminal commands**     | Runs in a hidden subprocess | Runs in VS Code's **integrated terminal** — visible, interactive, with shell integration for output capture. Supports named terminals, parallel tasks, and **split terminal groups**.            |
 | **Diagnostics**           | Not available               | Real **TypeScript errors, ESLint warnings**, etc. from VS Code's language services — returned after writes and available on-demand.                                                              |
 | **File reading**          | Raw file content            | Content plus **file metadata** (size, modified date), **language detection**, **git status**, **diagnostics summary**, and **symbol outlines** (functions, classes, interfaces grouped by kind). |
 | **Search**                | `grep`/`rg` via subprocess  | Same ripgrep engine, plus optional **semantic vector search** against an indexed codebase.                                                                                                       |
@@ -20,9 +20,46 @@ Claude Code's built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`) o
 | **Approval system**       | All-or-nothing permissions  | **Granular approval** — per-file write rules, per-command pattern matching, outside-workspace path trust with prefix/glob/exact patterns.                                                        |
 | **Rejection reasons**     | Silent rejection            | When you reject a write or command, you can provide a **reason** that's returned to Claude so it can adjust its approach.                                                                        |
 
+## Installation
+
+### Install script (recommended)
+
+Download and install the latest release from GitHub:
+
+```sh
+curl -sL https://raw.githubusercontent.com/reefbarman/native-claude/main/scripts/install.sh | bash
+```
+
+Or clone the repo first and run it locally:
+
+```sh
+./scripts/install.sh
+```
+
+### Manual download
+
+1. Go to the [latest release](https://github.com/reefbarman/native-claude/releases/latest)
+2. Download the `.vsix` file
+3. Install it:
+   ```sh
+   code --install-extension native-claude-*.vsix --force
+   ```
+
+### Build from source
+
+```sh
+git clone https://github.com/reefbarman/native-claude.git
+cd native-claude
+npm install && npm run build
+npx @vscode/vsce package --no-dependencies --allow-star-activation
+code --install-extension native-claude-*.vsix --force
+```
+
+After installing, reload VS Code. The MCP server starts automatically and configures `~/.claude.json`.
+
 ## Quick Start
 
-1. Install the extension (or build from source with `npm run build`)
+1. Install the extension (see [Installation](#installation))
 2. The MCP server starts automatically and configures `~/.claude.json`
 3. Start Claude Code — it will pick up the `native-claude` MCP server
 
@@ -117,7 +154,7 @@ Edit an existing file using search/replace blocks. Opens a diff view for review.
 | `path`    | string | File path                                |
 | `diff`    | string | Search/replace blocks (see format below) |
 
-```
+```text
 replacement content
 ```
 
@@ -241,6 +278,7 @@ Output is capped to the **last 200 lines** by default to prevent context window 
 | `cwd`                 | string?  | Working directory                                                                                                                           |
 | `terminal_id`         | string?  | Reuse a specific terminal by ID                                                                                                             |
 | `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`)                                                                                            |
+| `split_from`          | string?  | Split alongside an existing terminal (by `terminal_id` or `terminal_name`), creating a visual group                                         |
 | `background`          | boolean? | Fire-and-forget for long-running processes                                                                                                  |
 | `timeout`             | number?  | Timeout in seconds (default: 60)                                                                                                            |
 | `output_head`         | number?  | Return only the first N lines of output. Overrides the default 200-line tail cap.                                                           |
@@ -383,14 +421,15 @@ The global `~/.claude.json` config is still updated as a fallback for running Cl
 
 ## Settings
 
-| Setting                         | Default | Description                                                                    |
-| ------------------------------- | ------- | ------------------------------------------------------------------------------ |
-| `native-claude.port`            | `0`     | HTTP port for the MCP server (`0` = OS-assigned, recommended for multi-window) |
-| `native-claude.autoStart`       | `true`  | Auto-start server on activation                                                |
-| `native-claude.requireAuth`     | `true`  | Require Bearer token auth                                                      |
-| `native-claude.masterBypass`    | `false` | Skip all approval prompts                                                      |
-| `native-claude.diagnosticDelay` | `1500`  | Max ms to wait for diagnostics after save                                      |
-| `native-claude.writeRules`      | `[]`    | Glob patterns for auto-approved file writes (settings-level)                   |
+| Setting                          | Default | Description                                                                       |
+| -------------------------------- | ------- | --------------------------------------------------------------------------------- |
+| `native-claude.port`             | `0`     | HTTP port for the MCP server (`0` = OS-assigned, recommended for multi-window)    |
+| `native-claude.autoStart`        | `true`  | Auto-start server on activation                                                   |
+| `native-claude.requireAuth`      | `true`  | Require Bearer token auth                                                         |
+| `native-claude.masterBypass`     | `false` | Skip all approval prompts                                                         |
+| `native-claude.approvalPosition` | `panel` | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel) |
+| `native-claude.diagnosticDelay`  | `1500`  | Max ms to wait for diagnostics after save                                         |
+| `native-claude.writeRules`       | `[]`    | Glob patterns for auto-approved file writes (settings-level)                      |
 
 ## Architecture
 

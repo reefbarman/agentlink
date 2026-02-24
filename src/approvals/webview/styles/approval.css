@@ -1,0 +1,421 @@
+/* Approval panel styles — extracted from ApprovalPanelProvider inline CSS */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  padding: 16px;
+}
+
+/* ── Idle state ──────────────────────────────────────────────────────── */
+
+.idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  opacity: 0.5;
+  gap: 8px;
+}
+.idle .codicon { font-size: 32px; }
+.idle p { font-size: 13px; }
+
+/* ── Header ──────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.header-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.badge {
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ── Card label ──────────────────────────────────────────────────────── */
+
+.card-label {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 10px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ── File card (write approvals) ─────────────────────────────────────── */
+
+.file-card {
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.file-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.file-card-header .codicon {
+  font-size: 16px;
+  color: var(--vscode-symbolIcon-fileForeground, var(--vscode-foreground));
+}
+.file-path {
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  word-break: break-all;
+}
+.operation-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.operation-badge.modify {
+  background: var(--vscode-editorWarning-foreground, #cca700);
+  color: #000;
+}
+.operation-badge.create {
+  background: var(--vscode-terminal-ansiGreen, #4ec9b0);
+  color: #000;
+}
+.outside-badge {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── Command box (path approvals) ────────────────────────────────────── */
+
+.command-box {
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  padding: 12px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+/* ── Terminal-style command box ───────────────────────────────────────── */
+
+.terminal-box {
+  background: var(--vscode-terminal-background, #1e1e1e);
+  border: 1px solid var(--vscode-terminal-border, var(--vscode-panel-border));
+  border-radius: 6px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom: 1px solid var(--vscode-terminal-border, rgba(255,255,255,0.06));
+  font-size: 11px;
+  color: var(--vscode-terminal-foreground, var(--vscode-foreground));
+  opacity: 0.7;
+}
+.terminal-header .codicon { font-size: 12px; }
+.terminal-body {
+  display: flex;
+  padding: 10px 12px;
+  align-items: flex-start;
+  gap: 8px;
+}
+.terminal-prompt {
+  color: var(--vscode-terminal-ansiGreen, #4ec9b0);
+  font-family: var(--vscode-terminal-fontFamily, var(--vscode-editor-font-family));
+  font-size: var(--vscode-terminal-fontSize, var(--vscode-editor-font-size));
+  line-height: 1.5;
+  user-select: none;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.terminal-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--vscode-terminal-foreground, var(--vscode-foreground));
+  font-family: var(--vscode-terminal-fontFamily, var(--vscode-editor-font-family));
+  font-size: var(--vscode-terminal-fontSize, var(--vscode-editor-font-size));
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  min-height: 22px;
+  max-height: 250px;
+  overflow-y: auto;
+  padding: 0;
+}
+.terminal-input.edited {
+  color: var(--vscode-terminal-ansiYellow, #e5c07b);
+}
+.edited-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--vscode-terminal-ansiYellow, #e5c07b);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: var(--vscode-font-family);
+  white-space: nowrap;
+}
+.btn:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+.btn-primary {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-border, transparent);
+}
+.btn-primary:hover { background: var(--vscode-button-hoverBackground); }
+.btn-secondary {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+.btn-secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.btn-danger {
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  color: var(--vscode-errorForeground, #f48771);
+  border-color: var(--vscode-inputValidation-errorBorder, #be1100);
+}
+.btn-danger:hover { opacity: 0.9; }
+.btn-outline {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-panel-border);
+}
+.btn-outline:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+/* ── Mode toggle buttons ─────────────────────────────────────────────── */
+
+.mode-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid var(--vscode-panel-border);
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: var(--vscode-font-family);
+  white-space: nowrap;
+}
+.mode-btn:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+.mode-btn.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-background);
+}
+.mode-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.mode-btn-skip.active {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border-color: var(--vscode-button-secondaryBackground);
+}
+
+/* ── Rules section ───────────────────────────────────────────────────── */
+
+.rules-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+.rules-header {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 12px;
+}
+
+/* ── Rule row ────────────────────────────────────────────────────────── */
+
+.rule-row {
+  margin-bottom: 16px;
+  padding: 10px;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+}
+.rule-row-skipped {
+  opacity: 0.5;
+}
+.rule-row-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.rule-row-label {
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  color: var(--vscode-foreground);
+  word-break: break-all;
+}
+.rule-row-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--vscode-terminal-ansiGreen, #4ec9b0);
+  color: #000;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.rule-row-input-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.rule-row-input-line .rule-pattern-input {
+  flex: 1;
+  margin-bottom: 0;
+}
+.rule-pattern-input.skipped {
+  opacity: 0.4;
+}
+.rule-row-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rule-row-option-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rule-row-option-label {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  flex-shrink: 0;
+}
+.toggle-group {
+  display: flex;
+  gap: 2px;
+}
+.save-rules-btn {
+  margin-top: 12px;
+}
+
+/* ── Expandable (rejection) ──────────────────────────────────────────── */
+
+.expandable {
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+}
+.expandable-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+/* ── Form fields ─────────────────────────────────────────────────────── */
+
+.field {
+  margin-bottom: 12px;
+}
+.field label {
+  display: block;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 4px;
+}
+.text-input {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 2px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+}
+.text-input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  border-color: var(--vscode-focusBorder);
+}
+.textarea {
+  resize: vertical;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  line-height: 1.5;
+}
+.radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 4px;
+}
+.radio-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.radio-label input[type="radio"] {
+  -webkit-appearance: radio;
+  appearance: radio;
+  accent-color: var(--vscode-focusBorder);
+  margin: 0 2px 0 0;
+}

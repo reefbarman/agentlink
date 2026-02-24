@@ -3,6 +3,10 @@
 !dist/extension.js.map
 !dist/sidebar.js
 !dist/sidebar.css
+!dist/approval.js
+!dist/approval.css
+!dist/codicon.css
+!dist/codicon.ttf
 !package.json
 !README.md
 !LICENSE

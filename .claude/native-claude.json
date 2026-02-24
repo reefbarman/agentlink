@@ -4,6 +4,14 @@
     {
       "pattern": "npm run release",
       "mode": "exact"
+    },
+    {
+      "pattern": "node -p \"require('./package.json').version\"",
+      "mode": "exact"
+    },
+    {
+      "pattern": "npm run build",
+      "mode": "prefix"
     }
   ]
 }

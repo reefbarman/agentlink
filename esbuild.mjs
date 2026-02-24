@@ -1,4 +1,5 @@
 import * as esbuild from "esbuild";
+import { copyFileSync } from "fs";
 
 const watch = process.argv.includes("--watch");
 
@@ -16,11 +17,9 @@ const extensionOptions = {
 };
 
 /** @type {esbuild.BuildOptions} */
-const webviewOptions = {
-  entryPoints: ["src/sidebar/webview/index.tsx"],
+const webviewBase = {
   bundle: true,
   outdir: "dist",
-  entryNames: "sidebar",
   format: "esm",
   platform: "browser",
   target: "es2022",
@@ -30,17 +29,42 @@ const webviewOptions = {
   jsxImportSource: "preact",
 };
 
+/** @type {esbuild.BuildOptions} */
+const sidebarOptions = {
+  ...webviewBase,
+  entryPoints: ["src/sidebar/webview/index.tsx"],
+  entryNames: "sidebar",
+};
+
+/** @type {esbuild.BuildOptions} */
+const approvalOptions = {
+  ...webviewBase,
+  entryPoints: ["src/approvals/webview/index.tsx"],
+  entryNames: "approval",
+};
+
 if (watch) {
-  const [extCtx, webCtx] = await Promise.all([
+  const [extCtx, sideCtx, appCtx] = await Promise.all([
     esbuild.context(extensionOptions),
-    esbuild.context(webviewOptions),
+    esbuild.context(sidebarOptions),
+    esbuild.context(approvalOptions),
   ]);
-  await Promise.all([extCtx.watch(), webCtx.watch()]);
+  await Promise.all([extCtx.watch(), sideCtx.watch(), appCtx.watch()]);
   console.log("Watching for changes...");
 } else {
   await Promise.all([
     esbuild.build(extensionOptions),
-    esbuild.build(webviewOptions),
+    esbuild.build(sidebarOptions),
+    esbuild.build(approvalOptions),
   ]);
+  // Copy codicon assets to dist
+  copyFileSync(
+    "node_modules/@vscode/codicons/dist/codicon.css",
+    "dist/codicon.css",
+  );
+  copyFileSync(
+    "node_modules/@vscode/codicons/dist/codicon.ttf",
+    "dist/codicon.ttf",
+  );
   console.log("Build complete.");
 }

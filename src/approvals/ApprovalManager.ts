@@ -428,29 +428,41 @@ export class ApprovalManager {
   // --- Command approval ---
 
   isCommandApproved(sessionId: string, command: string): boolean {
+    return this.findMatchingCommandRule(sessionId, command) !== null;
+  }
+
+  /**
+   * Find the first command rule that matches the given command.
+   * Returns the rule and its scope, or null if no match.
+   * Checks session → project → global (same priority as isCommandApproved).
+   */
+  findMatchingCommandRule(
+    sessionId: string,
+    command: string,
+  ): { rule: CommandRule; scope: RuleScope } | null {
     const trimmed = command.trim();
 
     // Check session rules first
     const session = this.getSession(sessionId);
     for (const rule of session.commandRules) {
-      if (this.matchesRule(trimmed, rule)) return true;
+      if (this.matchesRule(trimmed, rule)) return { rule, scope: "session" };
     }
 
     // Check project rules
     const projectConfig = this.configStore.getProjectConfigForFirstRoot();
     if (projectConfig) {
       for (const rule of projectConfig.commandRules ?? []) {
-        if (this.matchesRule(trimmed, rule)) return true;
+        if (this.matchesRule(trimmed, rule)) return { rule, scope: "project" };
       }
     }
 
     // Check global rules
     const globalConfig = this.configStore.getGlobalConfig();
     for (const rule of globalConfig.commandRules ?? []) {
-      if (this.matchesRule(trimmed, rule)) return true;
+      if (this.matchesRule(trimmed, rule)) return { rule, scope: "global" };
     }
 
-    return false;
+    return null;
   }
 
   addCommandRule(sessionId: string, rule: CommandRule, scope: RuleScope): void {

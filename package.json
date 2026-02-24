@@ -2,7 +2,7 @@
   "name": "native-claude",
   "displayName": "Native Claude",
   "description": "MCP server that provides Claude Code with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "0.6.23",
+  "version": "0.6.38",
   "publisher": "native-claude",
   "repository": {
     "type": "git",
@@ -39,6 +39,7 @@
     "views": {
       "nativeClaude": [
         {
+          "icon": "media/claude.svg",
           "type": "webview",
           "id": "nativeClaude.statusView",
           "name": "Status"
@@ -46,6 +47,7 @@
       ],
       "nativeClaudePanel": [
         {
+          "icon": "media/claude.svg",
           "type": "webview",
           "id": "nativeClaude.approvalView",
           "name": "Approvals"
@@ -165,7 +167,7 @@
             "beside",
             "panel"
           ],
-          "default": "beside",
+          "default": "panel",
           "enumDescriptions": [
             "Opens an editor tab to the right of the active editor (split view). Closes when all approvals are handled.",
             "Shows a tab in the bottom panel alongside Terminal/Problems. Can be dragged to the secondary sidebar."
@@ -191,6 +193,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",
+    "@vscode/codicons": "^0.0.44",
     "diff": "^5.2.0",
     "picomatch": "^4.0.3",
     "preact": "^10.28.4",

@@ -4,12 +4,18 @@ import { cleanTerminalOutput } from "../util/ansi.js";
 
 let terminalIconPath: vscode.Uri | undefined;
 
-export function initializeTerminalManager(extensionUri: vscode.Uri): void {
+export function initializeTerminalManager(
+  extensionUri: vscode.Uri,
+  log?: (message: string) => void,
+): void {
   terminalIconPath = vscode.Uri.joinPath(
     extensionUri,
     "media",
     "claude-terminal.svg",
   );
+  if (log) {
+    getTerminalManager().log = log;
+  }
 }
 
 interface ManagedTerminal {
@@ -41,6 +47,8 @@ export interface ExecuteOptions {
   cwd: string;
   terminal_id?: string;
   terminal_name?: string;
+  /** Split the new terminal alongside this terminal (by id or name) */
+  split_from?: string;
   background?: boolean;
   timeout?: number;
   /** Called once the terminal is resolved, before execution begins */
@@ -55,6 +63,7 @@ let nextTerminalId = 1;
 export class TerminalManager {
   private terminals: ManagedTerminal[] = [];
   private disposables: vscode.Disposable[] = [];
+  log?: (message: string) => void;
 
   constructor() {
     // Clean up terminals that get closed
@@ -68,7 +77,7 @@ export class TerminalManager {
   }
 
   async executeCommand(options: ExecuteOptions): Promise<CommandResult> {
-    const managed = this.resolveTerminal(options);
+    const managed = await this.resolveTerminal(options);
     managed.busy = true;
     options.onTerminalAssigned?.(managed.id);
 
@@ -105,8 +114,10 @@ export class TerminalManager {
     }
   }
 
-  private resolveTerminal(options: ExecuteOptions): ManagedTerminal {
-    const { cwd, terminal_id, terminal_name } = options;
+  private async resolveTerminal(
+    options: ExecuteOptions,
+  ): Promise<ManagedTerminal> {
+    const { cwd, terminal_id, terminal_name, split_from } = options;
 
     // If terminal_id is specified, find that specific terminal
     if (terminal_id) {
@@ -114,7 +125,7 @@ export class TerminalManager {
       if (existing) {
         return existing;
       }
-      // If not found, create a new one with that ID concept (fall through to creation)
+      // If not found, fall through to creation
     }
 
     // If terminal_name is specified, find or create by name
@@ -125,8 +136,12 @@ export class TerminalManager {
       if (existing) {
         return existing;
       }
-      // Create with the specified name
-      return this.createTerminal(cwd, terminal_name);
+      // Create with the specified name, optionally split from a parent
+      const managed = this.createTerminal(cwd, terminal_name);
+      if (split_from) {
+        await this.splitTerminalBeside(managed, split_from);
+      }
+      return managed;
     }
 
     // Default: reuse any idle default terminal.
@@ -143,7 +158,67 @@ export class TerminalManager {
       return idleDefaults[0];
     }
 
-    return this.createTerminal(cwd, "Native Claude");
+    const managed = this.createTerminal(cwd, "Native Claude");
+    if (split_from) {
+      await this.splitTerminalBeside(managed, split_from);
+    }
+    return managed;
+  }
+
+  /**
+   * Split the parent terminal and replace the child's vscode.Terminal reference
+   * with the newly created split terminal. Works around a VS Code bug (#205254)
+   * where `createTerminal({ location: { parentTerminal } })` is silently ignored
+   * when the parent was created in a previous async operation.
+   */
+  private async splitTerminalBeside(
+    child: ManagedTerminal,
+    splitFrom: string,
+  ): Promise<void> {
+    const parent =
+      this.terminals.find((t) => t.id === splitFrom) ??
+      this.terminals.find((t) => t.name === splitFrom);
+    if (!parent) {
+      this.log?.(
+        `split_from "${splitFrom}" not found in ${this.terminals.length} terminals: [${this.terminals.map((t) => `${t.name}(${t.id})`).join(", ")}]`,
+      );
+      return;
+    }
+
+    this.log?.(`split_from: splitting beside "${parent.name}" (${parent.id})`);
+
+    // Dispose the child terminal we just created — we'll replace it with
+    // the split terminal that VS Code creates from the parent.
+    child.terminal.dispose();
+
+    // Focus the parent terminal so the split command acts on it
+    parent.terminal.show(false);
+    // Small delay to ensure the parent terminal is focused
+    await new Promise((r) => setTimeout(r, 150));
+
+    // Listen for the new terminal that the split command will create
+    const splitTerminal = await new Promise<vscode.Terminal>((resolve) => {
+      const disposable = vscode.window.onDidOpenTerminal((t) => {
+        disposable.dispose();
+        resolve(t);
+      });
+      vscode.commands.executeCommand("workbench.action.terminal.split");
+    });
+
+    // Rename the split terminal to the requested name
+    splitTerminal.show(false);
+    await new Promise((r) => setTimeout(r, 50));
+    await vscode.commands.executeCommand(
+      "workbench.action.terminal.renameWithArg",
+      { name: child.name },
+    );
+
+    // Replace the terminal reference on the managed object
+    child.terminal = splitTerminal;
+
+    this.log?.(
+      `split_from: created split terminal "${child.name}" (${child.id})`,
+    );
   }
 
   private createTerminal(cwd: string, name: string): ManagedTerminal {

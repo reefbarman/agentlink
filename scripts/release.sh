@@ -33,10 +33,10 @@ echo "Bumped version to $NEW_VERSION"
 # Build
 npm run build
 
-# Package VSIX into dist/
-mkdir -p dist
-npx @vscode/vsce package --no-dependencies --allow-star-activation --out dist/
-VSIX=$(ls -t dist/*.vsix | head -1)
+# Package VSIX into releases/
+mkdir -p releases
+npx @vscode/vsce package --no-dependencies --allow-star-activation --out releases/
+VSIX=$(ls -t releases/*.vsix | head -1)
 echo "Built $VSIX"
 
 if $INSTALL; then

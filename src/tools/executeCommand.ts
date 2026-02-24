@@ -6,7 +6,11 @@ import { getTerminalManager } from "../integrations/TerminalManager.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { TrackerContext } from "../server/ToolCallTracker.js";
-import { splitCompoundCommand } from "../approvals/commandSplitter.js";
+import {
+  splitCompoundCommand,
+  expandSubCommands,
+} from "../approvals/commandSplitter.js";
+import type { SubCommandEntry } from "../approvals/webview/types.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
@@ -17,6 +21,7 @@ export async function handleExecuteCommand(
     cwd?: string;
     terminal_id?: string;
     terminal_name?: string;
+    split_from?: string;
     background?: boolean;
     timeout?: number;
     output_head?: number;
@@ -85,6 +90,7 @@ export async function handleExecuteCommand(
       cwd,
       terminal_id: params.terminal_id,
       terminal_name: params.terminal_name,
+      split_from: params.split_from,
       background: params.background,
       timeout: params.timeout ? params.timeout * 1000 : undefined, // seconds → ms
       onTerminalAssigned: trackerCtx
@@ -142,9 +148,10 @@ export async function handleExecuteCommand(
 /**
  * Approve sub-commands by showing a single dialog with the full command.
  *
- * - Run/Edit/Reject applies to the whole command at once.
- * - Trust buttons (Session/Project/Always) show an inline multi-entry
- *   pattern editor so the user can set per-sub-command rules in-place.
+ * - Split compound command, expand wrappers into separate sub-commands
+ * - Build enriched entries with existing matching rules
+ * - Run/Edit/Reject applies to the whole command at once
+ * - Always-visible per-sub-command rule editor with per-row scope
  */
 async function approveSubCommands(
   subCommands: string[],
@@ -153,55 +160,56 @@ async function approveSubCommands(
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<{ approved: boolean; reason?: string; editedCommand?: string }> {
-  // Find which sub-commands still need approval
-  const unapproved = subCommands.filter(
-    (sub) => !approvalManager.isCommandApproved(sessionId, sub),
+  // Expand wrappers: ["cd /foo", "sudo npm install"] → ["cd /foo", "sudo", "npm install"]
+  const expanded = expandSubCommands(subCommands);
+
+  // Check if all expanded sub-commands are already approved
+  const allApproved = expanded.every((sub) =>
+    approvalManager.isCommandApproved(sessionId, sub),
   );
+  if (allApproved) return { approved: true };
 
-  // All sub-commands already approved
-  if (unapproved.length === 0) return { approved: true };
+  // Build enriched entries for ALL sub-commands (even already-approved ones)
+  const entries: SubCommandEntry[] = expanded.map((cmd) => {
+    const match = approvalManager.findMatchingCommandRule(sessionId, cmd);
+    if (match) {
+      return {
+        command: cmd,
+        existingRule: {
+          pattern: match.rule.pattern,
+          mode: match.rule.mode,
+          scope: match.scope,
+        },
+      };
+    }
+    return { command: cmd };
+  });
 
-  // Show ONE dialog with the full command (passes sub-commands for multi-entry pattern editor)
-  const { promise, id: approvalId } = approvalPanel.enqueueCommandApproval(
+  // Show dialog with full command + enriched sub-command entries
+  const { promise } = approvalPanel.enqueueCommandApproval(
     fullCommand,
     fullCommand,
-    { subCommands: unapproved.length > 1 ? unapproved : undefined },
+    { subCommands: entries },
   );
   const response = await promise;
 
   if (response.decision === "reject") {
     return { approved: false, reason: response.rejectionReason };
   }
-  if (response.decision === "edit") {
-    return { approved: true, editedCommand: response.editedCommand };
-  }
-  if (response.decision === "run-once") {
-    if (response.editedCommand) {
-      return { approved: true, editedCommand: response.editedCommand };
-    }
-    return { approved: true };
-  }
 
-  // Trust decision (session/project/global)
-  const trustScope = response.decision as "session" | "project" | "global";
-
-  // Compound command with per-sub-command rules from inline multi-entry editor
+  // Save per-sub-command rules (each with its own scope)
   if (response.rules && response.rules.length > 0) {
     for (const rule of response.rules) {
-      if (rule.mode === "skip" || !rule.pattern) continue;
+      if (rule.mode === "skip" || !rule.pattern) {
+        continue;
+      }
+      const scope = rule.scope as "session" | "project" | "global";
       approvalManager.addCommandRule(
         sessionId,
-        { pattern: rule.pattern, mode: rule.mode },
-        trustScope,
+        { pattern: rule.pattern, mode: rule.mode as "prefix" | "exact" | "regex" },
+        scope,
       );
     }
-  } else if (response.rulePattern && response.ruleMode) {
-    // Single command — rule from inline pattern editor
-    approvalManager.addCommandRule(
-      sessionId,
-      { pattern: response.rulePattern, mode: response.ruleMode },
-      trustScope,
-    );
   }
 
   if (response.editedCommand) {

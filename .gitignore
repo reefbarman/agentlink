@@ -3,4 +3,4 @@ dist/
 *.vsix
 .claude/settings.json
 .vscode/.mytodos.json
-
+releases/
