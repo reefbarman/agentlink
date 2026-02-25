@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import * as fs from "fs/promises";
+import * as path from "path";
 
 import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
 import {
@@ -9,10 +11,9 @@ import {
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import {
-  showWriteApprovalScopeChoice,
-  showWritePatternEditor,
+  decisionToScope,
+  saveWriteTrustRules,
 } from "./writeApprovalUI.js";
-import { enqueueApproval } from "../util/quickPickQueue.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -49,9 +50,6 @@ export async function handleWriteFile(
         approvalPanel.isRecentlyApproved("write", relPath);
 
     if (canAutoApprove) {
-      const fs = await import("fs/promises");
-      const path = await import("path");
-
       // Snapshot diagnostics before the write
       const snap = snapshotDiagnostics();
 
@@ -101,72 +99,17 @@ export async function handleWriteFile(
       }
 
       // Handle session/always acceptance — save rules.
-      if (
-        decision === "accept-session" ||
-        decision === "accept-project" ||
-        decision === "accept-always"
-      ) {
-        const scope: "session" | "project" | "global" =
-          decision === "accept-session"
-            ? "session"
-            : decision === "accept-project"
-              ? "project"
-              : "global";
-
-        const panelResponse = diffView.writeApprovalResponse;
-        if (panelResponse?.trustScope) {
-          // Scope/pattern provided inline by the approval panel — no follow-up dialogs
-          if (panelResponse.trustScope === "all-files") {
-            approvalManager.setWriteApproval(sessionId, scope);
-          } else if (panelResponse.trustScope === "this-file") {
-            approvalManager.addWriteRule(
-              sessionId,
-              { pattern: relPath, mode: "exact" },
-              scope,
-            );
-          } else if (
-            panelResponse.trustScope === "pattern" &&
-            panelResponse.rulePattern &&
-            panelResponse.ruleMode
-          ) {
-            const rule = {
-              pattern: panelResponse.rulePattern,
-              mode: panelResponse.ruleMode,
-            };
-            approvalManager.addWriteRule(sessionId, rule, scope);
-            if (!inWorkspace) {
-              approvalManager.addPathRule(sessionId, rule, scope);
-            }
-          }
-        } else {
-          // QuickPick fallback — use follow-up dialogs
-          await enqueueApproval("Write scope selection", async () => {
-            if (!inWorkspace) {
-              const dirPath = (await import("path")).dirname(filePath) + "/";
-              const rule = await showWritePatternEditor(dirPath);
-              if (rule) {
-                approvalManager.addWriteRule(sessionId, rule, scope);
-                approvalManager.addPathRule(sessionId, rule, scope);
-              }
-            } else {
-              const choice = await showWriteApprovalScopeChoice(relPath);
-              if (choice === "all-files") {
-                approvalManager.setWriteApproval(sessionId, scope);
-              } else if (choice === "this-file") {
-                approvalManager.addWriteRule(
-                  sessionId,
-                  { pattern: relPath, mode: "exact" },
-                  scope,
-                );
-              } else if (choice === "pattern") {
-                const rule = await showWritePatternEditor(relPath);
-                if (rule) {
-                  approvalManager.addWriteRule(sessionId, rule, scope);
-                }
-              }
-            }
-          });
-        }
+      const scope = decisionToScope(decision);
+      if (scope) {
+        await saveWriteTrustRules({
+          panelResponse: diffView.writeApprovalResponse,
+          approvalManager,
+          sessionId,
+          scope,
+          relPath,
+          filePath,
+          inWorkspace,
+        });
       }
 
       return await diffView.saveChanges();

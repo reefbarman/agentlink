@@ -1,7 +1,16 @@
 import * as esbuild from "esbuild";
-import { copyFileSync } from "fs";
+import { copyFileSync, readFileSync } from "fs";
 
 const watch = process.argv.includes("--watch");
+
+// Load .env.local if it exists (for DEV_BUILD=true opt-in)
+let devBuild = false;
+try {
+  const envLocal = readFileSync(".env.local", "utf-8");
+  devBuild = /^DEV_BUILD\s*=\s*true$/m.test(envLocal);
+} catch {
+  // No .env.local — dev tools disabled (default)
+}
 
 /** @type {esbuild.BuildOptions} */
 const extensionOptions = {
@@ -14,6 +23,9 @@ const extensionOptions = {
   target: "node20",
   sourcemap: true,
   minify: false,
+  define: {
+    __DEV_BUILD__: JSON.stringify(devBuild),
+  },
 };
 
 /** @type {esbuild.BuildOptions} */

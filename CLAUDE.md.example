@@ -1,12 +1,6 @@
-# Recommended Claude Code Configuration for native-claude
-
-# Add the following to your global `~/.claude/CLAUDE.md` to ensure Claude Code
-# uses native-claude MCP tools instead of built-in equivalents in any project
-# where the extension is active.
-
 ## MANDATORY: Use native-claude MCP tools
 
-**STOP CHECK**: Before doing ANY work, verify the `native-claude` MCP server is connected by confirming you have access to its tools (e.g. `read_file`, `execute_command`, `apply_diff`). If native-claude tools are NOT available in your tool list, **STOP IMMEDIATELY** and tell the user:
+**STOP CHECK**: Before doing ANY work, verify that the `native-claude` MCP server is connected by confirming you have access to its tools (e.g. `read_file`, `execute_command`, `apply_diff`). If native-claude tools are NOT available in your tool list, **STOP IMMEDIATELY** and tell the user:
 
 > "The native-claude MCP server is not connected. I cannot proceed without it. Please check that the native-claude VS Code extension is running and reload the MCP connection."
 

@@ -1,0 +1,349 @@
+import { describe, it, expect } from "vitest";
+import {
+  parseSearchReplaceBlocks,
+  applyBlocks,
+  normalizeForComparison,
+  tryFlexibleMatch,
+} from "./applyDiff.js";
+
+// Helper to build a diff string with the new delimiter format
+function diff(...blocks: Array<{ search: string; replace: string }>): string {
+  return blocks
+    .map(
+      (b) =>
+        `<<<<<<< SEARCH\n${b.search}\n======= DIVIDER =======\n${b.replace}\n>>>>>>> REPLACE`,
+    )
+    .join("\n");
+}
+
+function legacyDiff(
+  ...blocks: Array<{ search: string; replace: string }>
+): string {
+  return blocks
+    .map(
+      (b) =>
+        `<<<<<<< SEARCH\n${b.search}\n=======\n${b.replace}\n>>>>>>> REPLACE`,
+    )
+    .join("\n");
+}
+
+describe("parseSearchReplaceBlocks", () => {
+  it("parses a single block", () => {
+    const input = diff({ search: "hello", replace: "world" });
+    const { blocks, malformedBlocks } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe("hello");
+    expect(blocks[0].replace).toBe("world");
+    expect(blocks[0].index).toBe(0);
+    expect(malformedBlocks).toBe(0);
+  });
+
+  it("parses multiple blocks", () => {
+    const input = diff(
+      { search: "a", replace: "b" },
+      { search: "c", replace: "d" },
+    );
+    const { blocks } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].search).toBe("a");
+    expect(blocks[1].search).toBe("c");
+    expect(blocks[0].index).toBe(0);
+    expect(blocks[1].index).toBe(1);
+  });
+
+  it("handles multi-line search and replace", () => {
+    const input = diff({
+      search: "line 1\nline 2\nline 3",
+      replace: "new 1\nnew 2",
+    });
+    const { blocks } = parseSearchReplaceBlocks(input);
+    expect(blocks[0].search).toBe("line 1\nline 2\nline 3");
+    expect(blocks[0].replace).toBe("new 1\nnew 2");
+  });
+
+  it("handles empty search (delete)", () => {
+    const input = diff({ search: "", replace: "inserted" });
+    const { blocks } = parseSearchReplaceBlocks(input);
+    expect(blocks[0].search).toBe("");
+    expect(blocks[0].replace).toBe("inserted");
+  });
+
+  it("handles empty replace (delete)", () => {
+    const input = diff({ search: "remove me", replace: "" });
+    const { blocks } = parseSearchReplaceBlocks(input);
+    expect(blocks[0].search).toBe("remove me");
+    expect(blocks[0].replace).toBe("");
+  });
+
+  it("uses legacy delimiter when new delimiter is absent", () => {
+    const input = legacyDiff({ search: "old", replace: "new" });
+    const { blocks } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe("old");
+    expect(blocks[0].replace).toBe("new");
+  });
+
+  it("ignores legacy delimiter when new delimiter is present", () => {
+    // Mix: first block uses new delimiter, second has ======= in search content
+    const input =
+      "<<<<<<< SEARCH\nbefore\n======= DIVIDER =======\nafter\n>>>>>>> REPLACE\n" +
+      "<<<<<<< SEARCH\nhas =======\n======= DIVIDER =======\nreplaced\n>>>>>>> REPLACE";
+    const { blocks } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[1].search).toBe("has =======");
+  });
+
+  // ── Malformed blocks ────────────────────────────────────────────────
+
+  it("detects malformed block (missing REPLACE marker)", () => {
+    const input = "<<<<<<< SEARCH\nhello\n======= DIVIDER =======\nworld";
+    const { blocks, malformedBlocks } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(0);
+    expect(malformedBlocks).toBe(1);
+  });
+
+  it("detects malformed block (missing divider and REPLACE)", () => {
+    const input = "<<<<<<< SEARCH\nhello";
+    const { blocks, malformedBlocks } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(0);
+    expect(malformedBlocks).toBe(1);
+  });
+
+  it("counts valid and malformed blocks separately", () => {
+    const input =
+      diff({ search: "good", replace: "ok" }) +
+      "\n<<<<<<< SEARCH\nbad block without end";
+    const { blocks, malformedBlocks } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe("good");
+    expect(malformedBlocks).toBe(1);
+  });
+
+  it("returns empty for no blocks", () => {
+    const { blocks, malformedBlocks } =
+      parseSearchReplaceBlocks("just some text");
+    expect(blocks).toHaveLength(0);
+    expect(malformedBlocks).toBe(0);
+  });
+
+  it("returns empty for empty string", () => {
+    const { blocks, malformedBlocks } = parseSearchReplaceBlocks("");
+    expect(blocks).toHaveLength(0);
+    expect(malformedBlocks).toBe(0);
+  });
+
+  it("handles trailing whitespace on markers", () => {
+    const input =
+      "<<<<<<< SEARCH  \nhello\n======= DIVIDER =======  \nworld\n>>>>>>> REPLACE  ";
+    const { blocks } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe("hello");
+  });
+});
+
+describe("applyBlocks", () => {
+  it("applies a single replacement", () => {
+    const { result, failedBlocks } = applyBlocks("hello world", [
+      { search: "hello", replace: "goodbye", index: 0 },
+    ]);
+    expect(result).toBe("goodbye world");
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("applies multiple replacements sequentially", () => {
+    const { result } = applyBlocks("aaa bbb ccc", [
+      { search: "aaa", replace: "xxx", index: 0 },
+      { search: "bbb", replace: "yyy", index: 1 },
+    ]);
+    expect(result).toBe("xxx yyy ccc");
+  });
+
+  it("reports failed block when search not found", () => {
+    const { result, failedBlocks } = applyBlocks("hello world", [
+      { search: "missing", replace: "x", index: 0 },
+    ]);
+    expect(result).toBe("hello world");
+    expect(failedBlocks).toEqual([0]);
+  });
+
+  it("reports failed block when search is ambiguous (multiple matches)", () => {
+    const { result, failedBlocks } = applyBlocks("aa bb aa", [
+      { search: "aa", replace: "cc", index: 0 },
+    ]);
+    expect(result).toBe("aa bb aa");
+    expect(failedBlocks).toEqual([0]);
+  });
+
+  it("handles empty search string (always fails)", () => {
+    const { failedBlocks } = applyBlocks("content", [
+      { search: "", replace: "x", index: 0 },
+    ]);
+    expect(failedBlocks).toEqual([0]);
+  });
+
+  it("applies partial blocks (some succeed, some fail)", () => {
+    const { result, failedBlocks } = applyBlocks("hello world", [
+      { search: "hello", replace: "hi", index: 0 },
+      { search: "missing", replace: "x", index: 1 },
+    ]);
+    expect(result).toBe("hi world");
+    expect(failedBlocks).toEqual([1]);
+  });
+
+  it("handles multi-line content", () => {
+    const content = "function foo() {\n  return 1;\n}";
+    const { result } = applyBlocks(content, [
+      { search: "  return 1;", replace: "  return 42;", index: 0 },
+    ]);
+    expect(result).toBe("function foo() {\n  return 42;\n}");
+  });
+
+  // ── Flexible whitespace matching ─────────────────────────────────────
+
+  it("matches when file uses tabs but search uses spaces", () => {
+    const content = "function foo() {\n\treturn 1;\n}";
+    const { result, failedBlocks } = applyBlocks(content, [
+      { search: "    return 1;", replace: "    return 42;", index: 0 },
+    ]);
+    expect(result).toBe("function foo() {\n    return 42;\n}");
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("matches when file uses spaces but search uses tabs", () => {
+    const content = "function foo() {\n    return 1;\n}";
+    const { result, failedBlocks } = applyBlocks(content, [
+      { search: "\treturn 1;", replace: "\treturn 42;", index: 0 },
+    ]);
+    expect(result).toBe("function foo() {\n\treturn 42;\n}");
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("matches when trailing whitespace differs", () => {
+    // "hello world" (no trailing spaces) won't exactly match "hello world   "
+    // as a full line, but it WILL match as a substring via indexOf.
+    // The flexible match handles full-line trailing whitespace differences.
+    const content = "line 1\nhello world   \nline 3";
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search: "line 1\nhello world\nline 3",
+        replace: "line 1\ngoodbye world\nline 3",
+        index: 0,
+      },
+    ]);
+    expect(result).toBe("line 1\ngoodbye world\nline 3");
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("flexible match still rejects ambiguous matches", () => {
+    const content = "\treturn 1;\n\treturn 1;";
+    const { result, failedBlocks } = applyBlocks(content, [
+      { search: "    return 1;", replace: "    return 42;", index: 0 },
+    ]);
+    expect(result).toBe("\treturn 1;\n\treturn 1;");
+    expect(failedBlocks).toEqual([0]);
+  });
+
+  it("flexible match works with multi-line blocks", () => {
+    const content =
+      "class Foo {\n\tmethod() {\n\t\treturn 1;\n\t}\n}";
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search: "    method() {\n        return 1;\n    }",
+        replace: "    method() {\n        return 42;\n    }",
+        index: 0,
+      },
+    ]);
+    expect(result).toBe(
+      "class Foo {\n    method() {\n        return 42;\n    }\n}",
+    );
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("prefers exact match over flexible match", () => {
+    // Content has spaces — exact match should work, no flexible fallback needed
+    const content = "function foo() {\n    return 1;\n}";
+    const { result, failedBlocks } = applyBlocks(content, [
+      { search: "    return 1;", replace: "    return 42;", index: 0 },
+    ]);
+    expect(result).toBe("function foo() {\n    return 42;\n}");
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("handles replacement that introduces text matching a later search", () => {
+    // Block 0 replaces "a" with "b", block 1 searches for "b" in original
+    // After block 0: "b c b" → block 1 finds "b" twice → ambiguous → fails
+    const { result, failedBlocks } = applyBlocks("a c b", [
+      { search: "a", replace: "b", index: 0 },
+      { search: "b", replace: "z", index: 1 },
+    ]);
+    expect(result).toBe("b c b");
+    expect(failedBlocks).toEqual([1]);
+  });
+});
+
+describe("normalizeForComparison", () => {
+  it("converts leading tabs to 4 spaces", () => {
+    expect(normalizeForComparison("\thello")).toBe("    hello");
+    expect(normalizeForComparison("\t\thello")).toBe("        hello");
+  });
+
+  it("preserves leading spaces", () => {
+    expect(normalizeForComparison("    hello")).toBe("    hello");
+  });
+
+  it("trims trailing whitespace", () => {
+    expect(normalizeForComparison("hello   ")).toBe("hello");
+    expect(normalizeForComparison("\thello  ")).toBe("    hello");
+  });
+
+  it("handles mixed tabs and spaces in leading whitespace", () => {
+    expect(normalizeForComparison("\t  hello")).toBe("      hello");
+  });
+
+  it("preserves tabs inside content (non-leading)", () => {
+    expect(normalizeForComparison("hello\tworld")).toBe("hello\tworld");
+  });
+
+  it("handles empty string", () => {
+    expect(normalizeForComparison("")).toBe("");
+  });
+});
+
+describe("tryFlexibleMatch", () => {
+  it("matches single-line content with whitespace difference", () => {
+    const result = tryFlexibleMatch("\thello", "    hello");
+    expect(result).toEqual({ start: 0, end: 6 });
+  });
+
+  it("returns null for partial line match (line-based matching)", () => {
+    // "hello" doesn't match the full line "hello world"
+    expect(tryFlexibleMatch("hello world", "hello")).toBeNull();
+  });
+
+  it("matches tabs vs spaces in multi-line content", () => {
+    const content = "function foo() {\n\treturn 1;\n}";
+    const search = "    return 1;";
+    const result = tryFlexibleMatch(content, search);
+    expect(result).not.toBeNull();
+    // The matched range should cover "\treturn 1;"
+    expect(content.slice(result!.start, result!.end)).toBe("\treturn 1;");
+  });
+
+  it("returns null for ambiguous matches", () => {
+    const content = "\treturn 1;\n\treturn 1;";
+    const search = "    return 1;";
+    expect(tryFlexibleMatch(content, search)).toBeNull();
+  });
+
+  it("returns null for no match", () => {
+    expect(tryFlexibleMatch("hello world", "goodbye")).toBeNull();
+  });
+
+  it("handles multi-line search", () => {
+    const content = "a\n\tb\n\tc\nd";
+    const search = "    b\n    c";
+    const result = tryFlexibleMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(content.slice(result!.start, result!.end)).toBe("\tb\n\tc");
+  });
+});

@@ -10,11 +10,7 @@ import {
 } from "../integrations/DiffViewProvider.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import {
-  showWriteApprovalScopeChoice,
-  showWritePatternEditor,
-} from "./writeApprovalUI.js";
-import { enqueueApproval } from "../util/quickPickQueue.js";
+import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -40,12 +36,18 @@ const LEGACY_DIVIDER = "=======";
  * replacement content
  * >>>>>>> REPLACE
  */
-function parseSearchReplaceBlocks(diff: string): SearchReplaceBlock[] {
+interface ParseResult {
+  blocks: SearchReplaceBlock[];
+  malformedBlocks: number;
+}
+
+export function parseSearchReplaceBlocks(diff: string): ParseResult {
   const blocks: SearchReplaceBlock[] = [];
   const lines = diff.split("\n");
 
   let i = 0;
   let blockIndex = 0;
+  let malformedBlocks = 0;
 
   // Detect whether this diff uses the new or legacy delimiter.
   // If the new delimiter appears anywhere, use strict mode (only match new delimiter).
@@ -59,6 +61,7 @@ function parseSearchReplaceBlocks(diff: string): SearchReplaceBlock[] {
       const searchLines: string[] = [];
       const replaceLines: string[] = [];
       let inReplace = false;
+      let foundReplace = false;
 
       while (i < lines.length) {
         const trimmed = lines[i].trimEnd();
@@ -79,6 +82,7 @@ function parseSearchReplaceBlocks(diff: string): SearchReplaceBlock[] {
             replace: replaceLines.join("\n"),
             index: blockIndex,
           });
+          foundReplace = true;
           blockIndex++;
           i++;
           break;
@@ -91,19 +95,24 @@ function parseSearchReplaceBlocks(diff: string): SearchReplaceBlock[] {
         }
         i++;
       }
+
+      if (!foundReplace) {
+        malformedBlocks++;
+        blockIndex++;
+      }
     } else {
       i++;
     }
   }
 
-  return blocks;
+  return { blocks, malformedBlocks };
 }
 
 /**
  * Apply search/replace blocks to content sequentially.
  * Returns the new content and list of failed block indices.
  */
-function applyBlocks(
+export function applyBlocks(
   content: string,
   blocks: SearchReplaceBlock[],
 ): { result: string; failedBlocks: number[] } {
@@ -114,6 +123,15 @@ function applyBlocks(
     const occurrences = countOccurrences(result, block.search);
 
     if (occurrences === 0) {
+      // Fallback: try whitespace-flexible matching (tabs ≈ spaces)
+      const flexMatch = tryFlexibleMatch(result, block.search);
+      if (flexMatch) {
+        result =
+          result.slice(0, flexMatch.start) +
+          block.replace +
+          result.slice(flexMatch.end);
+        continue;
+      }
       failedBlocks.push(block.index);
       continue;
     }
@@ -128,6 +146,78 @@ function applyBlocks(
   }
 
   return { result, failedBlocks };
+}
+
+/**
+ * Normalize a line for whitespace-flexible comparison:
+ * - Convert leading tabs to 4 spaces
+ * - Trim trailing whitespace
+ *
+ * This allows matching when Claude generates spaces but the file uses tabs
+ * (or vice versa), which commonly happens because read_file output can make
+ * tabs and spaces visually indistinguishable.
+ */
+export function normalizeForComparison(line: string): string {
+  const trimmedEnd = line.trimEnd();
+  const leadingMatch = trimmedEnd.match(/^(\s*)/);
+  const leadingWS = leadingMatch?.[1] ?? "";
+  const rest = trimmedEnd.slice(leadingWS.length);
+  return leadingWS.replace(/\t/g, "    ") + rest;
+}
+
+/**
+ * Try to find a unique match for `search` within `content` using
+ * whitespace-flexible line-by-line comparison (tabs ≈ spaces in leading
+ * indentation, trailing whitespace ignored).
+ *
+ * Returns the character offset range { start, end } in the original content,
+ * or null if no unique match (0 or 2+) is found.
+ */
+export function tryFlexibleMatch(
+  content: string,
+  search: string,
+): { start: number; end: number } | null {
+  const contentLines = content.split("\n");
+  const searchLines = search.split("\n");
+
+  if (searchLines.length === 0) return null;
+
+  const normSearch = searchLines.map(normalizeForComparison);
+  const normContent = contentLines.map(normalizeForComparison);
+
+  let matchCount = 0;
+  let matchLineStart = -1;
+
+  for (let i = 0; i <= normContent.length - normSearch.length; i++) {
+    let isMatch = true;
+    for (let j = 0; j < normSearch.length; j++) {
+      if (normContent[i + j] !== normSearch[j]) {
+        isMatch = false;
+        break;
+      }
+    }
+    if (isMatch) {
+      matchCount++;
+      matchLineStart = i;
+      if (matchCount > 1) return null; // Ambiguous — bail early
+    }
+  }
+
+  if (matchCount !== 1) return null;
+
+  // Convert line indices to character offsets in the original content
+  let start = 0;
+  for (let i = 0; i < matchLineStart; i++) {
+    start += contentLines[i].length + 1; // +1 for \n
+  }
+
+  let end = start;
+  for (let i = 0; i < searchLines.length; i++) {
+    end += contentLines[matchLineStart + i].length;
+    if (i < searchLines.length - 1) end += 1; // +1 for \n between lines
+  }
+
+  return { start, end };
 }
 
 function countOccurrences(text: string, search: string): number {
@@ -176,7 +266,7 @@ export async function handleApplyDiff(
     }
 
     // Parse blocks
-    const blocks = parseSearchReplaceBlocks(params.diff);
+    const { blocks, malformedBlocks } = parseSearchReplaceBlocks(params.diff);
     if (blocks.length === 0) {
       return {
         content: [
@@ -185,6 +275,10 @@ export async function handleApplyDiff(
             text: JSON.stringify({
               error: "No valid search/replace blocks found in diff",
               path: params.path,
+              ...(malformedBlocks > 0 && {
+                malformed_blocks: malformedBlocks,
+                hint: "Some blocks were missing a >>>>>>> REPLACE marker",
+              }),
             }),
           },
         ],
@@ -280,9 +374,10 @@ export async function handleApplyDiff(
         path: relPath,
         operation: "modified",
       };
-      if (failedBlocks.length > 0) {
+      if (failedBlocks.length > 0 || malformedBlocks > 0) {
         response.partial = true;
-        response.failed_blocks = failedBlocks;
+        if (failedBlocks.length > 0) response.failed_blocks = failedBlocks;
+        if (malformedBlocks > 0) response.malformed_blocks = malformedBlocks;
       }
       if (newDiagnostics) {
         response.new_diagnostics = newDiagnostics;
@@ -307,72 +402,17 @@ export async function handleApplyDiff(
       }
 
       // Handle session/always acceptance — save rules.
-      if (
-        decision === "accept-session" ||
-        decision === "accept-project" ||
-        decision === "accept-always"
-      ) {
-        const scope: "session" | "project" | "global" =
-          decision === "accept-session"
-            ? "session"
-            : decision === "accept-project"
-              ? "project"
-              : "global";
-
-        const panelResponse = diffView.writeApprovalResponse;
-        if (panelResponse?.trustScope) {
-          // Scope/pattern provided inline by the approval panel — no follow-up dialogs
-          if (panelResponse.trustScope === "all-files") {
-            approvalManager.setWriteApproval(sessionId, scope);
-          } else if (panelResponse.trustScope === "this-file") {
-            approvalManager.addWriteRule(
-              sessionId,
-              { pattern: relPath, mode: "exact" },
-              scope,
-            );
-          } else if (
-            panelResponse.trustScope === "pattern" &&
-            panelResponse.rulePattern &&
-            panelResponse.ruleMode
-          ) {
-            const rule = {
-              pattern: panelResponse.rulePattern,
-              mode: panelResponse.ruleMode,
-            };
-            approvalManager.addWriteRule(sessionId, rule, scope);
-            if (!inWorkspace) {
-              approvalManager.addPathRule(sessionId, rule, scope);
-            }
-          }
-        } else {
-          // QuickPick fallback — use follow-up dialogs
-          await enqueueApproval("Write scope selection", async () => {
-            if (!inWorkspace) {
-              const dirPath = path.dirname(filePath) + "/";
-              const rule = await showWritePatternEditor(dirPath);
-              if (rule) {
-                approvalManager.addWriteRule(sessionId, rule, scope);
-                approvalManager.addPathRule(sessionId, rule, scope);
-              }
-            } else {
-              const choice = await showWriteApprovalScopeChoice(relPath);
-              if (choice === "all-files") {
-                approvalManager.setWriteApproval(sessionId, scope);
-              } else if (choice === "this-file") {
-                approvalManager.addWriteRule(
-                  sessionId,
-                  { pattern: relPath, mode: "exact" },
-                  scope,
-                );
-              } else if (choice === "pattern") {
-                const rule = await showWritePatternEditor(relPath);
-                if (rule) {
-                  approvalManager.addWriteRule(sessionId, rule, scope);
-                }
-              }
-            }
-          });
-        }
+      const scope = decisionToScope(decision);
+      if (scope) {
+        await saveWriteTrustRules({
+          panelResponse: diffView.writeApprovalResponse,
+          approvalManager,
+          sessionId,
+          scope,
+          relPath,
+          filePath,
+          inWorkspace,
+        });
       }
 
       return await diffView.saveChanges();
@@ -382,9 +422,13 @@ export async function handleApplyDiff(
     const responseObj = response as Record<string, unknown>;
 
     // Add partial failure info if applicable
-    if (failedBlocks.length > 0 && result.status === "accepted") {
+    if (
+      (failedBlocks.length > 0 || malformedBlocks > 0) &&
+      result.status === "accepted"
+    ) {
       responseObj.partial = true;
-      responseObj.failed_blocks = failedBlocks;
+      if (failedBlocks.length > 0) responseObj.failed_blocks = failedBlocks;
+      if (malformedBlocks > 0) responseObj.malformed_blocks = malformedBlocks;
     }
 
     return {

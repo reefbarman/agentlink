@@ -38,12 +38,44 @@ export function validateCommand(command: string): ValidationResult | null {
 // Commands that should use read_file or search_files instead
 const DIRECT_FILE_COMMANDS = new Map<
   string,
-  { tool: string; description: string }
+  { tool: string; description: string; reason: string }
 >([
-  ["head", { tool: "read_file", description: "read the beginning of files" }],
-  ["tail", { tool: "read_file", description: "read the end of files" }],
-  ["cat", { tool: "read_file", description: "read files" }],
-  ["grep", { tool: "search_files", description: "search file contents" }],
+  [
+    "head",
+    {
+      tool: "read_file",
+      description: "read the beginning of files",
+      reason:
+        "read_file provides line numbers, file metadata, git status, and diagnostics",
+    },
+  ],
+  [
+    "tail",
+    {
+      tool: "read_file",
+      description: "read the end of files",
+      reason:
+        "read_file provides line numbers, file metadata, git status, and diagnostics",
+    },
+  ],
+  [
+    "cat",
+    {
+      tool: "read_file",
+      description: "read files",
+      reason:
+        "read_file provides line numbers, file metadata, git status, and diagnostics",
+    },
+  ],
+  [
+    "grep",
+    {
+      tool: "search_files",
+      description: "search file contents",
+      reason:
+        "search_files uses ripgrep with context lines, supports regex, and returns structured results",
+    },
+  ],
 ]);
 
 /**
@@ -62,10 +94,28 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
     const info = DIRECT_FILE_COMMANDS.get(cmd);
     if (!info) continue;
 
+    // Detect cat used in write context (heredoc or output redirection)
+    if (cmd === "cat") {
+      // cat in a pipeline (e.g. `cat file1 file2 | diff`) is legitimate — skip
+      const pipeSegments = splitOnUnquotedPipes(trimmed);
+      if (pipeSegments.length > 1) continue;
+
+      const isHeredoc = trimmed.includes("<<");
+      const hasRedirect = tokens.some((t) => t === ">" || t === ">>");
+      if (isHeredoc || hasRedirect) {
+        return {
+          message: [
+            `Command rejected: "cat" with redirection should not be run in the terminal — it bypasses user review.`,
+            `\nUse the write_file or apply_diff tool instead — they open a diff view for the user to review and approve changes, and return diagnostics from the language server.`,
+          ].join("\n"),
+        };
+      }
+    }
+
     // Build a helpful message
     const lines: string[] = [];
     lines.push(
-      `Command rejected: "${cmd}" should not be run in the terminal. Use the ${info.tool} tool to ${info.description}.`,
+      `Command rejected: "${cmd}" should not be run in the terminal. Use the ${info.tool} tool to ${info.description} — ${info.reason}.`,
     );
 
     // Add specific guidance based on the command

@@ -459,28 +459,6 @@ The global `~/.claude.json` config is still updated as a fallback for running Cl
 
 Claude Code's MCP client has HTTP connection timeouts (~2–3 minutes by default). For tools that require user interaction — like `apply_diff` waiting for you to review a diff, or `execute_command` running a long build — the SSE stream can time out before you respond, causing Claude to hang waiting for a result that was lost.
 
-**Recommended: increase Claude Code's MCP timeouts**
-
-Add the following to `~/.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "MCP_TIMEOUT": "60000",
-    "MCP_TOOL_TIMEOUT": "600000"
-  }
-}
-```
-
-| Variable           | Default | Recommended | Description                          |
-| ------------------ | ------- | ----------- | ------------------------------------ |
-| `MCP_TIMEOUT`      | 10000   | 60000       | MCP server startup timeout (ms)      |
-| `MCP_TOOL_TIMEOUT` | 60000   | 600000      | Per-tool-call execution timeout (ms) |
-
-You can also pass these at launch time: `MCP_TOOL_TIMEOUT=600000 claude`
-
-> **Note:** There is a [known bug](https://github.com/anthropics/claude-code/issues) where these environment variables are sometimes ignored for SSE/HTTP connections. Native Claude includes server-side mitigations (SSE heartbeats and event store resumability) to handle this, but setting the timeouts is still recommended as a first line of defense.
-
 **What Native Claude does automatically:**
 
 - **SSE heartbeat notifications** — sends periodic keep-alive messages on the SSE stream to prevent idle timeout disconnects

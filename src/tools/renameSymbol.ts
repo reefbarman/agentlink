@@ -4,6 +4,7 @@ import { getRelativePath } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
+import { decisionToScope, applyInlineTrustScope } from "./writeApprovalUI.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -90,37 +91,9 @@ export async function handleRenameSymbol(
       }
 
       // Save trust rules for session/project/always decisions
-      if (
-        response.decision === "accept-session" ||
-        response.decision === "accept-project" ||
-        response.decision === "accept-always"
-      ) {
-        const scope: "session" | "project" | "global" =
-          response.decision === "accept-session"
-            ? "session"
-            : response.decision === "accept-project"
-              ? "project"
-              : "global";
-
-        if (response.trustScope === "all-files") {
-          approvalManager.setWriteApproval(sessionId, scope);
-        } else if (response.trustScope === "this-file") {
-          approvalManager.addWriteRule(
-            sessionId,
-            { pattern: relPath, mode: "exact" },
-            scope,
-          );
-        } else if (
-          response.trustScope === "pattern" &&
-          response.rulePattern &&
-          response.ruleMode
-        ) {
-          approvalManager.addWriteRule(
-            sessionId,
-            { pattern: response.rulePattern, mode: response.ruleMode },
-            scope,
-          );
-        }
+      const scope = decisionToScope(response.decision);
+      if (scope && response.trustScope) {
+        applyInlineTrustScope(response, approvalManager, sessionId, scope, relPath);
       }
     }
 

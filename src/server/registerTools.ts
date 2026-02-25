@@ -20,6 +20,9 @@ import { handleOpenFile } from "../tools/openFile.js";
 import { handleShowNotification } from "../tools/showNotification.js";
 import { handleRenameSymbol } from "../tools/renameSymbol.js";
 import { handleCloseTerminals } from "../tools/closeTerminals.js";
+import { handleSendFeedback } from "../tools/sendFeedback.js";
+import { handleGetFeedback } from "../tools/getFeedback.js";
+import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
 
 export function registerTools(
   server: McpServer,
@@ -608,4 +611,93 @@ export function registerTools(
       sid,
     ),
   );
+
+  // --- Dev-only feedback tools ---
+
+  if (__DEV_BUILD__) {
+    server.tool(
+      "send_feedback",
+      "Submit feedback about a native-claude tool — report issues, suggest improvements, or note missing features/parameters. Feedback is stored locally for the extension developer to review.",
+      {
+        tool_name: z
+          .string()
+          .describe("Name of the tool this feedback is about"),
+        feedback: z
+          .string()
+          .describe(
+            "Description of the issue, suggestion, or missing feature",
+          ),
+        tool_params: z
+          .string()
+          .optional()
+          .describe(
+            "The parameters that were passed to the tool (will be truncated to ~500 chars)",
+          ),
+        tool_result_summary: z
+          .string()
+          .optional()
+          .describe(
+            "Summary of what happened or the result received (will be truncated to ~500 chars)",
+          ),
+      },
+      { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      tracker.wrapHandler(
+        "send_feedback",
+        (params) => {
+          touch();
+          return handleSendFeedback(params, sid());
+        },
+        (p) => String(p.tool_name ?? ""),
+        sid,
+      ),
+    );
+
+    server.tool(
+      "get_feedback",
+      "Read all previously submitted feedback about native-claude tools. Optionally filter by tool name.",
+      {
+        tool_name: z
+          .string()
+          .optional()
+          .describe(
+            "Filter to feedback about a specific tool (omit for all feedback)",
+          ),
+      },
+      { readOnlyHint: true, openWorldHint: false },
+      tracker.wrapHandler(
+        "get_feedback",
+        (params) => {
+          touch();
+          return handleGetFeedback(params);
+        },
+        (p) => String(p.tool_name ?? "all"),
+        sid,
+      ),
+    );
+
+    server.tool(
+      "delete_feedback",
+      "Delete specific feedback entries by their 0-based index (as returned by get_feedback). Use after addressing feedback to keep the list clean.",
+      {
+        indices: z
+          .array(z.number())
+          .describe(
+            "Array of 0-based indices to delete (e.g. [0, 2] to delete the first and third entries)",
+          ),
+      },
+      { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      tracker.wrapHandler(
+        "delete_feedback",
+        (params) => {
+          touch();
+          return handleDeleteFeedback(params);
+        },
+        (p) =>
+          Array.isArray(p.indices)
+            ? (p.indices as number[]).join(", ")
+            : "none",
+        sid,
+      ),
+    );
+  }
 }

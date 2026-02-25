@@ -64,11 +64,14 @@ export async function handleGetDiagnostics(params: {
   }
 }
 
+const VALID_SEVERITIES = new Set(["error", "warning", "info", "information", "hint"]);
+
 function parseSeverityFilter(filter?: string): Set<vscode.DiagnosticSeverity> | null {
   if (!filter) return null; // no filter = show all
 
   const allowed = new Set<vscode.DiagnosticSeverity>();
-  const parts = filter.toLowerCase().split(",").map((s) => s.trim());
+  const parts = filter.toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
+  const unknown: string[] = [];
 
   for (const part of parts) {
     switch (part) {
@@ -76,7 +79,14 @@ function parseSeverityFilter(filter?: string): Set<vscode.DiagnosticSeverity> | 
       case "warning": allowed.add(vscode.DiagnosticSeverity.Warning); break;
       case "info": case "information": allowed.add(vscode.DiagnosticSeverity.Information); break;
       case "hint": allowed.add(vscode.DiagnosticSeverity.Hint); break;
+      default: unknown.push(part);
     }
+  }
+
+  if (allowed.size === 0 && unknown.length > 0) {
+    throw new Error(
+      `Unknown severity filter: ${unknown.join(", ")}. Valid values: error, warning, info, information, hint`,
+    );
   }
 
   return allowed.size > 0 ? allowed : null;

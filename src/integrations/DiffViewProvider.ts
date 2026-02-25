@@ -124,6 +124,7 @@ export interface DiffResult {
   path: string;
   operation?: "created" | "modified";
   user_edits?: string;
+  format_on_save?: boolean;
   new_diagnostics?: string;
   finalContent?: string;
   reason?: string;
@@ -494,25 +495,29 @@ export class DiffViewProvider {
     // Re-read the saved file to get the final content after format-on-save
     const finalContent = await fs.readFile(this.absolutePath!, "utf-8");
 
-    // Detect user edits by comparing final saved content against what was proposed.
-    // This captures both manual user edits AND format-on-save changes — both are
-    // things Claude needs to know about since the file now differs from what it proposed.
-    // Use 1 line of context to keep the patch compact.
+    // Separate user edits from format-on-save changes:
+    // - editedContent = what was in the editor when user accepted (proposed + user edits)
+    // - finalContent  = what ended up on disk after save (+ format-on-save)
     const eol = this.newContent.includes("\r\n") ? "\r\n" : "\n";
+    const normalizedEdited = editedContent.replace(/\r\n|\n/g, eol);
     const normalizedFinal = finalContent.replace(/\r\n|\n/g, eol);
     const normalizedNew = this.newContent.replace(/\r\n|\n/g, eol);
 
+    // user_edits = only intentional changes the user made in the diff editor
     let userEdits: string | undefined;
-    if (normalizedFinal !== normalizedNew) {
+    if (normalizedEdited !== normalizedNew) {
       userEdits = diffLib.createPatch(
         this.relPath,
         normalizedNew,
-        normalizedFinal,
+        normalizedEdited,
         "proposed",
-        "saved",
+        "user-edited",
         { context: 1 },
       );
     }
+
+    // Detect if format-on-save changed the file beyond user edits
+    const formatOnSave = normalizedFinal !== normalizedEdited;
 
     const result: DiffResult = {
       status: "accepted",
@@ -523,6 +528,9 @@ export class DiffViewProvider {
 
     if (userEdits) {
       result.user_edits = userEdits;
+    }
+    if (formatOnSave) {
+      result.format_on_save = true;
     }
     if (newProblems) {
       result.new_diagnostics = newProblems;

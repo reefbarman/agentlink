@@ -4,3 +4,4 @@ dist/
 .claude/settings.json
 .vscode/.mytodos.json
 releases/
+.env.local

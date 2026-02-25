@@ -155,9 +155,7 @@ function getGitStatus(filePath: string): string | undefined {
       if (!filePath.startsWith(repoRoot)) continue;
 
       // Check staged (index) changes
-      if (
-        repo.state.indexChanges.some((c) => c.uri.fsPath === filePath)
-      ) {
+      if (repo.state.indexChanges.some((c) => c.uri.fsPath === filePath)) {
         return "staged";
       }
 
@@ -169,9 +167,7 @@ function getGitStatus(filePath: string): string | undefined {
       }
 
       // Check untracked
-      if (
-        repo.state.untrackedChanges?.some((c) => c.uri.fsPath === filePath)
-      ) {
+      if (repo.state.untrackedChanges?.some((c) => c.uri.fsPath === filePath)) {
         return "untracked";
       }
 
@@ -209,6 +205,16 @@ function getDiagnosticsSummary(
 
 // --- Symbol outline ---
 
+// Symbol kinds that are containers — recurse one level to show their children
+const CONTAINER_KINDS = new Set([
+  vscode.SymbolKind.Class,
+  vscode.SymbolKind.Interface,
+  vscode.SymbolKind.Enum,
+  vscode.SymbolKind.Struct,
+  vscode.SymbolKind.Namespace,
+  vscode.SymbolKind.Module,
+]);
+
 async function getSymbolOutline(
   filePath: string,
 ): Promise<Record<string, string[]> | undefined> {
@@ -227,6 +233,16 @@ async function getSymbolOutline(
       const line = s.range.start.line + 1;
       if (!grouped[kind]) grouped[kind] = [];
       grouped[kind].push(`${s.name} (line ${line})`);
+
+      // Recurse one level into container symbols (class → methods, etc.)
+      if (CONTAINER_KINDS.has(s.kind) && s.children?.length) {
+        for (const child of s.children) {
+          const childKind = SYMBOL_KIND_NAMES[child.kind] ?? "symbol";
+          const childLine = child.range.start.line + 1;
+          if (!grouped[childKind]) grouped[childKind] = [];
+          grouped[childKind].push(`${s.name}.${child.name} (line ${childLine})`);
+        }
+      }
     }
     return grouped;
   } catch {
@@ -318,6 +334,21 @@ export async function handleReadFile(
     const totalLines = allLines.length;
 
     const offset = Math.max(1, params.offset ?? 1);
+    if (offset > totalLines) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              total_lines: totalLines,
+              error: `Offset ${offset} exceeds total lines (${totalLines})`,
+              path: params.path,
+            }),
+          },
+        ],
+      };
+    }
+
     const defaultLimit = 2000;
     const limit = Math.min(
       params.limit ?? defaultLimit,

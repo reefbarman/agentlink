@@ -2,7 +2,7 @@
   "name": "native-claude",
   "displayName": "Native Claude",
   "description": "MCP server that provides Claude Code with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "0.6.47",
+  "version": "0.6.52",
   "publisher": "native-claude",
   "repository": {
     "type": "git",
@@ -195,7 +195,9 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package",
-    "release": "bash scripts/release.sh"
+    "release": "bash scripts/release.sh",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",
@@ -211,6 +213,7 @@
     "@types/picomatch": "^4.0.2",
     "@types/vscode": "^1.93.0",
     "esbuild": "^0.25.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "vitest": "^4.0.18"
   }
 }
