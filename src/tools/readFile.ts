@@ -11,8 +11,18 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { SYMBOL_KIND_NAMES } from "./languageFeatures.js";
+import { Semaphore } from "../util/Semaphore.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
+
+// --- Concurrency control ---
+// Concurrent read_file calls can overwhelm VS Code's language server
+// (symbol outline requests are single-threaded). Limit concurrency to
+// prevent hangs when Claude reads many large files in parallel.
+const READ_CONCURRENCY = 5;
+const SYMBOL_TIMEOUT_MS = 5_000; // 5 seconds
+
+const readSemaphore = new Semaphore(READ_CONCURRENCY);
 
 // --- Language detection ---
 
@@ -220,9 +230,15 @@ async function getSymbolOutline(
 ): Promise<Record<string, string[]> | undefined> {
   try {
     const uri = vscode.Uri.file(filePath);
-    const symbols = await vscode.commands.executeCommand<
-      vscode.DocumentSymbol[]
-    >("vscode.executeDocumentSymbolProvider", uri);
+    const symbols = await Promise.race([
+      vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+        "vscode.executeDocumentSymbolProvider",
+        uri,
+      ),
+      new Promise<undefined>((resolve) =>
+        setTimeout(() => resolve(undefined), SYMBOL_TIMEOUT_MS),
+      ),
+    ]);
 
     if (!symbols || symbols.length === 0) return undefined;
 
@@ -281,6 +297,7 @@ export async function handleReadFile(
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
+  const release = await readSemaphore.acquire();
   try {
     const { absolutePath: filePath, inWorkspace } = resolveAndValidatePath(
       params.path,
@@ -421,5 +438,7 @@ export async function handleReadFile(
         },
       ],
     };
+  } finally {
+    release();
   }
 }
