@@ -237,7 +237,11 @@ export class TerminalManager {
 
     // Dispose the child terminal we just created — we'll replace it with
     // the split terminal that VS Code creates from the parent.
-    child.terminal.dispose();
+    // Detach the old terminal reference first so onDidCloseTerminal doesn't
+    // remove the managed object from this.terminals during the swap.
+    const oldTerminal = child.terminal;
+    child.terminal = undefined as unknown as vscode.Terminal;
+    oldTerminal.dispose();
 
     // Focus the parent terminal so the split command acts on it
     parent.terminal.show(false);
@@ -284,6 +288,14 @@ export class TerminalManager {
         VTE_VERSION: "0",
         // Clear ZSH EOL mark to prevent output artifacts
         PROMPT_EOL_MARK: "",
+        // Auto-answer npm/npx prompts with yes
+        npm_config_yes: "true",
+        // Prevent apt/dpkg from prompting for configuration
+        DEBIAN_FRONTEND: "noninteractive",
+        // Disable man pager
+        MANPAGER: process.platform === "win32" ? "" : "cat",
+        // Disable systemd pager
+        SYSTEMD_PAGER: "",
       },
     });
 
@@ -557,8 +569,9 @@ export class TerminalManager {
    * Close managed terminals. Returns the count of terminals closed.
    * If names are specified, only closes terminals with matching names.
    * Otherwise closes all managed terminals.
+   * Returns the count of closed terminals and any names that weren't found.
    */
-  closeTerminals(names?: string[]): number {
+  closeTerminals(names?: string[]): { closed: number; not_found?: string[] } {
     const toClose = names
       ? this.terminals.filter((t) => names.includes(t.name))
       : [...this.terminals];
@@ -574,7 +587,14 @@ export class TerminalManager {
     const closedIds = new Set(toClose.map((t) => t.id));
     this.terminals = this.terminals.filter((t) => !closedIds.has(t.id));
 
-    return toClose.length;
+    // Report any requested names that weren't found
+    const closedNames = new Set(toClose.map((t) => t.name));
+    const notFound = names?.filter((n) => !closedNames.has(n));
+
+    return {
+      closed: toClose.length,
+      ...(notFound && notFound.length > 0 && { not_found: notFound }),
+    };
   }
 
   /**

@@ -14,7 +14,7 @@ export async function handleCloseTerminals(params: {
     };
   }
 
-  const closed = tm.closeTerminals(
+  const result = tm.closeTerminals(
     params.names && params.names.length > 0 ? params.names : undefined,
   );
 
@@ -22,7 +22,11 @@ export async function handleCloseTerminals(params: {
     content: [
       {
         type: "text",
-        text: JSON.stringify({ closed, remaining: tm.listTerminals() }),
+        text: JSON.stringify({
+          closed: result.closed,
+          ...(result.not_found && { not_found: result.not_found }),
+          remaining: tm.listTerminals(),
+        }),
       },
     ],
   };

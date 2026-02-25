@@ -123,7 +123,7 @@ export function applyBlocks(
     const occurrences = countOccurrences(result, block.search);
 
     if (occurrences === 0) {
-      // Fallback: try whitespace-flexible matching (tabs ≈ spaces)
+      // Fallback 1: try whitespace-flexible matching (tabs ≈ spaces)
       const flexMatch = tryFlexibleMatch(result, block.search);
       if (flexMatch) {
         result =
@@ -132,6 +132,22 @@ export function applyBlocks(
           result.slice(flexMatch.end);
         continue;
       }
+
+      // Fallback 2: try escape-aware matching (\\n in file → \n in search)
+      const escMatch = tryEscapeAwareMatch(result, block.search);
+      if (escMatch) {
+        // Apply the same escape transformation to the replacement content
+        const transformedReplace = block.replace.replace(
+          /\n/g,
+          escMatch.escapeSequence,
+        );
+        result =
+          result.slice(0, escMatch.start) +
+          transformedReplace +
+          result.slice(escMatch.end);
+        continue;
+      }
+
       failedBlocks.push(block.index);
       continue;
     }
@@ -218,6 +234,47 @@ export function tryFlexibleMatch(
   }
 
   return { start, end };
+}
+
+/**
+ * Try to match search content against file content when escape sequences
+ * may have been corrupted during JSON serialization.
+ *
+ * Common case: file has `\\n` (literal backslash + n) on a single line, but
+ * JSON serialization collapsed the escapes into real newline characters,
+ * splitting the search content across multiple lines.
+ *
+ * Returns the character offset range { start, end } in the content plus the
+ * escape string that was used (so the caller can apply the same transformation
+ * to the replacement content), or null if no unique match is found.
+ */
+export function tryEscapeAwareMatch(
+  content: string,
+  search: string,
+): { start: number; end: number; escapeSequence: string } | null {
+  // Only relevant when search has newlines that might be escaped in the file
+  if (!search.includes("\n")) return null;
+
+  // Variants: replace actual newlines with escape sequences that might appear in the file
+  const escapeVariants = [
+    "\\n", // 2 chars: \ + n  (e.g. \n in a raw string)
+    "\\\\n", // 3 chars: \ + \ + n  (e.g. \\n in JS/TS source)
+  ];
+
+  for (const esc of escapeVariants) {
+    const variant = search.replace(/\n/g, esc);
+
+    // Skip if identical to original (shouldn't happen since we checked for \n)
+    if (variant === search) continue;
+
+    const count = countOccurrences(content, variant);
+    if (count === 1) {
+      const start = content.indexOf(variant);
+      return { start, end: start + variant.length, escapeSequence: esc };
+    }
+  }
+
+  return null;
 }
 
 function countOccurrences(text: string, search: string): number {

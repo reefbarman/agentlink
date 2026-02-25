@@ -3,8 +3,13 @@ import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function handleGetTerminalOutput(params: {
   terminal_id: string;
+  wait_seconds?: number;
   output_head?: number;
   output_tail?: number;
   output_offset?: number;
@@ -12,6 +17,28 @@ export async function handleGetTerminalOutput(params: {
   output_grep_context?: number;
 }): Promise<ToolResult> {
   const terminalManager = getTerminalManager();
+
+  // If wait_seconds is specified, poll until new output arrives, command finishes,
+  // or the wait time expires.
+  if (params.wait_seconds && params.wait_seconds > 0) {
+    const deadline = Date.now() + params.wait_seconds * 1000;
+    const initialState = terminalManager.getBackgroundState(params.terminal_id);
+    const initialLength = initialState?.output?.length ?? 0;
+    const initialRunning = initialState?.is_running ?? false;
+
+    while (Date.now() < deadline) {
+      const current = terminalManager.getBackgroundState(params.terminal_id);
+      if (!current) break;
+
+      // Stop waiting if: command finished, or new output appeared
+      const hasNewOutput = (current.output?.length ?? 0) > initialLength;
+      const finished = !current.is_running && initialRunning;
+      if (hasNewOutput || finished) break;
+
+      await sleep(Math.min(250, deadline - Date.now()));
+    }
+  }
+
   const state = terminalManager.getBackgroundState(params.terminal_id);
 
   if (!state) {

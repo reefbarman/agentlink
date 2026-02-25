@@ -13,6 +13,7 @@ import {
 import type { SubCommandEntry } from "../approvals/webview/types.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { validateCommand } from "../util/pipeValidator.js";
+import { validateInteractiveCommand } from "../util/interactiveValidator.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -66,6 +67,23 @@ export async function handleExecuteCommand(
               status: "rejected",
               command: params.command,
               reason: commandViolation.message,
+            }),
+          },
+        ],
+      };
+    }
+
+    // Reject known interactive commands (editors, REPLs, TUI apps, etc.)
+    const interactiveViolation = validateInteractiveCommand(params.command);
+    if (interactiveViolation) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "rejected",
+              command: params.command,
+              reason: interactiveViolation.message,
             }),
           },
         ],

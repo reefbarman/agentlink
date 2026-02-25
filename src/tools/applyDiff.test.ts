@@ -4,6 +4,7 @@ import {
   applyBlocks,
   normalizeForComparison,
   tryFlexibleMatch,
+  tryEscapeAwareMatch,
 } from "./applyDiff.js";
 
 // Helper to build a diff string with the new delimiter format
@@ -345,5 +346,102 @@ describe("tryFlexibleMatch", () => {
     const result = tryFlexibleMatch(content, search);
     expect(result).not.toBeNull();
     expect(content.slice(result!.start, result!.end)).toBe("\tb\n\tc");
+  });
+});
+
+describe("tryEscapeAwareMatch", () => {
+  it("matches when file has \\\\n but search has real newlines", () => {
+    // File has literal \\n (backslash + backslash + n = 3 chars)
+    const content = 'const desc = "Hello\\\\nWorld\\\\nFoo";';
+    // Search has actual newlines where the escapes were
+    const search = 'const desc = "Hello\nWorld\nFoo";';
+    const result = tryEscapeAwareMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(result!.start).toBe(0);
+    expect(result!.end).toBe(content.length);
+    expect(result!.escapeSequence).toBe("\\\\n");
+  });
+
+  it("matches when file has \\n (2 chars) but search has real newlines", () => {
+    // File has literal \n (backslash + n = 2 chars)
+    const content = "Hello\\nWorld";
+    const search = "Hello\nWorld";
+    const result = tryEscapeAwareMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(content.slice(result!.start, result!.end)).toBe("Hello\\nWorld");
+    expect(result!.escapeSequence).toBe("\\n");
+  });
+
+  it("returns null when search has no newlines", () => {
+    expect(tryEscapeAwareMatch("hello world", "hello world")).toBeNull();
+  });
+
+  it("returns null when no variant matches", () => {
+    const content = "completely different content";
+    const search = "hello\nworld";
+    expect(tryEscapeAwareMatch(content, search)).toBeNull();
+  });
+
+  it("returns null for ambiguous matches", () => {
+    // Two occurrences of the escaped form
+    const content = "Hello\\nWorld and Hello\\nWorld again";
+    const search = "Hello\nWorld";
+    expect(tryEscapeAwareMatch(content, search)).toBeNull();
+  });
+
+  it("works with long single-line strings like tool descriptions", () => {
+    // Simulate the real-world case: a long tool description with \\n
+    const content =
+      '    "Run a command.\\\\n\\\\nTerminal reuse: reuses an idle terminal.\\\\n\\\\nBackground: Use background=true for long-running processes.",';
+    // Claude's search has actual newlines where \\n was
+    const search =
+      '    "Run a command.\n\nTerminal reuse: reuses an idle terminal.\n\nBackground: Use background=true for long-running processes.",';
+    const result = tryEscapeAwareMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(result!.escapeSequence).toBe("\\\\n");
+  });
+});
+
+describe("applyBlocks — escape-aware fallback", () => {
+  it("applies replacement when file has \\\\n but search has newlines", () => {
+    const content = 'const msg = "Hello\\\\nWorld";';
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search: 'const msg = "Hello\nWorld";',
+        replace: 'const msg = "Goodbye\nWorld";',
+        index: 0,
+      },
+    ]);
+    // The replacement should also have \\n (preserving the file's escape style)
+    expect(result).toBe('const msg = "Goodbye\\\\nWorld";');
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("applies replacement when file has \\n (2 chars) but search has newlines", () => {
+    const content = "Hello\\nWorld";
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search: "Hello\nWorld",
+        replace: "Goodbye\nWorld",
+        index: 0,
+      },
+    ]);
+    expect(result).toBe("Goodbye\\nWorld");
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("prefers exact match over escape-aware match", () => {
+    // Content has both a real newline version and an escaped version
+    const content = "Hello\nWorld\nHello\\nWorld";
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search: "Hello\nWorld",
+        replace: "Goodbye\nWorld",
+        index: 0,
+      },
+    ]);
+    // Exact match should be used (first occurrence with real newlines)
+    expect(result).toBe("Goodbye\nWorld\nHello\\nWorld");
+    expect(failedBlocks).toEqual([]);
   });
 });

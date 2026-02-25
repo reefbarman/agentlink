@@ -234,7 +234,7 @@ export class DiffViewProvider {
       leftUri,
       rightUri,
       `${outsidePrefix}${this.relPath}: ${fileExists ? "Proposed Changes" : "New File"} (Editable)`,
-      { preview: true, preserveFocus: false },
+      { preview: true, preserveFocus: true },
     );
 
     // Wait for the diff editor to open

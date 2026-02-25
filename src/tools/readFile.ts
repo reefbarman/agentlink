@@ -384,16 +384,19 @@ export async function handleReadFile(
     const gitStatus = getGitStatus(filePath);
     if (gitStatus) result.git_status = gitStatus;
 
+    // Detect language early so we can use it for symbol filtering
+    const language = detectLanguage(filePath);
+
     // Symbol outline runs first — it opens the document, which triggers the
     // language server. This makes accurate language detection and diagnostics
     // available as a side effect.
-    if (params.include_symbols !== false) {
+    // Skip symbols for JSON/JSONC — every key becomes a "symbol" which is noisy
+    const isDataFile = language === "json" || language === "jsonc";
+    if (params.include_symbols !== false && !isDataFile) {
       const symbols = await getSymbolOutline(filePath);
       if (symbols) result.symbols = symbols;
     }
 
-    // Language — check after symbols so the document is likely open
-    const language = detectLanguage(filePath);
     if (language) result.language = language;
 
     // Diagnostics — check after symbols so the language server has analyzed the file

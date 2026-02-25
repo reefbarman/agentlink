@@ -81,7 +81,8 @@ async function queryQdrant(
   qdrantUrl: string,
   collectionName: string,
   queryVector: number[],
-  directoryPrefix?: string
+  directoryPrefix?: string,
+  limit: number = 10
 ): Promise<QdrantSearchResult[]> {
   // Build filter — always exclude metadata points
   const mustNot = [{ key: "type", match: { value: "metadata" } }];
@@ -107,7 +108,7 @@ async function queryQdrant(
     query: queryVector,
     filter,
     score_threshold: 0.4,
-    limit: 50,
+    limit,
     params: {
       hnsw_ef: 128,
       exact: false,
@@ -153,7 +154,8 @@ async function queryQdrant(
 
 export async function semanticSearch(
   dirPath: string,
-  query: string
+  query: string,
+  limit?: number
 ): Promise<ToolResult> {
   if (!isSemanticSearchEnabled()) {
     return {
@@ -196,11 +198,13 @@ export async function semanticSearch(
   const queryVector = await generateEmbedding(query, apiKey);
 
   // Query Qdrant
+  const effectiveLimit = limit ?? 10;
   const results = await queryQdrant(
     qdrantUrl,
     collectionName,
     queryVector,
-    directoryPrefix
+    directoryPrefix,
+    effectiveLimit
   );
 
   // Format results

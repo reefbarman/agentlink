@@ -95,7 +95,7 @@ Read file contents with line numbers. Returns rich metadata that built-in `Read`
 - `language` — detected from open document or file extension (~80 extensions mapped)
 - `git_status` — `"staged"`, `"modified"`, `"untracked"`, or `"clean"` (via VS Code's git extension)
 - `diagnostics` — `{ errors: N, warnings: N }` summary from language services
-- `symbols` — top-level symbols grouped by kind (e.g. `{ "function": ["foo (line 1)"], "class": ["Bar (line 20)"] }`)
+- `symbols` — top-level symbols grouped by kind (e.g. `{ "function": ["foo (line 1)"], "class": ["Bar (line 20)"] }`). Automatically skipped for JSON/JSONC files (where symbol outlines are unhelpful noise).
 - `content` — numbered lines in `line_number | content` format
 
 Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not available rather than returned as null.
@@ -263,29 +263,32 @@ Search the codebase by meaning using vector similarity. Pass a natural language 
 | --------- | ------- | ------------------------------------------------------------------ |
 | `query`   | string  | Natural language query describing what you're looking for          |
 | `path`    | string? | Directory to scope the search to (omit to search entire workspace) |
+| `limit`   | number? | Maximum number of results to return (default: 10)                  |
 
 Requires a Qdrant vector index (built by Roo Code) and an OpenAI API key. See [Semantic Search](#semantic-search).
 
 ### execute_command
 
-Run a command in VS Code's integrated terminal. Output is captured when shell integration is available. Terminal environment is configured to prevent interactive pagers (`PAGER=cat`, `GIT_PAGER=cat`, etc.).
+Run a command in VS Code's integrated terminal. Output is captured when shell integration is available. Terminal environment is configured to prevent interactive pagers (`PAGER=cat`, `GIT_PAGER=cat`, etc.) and to suppress interactive prompts (`npm_config_yes=true`, `DEBIAN_FRONTEND=noninteractive`).
+
+**Interactive command validation:** Commands that require interactive input are automatically rejected with a helpful suggestion. This includes editors (vim, nano, emacs), TUI apps (top, htop, ncdu), bare database CLIs without inline queries (mysql, psql, mongosh), bare REPLs without scripts (python, node, ruby), git interactive flags (-i, -p, --patch), scaffolding commands without --yes (npx create-*, npm init), and more. The rejection message includes the reason and a non-interactive alternative.
 
 Output is capped to the **last 200 lines** by default to prevent context window bloat. Full output is saved to a temp file (returned as `output_file`) for on-demand access via `read_file`. Use `output_head`, `output_tail`, or `output_grep` to customize filtering — agents should use these instead of piping through `grep`/`tail`/`head` in the command itself, which hides output from the user.
 
-| Parameter             | Type     | Description                                                                                                                                 |
-| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`             | string   | Shell command to execute                                                                                                                    |
-| `cwd`                 | string?  | Working directory                                                                                                                           |
-| `terminal_id`         | string?  | Reuse a specific terminal by ID                                                                                                             |
-| `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`)                                                                                            |
-| `split_from`          | string?  | Split alongside an existing terminal (by `terminal_id` or `terminal_name`), creating a visual group                                         |
-| `background`          | boolean? | Run without waiting for completion. Returns immediately with `terminal_id`. Use `get_terminal_output` to check progress.                    |
+| Parameter             | Type     | Description                                                                                                                                        |
+| --------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`             | string   | Shell command to execute                                                                                                                           |
+| `cwd`                 | string?  | Working directory                                                                                                                                  |
+| `terminal_id`         | string?  | Reuse a specific terminal by ID                                                                                                                    |
+| `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`)                                                                                                   |
+| `split_from`          | string?  | Split alongside an existing terminal (by `terminal_id` or `terminal_name`), creating a visual group                                                |
+| `background`          | boolean? | Run without waiting for completion. Returns immediately with `terminal_id`. Use `get_terminal_output` to check progress.                           |
 | `timeout`             | number?  | Timeout in seconds. Starts counting from when the shell begins executing (not from tool call start), so terminal startup time doesn't eat into it. |
-| `output_head`         | number?  | Return only the first N lines of output. Overrides the default 200-line tail cap.                                                           |
-| `output_tail`         | number?  | Return only the last N lines of output. Overrides the default 200-line tail cap.                                                            |
-| `output_offset`       | number?  | Skip first N lines before applying head/tail. Use with `output_head` for line ranges (e.g. `offset: 290, head: 21` → lines 290-310).        |
-| `output_grep`         | string?  | Filter output to lines matching this regex pattern (case-insensitive). Applied before offset/head/tail.                                     |
-| `output_grep_context` | number?  | Number of context lines around each grep match (like `grep -C`). Non-contiguous groups are separated by `--`. Only used with `output_grep`. |
+| `output_head`         | number?  | Return only the first N lines of output. Overrides the default 200-line tail cap.                                                                  |
+| `output_tail`         | number?  | Return only the last N lines of output. Overrides the default 200-line tail cap.                                                                   |
+| `output_offset`       | number?  | Skip first N lines before applying head/tail. Use with `output_head` for line ranges (e.g. `offset: 290, head: 21` → lines 290-310).               |
+| `output_grep`         | string?  | Filter output to lines matching this regex pattern (case-insensitive). Applied before offset/head/tail.                                            |
+| `output_grep_context` | number?  | Number of context lines around each grep match (like `grep -C`). Non-contiguous groups are separated by `--`. Only used with `output_grep`.        |
 
 **Response includes:**
 
@@ -305,18 +308,24 @@ Close managed terminals to clean up clutter. With no arguments, closes all termi
 | --------- | --------- | -------------------------------------------------------------------------------- |
 | `names`   | string[]? | Terminal names to close (e.g. `["Server", "Tests"]`). Omit to close all managed. |
 
+**Response includes:**
+
+- `closed` — number of terminals closed
+- `not_found` — array of requested terminal names that weren't found (only present when `names` is provided and some didn't match)
+
 ### get_terminal_output
 
 Get the output and status of a background command. Use after `execute_command` with `background: true` to check on progress, read accumulated output, and see if the command has finished. Background terminals are never auto-reused — they must be referenced explicitly by `terminal_id`.
 
-| Parameter             | Type    | Description                                                              |
-| --------------------- | ------- | ------------------------------------------------------------------------ |
-| `terminal_id`         | string  | Terminal ID returned by `execute_command` (e.g. `term_3`)                |
-| `output_head`         | number? | Return only the first N lines of output                                  |
-| `output_tail`         | number? | Return only the last N lines of output                                   |
-| `output_offset`       | number? | Skip first N lines before applying head/tail                             |
-| `output_grep`         | string? | Filter output to lines matching this regex pattern (case-insensitive)    |
-| `output_grep_context` | number? | Number of context lines around each grep match                           |
+| Parameter             | Type    | Description                                                                                                                                                                                                 |
+| --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `terminal_id`         | string  | Terminal ID returned by `execute_command` (e.g. `term_3`)                                                                                                                                                   |
+| `wait_seconds`        | number? | Wait up to N seconds for new output to appear before returning. Polls every 250ms, returns early when new output arrives or command finishes. Useful to avoid double-calls when a command was just started. |
+| `output_head`         | number? | Return only the first N lines of output                                                                                                                                                                     |
+| `output_tail`         | number? | Return only the last N lines of output                                                                                                                                                                      |
+| `output_offset`       | number? | Skip first N lines before applying head/tail                                                                                                                                                                |
+| `output_grep`         | string? | Filter output to lines matching this regex pattern (case-insensitive)                                                                                                                                       |
+| `output_grep_context` | number? | Number of context lines around each grep match                                                                                                                                                              |
 
 **Response includes:**
 

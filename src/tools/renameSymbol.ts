@@ -25,7 +25,16 @@ export async function handleRenameSymbol(
 
     // Get the old name for display
     const wordRange = document.getWordRangeAtPosition(position);
-    const oldName = wordRange ? document.getText(wordRange) : `symbol at ${params.line}:${params.column}`;
+    let oldName: string;
+    if (wordRange) {
+      oldName = document.getText(wordRange);
+    } else {
+      // Manual fallback: extract word at position from line text
+      const lineText = document.lineAt(position.line).text;
+      const before = lineText.slice(0, position.character).match(/\w+$/)?.[0] ?? "";
+      const after = lineText.slice(position.character).match(/^\w+/)?.[0] ?? "";
+      oldName = (before + after) || `symbol at ${params.line}:${params.column}`;
+    }
 
     // Compute the rename edit
     const edit = await vscode.commands.executeCommand<vscode.WorkspaceEdit>(
