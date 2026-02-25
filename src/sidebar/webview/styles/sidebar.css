@@ -234,6 +234,12 @@ h3 {
   white-space: nowrap;
   margin-bottom: 4px;
 }
+.tool-call-heartbeat {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
 .tool-call-actions {
   display: flex;
   gap: 4px;

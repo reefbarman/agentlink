@@ -12,7 +12,6 @@ import {
   showWriteApprovalScopeChoice,
   showWritePatternEditor,
 } from "./writeApprovalUI.js";
-import { promptRejectionReason } from "../util/rejectionReason.js";
 import { enqueueApproval } from "../util/quickPickQueue.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
@@ -41,10 +40,13 @@ export async function handleWriteFile(
       .getConfiguration("native-claude")
       .get<boolean>("masterBypass", false);
 
-    // Auto-approve check
+    // Auto-approve check (includes recent single-use approvals within TTL)
     const canAutoApprove = inWorkspace
-      ? masterBypass || approvalManager.isWriteApproved(sessionId, filePath)
-      : approvalManager.isFileWriteApproved(sessionId, filePath);
+      ? masterBypass ||
+        approvalManager.isWriteApproved(sessionId, filePath) ||
+        approvalPanel.isRecentlyApproved("write", relPath)
+      : approvalManager.isFileWriteApproved(sessionId, filePath) ||
+        approvalPanel.isRecentlyApproved("write", relPath);
 
     if (canAutoApprove) {
       const fs = await import("fs/promises");
@@ -64,7 +66,10 @@ export async function handleWriteFile(
       });
 
       // Collect new diagnostics
-      const newDiagnostics = await snap.collectNewErrors(filePath, diagnosticDelay);
+      const newDiagnostics = await snap.collectNewErrors(
+        filePath,
+        diagnosticDelay,
+      );
 
       const response: Record<string, unknown> = {
         status: "accepted",
@@ -90,15 +95,23 @@ export async function handleWriteFile(
       const decision = await diffView.waitForUserDecision(approvalPanel);
 
       if (decision === "reject") {
-        const reason = diffView.writeApprovalResponse?.rejectionReason
-          ?? await enqueueApproval("Rejection reason", () => promptRejectionReason());
-        return await diffView.revertChanges(reason);
+        return await diffView.revertChanges(
+          diffView.writeApprovalResponse?.rejectionReason,
+        );
       }
 
       // Handle session/always acceptance — save rules.
-      if (decision === "accept-session" || decision === "accept-project" || decision === "accept-always") {
+      if (
+        decision === "accept-session" ||
+        decision === "accept-project" ||
+        decision === "accept-always"
+      ) {
         const scope: "session" | "project" | "global" =
-          decision === "accept-session" ? "session" : decision === "accept-project" ? "project" : "global";
+          decision === "accept-session"
+            ? "session"
+            : decision === "accept-project"
+              ? "project"
+              : "global";
 
         const panelResponse = diffView.writeApprovalResponse;
         if (panelResponse?.trustScope) {

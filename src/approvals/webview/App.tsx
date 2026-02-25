@@ -1,5 +1,9 @@
-import { useState, useEffect, useCallback } from "preact/hooks";
-import type { ApprovalRequest, ExtensionMessage, DecisionMessage } from "./types.js";
+import { useState, useEffect, useCallback, useRef } from "preact/hooks";
+import type {
+  ApprovalRequest,
+  ExtensionMessage,
+  DecisionMessage,
+} from "./types.js";
 import { CommandCard } from "./components/CommandCard.js";
 import { PathCard } from "./components/PathCard.js";
 import { WriteCard } from "./components/WriteCard.js";
@@ -16,10 +20,17 @@ interface AppProps {
 
 export function App({ vscodeApi }: AppProps) {
   const [request, setRequest] = useState<ApprovalRequest | null>(null);
+  const followUpRef = useRef("");
 
   const submit = useCallback(
     (data: Omit<DecisionMessage, "type">) => {
-      vscodeApi.postMessage({ type: "decision", ...data });
+      const followUp = followUpRef.current.trim();
+      vscodeApi.postMessage({
+        type: "decision",
+        ...data,
+        ...(followUp && { followUp }),
+      });
+      followUpRef.current = "";
     },
     [vscodeApi],
   );
@@ -42,12 +53,36 @@ export function App({ vscodeApi }: AppProps) {
 
   switch (request.kind) {
     case "command":
-      return <CommandCard request={request} submit={submit} />;
+      return (
+        <CommandCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
+      );
     case "path":
-      return <PathCard request={request} submit={submit} />;
+      return (
+        <PathCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
+      );
     case "write":
-      return <WriteCard request={request} submit={submit} />;
+      return (
+        <WriteCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
+      );
     case "rename":
-      return <RenameCard request={request} submit={submit} />;
+      return (
+        <RenameCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
+      );
   }
 }

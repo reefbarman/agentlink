@@ -62,6 +62,7 @@ export async function handleRenameSymbol(
       .get<boolean>("masterBypass", false);
 
     const canAutoApprove = masterBypass || approvalManager.isWriteApproved(sessionId);
+    let renameFollowUp: string | undefined;
 
     if (!canAutoApprove) {
       const { promise } = approvalPanel.enqueueRenameApproval(
@@ -72,6 +73,7 @@ export async function handleRenameSymbol(
       );
 
       const response = await promise;
+      renameFollowUp = response.followUp;
 
       if (response.decision === "reject") {
         return {
@@ -141,16 +143,21 @@ export async function handleRenameSymbol(
       }
     }
 
+    const result: Record<string, unknown> = {
+      status: "accepted",
+      old_name: oldName,
+      new_name: params.new_name,
+      files_modified: filesPreview,
+      total_changes: totalChanges,
+    };
+    if (renameFollowUp) {
+      result.follow_up = renameFollowUp;
+    }
+
     return {
       content: [{
         type: "text",
-        text: JSON.stringify({
-          status: "accepted",
-          old_name: oldName,
-          new_name: params.new_name,
-          files_modified: filesPreview,
-          total_changes: totalChanges,
-        }),
+        text: JSON.stringify(result),
       }],
     };
   } catch (err) {

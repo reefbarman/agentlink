@@ -1,20 +1,30 @@
-import { useState, useRef, useEffect, useCallback } from "preact/hooks";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+} from "preact/hooks";
+import type { RefObject } from "preact";
 import type { ApprovalRequest, RuleEntry, DecisionMessage } from "../types.js";
 import { RuleRow } from "./RuleRow.js";
-import { RejectionSection } from "./RejectionSection.js";
+import { ApprovalLayout } from "./ApprovalLayout.js";
 
 interface CommandCardProps {
   request: ApprovalRequest;
   submit: (data: Omit<DecisionMessage, "type">) => void;
+  followUpRef: RefObject<string>;
 }
 
-export function CommandCard({ request, submit }: CommandCardProps) {
+export function CommandCard({
+  request,
+  submit,
+  followUpRef,
+}: CommandCardProps) {
   const originalCommand = request.command ?? "";
   const [command, setCommand] = useState(originalCommand);
-  const [showReject, setShowReject] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Initialize rule entries from sub-commands
   const subCommands = request.subCommands ?? [];
   const [rules, setRules] = useState<RuleEntry[]>(() =>
     subCommands.map((entry) => {
@@ -28,14 +38,44 @@ export function CommandCard({ request, submit }: CommandCardProps) {
       return {
         pattern: entry.command,
         mode: "prefix" as const,
-        scope: "session" as const,
+        scope: "skip" as const,
       };
     }),
   );
 
   const isEdited = command !== originalCommand;
 
-  // Auto-resize textarea
+  // Snapshot of initial rules for dirty detection — only show "Save Rules"
+  // when the user actually modifies something (not just because existing rules match)
+  const initialRules = useMemo(
+    () =>
+      subCommands.map((entry) => {
+        if (entry.existingRule) {
+          return {
+            pattern: entry.existingRule.pattern,
+            mode: entry.existingRule.mode,
+            scope: entry.existingRule.scope,
+          };
+        }
+        return {
+          pattern: entry.command,
+          mode: "prefix" as const,
+          scope: "skip" as const,
+        };
+      }),
+    [],
+  );
+
+  const rulesModified = rules.some((rule, i) => {
+    const initial = initialRules[i];
+    if (!initial) return true;
+    return (
+      rule.pattern !== initial.pattern ||
+      rule.mode !== initial.mode ||
+      rule.scope !== initial.scope
+    );
+  });
+
   useEffect(() => {
     const el = textareaRef.current;
     if (el) {
@@ -45,23 +85,21 @@ export function CommandCard({ request, submit }: CommandCardProps) {
   }, [command]);
 
   const handleRun = useCallback(() => {
-    const data: Omit<DecisionMessage, "type"> = {
+    submit({
       id: request.id,
       decision: isEdited ? "edit" : "run-once",
       ...(isEdited && { editedCommand: command }),
-    };
-    submit(data);
+    });
   }, [request.id, isEdited, command, submit]);
 
   const handleSaveAndRun = useCallback(() => {
     const activeRules = rules.filter((r) => r.scope !== "skip");
-    const data: Omit<DecisionMessage, "type"> = {
+    submit({
       id: request.id,
       decision: "run-once",
       rules: activeRules.length > 0 ? rules : undefined,
       ...(isEdited && { editedCommand: command }),
-    };
-    submit(data);
+    });
   }, [request.id, rules, isEdited, command, submit]);
 
   const handleReject = useCallback(
@@ -71,42 +109,41 @@ export function CommandCard({ request, submit }: CommandCardProps) {
     [request.id, submit],
   );
 
-  const updateRule = useCallback(
-    (index: number, value: RuleEntry) => {
-      setRules((prev) => {
-        const next = [...prev];
-        next[index] = value;
-        return next;
-      });
-    },
-    [],
-  );
+  const updateRule = useCallback((index: number, value: RuleEntry) => {
+    setRules((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+  }, []);
 
-  const hasActiveRules = rules.some((r) => r.scope !== "skip");
-  const badge =
-    request.queueTotal && request.queueTotal > 1
-      ? `${request.queuePosition} of ${request.queueTotal}`
-      : "";
-
-  if (showReject) {
-    return (
-      <RejectionSection
-        onSubmit={handleReject}
-        onCancel={() => setShowReject(false)}
-      />
-    );
-  }
+  const rulesJsx =
+    subCommands.length > 0 ? (
+      <>
+        {subCommands.map((entry, i) => (
+          <RuleRow
+            key={i}
+            entry={entry}
+            value={rules[i]}
+            onChange={(v) => updateRule(i, v)}
+          />
+        ))}
+      </>
+    ) : undefined;
 
   return (
-    <div>
-      <div class="header">
-        <span class="header-title">
-          <span class="codicon codicon-warning" /> APPROVAL REQUIRED
-        </span>
-        {badge && <span class="badge">{badge}</span>}
-      </div>
-
-      {/* Command display */}
+    <ApprovalLayout
+      queuePosition={request.queuePosition}
+      queueTotal={request.queueTotal}
+      rulesContent={rulesJsx}
+      rulesModified={rulesModified}
+      primaryLabel="Run"
+      primaryWithRulesLabel="Save Rules & Run"
+      onAccept={handleRun}
+      onSaveAndAccept={handleSaveAndRun}
+      onReject={handleReject}
+      followUpRef={followUpRef}
+    >
       <div class="terminal-box">
         <div class="terminal-header">
           <span class="codicon codicon-terminal" />
@@ -123,47 +160,12 @@ export function CommandCard({ request, submit }: CommandCardProps) {
             ref={textareaRef}
             class={`terminal-input ${isEdited ? "edited" : ""}`}
             value={command}
-            onInput={(e) =>
-              setCommand((e.target as HTMLTextAreaElement).value)
-            }
+            onInput={(e) => setCommand((e.target as HTMLTextAreaElement).value)}
             rows={1}
             spellcheck={false}
           />
         </div>
       </div>
-
-      {/* Action buttons */}
-      <div class="button-row">
-        <button class="btn btn-primary" onClick={handleRun}>
-          Run
-        </button>
-        <button class="btn btn-danger" onClick={() => setShowReject(true)}>
-          Reject
-        </button>
-      </div>
-
-      {/* Rule editor */}
-      {subCommands.length > 0 && (
-        <div class="rules-section">
-          <div class="rules-header">Rules</div>
-          {subCommands.map((entry, i) => (
-            <RuleRow
-              key={i}
-              entry={entry}
-              value={rules[i]}
-              onChange={(v) => updateRule(i, v)}
-            />
-          ))}
-          {hasActiveRules && (
-            <button
-              class="btn btn-primary save-rules-btn"
-              onClick={handleSaveAndRun}
-            >
-              Save Rules & Run
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+    </ApprovalLayout>
   );
 }

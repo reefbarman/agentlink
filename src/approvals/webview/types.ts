@@ -59,4 +59,6 @@ export interface DecisionMessage {
   ruleMode?: string;
   rules?: RuleEntry[];
   trustScope?: string;
+  /** Optional follow-up message from the user after accepting */
+  followUp?: string;
 }

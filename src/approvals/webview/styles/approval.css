@@ -261,7 +261,7 @@ body {
   border-color: var(--vscode-button-background);
 }
 .mode-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.6;
   cursor: default;
 }
 .mode-btn-skip.active {
@@ -270,18 +270,45 @@ body {
   border-color: var(--vscode-button-secondaryBackground);
 }
 
-/* ── Rules section ───────────────────────────────────────────────────── */
+/* ── Collapsible rules section ───────────────────────────────────────── */
 
-.rules-section {
-  margin-top: 16px;
-  padding-top: 12px;
+.rules-collapsible {
+  margin-top: 12px;
   border-top: 1px solid var(--vscode-panel-border);
+  padding-top: 4px;
 }
-.rules-header {
-  font-weight: 600;
-  font-size: 12px;
+.rules-collapse-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 4px;
+  background: transparent;
+  border: none;
   color: var(--vscode-descriptionForeground);
-  margin-bottom: 12px;
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.rules-collapse-toggle:hover {
+  color: var(--vscode-foreground);
+}
+.rules-collapse-toggle .codicon {
+  font-size: 12px;
+}
+.rules-modified-indicator {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--vscode-editorWarning-foreground, #cca700);
+  color: #000;
+}
+.rules-collapse-body {
+  padding: 8px 4px 4px;
 }
 
 /* ── Rule row ────────────────────────────────────────────────────────── */
@@ -294,7 +321,7 @@ body {
   border-radius: 4px;
 }
 .rule-row-skipped {
-  opacity: 0.5;
+  border-style: dashed;
 }
 .rule-row-header {
   display: flex;
@@ -329,7 +356,7 @@ body {
   margin-bottom: 0;
 }
 .rule-pattern-input.skipped {
-  opacity: 0.4;
+  opacity: 0.6;
 }
 .rule-row-options {
   display: flex;
@@ -350,24 +377,9 @@ body {
   display: flex;
   gap: 2px;
 }
-.save-rules-btn {
-  margin-top: 12px;
-}
 
-/* ── Expandable (rejection) ──────────────────────────────────────────── */
 
-.expandable {
-  margin-top: 12px;
-  padding: 14px;
-  background: var(--vscode-editor-background);
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 4px;
-}
-.expandable-title {
-  font-weight: 600;
-  font-size: 13px;
-  margin-bottom: 12px;
-}
+
 
 /* ── Form fields ─────────────────────────────────────────────────────── */
 
@@ -511,4 +523,24 @@ body {
   background: var(--vscode-badge-background);
   color: var(--vscode-badge-foreground);
   flex-shrink: 0;
+}
+
+/* ── Follow-up input ─────────────────────────────────────────────────── */
+
+.follow-up-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+.follow-up-label {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.follow-up-input {
+  resize: vertical;
+  min-height: 36px;
 }

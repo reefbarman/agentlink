@@ -48,6 +48,11 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
           <div class="tool-call-args" title={c.displayArgs}>
             {c.displayArgs}
           </div>
+          {c.lastHeartbeatAt && (
+            <div class="tool-call-heartbeat" title="Time since last successful SSE heartbeat">
+              heartbeat {formatElapsed(Date.now() - c.lastHeartbeatAt)} ago
+            </div>
+          )}
           <div class="tool-call-actions">
             <button
               class="btn btn-complete"

@@ -27,6 +27,7 @@ export interface TrackedCall {
   forceResolve: (result: ToolResult) => void;
   approvalId?: string;
   terminalId?: string;
+  lastHeartbeatAt?: number;
 }
 
 export interface TrackedCallInfo {
@@ -36,6 +37,7 @@ export interface TrackedCallInfo {
   startedAt: number;
   status: "active" | "completed";
   completedAt?: number;
+  lastHeartbeatAt?: number;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -116,6 +118,18 @@ function formatParamsForLog(params: Record<string, unknown>): string {
 
 const COMPLETED_TTL_MS = 8_000;
 
+// Interval for SSE heartbeat notifications to prevent client idle timeouts.
+// Claude Code drops the POST SSE stream after ~2.5min of inactivity.
+// Sending periodic notifications keeps data flowing on the stream.
+const HEARTBEAT_INTERVAL_MS = 20_000; // 20 seconds
+
+// Minimal type for the MCP handler's `extra` argument — just what we need
+// for heartbeating. The full type is RequestHandlerExtra<ServerNotification, ...>.
+interface McpHandlerExtra {
+  _meta?: { progressToken?: string | number };
+  sendNotification?: (notification: unknown) => Promise<void>;
+}
+
 export class ToolCallTracker extends EventEmitter {
   private activeCalls = new Map<string, TrackedCall>();
   private recentCalls = new Map<string, TrackedCallInfo>();
@@ -134,6 +148,7 @@ export class ToolCallTracker extends EventEmitter {
         displayArgs: c.displayArgs,
         startedAt: c.startedAt,
         status: "active" as const,
+        lastHeartbeatAt: c.lastHeartbeatAt,
       }),
     );
     const recent: TrackedCallInfo[] = [...this.recentCalls.values()];
@@ -180,18 +195,19 @@ export class ToolCallTracker extends EventEmitter {
    * Wrap a tool handler with tracking.  Returns a new handler that:
    * 1. Registers the call in the active set
    * 2. Races the original handler against a force-resolve promise
-   * 3. Cleans up in `finally`
+   * 3. Sends periodic SSE heartbeat notifications to prevent client idle timeouts
+   * 4. Cleans up in `finally`
    *
-   * The returned handler has an extra `trackerCtx` argument that tool
-   * handlers can optionally accept to link approvals/terminals.
+   * The returned handler accepts the MCP `extra` argument (second arg from
+   * McpServer.tool()) to access `sendNotification` for heartbeating.
    */
   wrapHandler<P extends Record<string, unknown> = Record<string, unknown>>(
     toolName: string,
     handler: (params: P, trackerCtx: TrackerContext) => Promise<ToolResult>,
     extractDisplayArgs: (params: P) => string,
     getSessionId: () => string,
-  ): (params: P) => Promise<ToolResult> {
-    return async (params: P) => {
+  ): (params: P, extra?: McpHandlerExtra) => Promise<ToolResult> {
+    return async (params: P, extra?: McpHandlerExtra) => {
       const id = randomUUID();
       let forceResolve!: (result: ToolResult) => void;
       const forcePromise = new Promise<ToolResult>((resolve) => {
@@ -220,9 +236,53 @@ export class ToolCallTracker extends EventEmitter {
       );
       this.emit("change");
 
+      // Start SSE heartbeat to prevent client idle timeouts (~2.5min).
+      // Notifications sent via extra.sendNotification are routed to the
+      // POST SSE stream (via relatedRequestId), keeping it alive.
+      // Send an immediate first heartbeat so the connection stays alive
+      // during approval waits (which can exceed the command timeout value).
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      if (extra?.sendNotification) {
+        let tick = 0;
+        const progressToken = extra._meta?.progressToken;
+
+        // Immediate first heartbeat — prevents client-side timeout during approval
+        const sendHeartbeat = async () => {
+          tick++;
+          try {
+            if (progressToken) {
+              await extra.sendNotification!({
+                method: "notifications/progress",
+                params: { progressToken, progress: tick },
+              });
+            } else {
+              await extra.sendNotification!({
+                method: "notifications/message",
+                params: {
+                  level: "debug",
+                  logger: "native-claude",
+                  data: `${toolName}: processing… (${tick * (HEARTBEAT_INTERVAL_MS / 1000)}s)`,
+                },
+              });
+            }
+            tracked.lastHeartbeatAt = Date.now();
+            this.emit("change");
+          } catch {
+            // Connection gone — stop heartbeating
+            if (heartbeat) clearInterval(heartbeat);
+            heartbeat = undefined;
+          }
+        };
+
+        // Send immediately, then continue on interval
+        sendHeartbeat();
+        heartbeat = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+      }
+
       try {
         return await Promise.race([handler(params, ctx), forcePromise]);
       } finally {
+        if (heartbeat) clearInterval(heartbeat);
         const completed = this.activeCalls.get(id);
         this.activeCalls.delete(id);
         if (completed) this.markCompleted(completed);

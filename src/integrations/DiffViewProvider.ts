@@ -127,6 +127,7 @@ export interface DiffResult {
   new_diagnostics?: string;
   finalContent?: string;
   reason?: string;
+  follow_up?: string;
 }
 
 export class DiffViewProvider {
@@ -525,6 +526,9 @@ export class DiffViewProvider {
     }
     if (newProblems) {
       result.new_diagnostics = newProblems;
+    }
+    if (this.writeApprovalResponse?.followUp) {
+      result.follow_up = this.writeApprovalResponse.followUp;
     }
 
     return result;

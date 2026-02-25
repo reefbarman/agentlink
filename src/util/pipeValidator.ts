@@ -1,0 +1,579 @@
+/**
+ * Validate commands before execution. Rejects:
+ * 1. Direct file-reading commands (head/tail/cat/grep on files) — use read_file/search_files
+ * 2. Piped filtering (cmd | head/tail/grep) — use output_head/output_tail/output_grep params
+ *
+ * Returns null if the command is clean, or a rejection object with
+ * a helpful message suggesting the correct tool or parameters.
+ */
+
+interface PipeViolation {
+  /** The piped command name (head, tail, grep) */
+  command: string;
+  /** The full piped segment (e.g. "head -5", "grep -i error") */
+  segment: string;
+  /** Suggested tool parameters */
+  suggestions: Record<string, string | number>;
+}
+
+interface ValidationResult {
+  message: string;
+  /** For pipe violations: the command with piped filtering segments stripped */
+  strippedCommand?: string;
+}
+
+/**
+ * Validate a command for disallowed patterns.
+ * Returns null if the command is clean, or a result with a rejection message.
+ */
+export function validateCommand(command: string): ValidationResult | null {
+  // Check 1: Direct file-reading commands (head/tail/cat/grep used standalone)
+  const directViolation = checkDirectFileCommands(command);
+  if (directViolation) return directViolation;
+
+  // Check 2: Piped filtering (cmd | head/tail/grep)
+  return detectPipedFiltering(command);
+}
+
+// Commands that should use read_file or search_files instead
+const DIRECT_FILE_COMMANDS = new Map<
+  string,
+  { tool: string; description: string }
+>([
+  ["head", { tool: "read_file", description: "read the beginning of files" }],
+  ["tail", { tool: "read_file", description: "read the end of files" }],
+  ["cat", { tool: "read_file", description: "read files" }],
+  ["grep", { tool: "search_files", description: "search file contents" }],
+]);
+
+/**
+ * Check if any sub-command in a compound command starts with head/tail/cat/grep.
+ * Splits on && ; || but NOT on | (pipe case is handled separately).
+ */
+function checkDirectFileCommands(command: string): ValidationResult | null {
+  const subCommands = splitOnCompoundOperators(command);
+
+  for (const sub of subCommands) {
+    const trimmed = sub.trim();
+    const tokens = tokenize(trimmed);
+    if (tokens.length === 0) continue;
+
+    const cmd = tokens[0];
+    const info = DIRECT_FILE_COMMANDS.get(cmd);
+    if (!info) continue;
+
+    // Build a helpful message
+    const lines: string[] = [];
+    lines.push(
+      `Command rejected: "${cmd}" should not be run in the terminal. Use the ${info.tool} tool to ${info.description}.`,
+    );
+
+    // Add specific guidance based on the command
+    if (cmd === "cat" && tokens.length >= 2) {
+      const file = stripQuotes(tokens[tokens.length - 1]);
+      lines.push(`\nUse: ${info.tool} with path: "${file}"`);
+    } else if (cmd === "head" && tokens.length >= 2) {
+      const headArgs = parseHeadArgs(tokens.slice(1));
+      const file = findFileArg(tokens.slice(1));
+      if (file) {
+        const limit = headArgs.output_head ?? 10;
+        lines.push(
+          `\nUse: ${info.tool} with path: "${file}" and limit: ${limit}`,
+        );
+      }
+    } else if (cmd === "tail" && tokens.length >= 2) {
+      const file = findFileArg(tokens.slice(1));
+      if (file) {
+        lines.push(`\nUse: ${info.tool} with path: "${file}"`);
+      }
+    } else if (cmd === "grep" && tokens.length >= 2) {
+      const grepArgs = parseGrepArgs(tokens.slice(1));
+      const pattern = grepArgs.output_grep;
+      const file = findFileArg(tokens.slice(1), true);
+      lines.push(
+        `\nUse: ${info.tool} with${file ? ` path: "${file}" and` : ""} regex: "${pattern ?? "..."}"`,
+      );
+    }
+
+    return { message: lines.join("\n") };
+  }
+
+  return null;
+}
+
+/**
+ * Find the file/path argument in a token list (skip flags and their values).
+ * For grep, the file arg is the second positional arg (first is the pattern).
+ */
+function findFileArg(
+  args: string[],
+  skipFirstPositional = false,
+): string | null {
+  let skippedFirst = !skipFirstPositional;
+
+  // Simple flag-value pairs to skip
+  const valueFlags = new Set(["-n", "--lines", "-c", "-C", "-A", "-B", "-e"]);
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg.startsWith("-")) {
+      // Skip flag
+      if (valueFlags.has(arg) || arg.match(/^--\w+=/) === null) {
+        // If it's a known value flag without =, skip the next token too
+        if (valueFlags.has(arg) && i + 1 < args.length) {
+          i++;
+        }
+      }
+      continue;
+    }
+
+    // Positional argument
+    if (!skippedFirst) {
+      skippedFirst = true;
+      continue;
+    }
+
+    return stripQuotes(arg);
+  }
+
+  return null;
+}
+
+/**
+ * Split a command on && ; || (compound operators) while respecting quotes.
+ * Does NOT split on | (single pipe) — that's handled by the pipe validator.
+ */
+function splitOnCompoundOperators(command: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  let i = 0;
+
+  while (i < command.length) {
+    const ch = command[i];
+
+    // Backslash escape
+    if (ch === "\\" && i + 1 < command.length) {
+      current += ch + command[i + 1];
+      i += 2;
+      continue;
+    }
+
+    // Quote tracking
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      current += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      current += ch;
+      i++;
+      continue;
+    }
+
+    if (!inSingle && !inDouble) {
+      // && operator
+      if (ch === "&" && i + 1 < command.length && command[i + 1] === "&") {
+        segments.push(current);
+        current = "";
+        i += 2;
+        continue;
+      }
+
+      // || operator
+      if (ch === "|" && i + 1 < command.length && command[i + 1] === "|") {
+        segments.push(current);
+        current = "";
+        i += 2;
+        continue;
+      }
+
+      // ; separator
+      if (ch === ";") {
+        segments.push(current);
+        current = "";
+        i++;
+        continue;
+      }
+    }
+
+    current += ch;
+    i++;
+  }
+
+  segments.push(current);
+  return segments;
+}
+
+/**
+ * Scan a command for unquoted pipes to head, tail, or grep.
+ * Returns null if the command is clean, or a result with a rejection message.
+ */
+function detectPipedFiltering(command: string): ValidationResult | null {
+  const segments = splitOnUnquotedPipes(command);
+  if (segments.length < 2) return null;
+
+  const violations: PipeViolation[] = [];
+  const keptSegments: string[] = [segments[0]];
+
+  for (let i = 1; i < segments.length; i++) {
+    const segment = segments[i].trim();
+    const violation = checkSegment(segment);
+    if (violation) {
+      violations.push(violation);
+    } else {
+      keptSegments.push(segments[i]);
+    }
+  }
+
+  if (violations.length === 0) return null;
+
+  const strippedCommand = keptSegments.join(" | ").trim();
+
+  // Build the message
+  const lines: string[] = [];
+
+  lines.push(
+    `Command rejected: piping through ${violations.map((v) => `"${v.command}"`).join(" and ")} hides output from the user's terminal.`,
+  );
+  lines.push("");
+
+  // Suggest parameters
+  const allSuggestions: Record<string, string | number> = {};
+  for (const v of violations) {
+    Object.assign(allSuggestions, v.suggestions);
+  }
+
+  const paramList = Object.entries(allSuggestions)
+    .map(([k, v]) => `  ${k}: ${typeof v === "string" ? `"${v}"` : v}`)
+    .join("\n");
+  lines.push(`Use these tool parameters instead:\n${paramList}`);
+  lines.push("");
+  lines.push(`Run this command instead: ${strippedCommand}`);
+
+  return {
+    message: lines.join("\n"),
+    strippedCommand,
+  };
+}
+
+const REJECTED_COMMANDS = new Set(["head", "tail", "grep"]);
+
+/**
+ * Check if a pipe segment is a head/tail/grep invocation.
+ * Returns a violation with parsed suggestions, or null if it's not one of those.
+ */
+function checkSegment(segment: string): PipeViolation | null {
+  const tokens = tokenize(segment);
+  if (tokens.length === 0) return null;
+
+  const cmd = tokens[0];
+  if (!REJECTED_COMMANDS.has(cmd)) return null;
+
+  const args = tokens.slice(1);
+
+  switch (cmd) {
+    case "head":
+      return { command: cmd, segment, suggestions: parseHeadArgs(args) };
+    case "tail":
+      return { command: cmd, segment, suggestions: parseTailArgs(args) };
+    case "grep":
+      return { command: cmd, segment, suggestions: parseGrepArgs(args) };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Parse head arguments: head -5, head -n 5, head -n5, head --lines=5
+ */
+function parseHeadArgs(args: string[]): Record<string, number> {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    // head -5 (shorthand)
+    const shortMatch = arg.match(/^-(\d+)$/);
+    if (shortMatch) {
+      return { output_head: parseInt(shortMatch[1], 10) };
+    }
+
+    // head -n5 or head -n 5
+    if (arg === "-n" || arg === "--lines") {
+      const next = args[i + 1];
+      if (next && /^\d+$/.test(next)) {
+        return { output_head: parseInt(next, 10) };
+      }
+    }
+    const nMatch = arg.match(/^-n(\d+)$/);
+    if (nMatch) {
+      return { output_head: parseInt(nMatch[1], 10) };
+    }
+
+    // head --lines=5
+    const longMatch = arg.match(/^--lines=(\d+)$/);
+    if (longMatch) {
+      return { output_head: parseInt(longMatch[1], 10) };
+    }
+  }
+
+  // Default: head with no args means 10 lines
+  return { output_head: 10 };
+}
+
+/**
+ * Parse tail arguments: tail -5, tail -n 5, tail -n +5 (offset)
+ */
+function parseTailArgs(args: string[]): Record<string, number> {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    // tail -5 (shorthand)
+    const shortMatch = arg.match(/^-(\d+)$/);
+    if (shortMatch) {
+      return { output_tail: parseInt(shortMatch[1], 10) };
+    }
+
+    // tail -n +5 (offset from start — maps to output_offset)
+    if (arg === "-n" || arg === "--lines") {
+      const next = args[i + 1];
+      if (next) {
+        const offsetMatch = next.match(/^\+(\d+)$/);
+        if (offsetMatch) {
+          return { output_offset: parseInt(offsetMatch[1], 10) };
+        }
+        if (/^\d+$/.test(next)) {
+          return { output_tail: parseInt(next, 10) };
+        }
+      }
+    }
+
+    // tail -n5 or tail -n+5
+    const nMatch = arg.match(/^-n(\d+)$/);
+    if (nMatch) {
+      return { output_tail: parseInt(nMatch[1], 10) };
+    }
+    const nOffsetMatch = arg.match(/^-n\+(\d+)$/);
+    if (nOffsetMatch) {
+      return { output_offset: parseInt(nOffsetMatch[1], 10) };
+    }
+
+    // tail --lines=5 or --lines=+5
+    const longMatch = arg.match(/^--lines=\+?(\d+)$/);
+    if (longMatch) {
+      const hasPlus = arg.includes("+");
+      const num = parseInt(longMatch[1], 10);
+      return hasPlus ? { output_offset: num } : { output_tail: num };
+    }
+  }
+
+  // Default: tail with no args means 10 lines
+  return { output_tail: 10 };
+}
+
+/**
+ * Parse grep arguments: grep pattern, grep -i pattern, grep -C 3 pattern,
+ * grep -E "regex", etc.
+ */
+function parseGrepArgs(args: string[]): Record<string, string | number> {
+  const suggestions: Record<string, string | number> = {};
+  let pattern: string | null = null;
+
+  // Flags that consume the next argument
+  const valueFlagsSet = new Set([
+    "-e",
+    "--regexp",
+    "-f",
+    "--file",
+    "-m",
+    "--max-count",
+    "--label",
+    "-A",
+    "--after-context",
+    "-B",
+    "--before-context",
+    "-C",
+    "--context",
+    "--color",
+    "--colour",
+    "-D",
+    "--devices",
+    "-d",
+    "--directories",
+    "--exclude",
+    "--include",
+    "--exclude-dir",
+    "--include-dir",
+  ]);
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    // Context flags
+    if ((arg === "-C" || arg === "--context") && args[i + 1]) {
+      const num = parseInt(args[i + 1], 10);
+      if (!isNaN(num)) suggestions.output_grep_context = num;
+      i++;
+      continue;
+    }
+    if ((arg === "-A" || arg === "--after-context") && args[i + 1]) {
+      const num = parseInt(args[i + 1], 10);
+      if (!isNaN(num)) suggestions.output_grep_context = num;
+      i++;
+      continue;
+    }
+    if ((arg === "-B" || arg === "--before-context") && args[i + 1]) {
+      const num = parseInt(args[i + 1], 10);
+      if (!isNaN(num)) suggestions.output_grep_context = num;
+      i++;
+      continue;
+    }
+
+    // Explicit pattern flag
+    if ((arg === "-e" || arg === "--regexp") && args[i + 1]) {
+      pattern = stripQuotes(args[i + 1]);
+      i++;
+      continue;
+    }
+
+    // Other value flags — skip the value
+    if (valueFlagsSet.has(arg)) {
+      i++;
+      continue;
+    }
+
+    // Boolean flags (single char or long) — skip
+    if (arg.startsWith("-")) {
+      // Combined short flags like -inE
+      continue;
+    }
+
+    // First positional argument is the pattern
+    if (pattern === null) {
+      pattern = stripQuotes(arg);
+      continue;
+    }
+  }
+
+  if (pattern) {
+    suggestions.output_grep = pattern;
+  }
+
+  return suggestions;
+}
+
+function stripQuotes(s: string): string {
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
+/**
+ * Split a command string on unquoted pipe (|) characters.
+ * Respects single quotes, double quotes, and backslash escapes.
+ * Does NOT split on || (logical OR).
+ */
+function splitOnUnquotedPipes(command: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  let i = 0;
+
+  while (i < command.length) {
+    const ch = command[i];
+
+    // Backslash escape
+    if (ch === "\\" && i + 1 < command.length) {
+      current += ch + command[i + 1];
+      i += 2;
+      continue;
+    }
+
+    // Quote tracking
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      current += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      current += ch;
+      i++;
+      continue;
+    }
+
+    // Pipe — only outside quotes
+    if (ch === "|" && !inSingle && !inDouble) {
+      // Skip || (logical OR)
+      if (i + 1 < command.length && command[i + 1] === "|") {
+        current += "||";
+        i += 2;
+        continue;
+      }
+      segments.push(current);
+      current = "";
+      i++;
+      continue;
+    }
+
+    current += ch;
+    i++;
+  }
+
+  segments.push(current);
+  return segments;
+}
+
+/**
+ * Simple tokenizer: split on whitespace, respecting quotes and escapes.
+ */
+function tokenize(input: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (ch === "\\" && i + 1 < input.length && !inSingle) {
+      current += ch + input[i + 1];
+      i++;
+      continue;
+    }
+
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      current += ch;
+      continue;
+    }
+
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      current += ch;
+      continue;
+    }
+
+    if (/\s/.test(ch) && !inSingle && !inDouble) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (current) tokens.push(current);
+  return tokens;
+}

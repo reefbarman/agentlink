@@ -12,6 +12,7 @@ import {
 } from "../approvals/commandSplitter.js";
 import type { SubCommandEntry } from "../approvals/webview/types.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
+import { validateCommand } from "../util/pipeValidator.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -52,6 +53,24 @@ export async function handleExecuteCommand(
       .get<boolean>("masterBypass", false);
 
     let commandToRun = params.command;
+    let approvalFollowUp: string | undefined;
+
+    // Reject disallowed command patterns (direct head/tail/cat/grep, piped filtering)
+    const commandViolation = validateCommand(params.command);
+    if (commandViolation) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "rejected",
+              command: params.command,
+              reason: commandViolation.message,
+            }),
+          },
+        ],
+      };
+    }
 
     if (!masterBypass) {
       // Split compound command and approve each sub-command
@@ -82,6 +101,8 @@ export async function handleExecuteCommand(
       if (approvalResult.editedCommand) {
         commandToRun = approvalResult.editedCommand;
       }
+
+      approvalFollowUp = approvalResult.followUp;
     }
 
     const terminalManager = getTerminalManager();
@@ -129,6 +150,10 @@ export async function handleExecuteCommand(
       result.command = commandToRun;
     }
 
+    if (approvalFollowUp) {
+      result.follow_up = approvalFollowUp;
+    }
+
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
@@ -159,15 +184,18 @@ async function approveSubCommands(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
-): Promise<{ approved: boolean; reason?: string; editedCommand?: string }> {
+): Promise<{ approved: boolean; reason?: string; editedCommand?: string; followUp?: string }> {
   // Expand wrappers: ["cd /foo", "sudo npm install"] → ["cd /foo", "sudo", "npm install"]
   const expanded = expandSubCommands(subCommands);
 
-  // Check if all expanded sub-commands are already approved
+  // Check if all expanded sub-commands are already approved,
+  // or the full command was recently approved within the TTL window
   const allApproved = expanded.every((sub) =>
     approvalManager.isCommandApproved(sessionId, sub),
   );
-  if (allApproved) return { approved: true };
+  if (allApproved || approvalPanel.isRecentlyApproved("command", fullCommand)) {
+    return { approved: true };
+  }
 
   // Build enriched entries for ALL sub-commands (even already-approved ones)
   const entries: SubCommandEntry[] = expanded.map((cmd) => {
@@ -213,7 +241,7 @@ async function approveSubCommands(
   }
 
   if (response.editedCommand) {
-    return { approved: true, editedCommand: response.editedCommand };
+    return { approved: true, editedCommand: response.editedCommand, followUp: response.followUp };
   }
-  return { approved: true };
+  return { approved: true, followUp: response.followUp };
 }

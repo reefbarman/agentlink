@@ -40,6 +40,7 @@ export interface CommandResult {
   command?: string;
   command_modified?: boolean;
   original_command?: string;
+  follow_up?: string;
 }
 
 export interface ExecuteOptions {

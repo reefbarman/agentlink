@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { EventStore } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "crypto";
 import type * as http from "http";
 
@@ -16,6 +18,65 @@ interface Session {
 
 const SESSION_IDLE_TTL = 30 * 60_000; // 30 minutes
 const CLEANUP_INTERVAL = 5 * 60_000; // 5 minutes
+
+// ── In-memory event store for SSE resumability ──────────────────────────────
+// When a client disconnects mid-tool-call (e.g. during a long apply_diff review),
+// the tool response would normally be lost. With an event store, responses are
+// persisted and can be replayed when the client reconnects with Last-Event-ID.
+const EVENT_STORE_MAX_AGE = 60 * 60_000; // 1 hour
+
+interface StoredEvent {
+  streamId: string;
+  message: JSONRPCMessage;
+  timestamp: number;
+}
+
+class InMemoryEventStore implements EventStore {
+  private events = new Map<string, StoredEvent>();
+
+  async storeEvent(streamId: string, message: JSONRPCMessage): Promise<string> {
+    const eventId = `${streamId}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    this.events.set(eventId, { streamId, message, timestamp: Date.now() });
+    this.prune();
+    return eventId;
+  }
+
+  async getStreamIdForEventId(eventId: string): Promise<string | undefined> {
+    return this.events.get(eventId)?.streamId;
+  }
+
+  async replayEventsAfter(
+    lastEventId: string,
+    {
+      send,
+    }: { send: (eventId: string, message: JSONRPCMessage) => Promise<void> },
+  ): Promise<string> {
+    const entry = this.events.get(lastEventId);
+    if (!entry) return "";
+
+    const { streamId } = entry;
+    let found = false;
+    const sorted = [...this.events.entries()].sort((a, b) =>
+      a[0].localeCompare(b[0]),
+    );
+    for (const [eventId, ev] of sorted) {
+      if (ev.streamId !== streamId) continue;
+      if (eventId === lastEventId) {
+        found = true;
+        continue;
+      }
+      if (found) await send(eventId, ev.message);
+    }
+    return streamId;
+  }
+
+  private prune(): void {
+    const cutoff = Date.now() - EVENT_STORE_MAX_AGE;
+    for (const [id, ev] of this.events) {
+      if (ev.timestamp < cutoff) this.events.delete(id);
+    }
+  }
+}
 
 export class McpServerHost {
   private sessions = new Map<string, Session>();
@@ -36,10 +97,17 @@ export class McpServerHost {
     this.approvalManager = approvalManager;
     this.approvalPanel = approvalPanel;
     this.tracker = tracker;
-    this.cleanupInterval = setInterval(() => this.pruneIdleSessions(), CLEANUP_INTERVAL);
+    this.cleanupInterval = setInterval(
+      () => this.pruneIdleSessions(),
+      CLEANUP_INTERVAL,
+    );
   }
 
-  async handleRequest(req: http.IncomingMessage, res: http.ServerResponse, parsedBody?: unknown): Promise<void> {
+  async handleRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    parsedBody?: unknown,
+  ): Promise<void> {
     // Auth check
     if (this.authToken && !this.validateAuth(req)) {
       res.writeHead(401, { "Content-Type": "application/json" });
@@ -64,6 +132,8 @@ export class McpServerHost {
     // No session ID → new client connecting
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => sessionId ?? randomUUID(),
+      eventStore: new InMemoryEventStore(),
+      retryInterval: 5_000, // suggest 5s reconnect to clients
     });
 
     const server = new McpServer({
@@ -71,7 +141,13 @@ export class McpServerHost {
       version: "0.1.0",
     });
 
-    registerTools(server, this.approvalManager, this.approvalPanel, () => transport.sessionId, this.tracker);
+    registerTools(
+      server,
+      this.approvalManager,
+      this.approvalPanel,
+      () => transport.sessionId,
+      this.tracker,
+    );
     await server.connect(transport);
 
     // Handle the initialization request

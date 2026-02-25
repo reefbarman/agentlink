@@ -2,7 +2,7 @@
   "name": "native-claude",
   "displayName": "Native Claude",
   "description": "MCP server that provides Claude Code with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "0.6.40",
+  "version": "0.6.47",
   "publisher": "native-claude",
   "repository": {
     "type": "git",
@@ -173,6 +173,12 @@
             "Shows a tab in the bottom panel alongside Terminal/Problems. Can be dragged to the secondary sidebar."
           ],
           "description": "Where to show approval dialogs."
+        },
+        "native-claude.recentApprovalTtl": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "description": "Seconds to remember a single-use approval (run-once / accept). Repeat identical commands or writes to the same file within this window are auto-approved. Set to 0 to disable."
         },
         "native-claude.writeRules": {
           "type": "array",

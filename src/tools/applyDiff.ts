@@ -14,7 +14,6 @@ import {
   showWriteApprovalScopeChoice,
   showWritePatternEditor,
 } from "./writeApprovalUI.js";
-import { promptRejectionReason } from "../util/rejectionReason.js";
 import { enqueueApproval } from "../util/quickPickQueue.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
@@ -249,10 +248,13 @@ export async function handleApplyDiff(
       .getConfiguration("native-claude")
       .get<boolean>("masterBypass", false);
 
-    // Auto-approve check
+    // Auto-approve check (includes recent single-use approvals within TTL)
     const canAutoApprove = inWorkspace
-      ? masterBypass || approvalManager.isWriteApproved(sessionId, filePath)
-      : approvalManager.isFileWriteApproved(sessionId, filePath);
+      ? masterBypass ||
+        approvalManager.isWriteApproved(sessionId, filePath) ||
+        approvalPanel.isRecentlyApproved("write", relPath)
+      : approvalManager.isFileWriteApproved(sessionId, filePath) ||
+        approvalPanel.isRecentlyApproved("write", relPath);
 
     if (canAutoApprove) {
       // Snapshot diagnostics before the write
@@ -299,9 +301,9 @@ export async function handleApplyDiff(
       const decision = await diffView.waitForUserDecision(approvalPanel);
 
       if (decision === "reject") {
-        const reason = diffView.writeApprovalResponse?.rejectionReason
-          ?? await enqueueApproval("Rejection reason", () => promptRejectionReason());
-        return await diffView.revertChanges(reason);
+        return await diffView.revertChanges(
+          diffView.writeApprovalResponse?.rejectionReason,
+        );
       }
 
       // Handle session/always acceptance — save rules.

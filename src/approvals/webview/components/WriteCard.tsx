@@ -1,6 +1,7 @@
 import { useState, useCallback } from "preact/hooks";
+import type { RefObject } from "preact";
 import type { ApprovalRequest, DecisionMessage } from "../types.js";
-import { RejectionSection } from "./RejectionSection.js";
+import { ApprovalLayout } from "./ApprovalLayout.js";
 
 const MODES = ["glob", "prefix", "exact"] as const;
 const SCOPES = ["session", "project", "global", "skip"] as const;
@@ -15,9 +16,10 @@ const TRUST_SCOPES = ["all-files", "this-file", "pattern"] as const;
 interface WriteCardProps {
   request: ApprovalRequest;
   submit: (data: Omit<DecisionMessage, "type">) => void;
+  followUpRef: RefObject<string>;
 }
 
-export function WriteCard({ request, submit }: WriteCardProps) {
+export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
   const filePath = request.filePath ?? "";
   const operation = request.writeOperation ?? "modify";
   const outsideWorkspace = request.outsideWorkspace ?? false;
@@ -28,13 +30,8 @@ export function WriteCard({ request, submit }: WriteCardProps) {
   const [pattern, setPattern] = useState(filePath);
   const [mode, setMode] = useState<(typeof MODES)[number]>("glob");
   const [scope, setScope] = useState<(typeof SCOPES)[number]>("skip");
-  const [showReject, setShowReject] = useState(false);
 
   const isSkipped = scope === "skip";
-  const badge =
-    request.queueTotal && request.queueTotal > 1
-      ? `${request.queuePosition} of ${request.queueTotal}`
-      : "";
 
   const handleAccept = useCallback(() => {
     submit({ id: request.id, decision: "accept" });
@@ -69,25 +66,87 @@ export function WriteCard({ request, submit }: WriteCardProps) {
     [request.id, submit],
   );
 
-  if (showReject) {
-    return (
-      <RejectionSection
-        onSubmit={handleReject}
-        onCancel={() => setShowReject(false)}
-      />
-    );
-  }
+  const rulesJsx = (
+    <>
+      {!outsideWorkspace && (
+        <div class="field">
+          <label>Scope:</label>
+          <div class="radio-group">
+            {TRUST_SCOPES.map((ts) => (
+              <label key={ts} class="radio-label">
+                <input
+                  type="radio"
+                  name="trustScope"
+                  value={ts}
+                  checked={trustScope === ts}
+                  onChange={() => setTrustScope(ts)}
+                />
+                {ts === "all-files"
+                  ? "All files"
+                  : ts === "this-file"
+                    ? "This file only"
+                    : "Custom pattern"}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {trustScope === "pattern" && (
+        <div class="rule-row">
+          <input
+            type="text"
+            class="text-input rule-pattern-input"
+            value={pattern}
+            onInput={(e) => setPattern((e.target as HTMLInputElement).value)}
+          />
+          <div class="rule-row-toggles">
+            <div class="toggle-group">
+              {MODES.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  class={`mode-btn ${mode === m ? "active" : ""}`}
+                  onClick={() => setMode(m)}
+                >
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div class="rule-row-toggles" style={{ marginTop: "8px" }}>
+        <div class="toggle-group">
+          {SCOPES.map((s) => (
+            <button
+              key={s}
+              type="button"
+              class={`mode-btn ${scope === s ? "active" : ""} ${s === "skip" ? "mode-btn-skip" : ""}`}
+              onClick={() => setScope(s)}
+            >
+              {SCOPE_LABELS[s]}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
 
   return (
-    <div>
-      <div class="header">
-        <span class="header-title">
-          <span class="codicon codicon-warning" /> APPROVAL REQUIRED
-        </span>
-        {badge && <span class="badge">{badge}</span>}
-      </div>
-
-      {/* File card */}
+    <ApprovalLayout
+      queuePosition={request.queuePosition}
+      queueTotal={request.queueTotal}
+      rulesContent={rulesJsx}
+      rulesModified={!isSkipped}
+      primaryLabel="Accept"
+      primaryWithRulesLabel="Save Rule & Accept"
+      onAccept={handleAccept}
+      onSaveAndAccept={handleSaveAndAccept}
+      onReject={handleReject}
+      followUpRef={followUpRef}
+    >
       <div class="file-card">
         <div class="file-card-header">
           <span
@@ -102,94 +161,6 @@ export function WriteCard({ request, submit }: WriteCardProps) {
           </div>
         )}
       </div>
-
-      {/* Action buttons */}
-      <div class="button-row">
-        <button class="btn btn-primary" onClick={handleAccept}>
-          Accept
-        </button>
-        <button class="btn btn-danger" onClick={() => setShowReject(true)}>
-          Reject
-        </button>
-      </div>
-
-      {/* Trust rule */}
-      <div class="rules-section">
-        <div class="rules-header">Trust Rule</div>
-
-        {!outsideWorkspace && (
-          <div class="field">
-            <label>Scope:</label>
-            <div class="radio-group">
-              {TRUST_SCOPES.map((ts) => (
-                <label key={ts} class="radio-label">
-                  <input
-                    type="radio"
-                    name="trustScope"
-                    value={ts}
-                    checked={trustScope === ts}
-                    onChange={() => setTrustScope(ts)}
-                  />
-                  {ts === "all-files"
-                    ? "All files"
-                    : ts === "this-file"
-                      ? "This file only"
-                      : "Custom pattern"}
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {trustScope === "pattern" && (
-          <div class="rule-row">
-            <input
-              type="text"
-              class="text-input rule-pattern-input"
-              value={pattern}
-              onInput={(e) => setPattern((e.target as HTMLInputElement).value)}
-            />
-            <div class="rule-row-toggles">
-              <div class="toggle-group">
-                {MODES.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    class={`mode-btn ${mode === m ? "active" : ""}`}
-                    onClick={() => setMode(m)}
-                  >
-                    {m.charAt(0).toUpperCase() + m.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div class="rule-row-toggles" style={{ marginTop: "8px" }}>
-          <div class="toggle-group">
-            {SCOPES.map((s) => (
-              <button
-                key={s}
-                type="button"
-                class={`mode-btn ${scope === s ? "active" : ""} ${s === "skip" ? "mode-btn-skip" : ""}`}
-                onClick={() => setScope(s)}
-              >
-                {SCOPE_LABELS[s]}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {!isSkipped && (
-          <button
-            class="btn btn-primary save-rules-btn"
-            onClick={handleSaveAndAccept}
-          >
-            Save Rule & Accept
-          </button>
-        )}
-      </div>
-    </div>
+    </ApprovalLayout>
   );
 }

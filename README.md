@@ -17,8 +17,8 @@ Claude Code's built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`) o
 | **Search**                | `grep`/`rg` via subprocess  | Same ripgrep engine, plus optional **semantic vector search** against an indexed codebase.                                                                                                       |
 | **File listing**          | `find`/`ls` via subprocess  | Native listing with ripgrep's `--files` mode for fast recursive listing with automatic `.gitignore` support.                                                                                     |
 | **Language intelligence** | Not available               | **Go to definition**, **find references**, **hover types**, **completions**, **symbols**, and **rename** — all powered by VS Code's language server.                                             |
-| **Approval system**       | All-or-nothing permissions  | **Granular approval** — per-file write rules, per-command pattern matching, outside-workspace path trust with prefix/glob/exact patterns.                                                        |
-| **Rejection reasons**     | Silent rejection            | When you reject a write or command, you can provide a **reason** that's returned to Claude so it can adjust its approach.                                                                        |
+| **Approval system**       | All-or-nothing permissions  | **Granular approval** — per-file write rules, per-sub-command pattern matching, outside-workspace path trust with prefix/glob/exact patterns, all in a dedicated approval panel.                 |
+| **Follow-up messages**    | Silent rejection            | Every approval dialog includes a **follow-up message** field — returned to Claude as context on accept or as a rejection reason on reject.                                                       |
 
 ## Installation
 
@@ -63,7 +63,7 @@ After installing, reload VS Code. The MCP server starts automatically and config
 2. The MCP server starts automatically and configures `~/.claude.json`
 3. Start Claude Code — it will pick up the `native-claude` MCP server
 
-The sidebar panel shows server status, active tool calls, and approval rules. If auto-configuration doesn't work, use the sidebar buttons to copy the config or run the CLI setup command.
+The sidebar shows server status, active tool calls, and approval rules. The approval panel (bottom panel by default, configurable with `native-claude.approvalPosition`) handles interactive approval dialogs for commands, file writes, path access, and renames. If auto-configuration doesn't work, use the sidebar buttons to copy the config or run the CLI setup command.
 
 ### Configuring Claude Code
 
@@ -305,11 +305,14 @@ Close managed terminals to clean up clutter. With no arguments, closes all termi
 | --------- | --------- | -------------------------------------------------------------------------------- |
 | `names`   | string[]? | Terminal names to close (e.g. `["Server", "Tests"]`). Omit to close all managed. |
 
-## Sidebar
+## Sidebar & Approval Panel
 
-The sidebar (click the Native Claude icon in the activity bar) provides a live overview of the extension and controls for managing active tool calls and approval rules.
+The extension provides two Preact-based webview panels:
 
-### Sections
+- **Sidebar** (Native Claude icon in the activity bar) — live status overview, rule management, and tool call tracking
+- **Approval Panel** (bottom panel by default, or split editor — configurable via `native-claude.approvalPosition`) — interactive approval dialogs for commands, file writes, path access, and renames. Each dialog includes a follow-up message field that's returned to Claude (as context on accept, or as a rejection reason on reject).
+
+### Sidebar Sections
 
 - **Tool Calls** — Shows all in-progress MCP tool calls with elapsed time. Each call has **Complete** and **Cancel** buttons. Complete captures partial output and interrupts the process; Cancel sends SIGINT (Ctrl+C) and force-resolves with a cancellation result. Completed calls remain visible in a dimmed state for a few seconds before fading out.
 - **Server Status** — MCP server state (running/stopped, port, session count, auth, master bypass) with start/stop controls and links to settings, output log, and config files.
@@ -334,48 +337,53 @@ Native Claude includes a granular approval system to keep you in control.
 
 ### Write Approval
 
-When Claude proposes file changes (`write_file` or `apply_diff`), a diff view opens with **Accept** (checkmark), **Options** (...), and **Reject** (X) buttons in the editor title bar.
+When Claude proposes file changes (`write_file` or `apply_diff`), a diff view opens showing the proposed changes and the approval panel presents a write approval card. The editor title bar also has quick-access buttons: **Accept** (checkmark), **Options** (...), and **Reject** (X).
 
 - **Accept** — saves the changes
-- **Options** — accept for the current session or always, with optional file pattern rules
-- **Reject** — discards the changes, with optional rejection reason returned to Claude
+- **Save Rule & Accept** — saves an auto-approval rule and accepts (expand the "Auto Approval Rules" section to configure)
+- **Reject** — discards the changes, with optional follow-up message returned to Claude
 
 User edits made in the diff view before accepting are captured and returned to Claude as a patch, so it can see what you changed.
 
 #### File-Level Write Rules
 
-When accepting writes via Options, you can scope the approval:
+The approval panel's collapsible "Auto Approval Rules" section lets you scope the approval:
 
 - **All files** — blanket approval for all writes
 - **This file** — only auto-approve this specific file
 - **Custom pattern** — define a prefix, exact, or glob pattern to match files
 
-Rules can be scoped to the current session or saved permanently. Manage them from the sidebar.
+Rules can be scoped to session, project, or global. Manage them from the sidebar.
 
 ### Command Approval
 
-When Claude runs a command via `execute_command`, a modal dialog shows the command with options:
+When Claude runs a command via `execute_command`, the approval panel shows the command in a terminal-style display. The command text is editable inline — you can modify it before running.
 
-- **Run Once** — execute without saving a rule
-- **Accept for Session** — save a trusted pattern for this session
-- **Accept Always** — save a trusted pattern permanently
-- **Reject** — block the command, with optional rejection reason
+- **Run** — execute the command (without saving a rule)
+- **Save Rule & Run** — save auto-approval rules and execute (expand the "Auto Approval Rules" section to configure)
+- **Reject** — block the command, with optional follow-up message returned to Claude
 
-When saving a pattern, a pattern editor opens pre-filled with the command. You can edit the text and choose a match mode:
+#### Per-Sub-Command Rules
 
-- **Prefix Match** — trust commands starting with the pattern (e.g. `npm` matches `npm install`, `npm test`)
-- **Exact Match** — trust only this exact command
-- **Regex Match** — trust commands matching a regex
+For compound commands (e.g. `npm install && npm test`), the approval panel splits the command into individual sub-commands, each with its own rule row. You can configure each sub-command independently:
+
+- **Pattern** — pre-filled with the sub-command, editable
+- **Mode** — prefix, exact, regex, or skip (don't save a rule for this sub-command)
+- **Scope** — session, project, or global
 
 ### Outside-Workspace Path Access
 
-When a tool accesses a file outside the workspace, a **modal dialog** prompts for approval:
+When a tool accesses a file outside the workspace, the approval panel prompts for approval:
 
 - **Allow Once** — permit this single access
-- **Allow for Session** — save a path trust rule for the session
-- **Always Allow** — save a path trust rule permanently
+- **Save Rule & Allow** — save a path trust rule and allow (expand the "Auto Approval Rules" section to configure)
+- **Reject** — block the access, with optional follow-up message returned to Claude
 
-For session/always rules, a pattern editor opens pre-filled with the parent directory. You can choose prefix, exact, or glob matching.
+The rule editor is pre-filled with the parent directory path. You can choose prefix, exact, or glob matching, and scope to session, project, or global.
+
+### Rename Approval
+
+When Claude renames a symbol via `rename_symbol`, the approval panel shows the old and new names along with the list of affected files. The same accept/reject flow applies — you can save auto-approval rules or reject with a follow-up message.
 
 ### Managing Rules
 
@@ -389,6 +397,19 @@ The sidebar shows all global and session rules for writes, commands, and trusted
 ### Master Bypass
 
 Set `native-claude.masterBypass` to `true` in settings to skip all approval prompts. Both file writes and commands are auto-approved. Use with caution.
+
+### Recent Approval Auto-Approve
+
+When you approve a command with **Run Once** or accept a file write, the approval is remembered for a short window (default: 60 seconds). If Claude fires the same command or writes to the same file again within that window, it is auto-approved without prompting — no diff view, no dialog.
+
+This is especially useful when Claude edits the same file multiple times in quick succession or re-runs a build command. You approve once and the rest flow through automatically.
+
+- **Commands** — keyed on the full command string. `npm run build` approved once → auto-approved on repeat. A different command (e.g. `npm test`) still requires approval.
+- **Writes** — keyed on the file path. Accepting a write to `src/foo.ts` auto-approves subsequent writes to the same file within the window.
+- **Edited commands** — if you edit a command before running, it is _not_ cached (you clearly wanted to review it).
+- **Persistent rules take precedence** — if you choose "For Session" or "Always", those rules handle future approvals regardless of the TTL.
+
+Configure the window with `native-claude.recentApprovalTtl` (seconds). Set to `0` to disable.
 
 ## Semantic Search
 
@@ -421,24 +442,67 @@ The global `~/.claude.json` config is still updated as a fallback for running Cl
 
 ## Settings
 
-| Setting                          | Default | Description                                                                       |
-| -------------------------------- | ------- | --------------------------------------------------------------------------------- |
-| `native-claude.port`             | `0`     | HTTP port for the MCP server (`0` = OS-assigned, recommended for multi-window)    |
-| `native-claude.autoStart`        | `true`  | Auto-start server on activation                                                   |
-| `native-claude.requireAuth`      | `true`  | Require Bearer token auth                                                         |
-| `native-claude.masterBypass`     | `false` | Skip all approval prompts                                                         |
-| `native-claude.approvalPosition` | `panel` | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel) |
-| `native-claude.diagnosticDelay`  | `1500`  | Max ms to wait for diagnostics after save                                         |
-| `native-claude.writeRules`       | `[]`    | Glob patterns for auto-approved file writes (settings-level)                      |
+| Setting                           | Default | Description                                                                                                           |
+| --------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `native-claude.port`              | `0`     | HTTP port for the MCP server (`0` = OS-assigned, recommended for multi-window)                                        |
+| `native-claude.autoStart`         | `true`  | Auto-start server on activation                                                                                       |
+| `native-claude.requireAuth`       | `true`  | Require Bearer token auth                                                                                             |
+| `native-claude.masterBypass`      | `false` | Skip all approval prompts                                                                                             |
+| `native-claude.approvalPosition`  | `panel` | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                     |
+| `native-claude.diagnosticDelay`   | `1500`  | Max ms to wait for diagnostics after save                                                                             |
+| `native-claude.recentApprovalTtl` | `60`    | Seconds to remember single-use approvals. Repeat identical commands/writes auto-approve within this window. `0` = off |
+| `native-claude.writeRules`        | `[]`    | Glob patterns for auto-approved file writes (settings-level)                                                          |
+
+## Troubleshooting
+
+### Tool calls hanging / timing out
+
+Claude Code's MCP client has HTTP connection timeouts (~2–3 minutes by default). For tools that require user interaction — like `apply_diff` waiting for you to review a diff, or `execute_command` running a long build — the SSE stream can time out before you respond, causing Claude to hang waiting for a result that was lost.
+
+**Recommended: increase Claude Code's MCP timeouts**
+
+Add the following to `~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "MCP_TIMEOUT": "60000",
+    "MCP_TOOL_TIMEOUT": "600000"
+  }
+}
+```
+
+| Variable           | Default | Recommended | Description                          |
+| ------------------ | ------- | ----------- | ------------------------------------ |
+| `MCP_TIMEOUT`      | 10000   | 60000       | MCP server startup timeout (ms)      |
+| `MCP_TOOL_TIMEOUT` | 60000   | 600000      | Per-tool-call execution timeout (ms) |
+
+You can also pass these at launch time: `MCP_TOOL_TIMEOUT=600000 claude`
+
+> **Note:** There is a [known bug](https://github.com/anthropics/claude-code/issues) where these environment variables are sometimes ignored for SSE/HTTP connections. Native Claude includes server-side mitigations (SSE heartbeats and event store resumability) to handle this, but setting the timeouts is still recommended as a first line of defense.
+
+**What Native Claude does automatically:**
+
+- **SSE heartbeat notifications** — sends periodic keep-alive messages on the SSE stream to prevent idle timeout disconnects
+- **Event store resumability** — tool responses are persisted in an in-memory store so they can be replayed if the client reconnects with `Last-Event-ID`
+- **Tool call sidebar** — if a tool call does get stuck, you can **Complete** or **Cancel** it from the sidebar's Tool Calls section
+
+### Server not starting
+
+Check the Output panel (View → Output → "Native Claude") for error logs. Common causes:
+
+- **Port conflict** — set `native-claude.port` to `0` (default) for OS-assigned ports
+- **Auth mismatch** — the token in `~/.claude.json` may be stale; restart the extension to regenerate it
 
 ## Architecture
 
 - **Transport**: Streamable HTTP on `127.0.0.1` (localhost only, no network exposure)
 - **Per-session isolation**: Each MCP session gets its own `McpServer` + `StreamableHTTPServerTransport` pair
 - **Session recovery**: Stale session IDs (e.g. after extension reload) are transparently reused instead of returning 404 errors
+- **SSE resumability**: Each transport is configured with an in-memory event store, enabling clients to reconnect and replay missed tool responses
 - **Auth**: Optional Bearer token stored in VS Code's `globalState`, auto-written to `~/.claude.json` with atomic write (temp file + rename)
-- **Sidebar**: Preact-based webview with `postMessage` state bridge — no full HTML replacement, all updates are incremental via VDOM diffing
-- **Bundled**: Dual esbuild targets — extension (CJS/Node) and sidebar webview (ESM/browser with JSX). No runtime dependencies beyond VS Code and Preact (~3KB)
+- **Webviews**: Two Preact-based webviews (sidebar + approval panel) with `postMessage` state bridge — no full HTML replacement, all updates are incremental via VDOM diffing
+- **Bundled**: Triple esbuild targets — extension (CJS/Node), sidebar webview (ESM/browser), and approval panel webview (ESM/browser). No runtime dependencies beyond VS Code and Preact (~3KB)
 
 ## Development
 

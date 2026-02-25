@@ -16,6 +16,8 @@ export interface CommandApprovalResponse {
     mode: "prefix" | "exact" | "regex" | "skip";
     scope: "session" | "project" | "global";
   }>;
+  /** Optional follow-up message from the user */
+  followUp?: string;
 }
 
 export interface PathApprovalResponse {
@@ -28,6 +30,8 @@ export interface PathApprovalResponse {
   rejectionReason?: string;
   rulePattern?: string;
   ruleMode?: "glob" | "prefix" | "exact";
+  /** Optional follow-up message from the user */
+  followUp?: string;
 }
 
 export interface WriteApprovalResponse {
@@ -42,6 +46,8 @@ export interface WriteApprovalResponse {
   trustScope?: "all-files" | "this-file" | "pattern";
   rulePattern?: string;
   ruleMode?: "glob" | "prefix" | "exact";
+  /** Optional follow-up message from the user */
+  followUp?: string;
 }
 
 export interface RenameApprovalResponse {
@@ -55,6 +61,8 @@ export interface RenameApprovalResponse {
   trustScope?: "all-files" | "this-file" | "pattern";
   rulePattern?: string;
   ruleMode?: "glob" | "prefix" | "exact";
+  /** Optional follow-up message from the user */
+  followUp?: string;
 }
 
 // ── Internal types ──────────────────────────────────────────────────────────
@@ -95,6 +103,11 @@ export class ApprovalPanelProvider
   // Queue
   private queue: QueueEntry[] = [];
   private currentEntry: QueueEntry | undefined;
+
+  // Recent single-use approvals cache (key → timestamp)
+  // When a user approves a "run-once" command or "accept" write, repeat
+  // identical requests within the TTL window are auto-approved.
+  private recentApprovals = new Map<string, number>();
 
   // Alert
   private alertDisposable: vscode.Disposable | undefined;
@@ -232,6 +245,11 @@ export class ApprovalPanelProvider
   // ── Queue management ────────────────────────────────────────────────────
 
   private enqueue(request: InternalRequest): Promise<unknown> {
+    // Auto-resolve immediately if a matching approval was granted recently
+    if (this.isRecentlyApprovedRequest(request)) {
+      return Promise.resolve(this.makeAutoApproveResponse(request.kind));
+    }
+
     return new Promise((resolve) => {
       this.queue.push({ request, resolve });
       this.updatePendingCount();
@@ -241,6 +259,19 @@ export class ApprovalPanelProvider
 
   private processQueue(): void {
     if (this.currentEntry) return;
+
+    // Auto-resolve any recently-approved items at the front of the queue
+    while (this.queue.length > 0) {
+      const front = this.queue[0];
+      if (this.isRecentlyApprovedRequest(front.request)) {
+        this.queue.shift();
+        this.updatePendingCount();
+        front.resolve(this.makeAutoApproveResponse(front.request.kind));
+      } else {
+        break;
+      }
+    }
+
     if (this.queue.length === 0) {
       this.onQueueEmpty();
       return;
@@ -324,6 +355,7 @@ export class ApprovalPanelProvider
     ruleMode?: string;
     rules?: Array<{ pattern: string; mode: string; scope: string }>;
     trustScope?: string;
+    followUp?: string;
   }): void {
     // Handle webviewReady handshake
     if (message.type === "webviewReady") {
@@ -346,6 +378,8 @@ export class ApprovalPanelProvider
     const entry = this.currentEntry;
     this.currentEntry = undefined;
 
+    const followUp = message.followUp || undefined;
+
     if (entry.request.kind === "command") {
       const response: CommandApprovalResponse = {
         decision: message.decision as CommandApprovalResponse["decision"],
@@ -356,6 +390,7 @@ export class ApprovalPanelProvider
           | CommandApprovalResponse["ruleMode"]
           | undefined,
         rules: message.rules as CommandApprovalResponse["rules"],
+        followUp,
       };
       entry.resolve(response);
     } else if (entry.request.kind === "write") {
@@ -365,6 +400,7 @@ export class ApprovalPanelProvider
         trustScope: message.trustScope as WriteApprovalResponse["trustScope"],
         rulePattern: message.rulePattern || undefined,
         ruleMode: message.ruleMode as WriteApprovalResponse["ruleMode"],
+        followUp,
       };
       entry.resolve(response);
     } else if (entry.request.kind === "rename") {
@@ -374,6 +410,7 @@ export class ApprovalPanelProvider
         trustScope: message.trustScope as RenameApprovalResponse["trustScope"],
         rulePattern: message.rulePattern || undefined,
         ruleMode: message.ruleMode as RenameApprovalResponse["ruleMode"],
+        followUp,
       };
       entry.resolve(response);
     } else {
@@ -384,8 +421,18 @@ export class ApprovalPanelProvider
         ruleMode: message.ruleMode as
           | PathApprovalResponse["ruleMode"]
           | undefined,
+        followUp,
       };
       entry.resolve(response);
+    }
+
+    // Record for repeat auto-approve within TTL window.
+    // Skip rejections and edited commands (user wanted to review those).
+    const isRejection = message.decision === "reject";
+    const isEdited =
+      entry.request.kind === "command" && !!message.editedCommand;
+    if (!isRejection && !isEdited) {
+      this.recordApproval(entry.request);
     }
 
     this.processQueue();
@@ -560,6 +607,129 @@ export class ApprovalPanelProvider
   <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
 </body>
 </html>`;
+  }
+
+  // ── Recent approval cache ───────────────────────────────────────────────
+
+  /**
+   * Check whether a request of the given kind/identifier was recently
+   * approved (within the configured TTL).  Tool implementations can call
+   * this *before* enqueueing to skip expensive UI (diff views, approval
+   * panels) entirely.
+   */
+  isRecentlyApproved(
+    kind: InternalRequest["kind"],
+    identifier: string,
+  ): boolean {
+    const ttl = this.getRecentApprovalTtl();
+    if (ttl <= 0) return false;
+    const key = this.buildKey(kind, identifier);
+    if (!key) return false;
+    return this.hasRecentApproval(key);
+  }
+
+  private getRecentApprovalTtl(): number {
+    return (
+      vscode.workspace
+        .getConfiguration("native-claude")
+        .get<number>("recentApprovalTtl", 60) * 1000
+    );
+  }
+
+  private buildKey(
+    kind: InternalRequest["kind"],
+    identifier: string,
+  ): string | undefined {
+    switch (kind) {
+      case "command":
+        return `cmd:${identifier}`;
+      case "write":
+        return `write:${identifier}`;
+      case "path":
+        return `path:${identifier}`;
+      case "rename":
+        return `rename:${identifier}`;
+      default:
+        return undefined;
+    }
+  }
+
+  private approvalKeyForRequest(
+    request: InternalRequest,
+  ): string | undefined {
+    switch (request.kind) {
+      case "command":
+        return request.fullCommand
+          ? `cmd:${request.fullCommand}`
+          : undefined;
+      case "write":
+        return request.filePath
+          ? `write:${request.filePath}`
+          : undefined;
+      case "path":
+        return request.filePath
+          ? `path:${request.filePath}`
+          : undefined;
+      case "rename":
+        return request.oldName && request.newName
+          ? `rename:${request.oldName}\u2192${request.newName}`
+          : undefined;
+      default:
+        return undefined;
+    }
+  }
+
+  private hasRecentApproval(key: string): boolean {
+    const ttl = this.getRecentApprovalTtl();
+    if (ttl <= 0) return false;
+    const ts = this.recentApprovals.get(key);
+    if (ts === undefined) return false;
+    if (Date.now() - ts > ttl) {
+      this.recentApprovals.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  private recordApproval(request: InternalRequest): void {
+    const key = this.approvalKeyForRequest(request);
+    if (!key) return;
+    this.recentApprovals.set(key, Date.now());
+    // Prune expired entries when the map grows large
+    if (this.recentApprovals.size > 100) {
+      const ttl = this.getRecentApprovalTtl();
+      const now = Date.now();
+      for (const [k, ts] of this.recentApprovals) {
+        if (now - ts > ttl) this.recentApprovals.delete(k);
+      }
+    }
+  }
+
+  private isRecentlyApprovedRequest(
+    request: InternalRequest,
+  ): boolean {
+    const key = this.approvalKeyForRequest(request);
+    if (!key) return false;
+    return this.hasRecentApproval(key);
+  }
+
+  private makeAutoApproveResponse(
+    kind: InternalRequest["kind"],
+  ):
+    | CommandApprovalResponse
+    | PathApprovalResponse
+    | WriteApprovalResponse
+    | RenameApprovalResponse {
+    switch (kind) {
+      case "command":
+        return { decision: "run-once" };
+      case "write":
+        return { decision: "accept" };
+      case "path":
+        return { decision: "allow-once" };
+      case "rename":
+        return { decision: "accept" };
+    }
   }
 
   // ── Dispose ─────────────────────────────────────────────────────────────

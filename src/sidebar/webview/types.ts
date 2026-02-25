@@ -44,6 +44,7 @@ export interface TrackedCallInfo {
   startedAt: number;
   status: "active" | "completed";
   completedAt?: number;
+  lastHeartbeatAt?: number;
 }
 
 // Extension → Webview messages
