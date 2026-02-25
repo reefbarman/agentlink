@@ -279,8 +279,8 @@ Output is capped to the **last 200 lines** by default to prevent context window 
 | `terminal_id`         | string?  | Reuse a specific terminal by ID                                                                                                             |
 | `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`)                                                                                            |
 | `split_from`          | string?  | Split alongside an existing terminal (by `terminal_id` or `terminal_name`), creating a visual group                                         |
-| `background`          | boolean? | Fire-and-forget for long-running processes                                                                                                  |
-| `timeout`             | number?  | Timeout in seconds (default: 60)                                                                                                            |
+| `background`          | boolean? | Run without waiting for completion. Returns immediately with `terminal_id`. Use `get_terminal_output` to check progress.                    |
+| `timeout`             | number?  | Timeout in seconds. Starts counting from when the shell begins executing (not from tool call start), so terminal startup time doesn't eat into it. |
 | `output_head`         | number?  | Return only the first N lines of output. Overrides the default 200-line tail cap.                                                           |
 | `output_tail`         | number?  | Return only the last N lines of output. Overrides the default 200-line tail cap.                                                            |
 | `output_offset`       | number?  | Skip first N lines before applying head/tail. Use with `output_head` for line ranges (e.g. `offset: 290, head: 21` → lines 290-310).        |
@@ -304,6 +304,28 @@ Close managed terminals to clean up clutter. With no arguments, closes all termi
 | Parameter | Type      | Description                                                                      |
 | --------- | --------- | -------------------------------------------------------------------------------- |
 | `names`   | string[]? | Terminal names to close (e.g. `["Server", "Tests"]`). Omit to close all managed. |
+
+### get_terminal_output
+
+Get the output and status of a background command. Use after `execute_command` with `background: true` to check on progress, read accumulated output, and see if the command has finished. Background terminals are never auto-reused — they must be referenced explicitly by `terminal_id`.
+
+| Parameter             | Type    | Description                                                              |
+| --------------------- | ------- | ------------------------------------------------------------------------ |
+| `terminal_id`         | string  | Terminal ID returned by `execute_command` (e.g. `term_3`)                |
+| `output_head`         | number? | Return only the first N lines of output                                  |
+| `output_tail`         | number? | Return only the last N lines of output                                   |
+| `output_offset`       | number? | Skip first N lines before applying head/tail                             |
+| `output_grep`         | string? | Filter output to lines matching this regex pattern (case-insensitive)    |
+| `output_grep_context` | number? | Number of context lines around each grep match                           |
+
+**Response includes:**
+
+- `terminal_id` — echoed back
+- `is_running` — whether the background command is still running
+- `exit_code` — null while running, number when finished
+- `output` — accumulated output so far (cleaned of ANSI codes)
+- `output_captured` — whether shell integration was available for output capture
+- `total_lines`, `lines_shown`, `output_file` — same filtering/temp-file behavior as `execute_command`
 
 ## Sidebar & Approval Panel
 

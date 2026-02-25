@@ -4,6 +4,31 @@ import { cleanTerminalOutput } from "../util/ansi.js";
 
 let terminalIconPath: vscode.Uri | undefined;
 
+/**
+ * Escape `!` characters that would trigger shell history expansion.
+ * History expansion occurs in unquoted and double-quoted contexts but NOT
+ * inside single quotes. Walks the string tracking quote state and replaces
+ * unprotected `!` with `\!`.
+ */
+export function escapeHistoryExpansion(command: string): string {
+  if (!command.includes("!")) return command;
+  let result = "";
+  let inSingle = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    const prev = i > 0 ? command[i - 1] : "";
+    if (ch === "'" && prev !== "\\") {
+      inSingle = !inSingle;
+      result += ch;
+    } else if (ch === "!" && !inSingle && prev !== "\\") {
+      result += "\\!";
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}
+
 export function initializeTerminalManager(
   extensionUri: vscode.Uri,
   log?: (message: string) => void,
@@ -26,6 +51,14 @@ interface ManagedTerminal {
   busy: boolean;
   /** Accumulated output from the current shell integration execution */
   outputBuffer: string;
+  /** True while a background command is actively running */
+  backgroundRunning: boolean;
+  /** Exit code of the completed background command (null while running or if unknown) */
+  backgroundExitCode: number | null;
+  /** Whether output was captured for the background command */
+  backgroundOutputCaptured: boolean;
+  /** Disposables for background listeners (stream reader, exit listener) */
+  backgroundDisposables: vscode.Disposable[];
 }
 
 export interface CommandResult {
@@ -70,6 +103,13 @@ export class TerminalManager {
     // Clean up terminals that get closed
     this.disposables.push(
       vscode.window.onDidCloseTerminal((closedTerminal) => {
+        const closing = this.terminals.filter(
+          (t) => t.terminal === closedTerminal,
+        );
+        for (const managed of closing) {
+          for (const d of managed.backgroundDisposables) d.dispose();
+          managed.backgroundDisposables = [];
+        }
         this.terminals = this.terminals.filter(
           (t) => t.terminal !== closedTerminal,
         );
@@ -78,6 +118,13 @@ export class TerminalManager {
   }
 
   async executeCommand(options: ExecuteOptions): Promise<CommandResult> {
+    // Escape ! characters to prevent shell history expansion in
+    // interactive terminals (zsh/bash treat ! specially in double quotes).
+    const command =
+      process.platform !== "win32"
+        ? escapeHistoryExpansion(options.command)
+        : options.command;
+
     const managed = await this.resolveTerminal(options);
     managed.busy = true;
     options.onTerminalAssigned?.(managed.id);
@@ -94,7 +141,7 @@ export class TerminalManager {
       if (options.background) {
         return this.executeBackground(
           managed,
-          options.command,
+          command,
           options.cwd,
           hasShellIntegration,
         );
@@ -103,12 +150,12 @@ export class TerminalManager {
       if (hasShellIntegration) {
         return await this.executeWithShellIntegration(
           managed,
-          options.command,
+          command,
           options.cwd,
           options.timeout,
         );
       } else {
-        return this.executeWithSendText(managed, options.command, options.cwd);
+        return this.executeWithSendText(managed, command, options.cwd);
       }
     } finally {
       managed.busy = false;
@@ -132,7 +179,7 @@ export class TerminalManager {
     // If terminal_name is specified, find or create by name
     if (terminal_name) {
       const existing = this.terminals.find(
-        (t) => t.name === terminal_name && !t.busy,
+        (t) => t.name === terminal_name && !t.busy && !t.backgroundRunning,
       );
       if (existing) {
         return existing;
@@ -149,7 +196,7 @@ export class TerminalManager {
     // Prefer one with matching cwd, but fall back to any idle one
     // (the stored cwd is just the creation cwd — after commands run it may differ).
     const idleDefaults = this.terminals.filter(
-      (t) => !t.busy && t.name === "Native Claude",
+      (t) => !t.busy && !t.backgroundRunning && t.name === "Native Claude",
     );
     const cwdMatch = idleDefaults.find((t) => t.cwd === cwd);
     if (cwdMatch) {
@@ -248,6 +295,10 @@ export class TerminalManager {
       cwd,
       busy: false,
       outputBuffer: "",
+      backgroundRunning: false,
+      backgroundExitCode: null,
+      backgroundOutputCaptured: false,
+      backgroundDisposables: [],
     };
     this.terminals.push(managed);
     return managed;
@@ -305,12 +356,21 @@ export class TerminalManager {
         }),
       );
 
+      // Defer timeout until the shell actually starts executing the command.
+      // This prevents terminal startup / shell queue delays from eating into
+      // the user-specified timeout.
       if (timeout !== undefined) {
-        const timer = setTimeout(() => {
-          timedOut = true;
-          resolve(undefined);
-        }, timeout);
-        disposables.push({ dispose: () => clearTimeout(timer) });
+        disposables.push(
+          vscode.window.onDidStartTerminalShellExecution((e) => {
+            if (e.terminal === terminal) {
+              const timer = setTimeout(() => {
+                timedOut = true;
+                resolve(undefined);
+              }, timeout);
+              disposables.push({ dispose: () => clearTimeout(timer) });
+            }
+          }),
+        );
       }
     });
 
@@ -415,16 +475,78 @@ export class TerminalManager {
     cwd: string,
     hasShellIntegration: boolean,
   ): CommandResult {
-    // Fire-and-forget: send command to terminal without waiting for completion
+    // Clean up any previous background state
+    for (const d of managed.backgroundDisposables) d.dispose();
+    managed.backgroundDisposables = [];
+    managed.backgroundRunning = true;
+    managed.backgroundExitCode = null;
+    managed.outputBuffer = "";
+
     if (hasShellIntegration) {
-      managed.terminal.shellIntegration!.executeCommand(command);
+      managed.backgroundOutputCaptured = true;
+      const execution =
+        managed.terminal.shellIntegration!.executeCommand(command);
+      const stream = execution.read();
+
+      // Read stream asynchronously — don't await, let it run in background
+      const streamDone = (async () => {
+        for await (const data of stream) {
+          managed.outputBuffer += data;
+          // Check for OSC 633;D completion marker in stream
+          const tail = managed.outputBuffer.slice(-50);
+          const match = tail.match(/\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/);
+          if (match) {
+            const markerIdx = managed.outputBuffer.lastIndexOf("\x1b]633;D");
+            if (markerIdx >= 0)
+              managed.outputBuffer = managed.outputBuffer.slice(0, markerIdx);
+            managed.backgroundExitCode =
+              match[1] !== undefined ? parseInt(match[1], 10) : null;
+            managed.backgroundRunning = false;
+            managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
+            for (const d of managed.backgroundDisposables) d.dispose();
+            managed.backgroundDisposables = [];
+            break;
+          }
+        }
+      })();
+
+      // Listen for shell execution end event as primary completion signal
+      const exitDisposable = vscode.window.onDidEndTerminalShellExecution(
+        (e) => {
+          if (e.terminal === managed.terminal) {
+            managed.backgroundExitCode = e.exitCode ?? null;
+            managed.backgroundRunning = false;
+            managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
+            for (const d of managed.backgroundDisposables) d.dispose();
+            managed.backgroundDisposables = [];
+          }
+        },
+      );
+
+      // Listen for terminal close
+      const closeDisposable = vscode.window.onDidCloseTerminal((t) => {
+        if (t === managed.terminal) {
+          managed.backgroundRunning = false;
+          managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
+          for (const d of managed.backgroundDisposables) d.dispose();
+          managed.backgroundDisposables = [];
+        }
+      });
+
+      managed.backgroundDisposables.push(exitDisposable, closeDisposable);
+
+      // Catch stream errors silently (terminal may close mid-read)
+      streamDone.catch(() => {
+        managed.backgroundRunning = false;
+      });
     } else {
+      managed.backgroundOutputCaptured = false;
       managed.terminal.sendText(command, true);
     }
 
     return {
       exit_code: null,
-      output: `Background command started in terminal "${managed.name}". Use terminal_id "${managed.id}" to run further commands in this terminal.`,
+      output: `Background command started in terminal "${managed.name}". Use terminal_id "${managed.id}" with get_terminal_output to check on progress.`,
       cwd,
       output_captured: false,
       terminal_id: managed.id,
@@ -442,6 +564,8 @@ export class TerminalManager {
       : [...this.terminals];
 
     for (const managed of toClose) {
+      for (const d of managed.backgroundDisposables) d.dispose();
+      managed.backgroundDisposables = [];
       managed.terminal.dispose();
     }
 
@@ -454,13 +578,43 @@ export class TerminalManager {
   }
 
   /**
-   * Get accumulated output from a busy terminal.
-   * Returns undefined if the terminal is not found or not busy.
+   * Get accumulated output from a busy or background terminal.
+   * Returns undefined if the terminal is not found.
    */
   getCurrentOutput(terminalId: string): string | undefined {
     const managed = this.terminals.find((t) => t.id === terminalId);
-    if (!managed || !managed.busy) return undefined;
+    if (!managed) return undefined;
+    if (
+      !managed.busy &&
+      !managed.backgroundRunning &&
+      !managed.backgroundOutputCaptured
+    )
+      return undefined;
     return cleanTerminalOutput(managed.outputBuffer);
+  }
+
+  /**
+   * Get the background execution state of a terminal.
+   * Returns undefined if the terminal is not found.
+   */
+  getBackgroundState(terminalId: string):
+    | {
+        is_running: boolean;
+        exit_code: number | null;
+        output: string;
+        output_captured: boolean;
+      }
+    | undefined {
+    const managed = this.terminals.find((t) => t.id === terminalId);
+    if (!managed) return undefined;
+    return {
+      is_running: managed.backgroundRunning,
+      exit_code: managed.backgroundExitCode,
+      output: managed.backgroundRunning
+        ? cleanTerminalOutput(managed.outputBuffer)
+        : managed.outputBuffer,
+      output_captured: managed.backgroundOutputCaptured,
+    };
   }
 
   /**

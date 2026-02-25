@@ -20,6 +20,7 @@ import { handleOpenFile } from "../tools/openFile.js";
 import { handleShowNotification } from "../tools/showNotification.js";
 import { handleRenameSymbol } from "../tools/renameSymbol.js";
 import { handleCloseTerminals } from "../tools/closeTerminals.js";
+import { handleGetTerminalOutput } from "../tools/getTerminalOutput.js";
 import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleGetFeedback } from "../tools/getFeedback.js";
 import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
@@ -461,7 +462,7 @@ export function registerTools(
 
   server.tool(
     "execute_command",
-    "Run a command in VS Code's integrated terminal. The terminal is visible to the user. Output is captured when shell integration is available.\n\nTerminal reuse: By default, reuses an existing idle terminal — do NOT pass terminal_name or terminal_id for normal commands. Only use terminal_name when you need a genuinely separate terminal for parallel execution (e.g. a background dev server running alongside normal commands). Do not create named terminals for one-off commands.\n\nTerminal splitting: Use split_from with a terminal_id or terminal_name to create a new terminal split alongside an existing one, forming a visual group in VS Code's terminal panel. Only affects new terminal creation — if the target terminal_name already exists and is idle, it is reused without re-splitting.\n\nOutput is capped to the last 200 lines by default. Full output is saved to a temp file (returned as output_file) for on-demand access via read_file. Use output_head, output_tail, or output_grep to customize filtering. IMPORTANT: Commands that pipe through head, tail, or grep (e.g. `cmd | head -5`) will be automatically REJECTED. Use the output_head, output_tail, and output_grep parameters instead — they filter the output returned to you while keeping the full output visible to the user in the terminal.",
+    "Run a command in VS Code's integrated terminal. The terminal is visible to the user. Output is captured when shell integration is available.\n\nTerminal reuse: By default, reuses an existing idle terminal — do NOT pass terminal_name or terminal_id for normal commands. Only use terminal_name when you need a genuinely separate terminal for parallel execution (e.g. a background dev server running alongside normal commands). Do not create named terminals for one-off commands.\n\nTerminal splitting: Use split_from with a terminal_id or terminal_name to create a new terminal split alongside an existing one, forming a visual group in VS Code's terminal panel. Only affects new terminal creation — if the target terminal_name already exists and is idle, it is reused without re-splitting.\n\nBackground commands: Use background=true for long-running processes (dev servers, watch modes). Returns immediately with terminal_id. Use get_terminal_output with the terminal_id to check on progress, read accumulated output, and see if the command has finished. Background terminals are never auto-reused — always use terminal_name or terminal_id to target them.\n\nOutput is capped to the last 200 lines by default. Full output is saved to a temp file (returned as output_file) for on-demand access via read_file. Use output_head, output_tail, or output_grep to customize filtering. IMPORTANT: Commands that pipe through head, tail, or grep (e.g. `cmd | head -5`) will be automatically REJECTED. Use the output_head, output_tail, and output_grep parameters instead — they filter the output returned to you while keeping the full output visible to the user in the terminal.",
     {
       command: z.string().describe("Shell command to execute"),
       cwd: z
@@ -608,6 +609,58 @@ export function registerTools(
       },
       (p) =>
         Array.isArray(p.names) ? (p.names as string[]).join(", ") : "all",
+      sid,
+    ),
+  );
+
+  server.tool(
+    "get_terminal_output",
+    "Get the output and status of a background command running in a terminal. Use after execute_command with background=true to check on progress, read accumulated output, and see if the command has finished. Supports the same output filtering parameters as execute_command.",
+    {
+      terminal_id: z
+        .string()
+        .describe(
+          "Terminal ID returned by execute_command (e.g. 'term_3')",
+        ),
+      output_head: z
+        .number()
+        .optional()
+        .describe(
+          "Return only the first N lines of output.",
+        ),
+      output_tail: z
+        .number()
+        .optional()
+        .describe(
+          "Return only the last N lines of output.",
+        ),
+      output_offset: z
+        .number()
+        .optional()
+        .describe(
+          "Skip first N lines before applying head/tail.",
+        ),
+      output_grep: z
+        .string()
+        .optional()
+        .describe(
+          "Filter output to lines matching this regex pattern (case-insensitive).",
+        ),
+      output_grep_context: z
+        .number()
+        .optional()
+        .describe(
+          "Number of context lines around each grep match.",
+        ),
+    },
+    { readOnlyHint: true, openWorldHint: false },
+    tracker.wrapHandler(
+      "get_terminal_output",
+      (params) => {
+        touch();
+        return handleGetTerminalOutput(params);
+      },
+      (p) => String(p.terminal_id ?? ""),
       sid,
     ),
   );
