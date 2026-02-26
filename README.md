@@ -255,6 +255,27 @@ Rename a symbol across the workspace using VS Code's language server. Performs a
 
 Shows affected files for approval before applying. Uses the same write approval flow as `write_file` — the user can accept once, for the session, for the project, or always.
 
+### find_and_replace
+
+Find and replace text across one or more files. Shows affected files for approval before applying. Use `path` for a single file or `glob` for multi-file replacement.
+
+| Parameter | Type     | Description                                                                        |
+| --------- | -------- | ---------------------------------------------------------------------------------- |
+| `find`    | string   | Text to find. Treated as a literal string unless `regex=true`.                     |
+| `replace` | string   | Replacement text                                                                   |
+| `path`    | string?  | Single file path to search in. Mutually exclusive with `glob`.                     |
+| `glob`    | string?  | Glob pattern to match files (e.g. `src/**/*.ts`). Mutually exclusive with `path`.  |
+| `regex`   | boolean? | Treat `find` as a regular expression. Supports capture groups (`$1`, `$2`) in `replace`. Default: false. |
+
+**Response includes:**
+
+- `status` — `applied`, `no_matches`, or `rejected`
+- `files_changed` — number of files modified
+- `total_replacements` — total number of replacements made
+- `files` — per-file breakdown with `path` and `changes` count
+
+Uses the same write approval flow as `rename_symbol` — shows affected files for review before applying.
+
 ### codebase_search
 
 Search the codebase by meaning using vector similarity. Pass a natural language query and get ranked code chunks. Best for exploratory questions like "how does authentication work" or "where are database connections configured".

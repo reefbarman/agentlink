@@ -24,6 +24,7 @@ import { handleGetTerminalOutput } from "../tools/getTerminalOutput.js";
 import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleGetFeedback } from "../tools/getFeedback.js";
 import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
+import { handleFindAndReplace } from "../tools/findAndReplace.js";
 
 export function registerTools(
   server: McpServer,
@@ -44,11 +45,11 @@ export function registerTools(
       path: z
         .string()
         .describe("File path (absolute or relative to workspace root)"),
-      offset: z
+      offset: z.coerce
         .number()
         .optional()
         .describe("Starting line number (1-indexed, default: 1)"),
-      limit: z
+      limit: z.coerce
         .number()
         .optional()
         .describe("Maximum number of lines to read (default: 2000)"),
@@ -133,12 +134,7 @@ export function registerTools(
       "search_files",
       (params) => {
         touch();
-        return handleSearchFiles(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleSearchFiles(params, approvalManager, approvalPanel, sid());
       },
       (p) => String(p.regex ?? "").slice(0, 60),
       sid,
@@ -183,8 +179,8 @@ export function registerTools(
       path: z
         .string()
         .describe("File path (absolute or relative to workspace root)"),
-      line: z.number().describe("Line number (1-indexed)"),
-      column: z.number().describe("Column number (1-indexed)"),
+      line: z.coerce.number().describe("Line number (1-indexed)"),
+      column: z.coerce.number().describe("Column number (1-indexed)"),
     },
     { readOnlyHint: true, openWorldHint: false },
     tracker.wrapHandler(
@@ -210,8 +206,8 @@ export function registerTools(
       path: z
         .string()
         .describe("File path (absolute or relative to workspace root)"),
-      line: z.number().describe("Line number (1-indexed)"),
-      column: z.number().describe("Column number (1-indexed)"),
+      line: z.coerce.number().describe("Line number (1-indexed)"),
+      column: z.coerce.number().describe("Column number (1-indexed)"),
       include_declaration: z
         .boolean()
         .optional()
@@ -256,12 +252,7 @@ export function registerTools(
       "get_symbols",
       (params) => {
         touch();
-        return handleGetSymbols(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGetSymbols(params, approvalManager, approvalPanel, sid());
       },
       (p) => String(p.path ?? p.query ?? ""),
       sid,
@@ -275,8 +266,8 @@ export function registerTools(
       path: z
         .string()
         .describe("File path (absolute or relative to workspace root)"),
-      line: z.number().describe("Line number (1-indexed)"),
-      column: z.number().describe("Column number (1-indexed)"),
+      line: z.coerce.number().describe("Line number (1-indexed)"),
+      column: z.coerce.number().describe("Column number (1-indexed)"),
     },
     { readOnlyHint: true, openWorldHint: false },
     tracker.wrapHandler(
@@ -297,8 +288,8 @@ export function registerTools(
       path: z
         .string()
         .describe("File path (absolute or relative to workspace root)"),
-      line: z.number().describe("Line number (1-indexed)"),
-      column: z.number().describe("Column number (1-indexed)"),
+      line: z.coerce.number().describe("Line number (1-indexed)"),
+      column: z.coerce.number().describe("Column number (1-indexed)"),
       limit: z
         .number()
         .optional()
@@ -439,8 +430,10 @@ export function registerTools(
         .describe(
           "File path containing the symbol (absolute or relative to workspace root)",
         ),
-      line: z.number().describe("Line number of the symbol (1-indexed)"),
-      column: z.number().describe("Column number of the symbol (1-indexed)"),
+      line: z.coerce.number().describe("Line number of the symbol (1-indexed)"),
+      column: z.coerce
+        .number()
+        .describe("Column number of the symbol (1-indexed)"),
       new_name: z.string().describe("The new name for the symbol"),
     },
     { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -575,18 +568,62 @@ export function registerTools(
       "codebase_search",
       async (params) => {
         touch();
-        const { semanticSearch } = await import(
-          "../services/semanticSearch.js"
-        );
-        const { resolveAndValidatePath, getFirstWorkspaceRoot } = await import(
-          "../util/paths.js"
-        );
+        const { semanticSearch } =
+          await import("../services/semanticSearch.js");
+        const { resolveAndValidatePath, getFirstWorkspaceRoot } =
+          await import("../util/paths.js");
         const dirPath = params.path
           ? resolveAndValidatePath(String(params.path)).absolutePath
           : getFirstWorkspaceRoot();
         return semanticSearch(dirPath, String(params.query), params.limit);
       },
       (p) => String(p.query ?? "").slice(0, 60),
+      sid,
+    ),
+  );
+
+  server.tool(
+    "find_and_replace",
+    "Find and replace text across one or more files. Shows a preview of affected files for approval before applying. Use 'path' for a single file or 'glob' for multi-file replacement. Supports literal strings and regex patterns.",
+    {
+      find: z
+        .string()
+        .describe(
+          "Text to find. Treated as a literal string unless regex=true.",
+        ),
+      replace: z.string().describe("Replacement text"),
+      path: z
+        .string()
+        .optional()
+        .describe(
+          "Single file path to search in (absolute or relative to workspace root). Mutually exclusive with glob.",
+        ),
+      glob: z
+        .string()
+        .optional()
+        .describe(
+          "Glob pattern to match files (e.g. 'src/**/*.ts'). Mutually exclusive with path.",
+        ),
+      regex: z
+        .boolean()
+        .optional()
+        .describe(
+          "Treat 'find' as a regular expression. Supports capture groups ($1, $2) in 'replace'. Default: false.",
+        ),
+    },
+    { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    tracker.wrapHandler(
+      "find_and_replace",
+      (params) => {
+        touch();
+        return handleFindAndReplace(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => `${p.find?.slice(0, 30)} → ${p.replace?.slice(0, 30)}`,
       sid,
     ),
   );
@@ -625,9 +662,7 @@ export function registerTools(
     {
       terminal_id: z
         .string()
-        .describe(
-          "Terminal ID returned by execute_command (e.g. 'term_3')",
-        ),
+        .describe("Terminal ID returned by execute_command (e.g. 'term_3')"),
       wait_seconds: z
         .number()
         .optional()
@@ -637,21 +672,15 @@ export function registerTools(
       output_head: z
         .number()
         .optional()
-        .describe(
-          "Return only the first N lines of output.",
-        ),
+        .describe("Return only the first N lines of output."),
       output_tail: z
         .number()
         .optional()
-        .describe(
-          "Return only the last N lines of output.",
-        ),
+        .describe("Return only the last N lines of output."),
       output_offset: z
         .number()
         .optional()
-        .describe(
-          "Skip first N lines before applying head/tail.",
-        ),
+        .describe("Skip first N lines before applying head/tail."),
       output_grep: z
         .string()
         .optional()
@@ -661,9 +690,7 @@ export function registerTools(
       output_grep_context: z
         .number()
         .optional()
-        .describe(
-          "Number of context lines around each grep match.",
-        ),
+        .describe("Number of context lines around each grep match."),
     },
     { readOnlyHint: true, openWorldHint: false },
     tracker.wrapHandler(
@@ -689,9 +716,7 @@ export function registerTools(
           .describe("Name of the tool this feedback is about"),
         feedback: z
           .string()
-          .describe(
-            "Description of the issue, suggestion, or missing feature",
-          ),
+          .describe("Description of the issue, suggestion, or missing feature"),
         tool_params: z
           .string()
           .optional()
@@ -745,7 +770,7 @@ export function registerTools(
       "Delete specific feedback entries by their 0-based index (as returned by get_feedback). Use after addressing feedback to keep the list clean.",
       {
         indices: z
-          .array(z.number())
+          .array(z.coerce.number())
           .describe(
             "Array of 0-based indices to delete (e.g. [0, 2] to delete the first and third entries)",
           ),

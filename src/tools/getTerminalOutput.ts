@@ -17,6 +17,12 @@ export async function handleGetTerminalOutput(params: {
   output_grep_context?: number;
 }): Promise<ToolResult> {
   const terminalManager = getTerminalManager();
+  const log = terminalManager.log;
+  const startTime = Date.now();
+
+  log?.(
+    `[get_terminal_output] ENTER terminal_id=${params.terminal_id} wait_seconds=${params.wait_seconds ?? "none"}`,
+  );
 
   // If wait_seconds is specified, poll until new output arrives, command finishes,
   // or the wait time expires.
@@ -25,6 +31,10 @@ export async function handleGetTerminalOutput(params: {
     const initialState = terminalManager.getBackgroundState(params.terminal_id);
     const initialLength = initialState?.output?.length ?? 0;
     const initialRunning = initialState?.is_running ?? false;
+
+    log?.(
+      `[get_terminal_output] POLL_START initial_len=${initialLength} initial_running=${initialRunning}`,
+    );
 
     while (Date.now() < deadline) {
       const current = terminalManager.getBackgroundState(params.terminal_id);
@@ -37,6 +47,8 @@ export async function handleGetTerminalOutput(params: {
 
       await sleep(Math.min(250, deadline - Date.now()));
     }
+
+    log?.(`[get_terminal_output] POLL_END elapsed=${Date.now() - startTime}ms`);
   }
 
   const state = terminalManager.getBackgroundState(params.terminal_id);
@@ -86,6 +98,10 @@ export async function handleGetTerminalOutput(params: {
   } else {
     result.output = "";
   }
+
+  log?.(
+    `[get_terminal_output] EXIT elapsed=${Date.now() - startTime}ms terminal_id=${params.terminal_id}`,
+  );
 
   return {
     content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

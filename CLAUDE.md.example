@@ -16,6 +16,17 @@ When the `native-claude` MCP server is available, NEVER use built-in `Read`, `Ed
 
 These MCP tools open diff views for user review, run commands in visible terminals, and return VS Code diagnostics. There is no exception to this rule.
 
+### Common mistakes — DO NOT DO THESE
+
+These are the most frequent violations. Check yourself before every tool call:
+
+- **DO NOT use `Bash` to run builds, tests, git commands, or any shell command.** Use `execute_command`. If `execute_command` fails (e.g. parameter validation error), fix the parameters and retry — do NOT fall back to `Bash`.
+- **DO NOT use `Grep` to search code.** Use `search_files`. If you need to search the workspace root, pass `path: "."`.
+- **DO NOT use `Read` to read files.** Use `read_file`. There is no scenario where `Read` is acceptable.
+- **DO NOT use `Edit` or `Write` to modify files.** Use `apply_diff`, `write_file`, or `find_and_replace`. The built-in `Edit` tool's `replace_all` feature is NOT a reason to use it — use `find_and_replace` instead.
+- **DO NOT use `Glob` to find files.** Use `list_files`.
+- **DO NOT fall back to built-in tools when a native-claude tool returns an error.** Fix the issue (wrong parameter type, missing required param, etc.) and retry with the native-claude tool.
+
 ### Tool details
 
 | Instead of (built-in) | Use (native-claude MCP) | Why |
@@ -59,4 +70,5 @@ native-claude also provides tools that Claude Code doesn't have natively. Use th
 - **`open_file`** — Open a file in the VS Code editor, optionally scrolling to a specific line.
 - **`show_notification`** — Show a notification in VS Code. Use sparingly for important status updates.
 - **`codebase_search`** — Semantic search over the codebase using vector similarity. Pass a natural language query (e.g. "how does auth work", "where are API routes defined") and get ranked code chunks. Use `limit` (default 10) to control how many results are returned. **Prefer this over regex search when you're exploring unfamiliar code, looking for conceptual matches, or don't know exact function/variable names.** Requires Roo Code codebase index + OpenAI API key.
+- **`find_and_replace`** — Bulk find-and-replace across one file or many files. Use `path` for a single file or `glob` (e.g. `src/**/*.ts`) for multi-file. Supports literal strings and regex with capture groups. Shows affected files for approval before applying. **Use this instead of writing many apply_diff hunks for repetitive replacements.**
 - **`get_terminal_output`** — Check on a background command started with `execute_command` + `background: true`. Pass the `terminal_id` returned by `execute_command`. Returns accumulated output, whether the command is still running, and the exit code when finished. Use `wait_seconds` to poll for new output (avoids needing two calls when a command was just started). Supports the same output filtering params as `execute_command` (`output_head`, `output_tail`, `output_grep`, etc.).

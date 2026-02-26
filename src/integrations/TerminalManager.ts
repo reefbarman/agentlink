@@ -49,6 +49,8 @@ interface ManagedTerminal {
   name: string;
   cwd: string;
   busy: boolean;
+  /** Timestamp when the last foreground command completed — used for reuse cooldown */
+  lastCommandEndedAt: number;
   /** Accumulated output from the current shell integration execution */
   outputBuffer: string;
   /** True while a background command is actively running */
@@ -98,6 +100,54 @@ export class TerminalManager {
   private terminals: ManagedTerminal[] = [];
   private disposables: vscode.Disposable[] = [];
   log?: (message: string) => void;
+
+  /**
+   * Rolling window of startup latencies (ms from executeCommand call to
+   * onDidStartTerminalShellExecution firing). Used to understand typical
+   * shell integration overhead so we can tune fallback timeouts.
+   */
+  private startupLatencies: number[] = [];
+  private static readonly MAX_LATENCY_SAMPLES = 50;
+
+  /**
+   * Minimum ms between finishing one command and starting another on the
+   * same terminal.  Prevents shell integration event loss caused by sending
+   * a new command before the shell has fully processed the previous
+   * command's OSC 633 completion sequences.
+   */
+  private static readonly REUSE_COOLDOWN_MS = 500;
+
+  /** Wait until the terminal's reuse cooldown has elapsed. */
+  private async waitForCooldown(managed: ManagedTerminal): Promise<void> {
+    const remaining =
+      TerminalManager.REUSE_COOLDOWN_MS -
+      (Date.now() - managed.lastCommandEndedAt);
+    if (remaining > 0) {
+      this.log?.(
+        `[cooldown] waiting ${remaining}ms for terminal ${managed.id} to be ready`,
+      );
+      await new Promise((r) => setTimeout(r, remaining));
+    }
+  }
+
+  /** Record a startup latency sample and log the rolling stats. */
+  private recordStartupLatency(latencyMs: number): void {
+    // Skip extreme outliers (from cancelled/stuck commands with stale listeners)
+    if (latencyMs > 30_000) return;
+    this.startupLatencies.push(latencyMs);
+    if (this.startupLatencies.length > TerminalManager.MAX_LATENCY_SAMPLES) {
+      this.startupLatencies.shift();
+    }
+    const sorted = [...this.startupLatencies].sort((a, b) => a - b);
+    const min = sorted[0];
+    const max = sorted[sorted.length - 1];
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const p95 = sorted[Math.floor(sorted.length * 0.95)];
+    this.log?.(
+      `[startup-latency] sample=${latencyMs}ms n=${sorted.length} ` +
+        `min=${min}ms median=${median}ms p95=${p95}ms max=${max}ms`,
+    );
+  }
 
   constructor() {
     // Clean up terminals that get closed
@@ -158,6 +208,7 @@ export class TerminalManager {
         return this.executeWithSendText(managed, command, options.cwd);
       }
     } finally {
+      managed.lastCommandEndedAt = Date.now();
       managed.busy = false;
     }
   }
@@ -182,6 +233,7 @@ export class TerminalManager {
         (t) => t.name === terminal_name && !t.busy && !t.backgroundRunning,
       );
       if (existing) {
+        await this.waitForCooldown(existing);
         return existing;
       }
       // Create with the specified name, optionally split from a parent
@@ -200,9 +252,11 @@ export class TerminalManager {
     );
     const cwdMatch = idleDefaults.find((t) => t.cwd === cwd);
     if (cwdMatch) {
+      await this.waitForCooldown(cwdMatch);
       return cwdMatch;
     }
     if (idleDefaults.length > 0) {
+      await this.waitForCooldown(idleDefaults[0]);
       return idleDefaults[0];
     }
 
@@ -306,6 +360,7 @@ export class TerminalManager {
       name,
       cwd,
       busy: false,
+      lastCommandEndedAt: 0,
       outputBuffer: "",
       backgroundRunning: false,
       backgroundExitCode: null,
@@ -349,11 +404,75 @@ export class TerminalManager {
     // Reset the output buffer for this execution
     managed.outputBuffer = "";
 
+    // --- Diagnostic state tracking ---
+    const execTag = `${managed.id}:${Date.now()}`;
+    const startTime = Date.now();
+    const diag = {
+      startEventFired: false,
+      endEventFired: false,
+      terminalClosed: false,
+      streamChunks: 0,
+      streamBytes: 0,
+      streamDone: false,
+      markerInStream: false,
+      markerByPoll: false,
+      raceResolved: false,
+      raceWinner: "",
+      lastActivityAt: startTime,
+    };
+
+    const logDiag = (event: string) => {
+      const elapsed = Date.now() - startTime;
+      this.log?.(
+        `[exec:${execTag}] ${event} (+${elapsed}ms) | ` +
+          `start=${diag.startEventFired} end=${diag.endEventFired} closed=${diag.terminalClosed} ` +
+          `chunks=${diag.streamChunks} bytes=${diag.streamBytes} ` +
+          `stream_done=${diag.streamDone} ` +
+          `marker_stream=${diag.markerInStream} marker_poll=${diag.markerByPoll} ` +
+          `buf=${managed.outputBuffer.length} race=${diag.raceResolved}` +
+          (diag.raceWinner ? ` winner=${diag.raceWinner}` : ""),
+      );
+      diag.lastActivityAt = Date.now();
+    };
+
+    logDiag(`EXEC_START cmd="${command.slice(0, 120)}"`);
+
+    // --- Stall detector ---
+    // Periodically logs complete state when no progress has been made.
+    // Does NOT cancel or resolve anything — purely diagnostic.
+    const STALL_CHECK_MS = 10_000;
+    const stallCheck = setInterval(() => {
+      if (diag.raceResolved) return;
+      const sinceActivity = Date.now() - diag.lastActivityAt;
+      if (sinceActivity >= STALL_CHECK_MS) {
+        const elapsed = Date.now() - startTime;
+        const latencyStats =
+          this.startupLatencies.length > 0
+            ? `samples=${this.startupLatencies.length} last=${this.startupLatencies[this.startupLatencies.length - 1]}ms`
+            : "no_samples";
+        this.log?.(
+          `[exec:${execTag}] STALL_WARNING no activity for ${sinceActivity}ms (total ${elapsed}ms) | ` +
+            `start=${diag.startEventFired} end=${diag.endEventFired} closed=${diag.terminalClosed} ` +
+            `chunks=${diag.streamChunks} bytes=${diag.streamBytes} ` +
+            `stream_done=${diag.streamDone} ` +
+            `marker_stream=${diag.markerInStream} marker_poll=${diag.markerByPoll} ` +
+            `buf=${managed.outputBuffer.length} ` +
+            `shellIntegration=${!!terminal.shellIntegration} ` +
+            `timeout=${timeout ?? "none"} ` +
+            `startup_latency={${latencyStats}} ` +
+            `cmd="${command.slice(0, 120)}"`,
+        );
+      }
+    }, STALL_CHECK_MS);
+    disposables.push({ dispose: () => clearInterval(stallCheck) });
+
     // --- Primary: shell integration events ---
     const exitCodePromise = new Promise<number | undefined>((resolve) => {
       disposables.push(
         vscode.window.onDidEndTerminalShellExecution((e) => {
           if (e.terminal === terminal) {
+            diag.endEventFired = true;
+            logDiag(`END_EVENT exitCode=${e.exitCode}`);
             resolve(e.exitCode);
           }
         }),
@@ -363,31 +482,69 @@ export class TerminalManager {
       disposables.push(
         vscode.window.onDidCloseTerminal((t) => {
           if (t === terminal) {
+            diag.terminalClosed = true;
+            logDiag("TERMINAL_CLOSED");
             resolve(undefined);
           }
         }),
       );
 
-      // Defer timeout until the shell actually starts executing the command.
-      // This prevents terminal startup / shell queue delays from eating into
-      // the user-specified timeout.
-      if (timeout !== undefined) {
-        disposables.push(
-          vscode.window.onDidStartTerminalShellExecution((e) => {
-            if (e.terminal === terminal) {
+      // Always listen for the start event (for diagnostics), and set up
+      // timeout only when configured. Defers timeout until the shell
+      // actually starts executing the command, so terminal startup /
+      // shell queue delays don't eat into the user-specified timeout.
+      disposables.push(
+        vscode.window.onDidStartTerminalShellExecution((e) => {
+          if (e.terminal === terminal) {
+            diag.startEventFired = true;
+            this.recordStartupLatency(Date.now() - executeCalledAt);
+            logDiag("START_EVENT");
+
+            if (timeout !== undefined) {
+              // Clear the catch-all — the precise deferred timer takes over
+              if (catchAllTimer) {
+                clearTimeout(catchAllTimer);
+                catchAllTimer = undefined;
+              }
               const timer = setTimeout(() => {
                 timedOut = true;
+                logDiag("TIMEOUT_FIRED");
                 resolve(undefined);
               }, timeout);
               disposables.push({ dispose: () => clearTimeout(timer) });
             }
-          }),
-        );
+          }
+        }),
+      );
+
+      // Catch-all timeout: prevent infinite hang if the start event
+      // never fires (shell integration race on rapid terminal reuse).
+      // Only active when the user specified a timeout — they explicitly
+      // want a time limit. Uses timeout + startup grace so the deferred
+      // timer still gets priority in the normal case.
+      let catchAllTimer: ReturnType<typeof setTimeout> | undefined;
+      if (timeout !== undefined) {
+        const STARTUP_GRACE_MS = 15_000;
+        catchAllTimer = setTimeout(() => {
+          if (!diag.raceResolved) {
+            timedOut = true;
+            logDiag("CATCH_ALL_TIMEOUT");
+            resolve(undefined);
+          }
+        }, timeout + STARTUP_GRACE_MS);
+        disposables.push({
+          dispose: () => {
+            if (catchAllTimer) clearTimeout(catchAllTimer);
+          },
+        });
       }
     });
 
-    // Execute the command
+    // Execute the command — record timestamp so we can measure startup latency
+    const executeCalledAt = Date.now();
+    logDiag("CALLING_EXECUTE_COMMAND");
     const execution = shellIntegration.executeCommand(command);
+    logDiag("EXECUTE_COMMAND_RETURNED");
 
     // Collect output from the stream (stored on managed terminal for external access)
     const stream = execution.read();
@@ -416,12 +573,18 @@ export class TerminalManager {
     // Track how far we've scanned so we don't re-check old data
     let lastMarkerCheckPos = 0;
 
-    const checkForMarker = (): boolean => {
+    const checkForMarker = (source: "stream" | "poll"): boolean => {
       // Search from last checked position (with overlap for split markers)
       const searchFrom = Math.max(0, lastMarkerCheckPos - 20);
       const region = managed.outputBuffer.slice(searchFrom);
       const match = region.match(MARKER_RE);
       if (match) {
+        if (source === "stream") {
+          diag.markerInStream = true;
+        } else {
+          diag.markerByPoll = true;
+        }
+        logDiag(`MARKER_FOUND source=${source} exitCode=${match[1] ?? "none"}`);
         resolveStreamMarker!(
           match[1] !== undefined ? parseInt(match[1], 10) : undefined,
         );
@@ -436,18 +599,53 @@ export class TerminalManager {
     const MARKER_POLL_MS = 500;
     const markerPoll = setInterval(() => {
       if (managed.outputBuffer.length > lastMarkerCheckPos) {
-        checkForMarker();
+        checkForMarker("poll");
       }
     }, MARKER_POLL_MS);
 
     const streamDone = (async () => {
       for await (const data of stream) {
+        diag.streamChunks++;
+        diag.streamBytes += data.length;
+        if (diag.streamChunks === 1) {
+          logDiag(`STREAM_FIRST_DATA len=${data.length}`);
+        }
+        diag.lastActivityAt = Date.now();
         managed.outputBuffer += data;
-        if (checkForMarker()) break;
+        if (checkForMarker("stream")) break;
       }
+      diag.streamDone = true;
+      logDiag("STREAM_COMPLETED");
     })();
 
     await Promise.race([streamDone, exitCodePromise, streamMarkerPromise]);
+
+    // If the race resolved but we have no output yet, the stream may
+    // still be delivering data (observed when exit event fires ~100ms
+    // before stream data arrives on rapidly-reused terminals). Wait
+    // briefly for it rather than returning empty output.
+    if (managed.outputBuffer.length === 0 && !diag.streamDone) {
+      const OUTPUT_GRACE_MS = 300;
+      logDiag(`OUTPUT_GRACE waiting ${OUTPUT_GRACE_MS}ms for stream data`);
+      await Promise.race([
+        streamDone,
+        new Promise((r) => setTimeout(r, OUTPUT_GRACE_MS)),
+      ]);
+    }
+
+    diag.raceResolved = true;
+    // Determine which promise won the race
+    if (diag.streamDone) diag.raceWinner = "stream";
+    else if (diag.endEventFired || diag.terminalClosed || timedOut)
+      diag.raceWinner = diag.endEventFired
+        ? "exitEvent"
+        : diag.terminalClosed
+          ? "terminalClosed"
+          : "timeout";
+    else if (diag.markerInStream || diag.markerByPoll)
+      diag.raceWinner = "marker";
+    else diag.raceWinner = "unknown";
+    logDiag("RACE_RESOLVED");
 
     clearInterval(markerPoll);
 
@@ -472,6 +670,8 @@ export class TerminalManager {
       ),
     ]);
 
+    logDiag(`EXIT_CODE=${exitCode ?? "null"}`);
+
     // Clean up all listeners
     for (const d of disposables) d.dispose();
 
@@ -487,6 +687,7 @@ export class TerminalManager {
       result.output += `\n[Timed out after ${timeout! / 1000}s — command may still be running in terminal]`;
     }
 
+    logDiag("RETURNING_RESULT");
     return result;
   }
 
