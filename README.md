@@ -8,17 +8,17 @@ Claude Code's built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`) o
 
 ### What you get over built-in tools
 
-| Capability                | Built-in tools              | Native Claude                                                                                                                                                                                    |
-| ------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **File editing**          | Writes directly to disk     | Opens a **diff view** — you see exactly what's changing, can edit inline, and accept or reject. Format-on-save applies automatically.                                                            |
-| **Terminal commands**     | Runs in a hidden subprocess | Runs in VS Code's **integrated terminal** — visible, interactive, with shell integration for output capture. Supports named terminals, parallel tasks, and **split terminal groups**.            |
-| **Diagnostics**           | Not available               | Real **TypeScript errors, ESLint warnings**, etc. from VS Code's language services — returned after writes and available on-demand.                                                              |
-| **File reading**          | Raw file content            | Content plus **file metadata** (size, modified date), **language detection**, **git status**, **diagnostics summary**, and **symbol outlines** (functions, classes, interfaces grouped by kind). |
-| **Search**                | `grep`/`rg` via subprocess  | Same ripgrep engine, plus optional **semantic vector search** against an indexed codebase.                                                                                                       |
-| **File listing**          | `find`/`ls` via subprocess  | Native listing with ripgrep's `--files` mode for fast recursive listing with automatic `.gitignore` support.                                                                                     |
-| **Language intelligence** | Not available               | **Go to definition**, **find references**, **hover types**, **completions**, **symbols**, and **rename** — all powered by VS Code's language server.                                             |
-| **Approval system**       | All-or-nothing permissions  | **Granular approval** — per-file write rules, per-sub-command pattern matching, outside-workspace path trust with prefix/glob/exact patterns, all in a dedicated approval panel.                 |
-| **Follow-up messages**    | Silent rejection            | Every approval dialog includes a **follow-up message** field — returned to Claude as context on accept or as a rejection reason on reject.                                                       |
+| Capability                | Built-in tools              | Native Claude                                                                                                                                                                                                                        |
+| ------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **File editing**          | Writes directly to disk     | Opens a **diff view** — you see exactly what's changing, can edit inline, and accept or reject. Format-on-save applies automatically.                                                                                                |
+| **Terminal commands**     | Runs in a hidden subprocess | Runs in VS Code's **integrated terminal** — visible, interactive, with shell integration for output capture. Supports named terminals, parallel tasks, and **split terminal groups**.                                                |
+| **Diagnostics**           | Not available               | Real **TypeScript errors, ESLint warnings**, etc. from VS Code's language services — returned after writes and available on-demand.                                                                                                  |
+| **File reading**          | Raw file content            | Content plus **file metadata** (size, modified date), **language detection**, **git status**, **diagnostics summary**, and **symbol outlines** (functions, classes, interfaces grouped by kind).                                     |
+| **Search**                | `grep`/`rg` via subprocess  | Same ripgrep engine, plus optional **semantic vector search** against an indexed codebase.                                                                                                                                           |
+| **File listing**          | `find`/`ls` via subprocess  | Native listing with ripgrep's `--files` mode for fast recursive listing with automatic `.gitignore` support.                                                                                                                         |
+| **Language intelligence** | Not available               | **Go to definition/implementation/type**, **find references**, **hover types**, **completions**, **symbols**, **rename**, **code actions**, **call/type hierarchy**, and **inlay hints** — all powered by VS Code's language server. |
+| **Approval system**       | All-or-nothing permissions  | **Granular approval** — per-file write rules, per-sub-command pattern matching, outside-workspace path trust with prefix/glob/exact patterns, all in a dedicated approval panel.                                                     |
+| **Follow-up messages**    | Silent rejection            | Every approval dialog includes a **follow-up message** field — returned to Claude as context on accept or as a rejection reason on reject.                                                                                           |
 
 ## Installation
 
@@ -75,6 +75,49 @@ cp CLAUDE.md.example ~/.claude/CLAUDE.md
 
 This covers tool mappings, usage notes, and descriptions of the additional language server tools. Review and edit it to fit your setup — for example, you may want to merge it with existing instructions in your `CLAUDE.md`.
 
+### Enforcing native-claude usage with hooks
+
+Even with `CLAUDE.md` instructions, Claude may occasionally fall back to built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Glob`, `Grep`). You can use a Claude Code [PreToolUse hook](https://docs.anthropic.com/en/docs/claude-code/hooks) to **block** built-in tools and force Claude to use native-claude equivalents.
+
+The repo includes a ready-made hook script at [`scripts/enforce-native-claude.sh`](scripts/enforce-native-claude.sh). It:
+
+- Blocks `Read`, `Edit`, `Write`, `Bash`, `Glob`, and `Grep` with a message telling Claude which native-claude tool to use instead
+- Logs every violation to `~/.claude/native-claude-violations.jsonl` with a timestamp, the blocked tool name, and the arguments Claude tried to pass
+
+**Setup:**
+
+1. Copy the script to your hooks directory:
+
+   ```sh
+   mkdir -p ~/.claude/hooks
+   cp scripts/enforce-native-claude.sh ~/.claude/hooks/
+   chmod +x ~/.claude/hooks/enforce-native-claude.sh
+   ```
+
+2. Add the hook to `~/.claude/settings.json`:
+
+   ```jsonc
+   {
+     "hooks": {
+       "PreToolUse": [
+         {
+           "matcher": "^(Read|Edit|Write|Bash|Glob|Grep)$",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "$HOME/.claude/hooks/enforce-native-claude.sh"
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+The `matcher` regex ensures the hook only fires for the six built-in tools that have native-claude equivalents — all other tools (including native-claude MCP tools, `Task`, `TodoWrite`, etc.) pass through unaffected.
+
+> **Requires `jq`** — install with `brew install jq`, `apt install jq`, etc.
+
 ## Tools
 
 ### read_file
@@ -100,17 +143,20 @@ Read file contents with line numbers. Returns rich metadata that built-in `Read`
 
 Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not available rather than returned as null.
 
+**Image support:** Image files (PNG, JPEG, GIF, WebP, BMP, ICO, AVIF) are returned as base64-encoded `image` content that Claude can view directly. Max image size: 10 MB.
+
 **Friendly errors:** `ENOENT` → `"File not found: {path}. Working directory: {root}"`, `EACCES` → `"Permission denied"`, `EISDIR` → `"Use list_files instead"`.
 
 ### list_files
 
 List files and directories. Directories have a trailing `/` suffix.
 
-| Parameter   | Type     | Description                               |
-| ----------- | -------- | ----------------------------------------- |
-| `path`      | string   | Directory path                            |
-| `recursive` | boolean? | List recursively (default: false)         |
-| `depth`     | number?  | Max directory depth for recursive listing |
+| Parameter   | Type     | Description                                                                       |
+| ----------- | -------- | --------------------------------------------------------------------------------- |
+| `path`      | string   | Directory path                                                                    |
+| `recursive` | boolean? | List recursively (default: false)                                                 |
+| `depth`     | number?  | Max directory depth for recursive listing                                         |
+| `pattern`   | string?  | Glob pattern to filter files (e.g. `*.ts`, `*.test.*`). Implies recursive search. |
 
 Recursive listing uses ripgrep (`--files` mode) for speed and automatic `.gitignore` support.
 
@@ -118,12 +164,17 @@ Recursive listing uses ripgrep (`--files` mode) for speed and automatic `.gitign
 
 Search file contents using regex or semantic vector search.
 
-| Parameter      | Type     | Description                                                   |
-| -------------- | -------- | ------------------------------------------------------------- |
-| `path`         | string   | Directory to search in                                        |
-| `regex`        | string   | Regex pattern, or natural language query when `semantic=true` |
-| `file_pattern` | string?  | Glob to filter files (e.g. `*.ts`)                            |
-| `semantic`     | boolean? | Use vector similarity search instead of regex                 |
+| Parameter          | Type     | Description                                                                                                                  |
+| ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `path`             | string   | Directory to search in                                                                                                       |
+| `regex`            | string   | Regex pattern, or natural language query when `semantic=true`                                                                |
+| `file_pattern`     | string?  | Glob to filter files (e.g. `*.ts`)                                                                                           |
+| `semantic`         | boolean? | Use vector similarity search instead of regex                                                                                |
+| `context`          | number?  | Number of context lines around each match (default: 1). Only used for `content` output mode.                                 |
+| `case_insensitive` | boolean? | Case-insensitive search (default: false)                                                                                     |
+| `multiline`        | boolean? | Enable multiline matching where `.` matches newlines (default: false)                                                        |
+| `max_results`      | number?  | Maximum number of matches to return (default: 300)                                                                           |
+| `output_mode`      | string?  | `content` (default, matching lines with context), `files_with_matches` (file paths only), or `count` (match counts per file) |
 
 Regex search is powered by ripgrep with context lines and per-file match counts. Semantic search queries a Qdrant vector index (see [Semantic Search](#semantic-search)).
 
@@ -131,10 +182,11 @@ Regex search is powered by ripgrep with context lines and per-file match counts.
 
 Get VS Code diagnostics (errors, warnings, etc.) for a file or the entire workspace.
 
-| Parameter  | Type    | Description                                                |
-| ---------- | ------- | ---------------------------------------------------------- |
-| `path`     | string? | File path (omit for all workspace diagnostics)             |
-| `severity` | string? | Comma-separated filter: `error`, `warning`, `info`, `hint` |
+| Parameter  | Type    | Description                                                                        |
+| ---------- | ------- | ---------------------------------------------------------------------------------- |
+| `path`     | string? | File path (omit for all workspace diagnostics)                                     |
+| `severity` | string? | Comma-separated filter: `error`, `warning`, `info`, `hint`                         |
+| `source`   | string? | Comma-separated source filter (e.g. `typescript`, `eslint`). Default: all sources. |
 
 ### write_file
 
@@ -171,6 +223,30 @@ Resolve the definition location of a symbol using VS Code's language server. Wor
 | `column`  | number | Column number (1-indexed)                          |
 
 Returns an array of `definitions`, each with `path`, `line`, `column`, `endLine`, `endColumn`. Handles both `Location` and `LocationLink` results from the language server.
+
+### go_to_implementation
+
+Find concrete implementations of an interface, abstract class, or method. Unlike `go_to_definition` which shows the declaration, this shows where the code actually runs.
+
+| Parameter | Type   | Description                                        |
+| --------- | ------ | -------------------------------------------------- |
+| `path`    | string | File path (absolute or relative to workspace root) |
+| `line`    | number | Line number (1-indexed)                            |
+| `column`  | number | Column number (1-indexed)                          |
+
+Returns an array of `implementations` with the same location format as `go_to_definition`.
+
+### go_to_type_definition
+
+Navigate to the type definition of a symbol. For `const x = getFoo()`, `go_to_definition` goes to `getFoo`'s declaration, but `go_to_type_definition` goes to the return type.
+
+| Parameter | Type   | Description                                        |
+| --------- | ------ | -------------------------------------------------- |
+| `path`    | string | File path (absolute or relative to workspace root) |
+| `line`    | number | Line number (1-indexed)                            |
+| `column`  | number | Column number (1-indexed)                          |
+
+Returns an array of `type_definitions` with the same location format as `go_to_definition`.
 
 ### get_references
 
@@ -223,15 +299,83 @@ Get autocomplete suggestions at a cursor position. Useful for discovering availa
 
 Returns `is_incomplete`, `total_items`, `showing`, and an `items` array with `label`, `kind`, `detail`, `documentation`, and `insertText` (when different from label).
 
+### get_code_actions
+
+Get available code actions (quick fixes, refactorings) at a position or range. Returns actions like "Add missing import", "Extract function", "Organize imports", "Fix ESLint error", etc.
+
+| Parameter        | Type     | Description                                                                                                  |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `path`           | string   | File path (absolute or relative to workspace root)                                                           |
+| `line`           | number   | Line number (1-indexed)                                                                                      |
+| `column`         | number   | Column number (1-indexed)                                                                                    |
+| `end_line`       | number?  | End line for range selection (1-indexed)                                                                     |
+| `end_column`     | number?  | End column for range selection (1-indexed)                                                                   |
+| `kind`           | string?  | Filter by action kind: `quickfix`, `refactor`, `refactor.extract`, `source.organizeImports`, `source.fixAll` |
+| `only_preferred` | boolean? | Only return preferred/recommended actions (default: false)                                                   |
+
+Returns an `actions` array with `index`, `title`, `kind`, `preferred`, `fixes_diagnostics`, `changes` (file/edit counts), and `has_command`. Use the `index` with `apply_code_action` to apply.
+
+### apply_code_action
+
+Apply a code action returned by `get_code_actions`. Modifies files directly (workspace edits are applied and saved).
+
+| Parameter | Type   | Description                                                    |
+| --------- | ------ | -------------------------------------------------------------- |
+| `index`   | number | 0-based index of the action to apply (from `get_code_actions`) |
+
+Returns `status`, `action` (title), `kind`, and `changed_files` (list of modified file paths).
+
+### get_call_hierarchy
+
+Get incoming callers and/or outgoing callees for a function or method. Shows who calls this function and what it calls.
+
+| Parameter   | Type    | Description                                                          |
+| ----------- | ------- | -------------------------------------------------------------------- |
+| `path`      | string  | File path (absolute or relative to workspace root)                   |
+| `line`      | number  | Line number (1-indexed)                                              |
+| `column`    | number  | Column number (1-indexed)                                            |
+| `direction` | string  | `incoming` (who calls this), `outgoing` (what this calls), or `both` |
+| `max_depth` | number? | Maximum recursion depth for call chain (default: 1, max: 3)          |
+
+Returns `symbol` (the target function) and `incoming`/`outgoing` arrays with caller/callee info, call site locations, and nested calls when depth > 1.
+
+### get_type_hierarchy
+
+Get supertypes (parent classes/interfaces) and/or subtypes (child classes/implementations) of a type.
+
+| Parameter   | Type    | Description                                              |
+| ----------- | ------- | -------------------------------------------------------- |
+| `path`      | string  | File path (absolute or relative to workspace root)       |
+| `line`      | number  | Line number (1-indexed)                                  |
+| `column`    | number  | Column number (1-indexed)                                |
+| `direction` | string  | `supertypes` (parents), `subtypes` (children), or `both` |
+| `max_depth` | number? | Maximum recursion depth (default: 2, max: 5)             |
+
+Returns `symbol` (the target type) and `supertypes`/`subtypes` arrays with type info and nested hierarchy.
+
+### get_inlay_hints
+
+Get inlay hints (inferred types, parameter names) for a range of lines. Shows the same inline annotations that VS Code displays in the editor.
+
+| Parameter    | Type    | Description                                        |
+| ------------ | ------- | -------------------------------------------------- |
+| `path`       | string  | File path (absolute or relative to workspace root) |
+| `start_line` | number? | Start of range (1-indexed, default: 1)             |
+| `end_line`   | number? | End of range (1-indexed, default: end of file)     |
+
+Returns a `hints` array with `line`, `column`, `label`, `kind` (`type` or `parameter`), and padding info.
+
 ### open_file
 
-Open a file in the VS Code editor, optionally scrolling to a specific line and placing the cursor.
+Open a file in the VS Code editor, optionally scrolling to a specific line and placing the cursor. Supports range selection to highlight code.
 
-| Parameter | Type    | Description                                        |
-| --------- | ------- | -------------------------------------------------- |
-| `path`    | string  | File path (absolute or relative to workspace root) |
-| `line`    | number? | Line number to scroll to (1-indexed)               |
-| `column`  | number? | Column for cursor placement (1-indexed)            |
+| Parameter    | Type    | Description                                                                      |
+| ------------ | ------- | -------------------------------------------------------------------------------- |
+| `path`       | string  | File path (absolute or relative to workspace root)                               |
+| `line`       | number? | Line number to scroll to (1-indexed)                                             |
+| `column`     | number? | Column for cursor placement (1-indexed)                                          |
+| `end_line`   | number? | End line for range selection (1-indexed, requires `line`). Highlights the range. |
+| `end_column` | number? | End column for range selection (1-indexed, requires `end_line`).                 |
 
 ### show_notification
 
@@ -257,14 +401,14 @@ Shows affected files for approval before applying. Uses the same write approval 
 
 ### find_and_replace
 
-Find and replace text across one or more files. Shows affected files for approval before applying. Use `path` for a single file or `glob` for multi-file replacement.
+Bulk find-and-replace across **multiple files**. Opens a rich preview panel showing each match in context with inline diffs — users can toggle individual matches on/off before accepting. For single-file edits, prefer `apply_diff` — it provides better diff review and format-on-save. Only use `find_and_replace` on a single file when making many identical replacements (e.g. renaming a variable throughout a file). Use `glob` for multi-file patterns.
 
-| Parameter | Type     | Description                                                                        |
-| --------- | -------- | ---------------------------------------------------------------------------------- |
-| `find`    | string   | Text to find. Treated as a literal string unless `regex=true`.                     |
-| `replace` | string   | Replacement text                                                                   |
-| `path`    | string?  | Single file path to search in. Mutually exclusive with `glob`.                     |
-| `glob`    | string?  | Glob pattern to match files (e.g. `src/**/*.ts`). Mutually exclusive with `path`.  |
+| Parameter | Type     | Description                                                                                              |
+| --------- | -------- | -------------------------------------------------------------------------------------------------------- |
+| `find`    | string   | Text to find. Treated as a literal string unless `regex=true`.                                           |
+| `replace` | string   | Replacement text                                                                                         |
+| `path`    | string?  | Single file path to search in. Mutually exclusive with `glob`.                                           |
+| `glob`    | string?  | Glob pattern to match files (e.g. `src/**/*.ts`). Mutually exclusive with `path`.                        |
 | `regex`   | boolean? | Treat `find` as a regular expression. Supports capture groups (`$1`, `$2`) in `replace`. Default: false. |
 
 **Response includes:**

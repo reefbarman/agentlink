@@ -25,6 +25,15 @@ import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleGetFeedback } from "../tools/getFeedback.js";
 import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
 import { handleFindAndReplace } from "../tools/findAndReplace.js";
+import { handleGoToImplementation } from "../tools/goToImplementation.js";
+import { handleGoToTypeDefinition } from "../tools/goToTypeDefinition.js";
+import {
+  handleGetCodeActions,
+  handleApplyCodeAction,
+} from "../tools/codeActions.js";
+import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
+import { handleGetTypeHierarchy } from "../tools/getTypeHierarchy.js";
+import { handleGetInlayHints } from "../tools/getInlayHints.js";
 
 export function registerTools(
   server: McpServer,
@@ -32,6 +41,7 @@ export function registerTools(
   approvalPanel: ApprovalPanelProvider,
   getSessionId: () => string | undefined,
   tracker: ToolCallTracker,
+  extensionUri: import("vscode").Uri,
 ): void {
   const sid = () => getSessionId() ?? "unknown";
   const touch = () => approvalManager.touchSession(sid());
@@ -74,7 +84,7 @@ export function registerTools(
 
   server.tool(
     "list_files",
-    "List files and directories at a given path. Directories have a trailing '/' suffix.",
+    "List files and directories at a given path. Directories have a trailing '/' suffix. Use 'pattern' to find files matching a glob (e.g. '*.test.ts').",
     {
       path: z
         .string()
@@ -83,11 +93,17 @@ export function registerTools(
         .boolean()
         .optional()
         .describe("List recursively (default: false)"),
-      depth: z
+      depth: z.coerce
         .number()
         .optional()
         .describe(
           "Maximum directory depth for recursive listing (e.g. 2 for two levels deep). Only used when recursive=true.",
+        ),
+      pattern: z
+        .string()
+        .optional()
+        .describe(
+          "Glob pattern to filter files (e.g. '*.ts', '*.test.*'). Implies recursive search. Uses ripgrep glob syntax.",
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
@@ -128,6 +144,34 @@ export function registerTools(
         .describe(
           "Use semantic/vector search instead of regex. Requires codebase index (Roo Code) and OpenAI API key. Default: false",
         ),
+      context: z.coerce
+        .number()
+        .optional()
+        .describe(
+          "Number of context lines to show around each match (default: 1). Only used for content output mode.",
+        ),
+      case_insensitive: z
+        .boolean()
+        .optional()
+        .describe(
+          "Case-insensitive search (default: false). Only used for regex search.",
+        ),
+      multiline: z
+        .boolean()
+        .optional()
+        .describe(
+          "Enable multiline matching where . matches newlines and patterns can span lines (default: false).",
+        ),
+      max_results: z.coerce
+        .number()
+        .optional()
+        .describe("Maximum number of matches to return (default: 300)."),
+      output_mode: z
+        .enum(["content", "files_with_matches", "count"])
+        .optional()
+        .describe(
+          "Output format: 'content' shows matching lines with context (default), 'files_with_matches' shows only file paths, 'count' shows match counts per file.",
+        ),
     },
     { readOnlyHint: true, openWorldHint: false },
     tracker.wrapHandler(
@@ -156,6 +200,12 @@ export function registerTools(
         .optional()
         .describe(
           "Comma-separated severity filter (e.g. 'error', 'error,warning'). Options: error, warning, info/information, hint. Default: all severities.",
+        ),
+      source: z
+        .string()
+        .optional()
+        .describe(
+          "Comma-separated source filter (e.g. 'typescript', 'eslint'). Only show diagnostics from matching sources. Default: all sources.",
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
@@ -282,6 +332,240 @@ export function registerTools(
   );
 
   server.tool(
+    "go_to_implementation",
+    "Find implementations of an interface, abstract class, or method. Unlike go_to_definition which shows the declaration, this shows concrete implementations. Essential for navigating interface-heavy codebases (TypeScript, Java, C#).",
+    {
+      path: z
+        .string()
+        .describe("File path (absolute or relative to workspace root)"),
+      line: z.coerce.number().describe("Line number (1-indexed)"),
+      column: z.coerce.number().describe("Column number (1-indexed)"),
+    },
+    { readOnlyHint: true, openWorldHint: false },
+    tracker.wrapHandler(
+      "go_to_implementation",
+      (params) => {
+        touch();
+        return handleGoToImplementation(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => `${p.path}:${p.line}`,
+      sid,
+    ),
+  );
+
+  server.tool(
+    "go_to_type_definition",
+    "Navigate to the type definition of a symbol. For 'const x = getFoo()', go_to_definition goes to getFoo's declaration, but go_to_type_definition goes to the return type. Useful for exploring API return types and inferred types.",
+    {
+      path: z
+        .string()
+        .describe("File path (absolute or relative to workspace root)"),
+      line: z.coerce.number().describe("Line number (1-indexed)"),
+      column: z.coerce.number().describe("Column number (1-indexed)"),
+    },
+    { readOnlyHint: true, openWorldHint: false },
+    tracker.wrapHandler(
+      "go_to_type_definition",
+      (params) => {
+        touch();
+        return handleGoToTypeDefinition(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => `${p.path}:${p.line}`,
+      sid,
+    ),
+  );
+
+  server.tool(
+    "get_code_actions",
+    "Get available code actions (quick fixes, refactorings) at a position or range. Returns actions like 'Add missing import', 'Extract function', 'Organize imports', 'Fix ESLint error', etc. Use apply_code_action to apply one. Provide end_line/end_column to get actions for a selection range.",
+    {
+      path: z
+        .string()
+        .describe("File path (absolute or relative to workspace root)"),
+      line: z.coerce.number().describe("Line number (1-indexed)"),
+      column: z.coerce.number().describe("Column number (1-indexed)"),
+      end_line: z.coerce
+        .number()
+        .optional()
+        .describe(
+          "End line for range selection (1-indexed). Omit for actions at a single position.",
+        ),
+      end_column: z.coerce
+        .number()
+        .optional()
+        .describe("End column for range selection (1-indexed)."),
+      kind: z
+        .string()
+        .optional()
+        .describe(
+          "Filter by action kind (e.g. 'quickfix', 'refactor', 'refactor.extract', 'source.organizeImports', 'source.fixAll').",
+        ),
+      only_preferred: z
+        .boolean()
+        .optional()
+        .describe(
+          "Only return preferred/recommended actions (default: false).",
+        ),
+    },
+    { readOnlyHint: true, openWorldHint: false },
+    tracker.wrapHandler(
+      "get_code_actions",
+      (params) => {
+        touch();
+        return handleGetCodeActions(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => `${p.path}:${p.line}`,
+      sid,
+    ),
+  );
+
+  server.tool(
+    "apply_code_action",
+    "Apply a code action returned by get_code_actions. Pass the index from the actions list. Modifies files directly (workspace edits are applied and saved). Call get_code_actions first to see available actions.",
+    {
+      index: z.coerce
+        .number()
+        .describe(
+          "0-based index of the action to apply (from get_code_actions result).",
+        ),
+    },
+    { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    tracker.wrapHandler(
+      "apply_code_action",
+      (params) => {
+        touch();
+        return handleApplyCodeAction(params);
+      },
+      (p) => `action[${p.index}]`,
+      sid,
+    ),
+  );
+
+  server.tool(
+    "get_call_hierarchy",
+    "Get incoming callers and/or outgoing callees for a function or method. Shows who calls this function (incoming) and what this function calls (outgoing). Supports recursive depth for exploring call chains.",
+    {
+      path: z
+        .string()
+        .describe("File path (absolute or relative to workspace root)"),
+      line: z.coerce.number().describe("Line number (1-indexed)"),
+      column: z.coerce.number().describe("Column number (1-indexed)"),
+      direction: z
+        .enum(["incoming", "outgoing", "both"])
+        .describe(
+          "Which direction to explore: 'incoming' (who calls this), 'outgoing' (what this calls), or 'both'.",
+        ),
+      max_depth: z.coerce
+        .number()
+        .optional()
+        .describe(
+          "Maximum recursion depth for call chain (default: 1, max: 3). Higher values return deeper call trees.",
+        ),
+    },
+    { readOnlyHint: true, openWorldHint: false },
+    tracker.wrapHandler(
+      "get_call_hierarchy",
+      (params) => {
+        touch();
+        return handleGetCallHierarchy(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => `${p.path}:${p.line}`,
+      sid,
+    ),
+  );
+
+  server.tool(
+    "get_type_hierarchy",
+    "Get supertypes (parent classes/interfaces) and/or subtypes (child classes/implementations) of a type. Useful for understanding inheritance hierarchies and finding all implementations of an interface.",
+    {
+      path: z
+        .string()
+        .describe("File path (absolute or relative to workspace root)"),
+      line: z.coerce.number().describe("Line number (1-indexed)"),
+      column: z.coerce.number().describe("Column number (1-indexed)"),
+      direction: z
+        .enum(["supertypes", "subtypes", "both"])
+        .describe(
+          "Which direction to explore: 'supertypes' (parent types), 'subtypes' (child types), or 'both'.",
+        ),
+      max_depth: z.coerce
+        .number()
+        .optional()
+        .describe(
+          "Maximum recursion depth (default: 2, max: 5). Controls how many levels of the hierarchy to return.",
+        ),
+    },
+    { readOnlyHint: true, openWorldHint: false },
+    tracker.wrapHandler(
+      "get_type_hierarchy",
+      (params) => {
+        touch();
+        return handleGetTypeHierarchy(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => `${p.path}:${p.line}`,
+      sid,
+    ),
+  );
+
+  server.tool(
+    "get_inlay_hints",
+    "Get inlay hints (inferred types, parameter names) for a range of lines. Shows the same inline type annotations and parameter labels that VS Code displays in the editor. Useful for understanding type inference without hovering each symbol.",
+    {
+      path: z
+        .string()
+        .describe("File path (absolute or relative to workspace root)"),
+      start_line: z.coerce
+        .number()
+        .optional()
+        .describe("Start of range (1-indexed, default: 1)."),
+      end_line: z.coerce
+        .number()
+        .optional()
+        .describe("End of range (1-indexed, default: end of file)."),
+    },
+    { readOnlyHint: true, openWorldHint: false },
+    tracker.wrapHandler(
+      "get_inlay_hints",
+      (params) => {
+        touch();
+        return handleGetInlayHints(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+        );
+      },
+      (p) => String(p.path ?? ""),
+      sid,
+    ),
+  );
+
+  server.tool(
     "get_completions",
     "Get autocomplete suggestions at a cursor position. Uses VS Code's language server to provide completion items — useful for discovering available methods, properties, and APIs.",
     {
@@ -290,7 +574,7 @@ export function registerTools(
         .describe("File path (absolute or relative to workspace root)"),
       line: z.coerce.number().describe("Line number (1-indexed)"),
       column: z.coerce.number().describe("Column number (1-indexed)"),
-      limit: z
+      limit: z.coerce
         .number()
         .optional()
         .describe("Maximum number of completion items to return (default: 50)"),
@@ -316,20 +600,32 @@ export function registerTools(
 
   server.tool(
     "open_file",
-    "Open a file in the VS Code editor, optionally scrolling to a specific line and column. The file becomes visible to the user in the editor.",
+    "Open a file in the VS Code editor, optionally scrolling to a specific line and column. Supports range selection to highlight code.",
     {
       path: z
         .string()
         .describe("File path (absolute or relative to workspace root)"),
-      line: z
+      line: z.coerce
         .number()
         .optional()
         .describe("Line number to scroll to (1-indexed)"),
-      column: z
+      column: z.coerce
         .number()
         .optional()
         .describe(
           "Column number for cursor placement (1-indexed, requires line)",
+        ),
+      end_line: z.coerce
+        .number()
+        .optional()
+        .describe(
+          "End line number for range selection (1-indexed, requires line). Highlights the range from line:column to end_line:end_column.",
+        ),
+      end_column: z.coerce
+        .number()
+        .optional()
+        .describe(
+          "End column number for range selection (1-indexed, requires end_line).",
         ),
     },
     { readOnlyHint: true, openWorldHint: false },
@@ -486,25 +782,25 @@ export function registerTools(
         .describe(
           "Run without waiting for completion. Use for long-running processes like dev servers. Returns immediately with terminal_id.",
         ),
-      timeout: z
+      timeout: z.coerce
         .number()
         .optional()
         .describe(
           "Timeout in seconds. If set, command output is returned when the timeout is reached, but the command may still be running in the terminal. If omitted, waits indefinitely for the command to finish. IMPORTANT: Always set a timeout for commands you expect to complete quickly (e.g. git, ls, cat, grep, npm test — use 10-30s). This prevents the session from hanging if a command unexpectedly blocks. Only omit timeout for long-running processes where you explicitly want to wait indefinitely.",
         ),
-      output_head: z
+      output_head: z.coerce
         .number()
         .optional()
         .describe(
           "Return only the first N lines of output. Overrides the default 200-line tail cap.",
         ),
-      output_tail: z
+      output_tail: z.coerce
         .number()
         .optional()
         .describe(
           "Return only the last N lines of output. Overrides the default 200-line tail cap.",
         ),
-      output_offset: z
+      output_offset: z.coerce
         .number()
         .optional()
         .describe(
@@ -516,7 +812,7 @@ export function registerTools(
         .describe(
           "Filter output to lines matching this regex pattern (case-insensitive). Applied before head/tail. Use this instead of piping through grep.",
         ),
-      output_grep_context: z
+      output_grep_context: z.coerce
         .number()
         .optional()
         .describe(
@@ -556,7 +852,7 @@ export function registerTools(
         .describe(
           "Directory to scope the search to (absolute or relative to workspace root). Omit to search the entire workspace.",
         ),
-      limit: z
+      limit: z.coerce
         .number()
         .optional()
         .describe(
@@ -584,7 +880,7 @@ export function registerTools(
 
   server.tool(
     "find_and_replace",
-    "Find and replace text across one or more files. Shows a preview of affected files for approval before applying. Use 'path' for a single file or 'glob' for multi-file replacement. Supports literal strings and regex patterns.",
+    "Bulk find-and-replace across MULTIPLE files using a glob pattern. Shows a preview of affected files for approval before applying. Supports literal strings and regex with capture groups. IMPORTANT: For single-file edits, prefer apply_diff instead — it provides better diff review and format-on-save. Only use find_and_replace for single files when making many identical replacements (e.g. renaming a variable throughout a file).",
     {
       find: z
         .string()
@@ -621,6 +917,7 @@ export function registerTools(
           approvalManager,
           approvalPanel,
           sid(),
+          extensionUri,
         );
       },
       (p) => `${p.find?.slice(0, 30)} → ${p.replace?.slice(0, 30)}`,
@@ -663,21 +960,21 @@ export function registerTools(
       terminal_id: z
         .string()
         .describe("Terminal ID returned by execute_command (e.g. 'term_3')"),
-      wait_seconds: z
+      wait_seconds: z.coerce
         .number()
         .optional()
         .describe(
           "Wait up to N seconds for new output to appear before returning. Useful when a background command was just started and you want to avoid a double-call. Polls every 250ms and returns early when new output arrives or the command finishes.",
         ),
-      output_head: z
+      output_head: z.coerce
         .number()
         .optional()
         .describe("Return only the first N lines of output."),
-      output_tail: z
+      output_tail: z.coerce
         .number()
         .optional()
         .describe("Return only the last N lines of output."),
-      output_offset: z
+      output_offset: z.coerce
         .number()
         .optional()
         .describe("Skip first N lines before applying head/tail."),
@@ -687,7 +984,7 @@ export function registerTools(
         .describe(
           "Filter output to lines matching this regex pattern (case-insensitive).",
         ),
-      output_grep_context: z
+      output_grep_context: z.coerce
         .number()
         .optional()
         .describe("Number of context lines around each grep match."),

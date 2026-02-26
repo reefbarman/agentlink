@@ -13,7 +13,27 @@ import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { SYMBOL_KIND_NAMES } from "./languageFeatures.js";
 import { Semaphore } from "../util/Semaphore.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+type ToolResult = {
+  content: Array<
+    | { type: "text"; text: string }
+    | { type: "image"; data: string; mimeType: string }
+  >;
+};
+
+// --- Image support ---
+
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+  ".avif": "image/avif",
+};
+
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 // --- Concurrency control ---
 // Concurrent read_file calls can overwhelm VS Code's language server
@@ -328,6 +348,37 @@ export async function handleReadFile(
     }
 
     if (isBinaryFile(filePath)) {
+      // Check if it's an image we can return as image content
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeType = IMAGE_EXTENSIONS[ext];
+
+      if (mimeType) {
+        const stat = await fs.stat(filePath);
+        if (stat.size > MAX_IMAGE_SIZE) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: `Image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_IMAGE_SIZE / 1024 / 1024} MB`,
+                  path: params.path,
+                }),
+              },
+            ],
+          };
+        }
+        const data = await fs.readFile(filePath);
+        return {
+          content: [
+            {
+              type: "image",
+              data: data.toString("base64"),
+              mimeType,
+            },
+          ],
+        };
+      }
+
       return {
         content: [
           {

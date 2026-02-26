@@ -55,19 +55,28 @@ const approvalOptions = {
   entryNames: "approval",
 };
 
+/** @type {esbuild.BuildOptions} */
+const frPreviewOptions = {
+  ...webviewBase,
+  entryPoints: ["src/findReplace/webview/index.tsx"],
+  entryNames: "fr-preview",
+};
+
 if (watch) {
-  const [extCtx, sideCtx, appCtx] = await Promise.all([
+  const [extCtx, sideCtx, appCtx, frCtx] = await Promise.all([
     esbuild.context(extensionOptions),
     esbuild.context(sidebarOptions),
     esbuild.context(approvalOptions),
+    esbuild.context(frPreviewOptions),
   ]);
-  await Promise.all([extCtx.watch(), sideCtx.watch(), appCtx.watch()]);
+  await Promise.all([extCtx.watch(), sideCtx.watch(), appCtx.watch(), frCtx.watch()]);
   console.log("Watching for changes...");
 } else {
   await Promise.all([
     esbuild.build(extensionOptions),
     esbuild.build(sidebarOptions),
     esbuild.build(approvalOptions),
+    esbuild.build(frPreviewOptions),
   ]);
   // Copy codicon assets to dist
   copyFileSync(

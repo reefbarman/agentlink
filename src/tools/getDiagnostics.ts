@@ -6,6 +6,7 @@ import { resolveAndValidatePath, getWorkspaceRoots } from "../util/paths.js";
 export async function handleGetDiagnostics(params: {
   path?: string;
   severity?: string;
+  source?: string;
 }): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   try {
     let diagnostics: [vscode.Uri, vscode.Diagnostic[]][];
@@ -37,8 +38,14 @@ export async function handleGetDiagnostics(params: {
         }
       }
 
+      // Build source filter set
+      const allowedSources = params.source
+        ? new Set(params.source.toLowerCase().split(",").map((s) => s.trim()).filter(Boolean))
+        : null;
+
       for (const diag of diags) {
         if (allowedSeverities && !allowedSeverities.has(diag.severity)) continue;
+        if (allowedSources && (!diag.source || !allowedSources.has(diag.source.toLowerCase()))) continue;
 
         const severity = severityToString(diag.severity);
         const line = diag.range.start.line + 1;

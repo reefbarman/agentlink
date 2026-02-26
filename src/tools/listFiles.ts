@@ -10,7 +10,7 @@ import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 const MAX_ENTRIES = 500;
 
 export async function handleListFiles(
-  params: { path: string; recursive?: boolean; depth?: number },
+  params: { path: string; recursive?: boolean; depth?: number; pattern?: string },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
@@ -29,6 +29,12 @@ export async function handleListFiles(
         };
       }
     }
+
+    // If pattern is provided, always use recursive ripgrep with glob filter
+    if (params.pattern) {
+      return await listRecursive(dirPath, params.path, params.depth, params.pattern);
+    }
+
     const recursive = params.recursive ?? false;
 
     if (recursive || params.depth) {
@@ -72,7 +78,8 @@ async function listShallow(
 async function listRecursive(
   dirPath: string,
   inputPath: string,
-  depth?: number
+  depth?: number,
+  pattern?: string,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   const rgPath = await getRipgrepBinPath();
   const args = [
@@ -85,6 +92,11 @@ async function listRecursive(
 
   if (depth !== undefined && depth > 0) {
     args.push("--max-depth", String(depth));
+  }
+
+  // Add glob pattern filter
+  if (pattern) {
+    args.push("-g", pattern);
   }
 
   args.push(dirPath);

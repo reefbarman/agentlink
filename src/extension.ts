@@ -278,6 +278,7 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
     approvalManager,
     approvalPanel,
     toolCallTracker,
+    context.extensionUri,
   );
 
   httpServer = http.createServer(async (req, res) => {

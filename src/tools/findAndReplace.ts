@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import * as path from "path";
 
 import {
   resolveAndValidatePath,
@@ -9,8 +8,23 @@ import {
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { decisionToScope, applyInlineTrustScope } from "./writeApprovalUI.js";
+import { FindReplacePreviewPanel } from "../findReplace/FindReplacePreviewPanel.js";
+import type {
+  FindReplaceMatch,
+  FindReplaceFileGroup,
+  FindReplacePreviewData,
+} from "../findReplace/webview/types.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
+
+const CONTEXT_LINES = 5;
+
+interface FileReplacement {
+  uri: vscode.Uri;
+  relPath: string;
+  replacements: Array<{ range: vscode.Range; newText: string; matchId: string }>;
+  matches: FindReplaceMatch[];
+}
 
 export async function handleFindAndReplace(
   params: {
@@ -23,7 +37,10 @@ export async function handleFindAndReplace(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  extensionUri: vscode.Uri,
 ): Promise<ToolResult> {
+  let previewPanel: FindReplacePreviewPanel | undefined;
+
   try {
     const workspaceRoot = getFirstWorkspaceRoot();
     const findStr = params.find;
@@ -56,7 +73,11 @@ export async function handleFindAndReplace(
     } else if (params.glob) {
       // Use VS Code's file finder with the glob pattern
       const relGlob = new vscode.RelativePattern(workspaceRoot, params.glob);
-      fileUris = await vscode.workspace.findFiles(relGlob, "**/node_modules/**", 500);
+      fileUris = await vscode.workspace.findFiles(
+        relGlob,
+        "**/node_modules/**",
+        500,
+      );
       if (fileUris.length === 0) {
         return error(`No files matched glob pattern: ${params.glob}`);
       }
@@ -64,12 +85,12 @@ export async function handleFindAndReplace(
       return error("Either 'path' or 'glob' must be specified");
     }
 
-    // Find all occurrences and build WorkspaceEdit
-    const edit = new vscode.WorkspaceEdit();
-    const filesPreview: Array<{ path: string; changes: number }> = [];
+    // Find all occurrences with context
+    const fileReplacements: FileReplacement[] = [];
     let totalChanges = 0;
 
-    for (const uri of fileUris) {
+    for (let fileIdx = 0; fileIdx < fileUris.length; fileIdx++) {
+      const uri = fileUris[fileIdx];
       let doc: vscode.TextDocument;
       try {
         doc = await vscode.workspace.openTextDocument(uri);
@@ -78,38 +99,72 @@ export async function handleFindAndReplace(
       }
 
       const text = doc.getText();
-      const replacements: Array<{ range: vscode.Range; newText: string }> = [];
+      const replacements: FileReplacement["replacements"] = [];
+      const matches: FindReplaceMatch[] = [];
 
       // Reset regex lastIndex for each file
       pattern.lastIndex = 0;
-      let match: RegExpExecArray | null;
+      let regexMatch: RegExpExecArray | null;
+      let matchIdx = 0;
 
-      while ((match = pattern.exec(text)) !== null) {
-        const startPos = doc.positionAt(match.index);
-        const endPos = doc.positionAt(match.index + match[0].length);
+      while ((regexMatch = pattern.exec(text)) !== null) {
+        const startPos = doc.positionAt(regexMatch.index);
+        const endPos = doc.positionAt(regexMatch.index + regexMatch[0].length);
         const range = new vscode.Range(startPos, endPos);
 
         // For regex, support capture group references ($1, $2, etc.)
         const newText = params.regex
-          ? match[0].replace(pattern, replaceStr)
+          ? regexMatch[0].replace(pattern, replaceStr)
           : replaceStr;
 
         // Reset pattern since we used it for the replacement
         if (params.regex) {
-          pattern.lastIndex = match.index + match[0].length;
+          pattern.lastIndex = regexMatch.index + regexMatch[0].length;
         }
 
-        replacements.push({ range, newText });
+        const matchId = `${fileIdx}:${matchIdx}`;
+
+        // Compute context lines
+        const matchLine = startPos.line;
+        const startCtx = Math.max(0, matchLine - CONTEXT_LINES);
+        const endCtx = Math.min(doc.lineCount - 1, matchLine + CONTEXT_LINES);
+
+        const contextBefore: FindReplaceMatch["contextBefore"] = [];
+        for (let ln = startCtx; ln < matchLine; ln++) {
+          contextBefore.push({ lineNumber: ln + 1, text: doc.lineAt(ln).text });
+        }
+
+        const contextAfter: FindReplaceMatch["contextAfter"] = [];
+        for (let ln = matchLine + 1; ln <= endCtx; ln++) {
+          contextAfter.push({ lineNumber: ln + 1, text: doc.lineAt(ln).text });
+        }
+
+        replacements.push({ range, newText, matchId });
+        matches.push({
+          id: matchId,
+          line: matchLine + 1,
+          columnStart: startPos.character,
+          columnEnd: endPos.character,
+          matchText: regexMatch[0],
+          replaceText: newText,
+          contextBefore,
+          matchLine: {
+            lineNumber: matchLine + 1,
+            text: doc.lineAt(matchLine).text,
+          },
+          contextAfter,
+        });
+
+        matchIdx++;
       }
 
       if (replacements.length > 0) {
-        for (const r of replacements) {
-          edit.replace(uri, r.range, r.newText);
-        }
         totalChanges += replacements.length;
-        filesPreview.push({
-          path: getRelativePath(uri.fsPath),
-          changes: replacements.length,
+        fileReplacements.push({
+          uri,
+          relPath: getRelativePath(uri.fsPath),
+          replacements,
+          matches,
         });
       }
     }
@@ -129,6 +184,17 @@ export async function handleFindAndReplace(
       };
     }
 
+    // Build preview and approval data
+    const fileGroups: FindReplaceFileGroup[] = fileReplacements.map((fr) => ({
+      path: fr.relPath,
+      matches: fr.matches,
+    }));
+
+    const filesPreview = fileReplacements.map((fr) => ({
+      path: fr.relPath,
+      changes: fr.replacements.length,
+    }));
+
     // Check write approval
     const masterBypass = vscode.workspace
       .getConfiguration("native-claude")
@@ -137,9 +203,21 @@ export async function handleFindAndReplace(
     const canAutoApprove =
       masterBypass || approvalManager.isWriteApproved(sessionId);
     let followUp: string | undefined;
+    let acceptedIds: Set<string> | undefined;
 
     if (!canAutoApprove) {
-      // Reuse the rename approval UI — it already shows old→new with affected files
+      // Open preview panel with diff blocks
+      previewPanel = new FindReplacePreviewPanel(extensionUri);
+      const previewData: FindReplacePreviewData = {
+        findText: findStr,
+        replaceText: replaceStr,
+        isRegex: !!params.regex,
+        fileGroups,
+        totalMatches: totalChanges,
+      };
+      previewPanel.show(previewData);
+
+      // Enqueue approval (shows summary in approval panel)
       const { promise } = approvalPanel.enqueueRenameApproval(
         findStr,
         replaceStr,
@@ -151,6 +229,8 @@ export async function handleFindAndReplace(
       followUp = response.followUp;
 
       if (response.decision === "reject") {
+        previewPanel.close();
+        previewPanel = undefined;
         return {
           content: [
             {
@@ -166,14 +246,59 @@ export async function handleFindAndReplace(
         };
       }
 
+      // Read accepted matches from preview panel
+      acceptedIds = previewPanel.getAcceptedMatchIds();
+      previewPanel.close();
+      previewPanel = undefined;
+
       // Save trust rules
       const scope = decisionToScope(response.decision);
       if (scope && response.trustScope) {
-        // For multi-file, use the first file as the representative path
         const repPath =
           filesPreview.length > 0 ? filesPreview[0].path : "find-and-replace";
-        applyInlineTrustScope(response, approvalManager, sessionId, scope, repPath);
+        applyInlineTrustScope(
+          response,
+          approvalManager,
+          sessionId,
+          scope,
+          repPath,
+        );
       }
+    }
+
+    // Build WorkspaceEdit — filtered by accepted matches if preview was shown
+    const edit = new vscode.WorkspaceEdit();
+    let appliedCount = 0;
+    const appliedFiles: Array<{ path: string; changes: number }> = [];
+
+    for (const fr of fileReplacements) {
+      let fileChanges = 0;
+      for (const r of fr.replacements) {
+        if (!acceptedIds || acceptedIds.has(r.matchId)) {
+          edit.replace(fr.uri, r.range, r.newText);
+          fileChanges++;
+        }
+      }
+      if (fileChanges > 0) {
+        appliedCount += fileChanges;
+        appliedFiles.push({ path: fr.relPath, changes: fileChanges });
+      }
+    }
+
+    if (appliedCount === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "no_changes",
+              find: findStr,
+              replace: replaceStr,
+              message: "All matches were excluded by user",
+            }),
+          },
+        ],
+      };
     }
 
     // Apply the edit
@@ -184,9 +309,9 @@ export async function handleFindAndReplace(
     }
 
     // Save all affected documents
-    for (const uri of fileUris) {
+    for (const fr of fileReplacements) {
       const doc = vscode.workspace.textDocuments.find(
-        (d) => d.uri.fsPath === uri.fsPath,
+        (d) => d.uri.fsPath === fr.uri.fsPath,
       );
       if (doc?.isDirty) {
         await doc.save();
@@ -197,10 +322,13 @@ export async function handleFindAndReplace(
       status: "applied",
       find: findStr,
       replace: replaceStr,
-      files_changed: filesPreview.length,
-      total_replacements: totalChanges,
-      files: filesPreview,
+      files_changed: appliedFiles.length,
+      total_replacements: appliedCount,
+      files: appliedFiles,
     };
+    if (acceptedIds && appliedCount < totalChanges) {
+      result.excluded = totalChanges - appliedCount;
+    }
     if (followUp) {
       result.follow_up = followUp;
     }
@@ -214,6 +342,9 @@ export async function handleFindAndReplace(
     }
     const message = err instanceof Error ? err.message : String(err);
     return error(message);
+  } finally {
+    // Ensure preview panel is always cleaned up
+    previewPanel?.close();
   }
 }
 

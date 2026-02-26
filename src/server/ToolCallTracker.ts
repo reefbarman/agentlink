@@ -1,11 +1,22 @@
 import { EventEmitter } from "events";
 import { randomUUID } from "crypto";
 
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type {
+  ServerRequest,
+  ServerNotification,
+} from "@modelcontextprotocol/sdk/types.js";
+
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+type ToolResult = {
+  content: Array<
+    | { type: "text"; text: string }
+    | { type: "image"; data: string; mimeType: string }
+  >;
+};
 
 const MAX_LOG_STRING_CHARS = 240;
 const MAX_LOG_JSON_CHARS = 1_200;
@@ -123,12 +134,7 @@ const COMPLETED_TTL_MS = 8_000;
 // Sending periodic notifications keeps data flowing on the stream.
 const HEARTBEAT_INTERVAL_MS = 20_000; // 20 seconds
 
-// Minimal type for the MCP handler's `extra` argument — just what we need
-// for heartbeating. The full type is RequestHandlerExtra<ServerNotification, ...>.
-interface McpHandlerExtra {
-  _meta?: { progressToken?: string | number };
-  sendNotification?: (notification: unknown) => Promise<void>;
-}
+type McpHandlerExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 export class ToolCallTracker extends EventEmitter {
   private activeCalls = new Map<string, TrackedCall>();
@@ -359,6 +365,11 @@ export class ToolCallTracker extends EventEmitter {
       return;
     }
 
+    if (call.toolName === "get_terminal_output") {
+      await this.completeGetTerminalOutput(call);
+      return;
+    }
+
     if (call.toolName === "write_file" || call.toolName === "apply_diff") {
       await this.completeWriteTool(call);
       return;
@@ -406,6 +417,40 @@ export class ToolCallTracker extends EventEmitter {
         terminal_id: call.terminalId ?? null,
         status: "force-completed",
         message: "Command force-completed by user. Process was interrupted.",
+      }),
+    );
+  }
+
+  private async completeGetTerminalOutput(call: TrackedCall): Promise<void> {
+    // displayArgs is the terminal_id for get_terminal_output
+    const terminalId = call.displayArgs;
+    this.log(
+      `COMPLETE_GET_OUTPUT ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${terminalId}`,
+    );
+
+    const { getTerminalManager } =
+      await import("../integrations/TerminalManager.js");
+    const state = getTerminalManager().getBackgroundState(terminalId);
+
+    if (!state) {
+      call.forceResolve(
+        makeToolResult({
+          error: `Terminal "${terminalId}" not found. It may have been closed.`,
+        }),
+      );
+      return;
+    }
+
+    call.forceResolve(
+      makeToolResult({
+        terminal_id: terminalId,
+        is_running: state.is_running,
+        exit_code: state.exit_code,
+        output_captured: state.output_captured,
+        output: state.output_captured ? state.output : "",
+        status: "force-completed",
+        message:
+          "Output returned immediately — wait was interrupted by user.",
       }),
     );
   }

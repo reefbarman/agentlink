@@ -5,6 +5,8 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "crypto";
 import type * as http from "http";
 
+import type * as vscode from "vscode";
+
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { ToolCallTracker } from "./ToolCallTracker.js";
@@ -86,17 +88,20 @@ export class McpServerHost {
   private approvalPanel: ApprovalPanelProvider;
 
   private tracker: ToolCallTracker;
+  private extensionUri: vscode.Uri;
 
   constructor(
     authToken: string | undefined,
     approvalManager: ApprovalManager,
     approvalPanel: ApprovalPanelProvider,
     tracker: ToolCallTracker,
+    extensionUri: vscode.Uri,
   ) {
     this.authToken = authToken;
     this.approvalManager = approvalManager;
     this.approvalPanel = approvalPanel;
     this.tracker = tracker;
+    this.extensionUri = extensionUri;
     this.cleanupInterval = setInterval(
       () => this.pruneIdleSessions(),
       CLEANUP_INTERVAL,
@@ -147,6 +152,7 @@ export class McpServerHost {
       this.approvalPanel,
       () => transport.sessionId,
       this.tracker,
+      this.extensionUri,
     );
     await server.connect(transport);
 
