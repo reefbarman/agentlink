@@ -387,7 +387,8 @@ export class ToolCallTracker extends EventEmitter {
 
     let partialOutput = "";
     if (call.terminalId) {
-      partialOutput = tm.getCurrentOutput(call.terminalId) ?? "";
+      partialOutput =
+        tm.getCurrentOutput(call.terminalId, { force: true }) ?? "";
       this.log(`COMPLETE_EXEC output captured: ${partialOutput.length} chars`);
     }
 

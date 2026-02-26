@@ -398,37 +398,64 @@ export class TerminalManager {
     // The marker fallback catches cases where the event is dropped but the
     // shell did send the OSC 633;D completion sequence.
     //
-    // We also check for the 633;D marker directly in the stream data itself:
-    // if the stream keeps delivering data past the command boundary (the bug),
-    // the shell's completion marker will appear in the chunks.
+    // We check for the 633;D marker both inside the stream loop (fast path)
+    // and via independent polling (catches markers the stream loop misses,
+    // e.g. if the stream hangs after yielding the marker data).
     let resolveStreamMarker: ((code: number | undefined) => void) | undefined;
+    let streamMarkerResolved = false;
     const streamMarkerPromise = new Promise<number | undefined>((resolve) => {
-      resolveStreamMarker = resolve;
+      resolveStreamMarker = (code) => {
+        if (streamMarkerResolved) return;
+        streamMarkerResolved = true;
+        resolve(code);
+      };
     });
 
     const MARKER_RE = /\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/;
 
+    // Track how far we've scanned so we don't re-check old data
+    let lastMarkerCheckPos = 0;
+
+    const checkForMarker = (): boolean => {
+      // Search from last checked position (with overlap for split markers)
+      const searchFrom = Math.max(0, lastMarkerCheckPos - 20);
+      const region = managed.outputBuffer.slice(searchFrom);
+      const match = region.match(MARKER_RE);
+      if (match) {
+        resolveStreamMarker!(
+          match[1] !== undefined ? parseInt(match[1], 10) : undefined,
+        );
+        return true;
+      }
+      lastMarkerCheckPos = managed.outputBuffer.length;
+      return false;
+    };
+
+    // Independent marker polling — runs outside the stream loop so it can
+    // detect markers even if the for-await iterator hangs after yielding data.
+    const MARKER_POLL_MS = 500;
+    const markerPoll = setInterval(() => {
+      if (managed.outputBuffer.length > lastMarkerCheckPos) {
+        checkForMarker();
+      }
+    }, MARKER_POLL_MS);
+
     const streamDone = (async () => {
       for await (const data of stream) {
         managed.outputBuffer += data;
-        // Check tail of accumulated output for the completion marker.
-        // Using the tail handles markers split across chunks.
-        const tail = managed.outputBuffer.slice(-50);
-        const match = tail.match(MARKER_RE);
-        if (match) {
-          // Truncate output to before the marker (strip prompt/protocol data)
-          const markerIdx = managed.outputBuffer.lastIndexOf("\x1b]633;D");
-          if (markerIdx >= 0)
-            managed.outputBuffer = managed.outputBuffer.slice(0, markerIdx);
-          resolveStreamMarker!(
-            match[1] !== undefined ? parseInt(match[1], 10) : undefined,
-          );
-          break;
-        }
+        if (checkForMarker()) break;
       }
     })();
 
     await Promise.race([streamDone, exitCodePromise, streamMarkerPromise]);
+
+    clearInterval(markerPoll);
+
+    // Strip the completion marker from output (if present)
+    const markerIdx = managed.outputBuffer.lastIndexOf("\x1b]633;D");
+    if (markerIdx >= 0) {
+      managed.outputBuffer = managed.outputBuffer.slice(0, markerIdx);
+    }
 
     // Clean up the output
     managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
@@ -601,10 +628,14 @@ export class TerminalManager {
    * Get accumulated output from a busy or background terminal.
    * Returns undefined if the terminal is not found.
    */
-  getCurrentOutput(terminalId: string): string | undefined {
+  getCurrentOutput(
+    terminalId: string,
+    options?: { force?: boolean },
+  ): string | undefined {
     const managed = this.terminals.find((t) => t.id === terminalId);
     if (!managed) return undefined;
     if (
+      !options?.force &&
       !managed.busy &&
       !managed.backgroundRunning &&
       !managed.backgroundOutputCaptured
