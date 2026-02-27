@@ -1,4 +1,5 @@
 import type { SidebarState, PostCommand } from "../types.js";
+import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
   state: SidebarState;
@@ -9,8 +10,7 @@ export function ServerStatus({ state, postCommand }: Props) {
   const { serverRunning, port, sessions, authEnabled, masterBypass } = state;
 
   return (
-    <div class="section">
-      <h3>Server Status</h3>
+    <CollapsibleSection title="Server Status">
       <div class="status-header">
         <span class={`dot ${serverRunning ? "running" : "stopped"}`} />
         <span class="status-text">
@@ -57,6 +57,6 @@ export function ServerStatus({ state, postCommand }: Props) {
         &middot;{" "}
         <a onClick={() => postCommand("openProjectConfig")}>Project Config</a>
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }

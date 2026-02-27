@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import type { SidebarState, PostCommand, AgentInfo } from "../types.js";
+import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
   state: SidebarState;
@@ -290,18 +291,16 @@ export function AgentIntegration({ state, postCommand }: Props) {
 
   if (!serverRunning) {
     return (
-      <div class="section">
-        <h3>Agent Configuration</h3>
+      <CollapsibleSection title="Agent Configuration">
         <p class="help-text">
           Start the server to configure agent integration.
         </p>
-      </div>
+      </CollapsibleSection>
     );
   }
 
   return (
-    <div class="section">
-      <h3>Agent Configuration</h3>
+    <CollapsibleSection title="Agent Configuration">
       <div class="info-row">
         <span class="label">MCP Config:</span>
         {agentConfigured ? (
@@ -334,6 +333,6 @@ export function AgentIntegration({ state, postCommand }: Props) {
           Copy JSON Config
         </button>
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }

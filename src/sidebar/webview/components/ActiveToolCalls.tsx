@@ -1,5 +1,6 @@
 import { useState, useEffect } from "preact/hooks";
 import type { TrackedCallInfo, PostCommand } from "../types.js";
+import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
   calls: TrackedCallInfo[];
@@ -27,13 +28,17 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
   }, [calls.length]);
 
   return (
-    <div class="section tool-calls-section">
-      <h3>
-        Tool Calls{" "}
-        {activeCalls.length > 0 && (
-          <span class="badge badge-warn">{activeCalls.length}</span>
-        )}
-      </h3>
+    <CollapsibleSection
+      title="Tool Calls"
+      className="tool-calls-section"
+      titleExtra={
+        activeCalls.length > 0 ? (
+          <span class="badge badge-warn" style={{ marginLeft: "6px" }}>
+            {activeCalls.length}
+          </span>
+        ) : undefined
+      }
+    >
       {calls.length === 0 && (
         <p class="help-text">No active tool calls.</p>
       )}
@@ -94,6 +99,6 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
           )}
         </div>
       ))}
-    </div>
+    </CollapsibleSection>
   );
 }

@@ -1,4 +1,5 @@
 import type { FeedbackEntry, PostCommand } from "../types.js";
+import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
   entries: FeedbackEntry[];
@@ -24,25 +25,30 @@ function formatDate(iso: string): string {
 }
 
 export function FeedbackList({ entries, postCommand }: Props) {
+  const badge =
+    entries.length > 0 ? (
+      <span class="badge badge-warn" style={{ marginLeft: "6px" }}>
+        {entries.length}
+      </span>
+    ) : (
+      <span class="badge" style={{ marginLeft: "6px" }}>
+        0
+      </span>
+    );
+
   if (entries.length === 0) {
     return (
-      <div class="section">
-        <h3>
-          Feedback <span class="badge">{entries.length}</span>
-        </h3>
+      <CollapsibleSection title="Feedback" titleExtra={badge}>
         <p class="help-text">No feedback recorded.</p>
         <button class="btn" onClick={() => postCommand("refreshFeedback")}>
           Refresh
         </button>
-      </div>
+      </CollapsibleSection>
     );
   }
 
   return (
-    <div class="section">
-      <h3>
-        Feedback <span class="badge badge-warn">{entries.length}</span>
-      </h3>
+    <CollapsibleSection title="Feedback" titleExtra={badge}>
       <div class="feedback-actions">
         <button class="btn" onClick={() => postCommand("refreshFeedback")}>
           Refresh
@@ -96,6 +102,6 @@ export function FeedbackList({ entries, postCommand }: Props) {
           </div>
         </div>
       ))}
-    </div>
+    </CollapsibleSection>
   );
 }

@@ -19,11 +19,37 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
 /**
  * Fix common regex escaping mistakes that Claude makes.
- * `\"` is not a valid regex escape (Rust/ripgrep), but Claude often sends it
- * due to JSON string escaping confusion. Strip the backslash before quotes.
+ *
+ * Claude often double-escapes regex patterns due to JSON string escaping
+ * confusion. For example, it sends `\\s` (literal backslash + s) when it
+ * means `\s` (whitespace metacharacter). This function collapses the most
+ * common double-escaped sequences back to single-escaped form.
+ *
+ * Also strips `\"` which is not a valid ripgrep escape.
  */
-function sanitizeRegex(regex: string): string {
-  return regex.replace(/\\"/g, '"');
+export function sanitizeRegex(regex: string): string {
+  // Collapse \\X → \X for known regex metacharacters and escape sequences.
+  // Covers: \s \S \d \D \w \W \b \B \n \t \r \f and punctuation escapes
+  // like \( \) \{ \} \[ \] \. \| \+ \* \? \^ \$
+  return regex
+    .replace(/\\\\([sSdDwWbBntrf(){}[\].|+*?^$])/g, "\\$1")
+    .replace(/\\"/g, '"');
+}
+
+/**
+ * Check if a regex pattern appears to be double-escaped and return a hint.
+ */
+export function getEscapingHint(regex: string): string | undefined {
+  // Look for patterns like \\s, \\d, \\(, \\{ that suggest double-escaping
+  if (/\\\\[sSdDwWbBntrf(){}[\].|+*?^$]/.test(regex)) {
+    return (
+      "Your regex appears double-escaped (e.g. \\\\s instead of \\s). " +
+      "The regex parameter is passed directly to ripgrep — only single " +
+      "backslash escapes are needed (e.g. \\s, \\d, \\(). JSON string " +
+      "escaping is handled automatically by the transport layer."
+    );
+  }
+  return undefined;
 }
 
 export async function handleSearchFiles(
@@ -131,11 +157,16 @@ export async function handleSearchFiles(
     } catch (error) {
       // Ripgrep error — may be invalid regex syntax etc.
       const message = error instanceof Error ? error.message : String(error);
+      const hint = getEscapingHint(params.regex);
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ error: message, regex: params.regex }),
+            text: JSON.stringify({
+              error: message,
+              regex: params.regex,
+              ...(hint && { hint }),
+            }),
           },
         ],
       };
@@ -246,7 +277,12 @@ async function searchFilesOnly(
     offset?: number;
   },
 ): Promise<ToolResult> {
-  const args = ["--files-with-matches", "-e", sanitizeRegex(params.regex), "--no-messages"];
+  const args = [
+    "--files-with-matches",
+    "-e",
+    sanitizeRegex(params.regex),
+    "--no-messages",
+  ];
 
   if (params.case_insensitive) args.push("--ignore-case");
   if (params.multiline) args.push("--multiline", "--multiline-dotall");
@@ -258,11 +294,16 @@ async function searchFilesOnly(
     output = await execRipgrepSearch(rgPath, args);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const hint = getEscapingHint(params.regex);
     return {
       content: [
         {
           type: "text",
-          text: JSON.stringify({ error: message, regex: params.regex }),
+          text: JSON.stringify({
+            error: message,
+            regex: params.regex,
+            ...(hint && { hint }),
+          }),
         },
       ],
     };
@@ -319,11 +360,16 @@ async function searchCount(
     output = await execRipgrepSearch(rgPath, args);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const hint = getEscapingHint(params.regex);
     return {
       content: [
         {
           type: "text",
-          text: JSON.stringify({ error: message, regex: params.regex }),
+          text: JSON.stringify({
+            error: message,
+            regex: params.regex,
+            ...(hint && { hint }),
+          }),
         },
       ],
     };

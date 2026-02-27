@@ -1,6 +1,7 @@
 import type { SidebarState, PostCommand } from "../types.js";
 import { RuleList } from "./common/RuleList.js";
 import { SessionBlock } from "./common/SessionBlock.js";
+import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
   state: SidebarState;
@@ -47,8 +48,7 @@ export function WriteApproval({ state, postCommand }: Props) {
     sessionsWithWriteRules.length > 0;
 
   return (
-    <div class="section">
-      <h3>Write Approval</h3>
+    <CollapsibleSection title="Write Approval">
       <div class="info-row">
         <span class="label">{label}</span>
         {badge}
@@ -119,6 +119,6 @@ export function WriteApproval({ state, postCommand }: Props) {
           )}
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   );
 }

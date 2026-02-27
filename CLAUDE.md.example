@@ -18,6 +18,10 @@ These MCP tools open diff views for user review, run commands in visible termina
 
 **Exception — non-text files:** The built-in `Read` tool may be used for file types that `read_file` cannot handle: **images** (PNG, JPG, GIF, etc. — Claude is multimodal), **PDFs** (with the `pages` parameter), and **Jupyter notebooks** (`.ipynb` — rendered with cells + outputs). A PreToolUse hook enforces this automatically.
 
+### Regex escaping — IMPORTANT
+
+The `search_files` `regex` parameter is passed directly to ripgrep. Use **single** backslash escapes (`\s`, `\d`, `\(`). Do NOT double-escape — `\\s` in the JSON string value is correct for matching whitespace. Common mistake: sending `\\\\s` (which ripgrep sees as literal backslash + `s`) instead of `\\s` (which ripgrep sees as `\s` = whitespace). The same applies to `\d`, `\w`, `\b`, `\n`, `\(`, `\{`, etc.
+
 ### Common mistakes — DO NOT DO THESE
 
 These are the most frequent violations. Check yourself before every tool call:

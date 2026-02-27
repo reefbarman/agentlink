@@ -14,6 +14,7 @@ import { TrustedPaths } from "./components/TrustedPaths.js";
 import { TrustedCommands } from "./components/TrustedCommands.js";
 import { AvailableTools } from "./components/AvailableTools.js";
 import { FeedbackList } from "./components/FeedbackList.js";
+import { CollapsibleSection } from "./components/common/CollapsibleSection.js";
 
 interface VsCodeApi {
   postMessage(message: unknown): void;
@@ -111,8 +112,7 @@ export function App({ vscodeApi }: AppProps) {
         />
       )}
       {__DEV_BUILD__ && (
-        <div class="section">
-          <h3>Dev Tools</h3>
+        <CollapsibleSection title="Dev Tools">
           <div class="button-group">
             <button
               class="btn btn-secondary"
@@ -121,7 +121,7 @@ export function App({ vscodeApi }: AppProps) {
               Reset Onboarding
             </button>
           </div>
-        </div>
+        </CollapsibleSection>
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 import type { SidebarState, PostCommand } from "../types.js";
 import { RuleList } from "./common/RuleList.js";
 import { SessionBlock } from "./common/SessionBlock.js";
+import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
   state: SidebarState;
@@ -15,8 +16,7 @@ export function TrustedCommands({ state, postCommand }: Props) {
   );
 
   return (
-    <div class="section">
-      <h3>Trusted Commands</h3>
+    <CollapsibleSection title="Trusted Commands">
       <div class="subsection-label">Global Rules</div>
       {(globalCommandRules ?? []).length > 0 ? (
         <RuleList
@@ -77,6 +77,6 @@ export function TrustedCommands({ state, postCommand }: Props) {
           </a>
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   );
 }

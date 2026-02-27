@@ -1,6 +1,7 @@
 import type { SidebarState, PostCommand } from "../types.js";
 import { RuleList } from "./common/RuleList.js";
 import { SessionBlock } from "./common/SessionBlock.js";
+import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
   state: SidebarState;
@@ -15,8 +16,7 @@ export function TrustedPaths({ state, postCommand }: Props) {
   );
 
   return (
-    <div class="section">
-      <h3>Trusted Paths</h3>
+    <CollapsibleSection title="Trusted Paths">
       <p class="help-text">Outside-workspace paths that tools can access.</p>
       <div class="subsection-label">Global Rules</div>
       {(globalPathRules ?? []).length > 0 ? (
@@ -55,6 +55,6 @@ export function TrustedPaths({ state, postCommand }: Props) {
           ))}
         </div>
       )}
-    </div>
+    </CollapsibleSection>
   );
 }

@@ -25,6 +25,25 @@ h3 {
   margin-bottom: 8px;
 }
 
+.section-header {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+}
+.section-header:hover {
+  color: var(--vscode-textLink-foreground);
+}
+.chevron {
+  font-size: 10px;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+.chevron.open {
+  transform: rotate(90deg);
+}
+
 .status-header {
   display: flex;
   align-items: center;

@@ -5,3 +5,5 @@ dist/
 .vscode/.mytodos.json
 releases/
 .env.local
+.vscode/settings.json
+plans/
