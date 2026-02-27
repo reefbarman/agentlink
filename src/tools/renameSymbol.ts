@@ -31,9 +31,10 @@ export async function handleRenameSymbol(
     } else {
       // Manual fallback: extract word at position from line text
       const lineText = document.lineAt(position.line).text;
-      const before = lineText.slice(0, position.character).match(/\w+$/)?.[0] ?? "";
+      const before =
+        lineText.slice(0, position.character).match(/\w+$/)?.[0] ?? "";
       const after = lineText.slice(position.character).match(/^\w+/)?.[0] ?? "";
-      oldName = (before + after) || `symbol at ${params.line}:${params.column}`;
+      oldName = before + after || `symbol at ${params.line}:${params.column}`;
     }
 
     // Compute the rename edit
@@ -46,7 +47,17 @@ export async function handleRenameSymbol(
 
     if (!edit) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ error: "Symbol at this position cannot be renamed", path: relPath, line: params.line, column: params.column }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: "Symbol at this position cannot be renamed",
+              path: relPath,
+              line: params.line,
+              column: params.column,
+            }),
+          },
+        ],
       };
     }
 
@@ -54,7 +65,15 @@ export async function handleRenameSymbol(
     const entries = edit.entries();
     if (entries.length === 0) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ error: "Rename produced no changes", path: relPath }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: "Rename produced no changes",
+              path: relPath,
+            }),
+          },
+        ],
       };
     }
 
@@ -63,15 +82,19 @@ export async function handleRenameSymbol(
     for (const [entryUri, edits] of entries) {
       const count = edits.length;
       totalChanges += count;
-      filesPreview.push({ path: getRelativePath(entryUri.fsPath), changes: count });
+      filesPreview.push({
+        path: getRelativePath(entryUri.fsPath),
+        changes: count,
+      });
     }
 
     // Check write approval
     const masterBypass = vscode.workspace
-      .getConfiguration("native-claude")
+      .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
 
-    const canAutoApprove = masterBypass || approvalManager.isWriteApproved(sessionId);
+    const canAutoApprove =
+      masterBypass || approvalManager.isWriteApproved(sessionId);
     let renameFollowUp: string | undefined;
 
     if (!canAutoApprove) {
@@ -87,22 +110,30 @@ export async function handleRenameSymbol(
 
       if (response.decision === "reject") {
         return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              status: "rejected",
-              old_name: oldName,
-              new_name: params.new_name,
-              reason: response.rejectionReason,
-            }),
-          }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "rejected",
+                old_name: oldName,
+                new_name: params.new_name,
+                reason: response.rejectionReason,
+              }),
+            },
+          ],
         };
       }
 
       // Save trust rules for session/project/always decisions
       const scope = decisionToScope(response.decision);
       if (scope && response.trustScope) {
-        applyInlineTrustScope(response, approvalManager, sessionId, scope, relPath);
+        applyInlineTrustScope(
+          response,
+          approvalManager,
+          sessionId,
+          scope,
+          relPath,
+        );
       }
     }
 
@@ -111,7 +142,15 @@ export async function handleRenameSymbol(
 
     if (!applied) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ error: "Failed to apply rename edit", path: relPath }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: "Failed to apply rename edit",
+              path: relPath,
+            }),
+          },
+        ],
       };
     }
 
@@ -137,10 +176,12 @@ export async function handleRenameSymbol(
     }
 
     return {
-      content: [{
-        type: "text",
-        text: JSON.stringify(result),
-      }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result),
+        },
+      ],
     };
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
@@ -148,7 +189,12 @@ export async function handleRenameSymbol(
     }
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
     };
   }
 }

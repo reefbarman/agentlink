@@ -10,21 +10,23 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
 function getQdrantUrl(): string {
   return vscode.workspace
-    .getConfiguration("native-claude")
+    .getConfiguration("agentlink")
     .get<string>("qdrantUrl", "http://localhost:6333");
 }
 
 function getOpenAiApiKey(): string {
   return (
     vscode.workspace
-      .getConfiguration("native-claude")
-      .get<string>("openaiApiKey", "") || process.env.OPENAI_API_KEY || ""
+      .getConfiguration("agentlink")
+      .get<string>("openaiApiKey", "") ||
+    process.env.OPENAI_API_KEY ||
+    ""
   );
 }
 
 function isSemanticSearchEnabled(): boolean {
   return vscode.workspace
-    .getConfiguration("native-claude")
+    .getConfiguration("agentlink")
     .get<boolean>("semanticSearchEnabled", false);
 }
 
@@ -37,7 +39,10 @@ function getCollectionName(workspacePath: string): string {
 
 // --- OpenAI Embeddings via fetch ---
 
-async function generateEmbedding(text: string, apiKey: string): Promise<number[]> {
+async function generateEmbedding(
+  text: string,
+  apiKey: string,
+): Promise<number[]> {
   const response = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: {
@@ -82,16 +87,20 @@ async function queryQdrant(
   collectionName: string,
   queryVector: number[],
   directoryPrefix?: string,
-  limit: number = 10
+  limit: number = 10,
 ): Promise<QdrantSearchResult[]> {
   // Build filter — always exclude metadata points
   const mustNot = [{ key: "type", match: { value: "metadata" } }];
   const must: Array<{ key: string; match: { value: string } }> = [];
 
   if (directoryPrefix) {
-    const normalized = path.posix.normalize(directoryPrefix.replace(/\\/g, "/"));
+    const normalized = path.posix.normalize(
+      directoryPrefix.replace(/\\/g, "/"),
+    );
     if (normalized !== "." && normalized !== "./") {
-      const cleaned = normalized.startsWith("./") ? normalized.slice(2) : normalized;
+      const cleaned = normalized.startsWith("./")
+        ? normalized.slice(2)
+        : normalized;
       const segments = cleaned.split("/").filter(Boolean);
       segments.forEach((segment, index) => {
         must.push({ key: `pathSegments.${index}`, match: { value: segment } });
@@ -130,7 +139,7 @@ async function queryQdrant(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `Qdrant is not reachable at ${qdrantUrl}. Ensure Qdrant is running and Roo Code codebase indexing is enabled. (${message})`
+      `Qdrant is not reachable at ${qdrantUrl}. Ensure Qdrant is running and Roo Code codebase indexing is enabled. (${message})`,
     );
   }
 
@@ -138,7 +147,7 @@ async function queryQdrant(
     const error = await response.text();
     if (response.status === 404) {
       throw new Error(
-        `No codebase index found for this workspace (collection: ${collectionName}). Ensure Roo Code has indexed this workspace.`
+        `No codebase index found for this workspace (collection: ${collectionName}). Ensure Roo Code has indexed this workspace.`,
       );
     }
     throw new Error(`Qdrant API error (${response.status}): ${error}`);
@@ -155,7 +164,7 @@ async function queryQdrant(
 export async function semanticSearch(
   dirPath: string,
   query: string,
-  limit?: number
+  limit?: number,
 ): Promise<ToolResult> {
   if (!isSemanticSearchEnabled()) {
     return {
@@ -164,7 +173,7 @@ export async function semanticSearch(
           type: "text",
           text: JSON.stringify({
             error:
-              "Semantic search is not enabled. Set native-claude.semanticSearchEnabled to true.",
+              "Semantic search is not enabled. Set agentlink.semanticSearchEnabled to true.",
           }),
         },
       ],
@@ -179,7 +188,7 @@ export async function semanticSearch(
           type: "text",
           text: JSON.stringify({
             error:
-              "OpenAI API key not configured. Set native-claude.openaiApiKey or OPENAI_API_KEY env var.",
+              "OpenAI API key not configured. Set agentlink.openaiApiKey or OPENAI_API_KEY env var.",
           }),
         },
       ],
@@ -204,7 +213,7 @@ export async function semanticSearch(
     collectionName,
     queryVector,
     directoryPrefix,
-    effectiveLimit
+    effectiveLimit,
   );
 
   // Format results
@@ -221,7 +230,7 @@ export async function semanticSearch(
   // Build output in a format Claude Code can read well
   const sections = formattedResults.map(
     (r) =>
-      `## ${r.file} (score: ${r.score.toFixed(4)}, lines ${r.startLine}-${r.endLine})\n${r.codeChunk}`
+      `## ${r.file} (score: ${r.score.toFixed(4)}, lines ${r.startLine}-${r.endLine})\n${r.codeChunk}`,
   );
 
   const output = {

@@ -1,14 +1,14 @@
-# Native Claude
+# AgentLink
 
-A VS Code extension that acts as an [MCP](https://modelcontextprotocol.io/) server, giving Claude Code direct access to native VS Code capabilities — diff-based file editing, integrated terminal, real diagnostics, symbol outlines, git status, and more.
+A VS Code extension that acts as an [MCP](https://modelcontextprotocol.io/) server, giving any AI agent native VS Code capabilities — diff-based file editing, integrated terminal, real diagnostics, symbol outlines, git status, and more.
 
 ## Why?
 
-Claude Code's built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`) operate at the filesystem level — they have no awareness of your editor. Native Claude replaces them with tools that work _through_ VS Code, unlocking capabilities that are impossible with raw filesystem access.
+Most AI coding agents operate at the filesystem level — they read and write files directly, run commands in hidden subprocesses, and have no awareness of your editor. AgentLink replaces those tools with ones that work _through_ VS Code, unlocking capabilities that are impossible with raw filesystem access.
 
 ### What you get over built-in tools
 
-| Capability                | Built-in tools              | Native Claude                                                                                                                                                                                                                        |
+| Capability                | Built-in tools              | AgentLink                                                                                                                                                                                                                            |
 | ------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **File editing**          | Writes directly to disk     | Opens a **diff view** — you see exactly what's changing, can edit inline, and accept or reject. Format-on-save applies automatically.                                                                                                |
 | **Terminal commands**     | Runs in a hidden subprocess | Runs in VS Code's **integrated terminal** — visible, interactive, with shell integration for output capture. Supports named terminals, parallel tasks, and **split terminal groups**.                                                |
@@ -18,7 +18,23 @@ Claude Code's built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`) o
 | **File listing**          | `find`/`ls` via subprocess  | Native listing with ripgrep's `--files` mode for fast recursive listing with automatic `.gitignore` support.                                                                                                                         |
 | **Language intelligence** | Not available               | **Go to definition/implementation/type**, **find references**, **hover types**, **completions**, **symbols**, **rename**, **code actions**, **call/type hierarchy**, and **inlay hints** — all powered by VS Code's language server. |
 | **Approval system**       | All-or-nothing permissions  | **Granular approval** — per-file write rules, per-sub-command pattern matching, outside-workspace path trust with prefix/glob/exact patterns, all in a dedicated approval panel.                                                     |
-| **Follow-up messages**    | Silent rejection            | Every approval dialog includes a **follow-up message** field — returned to Claude as context on accept or as a rejection reason on reject.                                                                                           |
+| **Follow-up messages**    | Silent rejection            | Every approval dialog includes a **follow-up message** field — returned to the agent as context on accept or as a rejection reason on reject.                                                                                        |
+
+## Supported Agents
+
+AgentLink works with any MCP-capable AI agent running inside VS Code:
+
+| Agent                                                                 | Auto-configured | Config location                                  |
+| --------------------------------------------------------------------- | --------------- | ------------------------------------------------ |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code)         | Yes             | `~/.claude.json`                                 |
+| [GitHub Copilot](https://code.visualstudio.com/docs/copilot/overview) | Yes             | `.vscode/mcp.json`                               |
+| [Roo Code](https://github.com/RooVetGit/Roo-Code)                     | Yes             | `.roo/mcp.json`                                  |
+| [Cline](https://github.com/cline/cline)                               | Yes             | `~/.cline/data/settings/cline_mcp_settings.json` |
+| [Kilo Code](https://kilocode.ai/)                                     | Yes             | `.kilocode/mcp.json`                             |
+| [Codex](https://github.com/openai/codex)                              | Yes             | `~/.codex/config.toml`                           |
+| Generic MCP client                                                    | Manual          | See [Manual Setup](#manual-setup)                |
+
+You can use **multiple agents simultaneously** — AgentLink writes config for all selected agents at once.
 
 ## Installation
 
@@ -27,7 +43,7 @@ Claude Code's built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`) o
 Download and install the latest release from GitHub:
 
 ```sh
-curl -sL https://raw.githubusercontent.com/reefbarman/native-claude/main/scripts/install.sh | bash
+curl -sL https://raw.githubusercontent.com/reefbarman/agentlink/main/scripts/install.sh | bash
 ```
 
 Or clone the repo first and run it locally:
@@ -38,62 +54,60 @@ Or clone the repo first and run it locally:
 
 ### Manual download
 
-1. Go to the [latest release](https://github.com/reefbarman/native-claude/releases/latest)
+1. Go to the [latest release](https://github.com/reefbarman/agentlink/releases/latest)
 2. Download the `.vsix` file
 3. Install it:
    ```sh
-   code --install-extension native-claude-*.vsix --force
+   code --install-extension agentlink-*.vsix --force
    ```
 
 ### Build from source
 
 ```sh
-git clone https://github.com/reefbarman/native-claude.git
-cd native-claude
+git clone https://github.com/reefbarman/agentlink.git
+cd agentlink
 npm install && npm run build
 npx @vscode/vsce package --no-dependencies --allow-star-activation
-code --install-extension native-claude-*.vsix --force
+code --install-extension agentlink-*.vsix --force
 ```
 
-After installing, reload VS Code. The MCP server starts automatically and configures `~/.claude.json`.
+After installing, reload VS Code. The MCP server starts automatically.
 
 ## Quick Start
 
 1. Install the extension (see [Installation](#installation))
-2. The MCP server starts automatically and configures `~/.claude.json`
-3. Start Claude Code — it will pick up the `native-claude` MCP server
+2. On first launch, the sidebar shows an **agent picker** — select which agents you use
+3. The MCP server starts automatically and writes config for your selected agents
+4. On the setup screen, optionally click:
+   - **Set Up Instructions** — writes instruction files that teach your agents how to use AgentLink tools (e.g. `~/.claude/CLAUDE.md`, `.github/copilot-instructions.md`)
+   - **Install Hooks** — installs PreToolUse hooks that block built-in tools and force agents to use AgentLink equivalents (for agents that support hooks: Claude Code, Copilot)
+5. Verify your agent can see the MCP server using the per-agent instructions shown
+6. Start your AI agent — it will discover the AgentLink MCP server
 
-The sidebar shows server status, active tool calls, and approval rules. The approval panel (bottom panel by default, configurable with `native-claude.approvalPosition`) handles interactive approval dialogs for commands, file writes, path access, and renames. If auto-configuration doesn't work, use the sidebar buttons to copy the config or run the CLI setup command.
+Both setup steps are optional but recommended. If you click them during onboarding, the corresponding auto-update settings are enabled so instruction files and hooks stay current on future startups.
 
-### Configuring Claude Code
+To change your agent selection later, run **AgentLink: Configure Agents** from the command palette. You can also run **AgentLink: Set Up Instructions** or **AgentLink: Install Hooks** from the command palette at any time.
 
-For best results, add instructions to your `~/.claude/CLAUDE.md` (global) or project-level `CLAUDE.md` telling Claude to prefer Native Claude tools over built-ins. A comprehensive example is included in the repo:
+The sidebar shows server status, active tool calls, and approval rules. The approval panel (bottom panel by default, configurable with `agentlink.approvalPosition`) handles interactive approval dialogs.
 
-```sh
-cp CLAUDE.md.example ~/.claude/CLAUDE.md
-```
+## Agent-Specific Setup
 
-This covers tool mappings, usage notes, and descriptions of the additional language server tools. Review and edit it to fit your setup — for example, you may want to merge it with existing instructions in your `CLAUDE.md`.
+### Claude Code
 
-### Enforcing native-claude usage with hooks
+AgentLink auto-configures `~/.claude.json` with per-project MCP entries.
 
-Even with `CLAUDE.md` instructions, Claude may occasionally fall back to built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Glob`, `Grep`). You can use a Claude Code [PreToolUse hook](https://docs.anthropic.com/en/docs/claude-code/hooks) to **block** built-in tools and force Claude to use native-claude equivalents.
+**Instructions:** Click **Set Up Instructions** during onboarding (or run `AgentLink: Set Up Instructions` from the command palette) to inject AgentLink tool usage instructions into `~/.claude/CLAUDE.md`. This uses boundary markers (`<!-- BEGIN agentlink -->` / `<!-- END agentlink -->`) so it can be safely re-run without duplicating content.
 
-The repo includes a ready-made hook script at [`scripts/enforce-native-claude.sh`](scripts/enforce-native-claude.sh). It:
+**Hooks:** Click **Install Hooks** during onboarding (or run `AgentLink: Install Hooks`) to install a [PreToolUse hook](https://docs.anthropic.com/en/docs/claude-code/hooks) that blocks built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Glob`, `Grep`) and forces Claude to use AgentLink equivalents. The hook script is installed to `~/.claude/hooks/enforce-agentlink.sh` and configured in `~/.claude/settings.json`.
 
-- Blocks `Read`, `Edit`, `Write`, `Bash`, `Glob`, and `Grep` with a message telling Claude which native-claude tool to use instead
-- Logs every violation to `~/.claude/native-claude-violations.jsonl` with a timestamp, the blocked tool name, and the arguments Claude tried to pass
+> **Hooks require `jq`** — install with `brew install jq`, `apt install jq`, etc.
 
-**Setup:**
+<details>
+<summary>Manual hook setup</summary>
 
-1. Copy the script to your hooks directory:
+If you prefer to set up hooks manually instead of using the extension command:
 
-   ```sh
-   mkdir -p ~/.claude/hooks
-   cp scripts/enforce-native-claude.sh ~/.claude/hooks/
-   chmod +x ~/.claude/hooks/enforce-native-claude.sh
-   ```
-
+1. Copy the script from the extension's `resources/enforce-agentlink.sh` to `~/.claude/hooks/`
 2. Add the hook to `~/.claude/settings.json`:
 
    ```jsonc
@@ -105,7 +119,7 @@ The repo includes a ready-made hook script at [`scripts/enforce-native-claude.sh
            "hooks": [
              {
                "type": "command",
-               "command": "$HOME/.claude/hooks/enforce-native-claude.sh"
+               "command": "$HOME/.claude/hooks/enforce-agentlink.sh"
              }
            ]
          }
@@ -114,15 +128,55 @@ The repo includes a ready-made hook script at [`scripts/enforce-native-claude.sh
    }
    ```
 
-The `matcher` regex ensures the hook only fires for the six built-in tools that have native-claude equivalents — all other tools (including native-claude MCP tools, `Task`, `TodoWrite`, etc.) pass through unaffected.
+</details>
 
-> **Requires `jq`** — install with `brew install jq`, `apt install jq`, etc.
+### GitHub Copilot
+
+AgentLink auto-creates `.vscode/mcp.json` in your workspace with the server config. Copilot discovers MCP servers from this file automatically.
+
+**Instructions:** Click **Set Up Instructions** during onboarding to inject instructions into `.github/copilot-instructions.md`.
+
+**Hooks:** Copilot supports the same [PreToolUse hooks](https://code.visualstudio.com/docs/copilot/customization/hooks) as Claude Code and reads from the same `~/.claude/settings.json` hook config. Click **Install Hooks** during onboarding to install the enforcement hook — it auto-detects which agent is calling and outputs the correct format. Copilot's built-in tools (`editFiles`, `readFile`, `runInTerminal`, etc.) are blocked just like Claude's.
+
+> **Tip:** Add `.vscode/mcp.json` to your `.gitignore` if you don't want the auto-generated config committed.
+
+### Roo Code
+
+AgentLink auto-creates `.roo/mcp.json` in your workspace. Click **Set Up Instructions** during onboarding to write instructions to `.roo/rules/agentlink.md`.
+
+### Cline
+
+AgentLink auto-configures `~/.cline/data/settings/cline_mcp_settings.json`. Click **Set Up Instructions** during onboarding to write instructions to `.clinerules`.
+
+### Kilo Code
+
+AgentLink auto-creates `.kilocode/mcp.json` in your workspace. Click **Set Up Instructions** during onboarding to write instructions to `.kilocode/rules/agentlink.md`.
+
+### Codex
+
+AgentLink auto-configures `~/.codex/config.toml` with the `[mcp_servers.agentlink]` section. Click **Set Up Instructions** during onboarding to write instructions to `AGENTS.md`.
+
+### Manual Setup
+
+For any MCP client not listed above, configure it to connect to:
+
+```
+http://localhost:<port>/mcp
+```
+
+The port is shown in the status bar. If auth is enabled (default), include the Bearer token in the `Authorization` header. Use the sidebar's **Copy JSON Config** button to get the full config.
+
+### Using Multiple Agents
+
+You can use AgentLink with multiple agents simultaneously (e.g., Claude Code + Roo Code). Select all the agents you use in the agent picker — AgentLink writes config for all of them on server start and cleans up on stop.
+
+Each agent connects to the same MCP server, so they share the same approval rules and tool capabilities. Note that concurrent use by multiple agents may cause conflicts (e.g., overlapping diff views).
 
 ## Tools
 
 ### read_file
 
-Read file contents with line numbers. Returns rich metadata that built-in `Read` cannot provide.
+Read file contents with line numbers. Returns rich metadata that built-in read tools cannot provide.
 
 | Parameter         | Type     | Description                                        |
 | ----------------- | -------- | -------------------------------------------------- |
@@ -138,12 +192,12 @@ Read file contents with line numbers. Returns rich metadata that built-in `Read`
 - `language` — detected from open document or file extension (~80 extensions mapped)
 - `git_status` — `"staged"`, `"modified"`, `"untracked"`, or `"clean"` (via VS Code's git extension)
 - `diagnostics` — `{ errors: N, warnings: N }` summary from language services
-- `symbols` — top-level symbols grouped by kind (e.g. `{ "function": ["foo (line 1)"], "class": ["Bar (line 20)"] }`). Automatically skipped for JSON/JSONC files (where symbol outlines are unhelpful noise).
+- `symbols` — top-level symbols grouped by kind (e.g. `{ "function": ["foo (line 1)"], "class": ["Bar (line 20)"] }`). Automatically skipped for JSON/JSONC files.
 - `content` — numbered lines in `line_number | content` format
 
 Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not available rather than returned as null.
 
-**Image support:** Image files (PNG, JPEG, GIF, WebP, BMP, ICO, AVIF) are returned as base64-encoded `image` content that Claude can view directly. Max image size: 10 MB.
+**Image support:** Image files (PNG, JPEG, GIF, WebP, BMP, ICO, AVIF) are returned as base64-encoded `image` content that the agent can view directly. Max image size: 10 MB.
 
 **Friendly errors:** `ENOENT` → `"File not found: {path}. Working directory: {root}"`, `EACCES` → `"Permission denied"`, `EISDIR` → `"Use list_files instead"`.
 
@@ -210,7 +264,11 @@ Edit an existing file using search/replace blocks. Opens a diff view for review.
 | `diff`    | string | Search/replace blocks (see format below) |
 
 ```text
+<<<<<<< SEARCH
+exact content to find
+======= DIVIDER =======
 replacement content
+>>>>>>> REPLACE
 ```
 
 Include multiple SEARCH/REPLACE blocks for multiple edits in one call.
@@ -225,19 +283,17 @@ Resolve the definition location of a symbol using VS Code's language server. Wor
 | `line`    | number | Line number (1-indexed)                            |
 | `column`  | number | Column number (1-indexed)                          |
 
-Returns an array of `definitions`, each with `path`, `line`, `column`, `endLine`, `endColumn`. Handles both `Location` and `LocationLink` results from the language server.
+Returns an array of `definitions`, each with `path`, `line`, `column`, `endLine`, `endColumn`.
 
 ### go_to_implementation
 
-Find concrete implementations of an interface, abstract class, or method. Unlike `go_to_definition` which shows the declaration, this shows where the code actually runs.
+Find concrete implementations of an interface, abstract class, or method.
 
 | Parameter | Type   | Description                                        |
 | --------- | ------ | -------------------------------------------------- |
 | `path`    | string | File path (absolute or relative to workspace root) |
 | `line`    | number | Line number (1-indexed)                            |
 | `column`  | number | Column number (1-indexed)                          |
-
-Returns an array of `implementations` with the same location format as `go_to_definition`.
 
 ### go_to_type_definition
 
@@ -249,11 +305,9 @@ Navigate to the type definition of a symbol. For `const x = getFoo()`, `go_to_de
 | `line`    | number | Line number (1-indexed)                            |
 | `column`  | number | Column number (1-indexed)                          |
 
-Returns an array of `type_definitions` with the same location format as `go_to_definition`.
-
 ### get_references
 
-Find all references to a symbol using VS Code's language server. Returns locations across the workspace where the symbol is used.
+Find all references to a symbol across the workspace.
 
 | Parameter             | Type     | Description                                               |
 | --------------------- | -------- | --------------------------------------------------------- |
@@ -261,8 +315,6 @@ Find all references to a symbol using VS Code's language server. Returns locatio
 | `line`                | number   | Line number (1-indexed)                                   |
 | `column`              | number   | Column number (1-indexed)                                 |
 | `include_declaration` | boolean? | Include the declaration itself in results (default: true) |
-
-Returns `total_references`, `truncated` (capped at 200), and a `references` array with the same location format as `go_to_definition`.
 
 ### get_symbols
 
@@ -273,13 +325,9 @@ Get symbols from a document or search workspace symbols. Two modes:
 | `path`    | string? | File path for document symbols (full hierarchy with children)               |
 | `query`   | string? | Search query for workspace-wide symbol search (used when `path` is omitted) |
 
-**Document mode** (`path` provided): Returns the full symbol tree with `name`, `kind`, `line`, `endLine`, and recursive `children[]`.
-
-**Workspace mode** (`query` provided): Returns a flat list of matching symbols with `name`, `kind`, `path`, `line`, `containerName`. Capped at 100 results.
-
 ### get_hover
 
-Get hover information (inferred types, documentation) for a symbol at a specific position. Provides the same information shown when hovering in the VS Code editor.
+Get hover information (inferred types, documentation) for a symbol at a specific position.
 
 | Parameter | Type   | Description                                        |
 | --------- | ------ | -------------------------------------------------- |
@@ -287,11 +335,9 @@ Get hover information (inferred types, documentation) for a symbol at a specific
 | `line`    | number | Line number (1-indexed)                            |
 | `column`  | number | Column number (1-indexed)                          |
 
-Returns `hover` as a string (type info, documentation) or `null` if no hover info is available.
-
 ### get_completions
 
-Get autocomplete suggestions at a cursor position. Useful for discovering available methods, properties, and APIs.
+Get autocomplete suggestions at a cursor position.
 
 | Parameter | Type    | Description                                                |
 | --------- | ------- | ---------------------------------------------------------- |
@@ -300,11 +346,9 @@ Get autocomplete suggestions at a cursor position. Useful for discovering availa
 | `column`  | number  | Column number (1-indexed)                                  |
 | `limit`   | number? | Maximum number of completion items to return (default: 50) |
 
-Returns `is_incomplete`, `total_items`, `showing`, and an `items` array with `label`, `kind`, `detail`, `documentation`, and `insertText` (when different from label).
-
 ### get_code_actions
 
-Get available code actions (quick fixes, refactorings) at a position or range. Returns actions like "Add missing import", "Extract function", "Organize imports", "Fix ESLint error", etc.
+Get available code actions (quick fixes, refactorings) at a position or range.
 
 | Parameter        | Type     | Description                                                                                                  |
 | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
@@ -316,21 +360,19 @@ Get available code actions (quick fixes, refactorings) at a position or range. R
 | `kind`           | string?  | Filter by action kind: `quickfix`, `refactor`, `refactor.extract`, `source.organizeImports`, `source.fixAll` |
 | `only_preferred` | boolean? | Only return preferred/recommended actions (default: false)                                                   |
 
-Returns an `actions` array with `index`, `title`, `kind`, `preferred`, `fixes_diagnostics`, `changes` (file/edit counts), and `has_command`. Use the `index` with `apply_code_action` to apply.
+Use the returned `index` with `apply_code_action` to apply an action.
 
 ### apply_code_action
 
-Apply a code action returned by `get_code_actions`. Modifies files directly (workspace edits are applied and saved).
+Apply a code action returned by `get_code_actions`.
 
 | Parameter | Type   | Description                                                    |
 | --------- | ------ | -------------------------------------------------------------- |
 | `index`   | number | 0-based index of the action to apply (from `get_code_actions`) |
 
-Returns `status`, `action` (title), `kind`, and `changed_files` (list of modified file paths).
-
 ### get_call_hierarchy
 
-Get incoming callers and/or outgoing callees for a function or method. Shows who calls this function and what it calls.
+Get incoming callers and/or outgoing callees for a function or method.
 
 | Parameter   | Type    | Description                                                          |
 | ----------- | ------- | -------------------------------------------------------------------- |
@@ -339,8 +381,6 @@ Get incoming callers and/or outgoing callees for a function or method. Shows who
 | `column`    | number  | Column number (1-indexed)                                            |
 | `direction` | string  | `incoming` (who calls this), `outgoing` (what this calls), or `both` |
 | `max_depth` | number? | Maximum recursion depth for call chain (default: 1, max: 3)          |
-
-Returns `symbol` (the target function) and `incoming`/`outgoing` arrays with caller/callee info, call site locations, and nested calls when depth > 1.
 
 ### get_type_hierarchy
 
@@ -354,11 +394,9 @@ Get supertypes (parent classes/interfaces) and/or subtypes (child classes/implem
 | `direction` | string  | `supertypes` (parents), `subtypes` (children), or `both` |
 | `max_depth` | number? | Maximum recursion depth (default: 2, max: 5)             |
 
-Returns `symbol` (the target type) and `supertypes`/`subtypes` arrays with type info and nested hierarchy.
-
 ### get_inlay_hints
 
-Get inlay hints (inferred types, parameter names) for a range of lines. Shows the same inline annotations that VS Code displays in the editor.
+Get inlay hints (inferred types, parameter names) for a range of lines.
 
 | Parameter    | Type    | Description                                        |
 | ------------ | ------- | -------------------------------------------------- |
@@ -366,11 +404,9 @@ Get inlay hints (inferred types, parameter names) for a range of lines. Shows th
 | `start_line` | number? | Start of range (1-indexed, default: 1)             |
 | `end_line`   | number? | End of range (1-indexed, default: end of file)     |
 
-Returns a `hints` array with `line`, `column`, `label`, `kind` (`type` or `parameter`), and padding info.
-
 ### open_file
 
-Open a file in the VS Code editor, optionally scrolling to a specific line and placing the cursor. Supports range selection to highlight code.
+Open a file in the VS Code editor, optionally scrolling to a specific line. Supports range selection.
 
 | Parameter    | Type    | Description                                                                      |
 | ------------ | ------- | -------------------------------------------------------------------------------- |
@@ -382,7 +418,7 @@ Open a file in the VS Code editor, optionally scrolling to a specific line and p
 
 ### show_notification
 
-Show a notification message in VS Code. Best for important status updates or completion of long-running tasks.
+Show a notification message in VS Code.
 
 | Parameter | Type    | Description                                     |
 | --------- | ------- | ----------------------------------------------- |
@@ -391,7 +427,7 @@ Show a notification message in VS Code. Best for important status updates or com
 
 ### rename_symbol
 
-Rename a symbol across the workspace using VS Code's language server. Performs a precise rename refactoring that updates all references, imports, and re-exports.
+Rename a symbol across the workspace using VS Code's language server. Updates all references, imports, and re-exports. Shows affected files for approval before applying.
 
 | Parameter  | Type   | Description                             |
 | ---------- | ------ | --------------------------------------- |
@@ -400,11 +436,9 @@ Rename a symbol across the workspace using VS Code's language server. Performs a
 | `column`   | number | Column number of the symbol (1-indexed) |
 | `new_name` | string | The new name for the symbol             |
 
-Shows affected files for approval before applying. Uses the same write approval flow as `write_file` — the user can accept once, for the session, for the project, or always.
-
 ### find_and_replace
 
-Bulk find-and-replace across **multiple files**. Opens a rich preview panel showing each match in context with inline diffs — users can toggle individual matches on/off before accepting. For single-file edits, prefer `apply_diff` — it provides better diff review and format-on-save. Only use `find_and_replace` on a single file when making many identical replacements (e.g. renaming a variable throughout a file). Use `glob` for multi-file patterns.
+Bulk find-and-replace across **multiple files**. Opens a rich preview panel showing each match in context with inline diffs — users can toggle individual matches on/off before accepting.
 
 | Parameter | Type     | Description                                                                                              |
 | --------- | -------- | -------------------------------------------------------------------------------------------------------- |
@@ -414,18 +448,11 @@ Bulk find-and-replace across **multiple files**. Opens a rich preview panel show
 | `glob`    | string?  | Glob pattern to match files (e.g. `src/**/*.ts`). Mutually exclusive with `path`.                        |
 | `regex`   | boolean? | Treat `find` as a regular expression. Supports capture groups (`$1`, `$2`) in `replace`. Default: false. |
 
-**Response includes:**
-
-- `status` — `applied`, `no_matches`, or `rejected`
-- `files_changed` — number of files modified
-- `total_replacements` — total number of replacements made
-- `files` — per-file breakdown with `path` and `changes` count
-
-Uses the same write approval flow as `rename_symbol` — shows affected files for review before applying.
+For single-file edits, prefer `apply_diff` — it provides better diff review and format-on-save.
 
 ### codebase_search
 
-Search the codebase by meaning using vector similarity. Pass a natural language query and get ranked code chunks. Best for exploratory questions like "how does authentication work" or "where are database connections configured".
+Search the codebase by meaning using vector similarity. Pass a natural language query and get ranked code chunks.
 
 | Parameter | Type    | Description                                                        |
 | --------- | ------- | ------------------------------------------------------------------ |
@@ -437,112 +464,72 @@ Requires a Qdrant vector index (built by Roo Code) and an OpenAI API key. See [S
 
 ### execute_command
 
-Run a command in VS Code's integrated terminal. Output is captured when shell integration is available. Terminal environment is configured to prevent interactive pagers (`PAGER=cat`, `GIT_PAGER=cat`, etc.) and to suppress interactive prompts (`npm_config_yes=true`, `DEBIAN_FRONTEND=noninteractive`).
+Run a command in VS Code's integrated terminal. Output is captured when shell integration is available.
 
-**Interactive command validation:** Commands that require interactive input are automatically rejected with a helpful suggestion. This includes editors (vim, nano, emacs), TUI apps (top, htop, ncdu), bare database CLIs without inline queries (mysql, psql, mongosh), bare REPLs without scripts (python, node, ruby), git interactive flags (-i, -p, --patch), scaffolding commands without --yes (npx create-*, npm init), and more. The rejection message includes the reason and a non-interactive alternative.
+**Interactive command validation:** Commands that require interactive input are automatically rejected with a helpful suggestion.
 
-Output is capped to the **last 200 lines** by default to prevent context window bloat. Full output is saved to a temp file (returned as `output_file`) for on-demand access via `read_file`. Use `output_head`, `output_tail`, or `output_grep` to customize filtering — agents should use these instead of piping through `grep`/`tail`/`head` in the command itself, which hides output from the user.
+Output is capped to the **last 200 lines** by default. Full output is saved to a temp file (returned as `output_file`) for on-demand access via `read_file`. Use `output_head`, `output_tail`, or `output_grep` to customize filtering.
 
-| Parameter             | Type     | Description                                                                                                                                        |
-| --------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`             | string   | Shell command to execute                                                                                                                           |
-| `cwd`                 | string?  | Working directory                                                                                                                                  |
-| `terminal_id`         | string?  | Reuse a specific terminal by ID                                                                                                                    |
-| `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`)                                                                                                   |
-| `split_from`          | string?  | Split alongside an existing terminal (by `terminal_id` or `terminal_name`), creating a visual group                                                |
-| `background`          | boolean? | Run without waiting for completion. Returns immediately with `terminal_id`. Use `get_terminal_output` to check progress.                           |
-| `timeout`             | number?  | Timeout in seconds. Starts counting from when the shell begins executing (not from tool call start), so terminal startup time doesn't eat into it. |
-| `output_head`         | number?  | Return only the first N lines of output. Overrides the default 200-line tail cap.                                                                  |
-| `output_tail`         | number?  | Return only the last N lines of output. Overrides the default 200-line tail cap.                                                                   |
-| `output_offset`       | number?  | Skip first N lines before applying head/tail. Use with `output_head` for line ranges (e.g. `offset: 290, head: 21` → lines 290-310).               |
-| `output_grep`         | string?  | Filter output to lines matching this regex pattern (case-insensitive). Applied before offset/head/tail.                                            |
-| `output_grep_context` | number?  | Number of context lines around each grep match (like `grep -C`). Non-contiguous groups are separated by `--`. Only used with `output_grep`.        |
-
-**Response includes:**
-
-- `output` — filtered/capped command output
-- `exit_code` — process exit code (null if unavailable)
-- `output_captured` — whether shell integration captured the output
-- `terminal_id` — terminal ID for reuse in subsequent commands
-- `total_lines` — total line count of the full output (before filtering)
-- `lines_shown` — number of lines in the returned `output`
-- `output_file` — path to temp file with full output (only present when output was truncated; omitted for outputs ≤ 10 MB threshold or when all lines fit)
+| Parameter             | Type     | Description                                                                                                              |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `command`             | string   | Shell command to execute                                                                                                 |
+| `cwd`                 | string?  | Working directory                                                                                                        |
+| `terminal_id`         | string?  | Reuse a specific terminal by ID                                                                                          |
+| `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`)                                                                         |
+| `split_from`          | string?  | Split alongside an existing terminal, creating a visual group                                                            |
+| `background`          | boolean? | Run without waiting for completion. Returns immediately with `terminal_id`. Use `get_terminal_output` to check progress. |
+| `timeout`             | number?  | Timeout in seconds                                                                                                       |
+| `output_head`         | number?  | Return only the first N lines of output                                                                                  |
+| `output_tail`         | number?  | Return only the last N lines of output                                                                                   |
+| `output_offset`       | number?  | Skip first N lines before applying head/tail                                                                             |
+| `output_grep`         | string?  | Filter output to lines matching this regex (case-insensitive)                                                            |
+| `output_grep_context` | number?  | Context lines around each grep match                                                                                     |
 
 ### close_terminals
 
-Close managed terminals to clean up clutter. With no arguments, closes all terminals created by native-claude. Pass specific names to close only those.
+Close managed terminals. With no arguments, closes all terminals created by AgentLink.
 
 | Parameter | Type      | Description                                                                      |
 | --------- | --------- | -------------------------------------------------------------------------------- |
 | `names`   | string[]? | Terminal names to close (e.g. `["Server", "Tests"]`). Omit to close all managed. |
 
-**Response includes:**
-
-- `closed` — number of terminals closed
-- `not_found` — array of requested terminal names that weren't found (only present when `names` is provided and some didn't match)
-
 ### get_terminal_output
 
-Get the output and status of a background command. Use after `execute_command` with `background: true` to check on progress, read accumulated output, and see if the command has finished. Background terminals are never auto-reused — they must be referenced explicitly by `terminal_id`.
+Get the output and status of a background command. Use after `execute_command` with `background: true`.
 
-| Parameter             | Type    | Description                                                                                                                                                                                                 |
-| --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `terminal_id`         | string  | Terminal ID returned by `execute_command` (e.g. `term_3`)                                                                                                                                                   |
-| `wait_seconds`        | number? | Wait up to N seconds for new output to appear before returning. Polls every 250ms, returns early when new output arrives or command finishes. Useful to avoid double-calls when a command was just started. |
-| `output_head`         | number? | Return only the first N lines of output                                                                                                                                                                     |
-| `output_tail`         | number? | Return only the last N lines of output                                                                                                                                                                      |
-| `output_offset`       | number? | Skip first N lines before applying head/tail                                                                                                                                                                |
-| `output_grep`         | string? | Filter output to lines matching this regex pattern (case-insensitive)                                                                                                                                       |
-| `output_grep_context` | number? | Number of context lines around each grep match                                                                                                                                                              |
-
-**Response includes:**
-
-- `terminal_id` — echoed back
-- `is_running` — whether the background command is still running
-- `exit_code` — null while running, number when finished
-- `output` — accumulated output so far (cleaned of ANSI codes)
-- `output_captured` — whether shell integration was available for output capture
-- `total_lines`, `lines_shown`, `output_file` — same filtering/temp-file behavior as `execute_command`
+| Parameter             | Type    | Description                                          |
+| --------------------- | ------- | ---------------------------------------------------- |
+| `terminal_id`         | string  | Terminal ID returned by `execute_command`            |
+| `wait_seconds`        | number? | Wait up to N seconds for new output before returning |
+| `output_head`         | number? | Return only the first N lines of output              |
+| `output_tail`         | number? | Return only the last N lines of output               |
+| `output_offset`       | number? | Skip first N lines before applying head/tail         |
+| `output_grep`         | string? | Filter output to lines matching this regex           |
+| `output_grep_context` | number? | Context lines around each grep match                 |
 
 ## Sidebar & Approval Panel
 
-The extension provides two Preact-based webview panels:
+The extension provides two webview panels:
 
-- **Sidebar** (Native Claude icon in the activity bar) — live status overview, rule management, and tool call tracking
-- **Approval Panel** (bottom panel by default, or split editor — configurable via `native-claude.approvalPosition`) — interactive approval dialogs for commands, file writes, path access, and renames. Each dialog includes a follow-up message field that's returned to Claude (as context on accept, or as a rejection reason on reject).
-
-### Sidebar Sections
-
-- **Tool Calls** — Shows all in-progress MCP tool calls with elapsed time. Each call has **Complete** and **Cancel** buttons. Complete captures partial output and interrupts the process; Cancel sends SIGINT (Ctrl+C) and force-resolves with a cancellation result. Completed calls remain visible in a dimmed state for a few seconds before fading out.
-- **Server Status** — MCP server state (running/stopped, port, session count, auth, master bypass) with start/stop controls and links to settings, output log, and config files.
-- **Claude Code Integration** — Shows whether `~/.claude.json` is configured, with buttons for CLI setup, copying the CLI command, or copying the JSON config.
-- **Write Approval** — Current write approval mode (prompt/session/project/global) with reset button. Shows file-level write rules (settings, global, project, session scopes) with inline edit and delete.
-- **Trusted Paths** — Outside-workspace path trust rules (global, project, session scopes) with inline edit and delete.
-- **Trusted Commands** — Command pattern rules (global, project, session scopes) with inline edit and delete, plus an "Add Rule" button.
-- **Available Tools** — Quick reference list of all registered MCP tools.
+- **Sidebar** (AgentLink icon in the activity bar) — live status overview, agent configuration, rule management, and tool call tracking
+- **Approval Panel** (bottom panel by default, or split editor — configurable via `agentlink.approvalPosition`) — interactive approval dialogs for commands, file writes, path access, and renames. Each dialog includes a follow-up message field returned to the agent.
 
 ### Tool Call Tracking
 
 Every MCP tool call is tracked from start to finish. The sidebar's Tool Calls section lets you intervene in long-running operations:
 
-- **Complete** — For `execute_command`: captures current terminal output, sends Ctrl+C to stop the process, and returns partial results. For `write_file`/`apply_diff`: auto-accepts the pending diff view. For other tools: force-resolves immediately.
-- **Cancel** — Sends Ctrl+C to any linked terminal, cancels any pending approval dialog, rejects any pending diff view, and returns a cancellation result to Claude.
-
-The Output log (accessible from the sidebar) shows detailed lifecycle events for each tool call: `START`, `END`, `WAITING_APPROVAL`, `TERMINAL_ASSIGNED`, `CANCEL`, `COMPLETE`, etc.
+- **Complete** — For `execute_command`: captures current terminal output, sends Ctrl+C, and returns partial results. For `write_file`/`apply_diff`: auto-accepts the pending diff view. For other tools: force-resolves immediately.
+- **Cancel** — Sends Ctrl+C to any linked terminal, cancels any pending approval dialog, rejects any pending diff view, and returns a cancellation result.
 
 ## Approval System
 
-Native Claude includes a granular approval system to keep you in control.
+AgentLink includes a granular approval system to keep you in control.
 
 ### Write Approval
 
-When Claude proposes file changes (`write_file` or `apply_diff`), a diff view opens showing the proposed changes and the approval panel presents a write approval card. The editor title bar also has quick-access buttons: **Accept** (checkmark), **Options** (...), and **Reject** (X).
+When an agent proposes file changes, a diff view opens showing the proposed changes and the approval panel presents a write approval card. The editor title bar has quick-access buttons: **Accept** (checkmark), **Options** (...), and **Reject** (X).
 
-- **Accept** — saves the changes
-- **Save Rule & Accept** — saves an auto-approval rule and accepts (expand the "Auto Approval Rules" section to configure)
-- **Reject** — discards the changes, with optional follow-up message returned to Claude
-
-User edits made in the diff view before accepting are captured and returned to Claude as a patch, so it can see what you changed.
+User edits made in the diff view before accepting are captured and returned to the agent as a patch.
 
 #### File-Level Write Rules
 
@@ -550,136 +537,112 @@ The approval panel's collapsible "Auto Approval Rules" section lets you scope th
 
 - **All files** — blanket approval for all writes
 - **This file** — only auto-approve this specific file
-- **Custom pattern** — define a prefix, exact, or glob pattern to match files
+- **Custom pattern** — define a prefix, exact, or glob pattern
 
 Rules can be scoped to session, project, or global. Manage them from the sidebar.
 
 ### Command Approval
 
-When Claude runs a command via `execute_command`, the approval panel shows the command in a terminal-style display. The command text is editable inline — you can modify it before running.
-
-- **Run** — execute the command (without saving a rule)
-- **Save Rule & Run** — save auto-approval rules and execute (expand the "Auto Approval Rules" section to configure)
-- **Reject** — block the command, with optional follow-up message returned to Claude
+When an agent runs a command, the approval panel shows the command in a terminal-style display. The command text is editable inline — you can modify it before running.
 
 #### Per-Sub-Command Rules
 
-For compound commands (e.g. `npm install && npm test`), the approval panel splits the command into individual sub-commands, each with its own rule row. You can configure each sub-command independently:
-
-- **Pattern** — pre-filled with the sub-command, editable
-- **Mode** — prefix, exact, regex, or skip (don't save a rule for this sub-command)
-- **Scope** — session, project, or global
+For compound commands (e.g. `npm install && npm test`), the approval panel splits the command into individual sub-commands, each with its own rule row.
 
 ### Outside-Workspace Path Access
 
-When a tool accesses a file outside the workspace, the approval panel prompts for approval:
-
-- **Allow Once** — permit this single access
-- **Save Rule & Allow** — save a path trust rule and allow (expand the "Auto Approval Rules" section to configure)
-- **Reject** — block the access, with optional follow-up message returned to Claude
-
-The rule editor is pre-filled with the parent directory path. You can choose prefix, exact, or glob matching, and scope to session, project, or global.
+When a tool accesses a file outside the workspace, the approval panel prompts for approval with options to allow once, save a rule, or reject.
 
 ### Rename Approval
 
-When Claude renames a symbol via `rename_symbol`, the approval panel shows the old and new names along with the list of affected files. The same accept/reject flow applies — you can save auto-approval rules or reject with a follow-up message.
+When an agent renames a symbol, the approval panel shows the old and new names along with the list of affected files.
 
 ### Managing Rules
 
-The sidebar shows all global and session rules for writes, commands, and trusted paths. You can:
-
-- **Click a rule** or the edit icon to modify its pattern and match mode
-- **Click the X** to delete a rule
-- **Add rules** manually via the sidebar button
-- **Clear** session rules individually or all at once
+The sidebar shows all global and session rules for writes, commands, and trusted paths. You can edit, delete, or add rules manually.
 
 ### Master Bypass
 
-Set `native-claude.masterBypass` to `true` in settings to skip all approval prompts. Both file writes and commands are auto-approved. Use with caution.
+Set `agentlink.masterBypass` to `true` in settings to skip all approval prompts. Use with caution.
 
 ### Recent Approval Auto-Approve
 
-When you approve a command with **Run Once** or accept a file write, the approval is remembered for a short window (default: 60 seconds). If Claude fires the same command or writes to the same file again within that window, it is auto-approved without prompting — no diff view, no dialog.
+When you approve a command or file write, the approval is remembered for a short window (default: 60 seconds). Repeat identical operations within that window are auto-approved without prompting.
 
-This is especially useful when Claude edits the same file multiple times in quick succession or re-runs a build command. You approve once and the rest flow through automatically.
-
-- **Commands** — keyed on the full command string. `npm run build` approved once → auto-approved on repeat. A different command (e.g. `npm test`) still requires approval.
-- **Writes** — keyed on the file path. Accepting a write to `src/foo.ts` auto-approves subsequent writes to the same file within the window.
-- **Edited commands** — if you edit a command before running, it is _not_ cached (you clearly wanted to review it).
-- **Persistent rules take precedence** — if you choose "For Session" or "Always", those rules handle future approvals regardless of the TTL.
-
-Configure the window with `native-claude.recentApprovalTtl` (seconds). Set to `0` to disable.
+Configure with `agentlink.recentApprovalTtl` (seconds). Set to `0` to disable.
 
 ## Semantic Search
 
-Native Claude can query a [Qdrant](https://qdrant.tech/) vector index for semantic code search. This is designed to share the index built by [Roo Code](https://github.com/RooVetGit/Roo-Code) — Native Claude doesn't build its own index, it queries the existing one.
+AgentLink can query a [Qdrant](https://qdrant.tech/) vector index for semantic code search. This is designed to share the index built by [Roo Code](https://github.com/RooVetGit/Roo-Code) — AgentLink doesn't build its own index, it queries the existing one.
 
 ### Setup
 
 1. Have Roo Code index your codebase (Roo Code Settings > Codebase Indexing)
 2. Enable in settings:
 
-| Setting                               | Default                 | Description                                             |
-| ------------------------------------- | ----------------------- | ------------------------------------------------------- |
-| `native-claude.semanticSearchEnabled` | `false`                 | Enable semantic search                                  |
-| `native-claude.qdrantUrl`             | `http://localhost:6333` | Qdrant server URL                                       |
-| `native-claude.openaiApiKey`          | `""`                    | OpenAI API key (falls back to `OPENAI_API_KEY` env var) |
+| Setting                           | Default                 | Description                                             |
+| --------------------------------- | ----------------------- | ------------------------------------------------------- |
+| `agentlink.semanticSearchEnabled` | `false`                 | Enable semantic search                                  |
+| `agentlink.qdrantUrl`             | `http://localhost:6333` | Qdrant server URL                                       |
+| `agentlink.openaiApiKey`          | `""`                    | OpenAI API key (falls back to `OPENAI_API_KEY` env var) |
 
 3. Use `search_files` with `semantic: true` — the `regex` parameter is interpreted as a natural language query
 
 ## Multi-Window Support
 
-Each VS Code window runs its own independent MCP server on its own port. The extension writes a `.mcp.json` file to each workspace folder root so that Claude Code instances running in that directory connect to the correct window.
+Each VS Code window runs its own independent MCP server on its own port. The extension writes config to each workspace folder root so that agent instances running in that directory connect to the correct window.
 
-- **No port conflicts** — if the configured port is already in use, the extension falls back to an OS-assigned port automatically.
-- **Correct window routing** — terminals, diffs, and approval dialogs appear in the window that owns the workspace, not a random window.
-- **Automatic lifecycle** — `.mcp.json` is created on server start and cleaned up on server stop/window close. If the file already contains other MCP server entries, they are preserved.
-
-The global `~/.claude.json` config is still updated as a fallback for running Claude Code outside of any workspace folder.
-
-> **Tip:** Add `.mcp.json` to your `.gitignore` if you don't want the auto-generated config committed to version control.
+- **No port conflicts** — if the configured port is in use, the extension falls back to an OS-assigned port automatically.
+- **Correct window routing** — terminals, diffs, and approval dialogs appear in the window that owns the workspace.
+- **Automatic lifecycle** — config files are created on server start and cleaned up on stop/window close. Existing entries in those files are preserved.
 
 ## Settings
 
-| Setting                           | Default | Description                                                                                                           |
-| --------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
-| `native-claude.port`              | `0`     | HTTP port for the MCP server (`0` = OS-assigned, recommended for multi-window)                                        |
-| `native-claude.autoStart`         | `true`  | Auto-start server on activation                                                                                       |
-| `native-claude.requireAuth`       | `true`  | Require Bearer token auth                                                                                             |
-| `native-claude.masterBypass`      | `false` | Skip all approval prompts                                                                                             |
-| `native-claude.approvalPosition`  | `panel` | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                     |
-| `native-claude.diagnosticDelay`   | `1500`  | Max ms to wait for diagnostics after save                                                                             |
-| `native-claude.recentApprovalTtl` | `60`    | Seconds to remember single-use approvals. Repeat identical commands/writes auto-approve within this window. `0` = off |
-| `native-claude.writeRules`        | `[]`    | Glob patterns for auto-approved file writes (settings-level)                                                          |
+| Setting                            | Default                 | Description                                                                                                      |
+| ---------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `agentlink.agents`                 | `["claude-code"]`       | Which agents to auto-configure (claude-code, copilot, roo-code, cline, kilo-code, codex)                         |
+| `agentlink.port`                   | `0`                     | HTTP port for the MCP server (`0` = OS-assigned, recommended for multi-window)                                   |
+| `agentlink.autoStart`              | `true`                  | Auto-start server on activation                                                                                  |
+| `agentlink.autoUpdateInstructions` | `false`                 | Auto-update agent instruction files on startup (enabled when you click Set Up Instructions during onboarding)    |
+| `agentlink.autoUpdateHooks`        | `false`                 | Auto-update enforcement hooks on startup (enabled when you click Install Hooks during onboarding)                |
+| `agentlink.requireAuth`            | `true`                  | Require Bearer token auth                                                                                        |
+| `agentlink.masterBypass`           | `false`                 | Skip all approval prompts                                                                                        |
+| `agentlink.approvalPosition`       | `panel`                 | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                |
+| `agentlink.diagnosticDelay`        | `1500`                  | Max ms to wait for diagnostics after save                                                                        |
+| `agentlink.recentApprovalTtl`      | `60`                    | Seconds to remember single-use approvals. Repeat identical operations auto-approve within this window. `0` = off |
+| `agentlink.writeRules`             | `[]`                    | Glob patterns for auto-approved file writes (settings-level)                                                     |
+| `agentlink.semanticSearchEnabled`  | `false`                 | Enable semantic codebase search via Qdrant index                                                                 |
+| `agentlink.qdrantUrl`              | `http://localhost:6333` | Qdrant vector database URL                                                                                       |
+| `agentlink.openaiApiKey`           | `""`                    | OpenAI API key for embedding queries (falls back to `OPENAI_API_KEY` env var)                                    |
 
 ## Troubleshooting
 
 ### Tool calls hanging / timing out
 
-Claude Code's MCP client has HTTP connection timeouts (~2–3 minutes by default). For tools that require user interaction — like `apply_diff` waiting for you to review a diff, or `execute_command` running a long build — the SSE stream can time out before you respond, causing Claude to hang waiting for a result that was lost.
+MCP clients may have HTTP connection timeouts. For tools that require user interaction — like `apply_diff` waiting for you to review a diff — the connection can time out before you respond.
 
-**What Native Claude does automatically:**
+**What AgentLink does automatically:**
 
-- **SSE heartbeat notifications** — sends periodic keep-alive messages on the SSE stream to prevent idle timeout disconnects
-- **Event store resumability** — tool responses are persisted in an in-memory store so they can be replayed if the client reconnects with `Last-Event-ID`
-- **Tool call sidebar** — if a tool call does get stuck, you can **Complete** or **Cancel** it from the sidebar's Tool Calls section
+- **SSE heartbeat notifications** — sends periodic keep-alive messages to prevent idle timeout disconnects
+- **Event store resumability** — tool responses are persisted in-memory so they can be replayed if the client reconnects
+- **Tool call sidebar** — if a tool call gets stuck, you can **Complete** or **Cancel** it from the sidebar
 
 ### Server not starting
 
-Check the Output panel (View → Output → "Native Claude") for error logs. Common causes:
+Check the Output panel (View > Output > "AgentLink") for error logs. Common causes:
 
-- **Port conflict** — set `native-claude.port` to `0` (default) for OS-assigned ports
-- **Auth mismatch** — the token in `~/.claude.json` may be stale; restart the extension to regenerate it
+- **Port conflict** — set `agentlink.port` to `0` (default) for OS-assigned ports
+- **Auth mismatch** — the token in the agent's config may be stale; restart the extension to regenerate it
 
 ## Architecture
 
 - **Transport**: Streamable HTTP on `127.0.0.1` (localhost only, no network exposure)
 - **Per-session isolation**: Each MCP session gets its own `McpServer` + `StreamableHTTPServerTransport` pair
-- **Session recovery**: Stale session IDs (e.g. after extension reload) are transparently reused instead of returning 404 errors
-- **SSE resumability**: Each transport is configured with an in-memory event store, enabling clients to reconnect and replay missed tool responses
-- **Auth**: Optional Bearer token stored in VS Code's `globalState`, auto-written to `~/.claude.json` with atomic write (temp file + rename)
-- **Webviews**: Two Preact-based webviews (sidebar + approval panel) with `postMessage` state bridge — no full HTML replacement, all updates are incremental via VDOM diffing
-- **Bundled**: Triple esbuild targets — extension (CJS/Node), sidebar webview (ESM/browser), and approval panel webview (ESM/browser). No runtime dependencies beyond VS Code and Preact (~3KB)
+- **Session recovery**: Stale session IDs are transparently reused instead of returning 404 errors
+- **SSE resumability**: Each transport is configured with an in-memory event store for client reconnection
+- **Auth**: Optional Bearer token stored in VS Code's `globalState`, auto-written to agent config files with atomic writes
+- **Webviews**: Two Preact-based webviews (sidebar + approval panel) with `postMessage` state bridge
+- **Bundled**: Triple esbuild targets — extension (CJS/Node), sidebar webview (ESM/browser), and approval panel webview (ESM/browser)
 
 ## Development
 
@@ -690,3 +653,10 @@ npm run watch     # rebuild on change
 ```
 
 Press F5 in VS Code to launch the Extension Development Host for testing.
+
+To release:
+
+```sh
+npm run release -- --install   # bump patch, build, package VSIX, install
+npm run release -- --minor     # minor version bump
+```

@@ -41,9 +41,14 @@ export class ApprovalManager {
     private configStore: ConfigStore,
   ) {
     this.pruneExpiredSessions();
-    this.pruneTimer = setInterval(() => this.pruneExpiredSessions(), PRUNE_INTERVAL);
+    this.pruneTimer = setInterval(
+      () => this.pruneExpiredSessions(),
+      PRUNE_INTERVAL,
+    );
     // Forward config file changes to our own onDidChange
-    this.configStoreListener = configStore.onDidChange(() => this._onDidChange.fire());
+    this.configStoreListener = configStore.onDidChange(() =>
+      this._onDidChange.fire(),
+    );
   }
 
   dispose(): void {
@@ -57,20 +62,44 @@ export class ApprovalManager {
   async migrateFromGlobalState(): Promise<void> {
     if (this.globalState.get<boolean>("configMigrated")) return;
 
-    const oldCommands = this.globalState.get<CommandRule[]>("globalCommandRules", []);
-    const oldWriteApproved = this.globalState.get<boolean>("globalWriteApproved", false);
-    const oldPathRules = this.globalState.get<PathRule[]>("globalPathRules", []);
-    const oldWriteRules = this.globalState.get<PathRule[]>("globalWriteRules", []);
+    const oldCommands = this.globalState.get<CommandRule[]>(
+      "globalCommandRules",
+      [],
+    );
+    const oldWriteApproved = this.globalState.get<boolean>(
+      "globalWriteApproved",
+      false,
+    );
+    const oldPathRules = this.globalState.get<PathRule[]>(
+      "globalPathRules",
+      [],
+    );
+    const oldWriteRules = this.globalState.get<PathRule[]>(
+      "globalWriteRules",
+      [],
+    );
 
     const hasData =
-      oldCommands.length > 0 || oldWriteApproved || oldPathRules.length > 0 || oldWriteRules.length > 0;
+      oldCommands.length > 0 ||
+      oldWriteApproved ||
+      oldPathRules.length > 0 ||
+      oldWriteRules.length > 0;
 
     if (hasData) {
       this.configStore.updateGlobalConfig((config) => {
         config.writeApproved = config.writeApproved || oldWriteApproved;
-        config.commandRules = deduplicateRules([...(config.commandRules ?? []), ...oldCommands]);
-        config.pathRules = deduplicateRules([...(config.pathRules ?? []), ...oldPathRules]);
-        config.writeRules = deduplicateRules([...(config.writeRules ?? []), ...oldWriteRules]);
+        config.commandRules = deduplicateRules([
+          ...(config.commandRules ?? []),
+          ...oldCommands,
+        ]);
+        config.pathRules = deduplicateRules([
+          ...(config.pathRules ?? []),
+          ...oldPathRules,
+        ]);
+        config.writeRules = deduplicateRules([
+          ...(config.writeRules ?? []),
+          ...oldWriteRules,
+        ]);
       });
 
       // Clear old globalState keys
@@ -171,7 +200,9 @@ export class ApprovalManager {
     this._onDidChange.fire();
   }
 
-  getWriteApprovalState(sessionId: string): "prompt" | "session" | "project" | "global" {
+  getWriteApprovalState(
+    sessionId: string,
+  ): "prompt" | "session" | "project" | "global" {
     if (this.configStore.getGlobalConfig().writeApproved) {
       return "global";
     }
@@ -191,17 +222,28 @@ export class ApprovalManager {
   isPathTrusted(sessionId: string, filePath: string): boolean {
     // Check session path rules first
     const session = this.getSession(sessionId);
-    if ((session.pathRules ?? []).some((r) => this.matchesPathRule(filePath, r))) {
+    if (
+      (session.pathRules ?? []).some((r) => this.matchesPathRule(filePath, r))
+    ) {
       return true;
     }
     // Check project path rules
     const projectConfig = this.configStore.getProjectConfigForFirstRoot();
-    if (projectConfig && (projectConfig.pathRules ?? []).some((r) => this.matchesPathRule(filePath, r))) {
+    if (
+      projectConfig &&
+      (projectConfig.pathRules ?? []).some((r) =>
+        this.matchesPathRule(filePath, r),
+      )
+    ) {
       return true;
     }
     // Check global path rules
     const globalConfig = this.configStore.getGlobalConfig();
-    if ((globalConfig.pathRules ?? []).some((r) => this.matchesPathRule(filePath, r))) {
+    if (
+      (globalConfig.pathRules ?? []).some((r) =>
+        this.matchesPathRule(filePath, r),
+      )
+    ) {
       return true;
     }
     return false;
@@ -211,7 +253,9 @@ export class ApprovalManager {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
         const rules = c.pathRules ?? [];
-        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+        if (
+          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
+        ) {
           rules.push(rule);
           c.pathRules = rules;
         }
@@ -220,7 +264,9 @@ export class ApprovalManager {
       const folder = getFirstWorkspaceRoot();
       this.configStore.updateProjectConfig(folder, (c) => {
         const rules = c.pathRules ?? [];
-        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+        if (
+          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
+        ) {
           rules.push(rule);
           c.pathRules = rules;
         }
@@ -228,7 +274,11 @@ export class ApprovalManager {
     } else {
       const session = this.sessions.get(sessionId) ?? this.newSession();
       const pathRules = session.pathRules ?? [];
-      if (!pathRules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+      if (
+        !pathRules.some(
+          (r) => r.pattern === rule.pattern && r.mode === rule.mode,
+        )
+      ) {
         pathRules.push(rule);
         session.pathRules = pathRules;
         session.lastActivity = Date.now();
@@ -251,13 +301,20 @@ export class ApprovalManager {
     } else if (sessionId) {
       const session = this.sessions.get(sessionId);
       if (session) {
-        session.pathRules = (session.pathRules ?? []).filter((r) => r.pattern !== pattern);
+        session.pathRules = (session.pathRules ?? []).filter(
+          (r) => r.pattern !== pattern,
+        );
       }
     }
     this._onDidChange.fire();
   }
 
-  editPathRule(oldPattern: string, newRule: PathRule, scope: RuleScope, sessionId?: string): void {
+  editPathRule(
+    oldPattern: string,
+    newRule: PathRule,
+    scope: RuleScope,
+    sessionId?: string,
+  ): void {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
         const rules = c.pathRules ?? [];
@@ -282,7 +339,11 @@ export class ApprovalManager {
     this._onDidChange.fire();
   }
 
-  getPathRules(sessionId: string): { session: PathRule[]; project: PathRule[]; global: PathRule[] } {
+  getPathRules(sessionId: string): {
+    session: PathRule[];
+    project: PathRule[];
+    global: PathRule[];
+  } {
     const session = this.getSession(sessionId);
     const projectConfig = this.configStore.getProjectConfigForFirstRoot();
     return {
@@ -300,11 +361,13 @@ export class ApprovalManager {
 
     // Settings-based patterns (match against both relative and absolute)
     const settingsPatterns = vscode.workspace
-      .getConfiguration("native-claude")
+      .getConfiguration("agentlink")
       .get<string[]>("writeRules", []);
     if (
       settingsPatterns.some((p) =>
-        candidates.some((c) => this.matchesPathRule(c, { pattern: p, mode: "glob" })),
+        candidates.some((c) =>
+          this.matchesPathRule(c, { pattern: p, mode: "glob" }),
+        ),
       )
     ) {
       return true;
@@ -312,7 +375,11 @@ export class ApprovalManager {
 
     // Session write rules
     const session = this.getSession(sessionId);
-    if ((session.writeRules ?? []).some((r) => candidates.some((c) => this.matchesPathRule(c, r)))) {
+    if (
+      (session.writeRules ?? []).some((r) =>
+        candidates.some((c) => this.matchesPathRule(c, r)),
+      )
+    ) {
       return true;
     }
 
@@ -320,14 +387,20 @@ export class ApprovalManager {
     const projectConfig = this.configStore.getProjectConfigForFirstRoot();
     if (
       projectConfig &&
-      (projectConfig.writeRules ?? []).some((r) => candidates.some((c) => this.matchesPathRule(c, r)))
+      (projectConfig.writeRules ?? []).some((r) =>
+        candidates.some((c) => this.matchesPathRule(c, r)),
+      )
     ) {
       return true;
     }
 
     // Global write rules
     const globalConfig = this.configStore.getGlobalConfig();
-    if ((globalConfig.writeRules ?? []).some((r) => candidates.some((c) => this.matchesPathRule(c, r)))) {
+    if (
+      (globalConfig.writeRules ?? []).some((r) =>
+        candidates.some((c) => this.matchesPathRule(c, r)),
+      )
+    ) {
       return true;
     }
 
@@ -338,7 +411,9 @@ export class ApprovalManager {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
         const rules = c.writeRules ?? [];
-        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+        if (
+          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
+        ) {
           rules.push(rule);
           c.writeRules = rules;
         }
@@ -347,7 +422,9 @@ export class ApprovalManager {
       const folder = getFirstWorkspaceRoot();
       this.configStore.updateProjectConfig(folder, (c) => {
         const rules = c.writeRules ?? [];
-        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+        if (
+          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
+        ) {
           rules.push(rule);
           c.writeRules = rules;
         }
@@ -355,7 +432,11 @@ export class ApprovalManager {
     } else {
       const session = this.sessions.get(sessionId) ?? this.newSession();
       const writeRules = session.writeRules ?? [];
-      if (!writeRules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+      if (
+        !writeRules.some(
+          (r) => r.pattern === rule.pattern && r.mode === rule.mode,
+        )
+      ) {
         writeRules.push(rule);
         session.writeRules = writeRules;
         session.lastActivity = Date.now();
@@ -368,23 +449,34 @@ export class ApprovalManager {
   removeWriteRule(pattern: string, scope: RuleScope, sessionId?: string): void {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
-        c.writeRules = (c.writeRules ?? []).filter((r) => r.pattern !== pattern);
+        c.writeRules = (c.writeRules ?? []).filter(
+          (r) => r.pattern !== pattern,
+        );
       });
     } else if (scope === "project") {
       const folder = getFirstWorkspaceRoot();
       this.configStore.updateProjectConfig(folder, (c) => {
-        c.writeRules = (c.writeRules ?? []).filter((r) => r.pattern !== pattern);
+        c.writeRules = (c.writeRules ?? []).filter(
+          (r) => r.pattern !== pattern,
+        );
       });
     } else if (sessionId) {
       const session = this.sessions.get(sessionId);
       if (session) {
-        session.writeRules = (session.writeRules ?? []).filter((r) => r.pattern !== pattern);
+        session.writeRules = (session.writeRules ?? []).filter(
+          (r) => r.pattern !== pattern,
+        );
       }
     }
     this._onDidChange.fire();
   }
 
-  editWriteRule(oldPattern: string, newRule: PathRule, scope: RuleScope, sessionId?: string): void {
+  editWriteRule(
+    oldPattern: string,
+    newRule: PathRule,
+    scope: RuleScope,
+    sessionId?: string,
+  ): void {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
         const rules = c.writeRules ?? [];
@@ -421,7 +513,9 @@ export class ApprovalManager {
       session: [...(session.writeRules ?? [])],
       project: [...(projectConfig?.writeRules ?? [])],
       global: [...(this.configStore.getGlobalConfig().writeRules ?? [])],
-      settings: vscode.workspace.getConfiguration("native-claude").get<string[]>("writeRules", []),
+      settings: vscode.workspace
+        .getConfiguration("agentlink")
+        .get<string[]>("writeRules", []),
     };
   }
 
@@ -469,7 +563,9 @@ export class ApprovalManager {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
         const rules = c.commandRules ?? [];
-        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+        if (
+          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
+        ) {
           rules.push(rule);
           c.commandRules = rules;
         }
@@ -478,14 +574,20 @@ export class ApprovalManager {
       const folder = getFirstWorkspaceRoot();
       this.configStore.updateProjectConfig(folder, (c) => {
         const rules = c.commandRules ?? [];
-        if (!rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+        if (
+          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
+        ) {
           rules.push(rule);
           c.commandRules = rules;
         }
       });
     } else {
       const session = this.sessions.get(sessionId) ?? this.newSession();
-      if (!session.commandRules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)) {
+      if (
+        !session.commandRules.some(
+          (r) => r.pattern === rule.pattern && r.mode === rule.mode,
+        )
+      ) {
         session.commandRules.push(rule);
         session.lastActivity = Date.now();
         this.sessions.set(sessionId, session);
@@ -494,7 +596,12 @@ export class ApprovalManager {
     this._onDidChange.fire();
   }
 
-  editCommandRule(oldPattern: string, newRule: CommandRule, scope: RuleScope, sessionId?: string): void {
+  editCommandRule(
+    oldPattern: string,
+    newRule: CommandRule,
+    scope: RuleScope,
+    sessionId?: string,
+  ): void {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
         const rules = c.commandRules ?? [];
@@ -511,27 +618,39 @@ export class ApprovalManager {
     } else if (sessionId) {
       const session = this.sessions.get(sessionId);
       if (session) {
-        const idx = session.commandRules.findIndex((r) => r.pattern === oldPattern);
+        const idx = session.commandRules.findIndex(
+          (r) => r.pattern === oldPattern,
+        );
         if (idx !== -1) session.commandRules[idx] = newRule;
       }
     }
     this._onDidChange.fire();
   }
 
-  removeCommandRule(pattern: string, scope: RuleScope, sessionId?: string): void {
+  removeCommandRule(
+    pattern: string,
+    scope: RuleScope,
+    sessionId?: string,
+  ): void {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
-        c.commandRules = (c.commandRules ?? []).filter((r) => r.pattern !== pattern);
+        c.commandRules = (c.commandRules ?? []).filter(
+          (r) => r.pattern !== pattern,
+        );
       });
     } else if (scope === "project") {
       const folder = getFirstWorkspaceRoot();
       this.configStore.updateProjectConfig(folder, (c) => {
-        c.commandRules = (c.commandRules ?? []).filter((r) => r.pattern !== pattern);
+        c.commandRules = (c.commandRules ?? []).filter(
+          (r) => r.pattern !== pattern,
+        );
       });
     } else if (sessionId) {
       const session = this.sessions.get(sessionId);
       if (session) {
-        session.commandRules = session.commandRules.filter((r) => r.pattern !== pattern);
+        session.commandRules = session.commandRules.filter(
+          (r) => r.pattern !== pattern,
+        );
       }
     }
     this._onDidChange.fire();
@@ -627,7 +746,9 @@ export class ApprovalManager {
   }
 }
 
-function deduplicateRules<T extends { pattern: string; mode: string }>(rules: T[]): T[] {
+function deduplicateRules<T extends { pattern: string; mode: string }>(
+  rules: T[],
+): T[] {
   const seen = new Set<string>();
   return rules.filter((r) => {
     const key = `${r.pattern}\0${r.mode}`;

@@ -13,33 +13,12 @@ import type {
   TrackedCallInfo,
 } from "../server/ToolCallTracker.js";
 import { readFeedback, deleteFeedback } from "../util/feedbackStore.js";
+import type { AgentInfo, SidebarState } from "./webview/types.js";
 
-export interface SidebarState {
-  serverRunning: boolean;
-  port: number | null;
-  sessions: number;
-  authEnabled: boolean;
-  claudeConfigured: boolean;
-  masterBypass: boolean;
-  writeApproval?: "prompt" | "session" | "project" | "global";
-  globalCommandRules?: CommandRule[];
-  projectCommandRules?: CommandRule[];
-  globalPathRules?: PathRule[];
-  projectPathRules?: PathRule[];
-  globalWriteRules?: PathRule[];
-  projectWriteRules?: PathRule[];
-  settingsWriteRules?: string[];
-  activeSessions?: Array<{
-    id: string;
-    writeApproved: boolean;
-    commandRules: CommandRule[];
-    pathRules: PathRule[];
-    writeRules: PathRule[];
-  }>;
-}
+export type { AgentInfo, SidebarState };
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = "nativeClaude.statusView";
+  public static readonly viewType = "agentLink.statusView";
 
   private view: vscode.WebviewView | undefined;
   private state: SidebarState = {
@@ -47,7 +26,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     port: null,
     sessions: 0,
     authEnabled: true,
-    claudeConfigured: false,
+    agentConfigured: false,
     masterBypass: false,
   };
   private approvalManager: ApprovalManager | undefined;
@@ -75,7 +54,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private refreshToolCalls(): void {
     if (!this.toolCallTracker) return;
     this.activeToolCalls = this.toolCallTracker.getActiveCalls();
-    this.log(`refreshToolCalls: ${this.activeToolCalls.length} active calls, view=${!!this.view}`);
+    this.log(
+      `refreshToolCalls: ${this.activeToolCalls.length} active calls, view=${!!this.view}`,
+    );
     // Send lightweight update to client instead of full re-render
     this.view?.webview.postMessage({
       type: "updateToolCalls",
@@ -126,13 +107,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
           break;
         case "startServer":
-          vscode.commands.executeCommand("native-claude.startServer");
+          vscode.commands.executeCommand("agentlink.startServer");
           break;
         case "stopServer":
-          vscode.commands.executeCommand("native-claude.stopServer");
+          vscode.commands.executeCommand("agentlink.stopServer");
           break;
         case "copyConfig":
-          this.copyClaudeConfig();
+          this.copyMcpConfig();
           break;
         case "copyCliCommand":
           this.copyCliCommand();
@@ -140,13 +121,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "openSettings":
           vscode.commands.executeCommand(
             "workbench.action.openSettings",
-            "native-claude",
+            "agentlink",
           );
           break;
         case "openOutput":
           vscode.commands.executeCommand(
             "workbench.action.output.show",
-            "Native Claude",
+            "AgentLink",
           );
           break;
         case "openGlobalConfig":
@@ -157,6 +138,36 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "installCli":
           this.installViaCli();
+          break;
+        case "saveAgents":
+          this.saveAgentSelection((message.agents as string).split(","));
+          break;
+        case "resetOnboarding":
+          vscode.commands.executeCommand("agentlink.resetOnboarding");
+          break;
+        case "dismissOnboarding":
+          this.dismissOnboarding();
+          break;
+        case "setupInstructions":
+          vscode.commands.executeCommand(
+            "agentlink.setupInstructions",
+            message.agentId,
+          );
+          // Enable auto-update for future startups
+          vscode.workspace
+            .getConfiguration("agentlink")
+            .update(
+              "autoUpdateInstructions",
+              true,
+              vscode.ConfigurationTarget.Global,
+            );
+          break;
+        case "installHooks":
+          vscode.commands.executeCommand("agentlink.installHooks");
+          // Enable auto-update for future startups
+          vscode.workspace
+            .getConfiguration("agentlink")
+            .update("autoUpdateHooks", true, vscode.ConfigurationTarget.Global);
           break;
         case "resetWriteApproval":
           this.approvalManager?.resetWriteApproval();
@@ -182,7 +193,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
           break;
         case "addGlobalRule":
-          vscode.commands.executeCommand("native-claude.addTrustedCommand");
+          vscode.commands.executeCommand("agentlink.addTrustedCommand");
           break;
         case "removeSessionRule":
           if (message.sessionId && message.pattern) {
@@ -211,7 +222,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "cancelToolCall":
           if (message.id) {
             vscode.commands.executeCommand(
-              "native-claude.cancelToolCall",
+              "agentlink.cancelToolCall",
               message.id,
             );
           }
@@ -219,13 +230,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case "completeToolCall":
           if (message.id) {
             vscode.commands.executeCommand(
-              "native-claude.completeToolCall",
+              "agentlink.completeToolCall",
               message.id,
             );
           }
           break;
         case "clearAllSessions":
-          vscode.commands.executeCommand("native-claude.clearSessionApprovals");
+          vscode.commands.executeCommand("agentlink.clearSessionApprovals");
           break;
         // Path rule handlers
         case "removeGlobalPathRule":
@@ -312,14 +323,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           if (__DEV_BUILD__) {
             const feedbackPath = path.join(
               os.homedir(),
-              ".claude",
-              "native-claude-feedback.jsonl",
+              ".agentlink",
+              "agentlink-feedback.jsonl",
             );
             vscode.window.showTextDocument(vscode.Uri.file(feedbackPath));
           }
           break;
       }
     });
+  }
+
+  getState(): SidebarState {
+    return { ...this.state };
   }
 
   updateState(partial: Partial<SidebarState>): void {
@@ -539,14 +554,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage({ type: "stateUpdate", state: this.state });
   }
 
-  private copyClaudeConfig(): void {
+  private copyMcpConfig(): void {
     if (!this.state.port) {
       vscode.window.showWarningMessage("Server is not running.");
       return;
     }
 
     const config = {
-      "native-claude": {
+      agentlink: {
         type: "http",
         url: `http://localhost:${this.state.port}/mcp`,
       },
@@ -562,7 +577,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const cmd = `claude mcp add --transport http native-claude http://localhost:${this.state.port}/mcp`;
+    const cmd = `claude mcp add --transport http agentlink http://localhost:${this.state.port}/mcp`;
     vscode.env.clipboard.writeText(cmd);
     vscode.window.showInformationMessage("CLI command copied to clipboard.");
   }
@@ -574,19 +589,45 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     const terminal = vscode.window.createTerminal({
-      name: "Native Claude Setup",
+      name: "AgentLink Setup",
     });
     terminal.show();
     terminal.sendText(
-      `claude mcp add --transport http native-claude http://localhost:${this.state.port}/mcp`,
+      `claude mcp add --transport http agentlink http://localhost:${this.state.port}/mcp`,
       true,
     );
+  }
+
+  private async saveAgentSelection(agentIds: string[]): Promise<void> {
+    if (!agentIds || agentIds.length === 0) return;
+    await vscode.workspace
+      .getConfiguration("agentlink")
+      .update("agents", agentIds, vscode.ConfigurationTarget.Global);
+    this.log(`Configured agents: ${agentIds.join(", ")}`);
+
+    // Transition to step 2 (confirmation + verification)
+    this.state.onboardingStep = 2;
+    this.state.configuredAgentIds = agentIds;
+    this.refreshApprovalState();
+
+    // Trigger re-config via command (extension.ts handles the actual config writing)
+    // Skip auto-update — user will manually click buttons on step 2
+    vscode.commands.executeCommand("agentlink.applyAgentConfig", {
+      skipAutoUpdate: true,
+    });
+  }
+
+  private dismissOnboarding(): void {
+    this.state.onboardingStep = undefined;
+    this.state.configuredAgentIds = undefined;
+    this.state.knownAgents = undefined;
+    this.refreshApprovalState();
   }
 
   private openConfigFile(scope: "global" | "project"): void {
     let filePath: string;
     if (scope === "global") {
-      filePath = path.join(os.homedir(), ".claude", "native-claude.json");
+      filePath = path.join(os.homedir(), ".agentlink", "agentlink.json");
     } else {
       const folders = vscode.workspace.workspaceFolders;
       if (!folders || folders.length === 0) {
@@ -595,8 +636,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       }
       filePath = path.join(
         folders[0].uri.fsPath,
-        ".claude",
-        "native-claude.json",
+        ".agentlink",
+        "agentlink.json",
       );
     }
     vscode.window.showTextDocument(vscode.Uri.file(filePath));
@@ -604,7 +645,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private getMasterBypass(): boolean {
     return vscode.workspace
-      .getConfiguration("native-claude")
+      .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
   }
 
@@ -627,7 +668,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
   <link rel="stylesheet" href="${styleUri}">
-  <title>Native Claude</title>
+  <title>AgentLink</title>
 </head>
 <body>
   <div id="root"></div>

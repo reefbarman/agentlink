@@ -94,7 +94,7 @@ type ApprovalPosition = "beside" | "panel";
 export class ApprovalPanelProvider
   implements vscode.WebviewViewProvider, vscode.Disposable
 {
-  public static readonly viewType = "nativeClaude.approvalView";
+  public static readonly viewType = "agentLink.approvalView";
 
   // Container references (only one is active at a time)
   private panel: vscode.WebviewPanel | undefined;
@@ -127,7 +127,7 @@ export class ApprovalPanelProvider
     this.statusBar.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
     );
-    this.statusBar.command = "nativeClaude.approvalView.focus";
+    this.statusBar.command = "agentLink.approvalView.focus";
   }
 
   // ── WebviewViewProvider (for "panel" mode) ──────────────────────────────
@@ -143,7 +143,7 @@ export class ApprovalPanelProvider
     if (this.currentEntry && this.getPosition() !== "beside") {
       this.showCurrentApproval();
       webviewView.show(false);
-      vscode.commands.executeCommand("nativeClaude.approvalView.focus");
+      vscode.commands.executeCommand("agentLink.approvalView.focus");
     }
   }
 
@@ -303,7 +303,7 @@ export class ApprovalPanelProvider
     const position = this.getPosition();
     const webview = this.ensureWebview(position);
     if (!webview) {
-      vscode.commands.executeCommand("nativeClaude.approvalView.focus");
+      vscode.commands.executeCommand("agentLink.approvalView.focus");
       return;
     }
 
@@ -315,7 +315,7 @@ export class ApprovalPanelProvider
       this.panel!.reveal(vscode.ViewColumn.Beside, false);
     } else if (this.view) {
       this.view.show(false);
-      vscode.commands.executeCommand("nativeClaude.approvalView.focus");
+      vscode.commands.executeCommand("agentLink.approvalView.focus");
     }
   }
 
@@ -486,7 +486,7 @@ export class ApprovalPanelProvider
   private getPosition(): ApprovalPosition {
     return (
       vscode.workspace
-        .getConfiguration("native-claude")
+        .getConfiguration("agentlink")
         .get<ApprovalPosition>("approvalPosition") ?? "beside"
     );
   }
@@ -502,7 +502,7 @@ export class ApprovalPanelProvider
       if (!this.panel) {
         this.webviewReady = false;
         this.panel = vscode.window.createWebviewPanel(
-          "nativeClaude.approval",
+          "agentLink.approval",
           "Approval Required",
           { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
           {
@@ -513,7 +513,7 @@ export class ApprovalPanelProvider
         this.panel.iconPath = vscode.Uri.joinPath(
           this.extensionUri,
           "media",
-          "claude.svg",
+          "agentlink.svg",
         );
         this.panel.onDidDispose(() => {
           this.panel = undefined;
@@ -549,7 +549,7 @@ export class ApprovalPanelProvider
       this.panel.reveal(vscode.ViewColumn.Beside, false);
     } else if (this.view) {
       this.view.show(false);
-      vscode.commands.executeCommand("nativeClaude.approvalView.focus");
+      vscode.commands.executeCommand("agentLink.approvalView.focus");
     }
   }
 
@@ -564,7 +564,7 @@ export class ApprovalPanelProvider
     alertBar.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
     );
-    alertBar.command = "nativeClaude.focusApproval";
+    alertBar.command = "agentLink.focusApproval";
     alertBar.show();
 
     let flash = true;
@@ -649,7 +649,7 @@ export class ApprovalPanelProvider
   private getRecentApprovalTtl(): number {
     return (
       vscode.workspace
-        .getConfiguration("native-claude")
+        .getConfiguration("agentlink")
         .get<number>("recentApprovalTtl", 60) * 1000
     );
   }

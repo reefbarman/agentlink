@@ -14,7 +14,7 @@ export async function handleSendFeedback(
 ): Promise<ToolResult> {
   try {
     const workspace = vscode.workspace.workspaceFolders?.[0]?.name ?? "unknown";
-    const ext = vscode.extensions.getExtension("native-claude.native-claude");
+    const ext = vscode.extensions.getExtension("agentlink.agentlink");
     const version =
       (ext?.packageJSON as { version?: string })?.version ?? "unknown";
 

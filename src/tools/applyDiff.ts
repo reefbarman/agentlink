@@ -486,11 +486,11 @@ export async function handleApplyDiff(
     }
 
     const diagnosticDelay = vscode.workspace
-      .getConfiguration("native-claude")
+      .getConfiguration("agentlink")
       .get<number>("diagnosticDelay", 1500);
 
     const masterBypass = vscode.workspace
-      .getConfiguration("native-claude")
+      .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
 
     // Auto-approve check (includes recent single-use approvals within TTL)

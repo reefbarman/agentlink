@@ -1,13 +1,14 @@
 {
-  "name": "native-claude",
-  "displayName": "Native Claude",
-  "description": "MCP server that provides Claude Code with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "0.7.6",
-  "publisher": "native-claude",
+  "name": "agentlink",
+  "displayName": "AgentLink",
+  "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
+  "version": "1.0.3",
+  "publisher": "agentlink",
   "repository": {
     "type": "git",
-    "url": "https://github.com/reefbarman/native-claude.git"
+    "url": "https://github.com/reefbarman/agentlink.git"
   },
+  "icon": "media/icon.png",
   "license": "MIT",
   "engines": {
     "vscode": "^1.93.0"
@@ -23,145 +24,177 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "nativeClaude",
-          "title": "Native Claude",
-          "icon": "media/claude.svg"
+          "id": "agentLink",
+          "title": "AgentLink",
+          "icon": "media/agentlink.svg"
         }
       ],
       "panel": [
         {
-          "id": "nativeClaudePanel",
-          "title": "Native Claude",
-          "icon": "media/claude.svg"
+          "id": "agentLinkPanel",
+          "title": "AgentLink",
+          "icon": "media/agentlink.svg"
         }
       ]
     },
     "views": {
-      "nativeClaude": [
+      "agentLink": [
         {
-          "icon": "media/claude.svg",
+          "icon": "media/agentlink.svg",
           "type": "webview",
-          "id": "nativeClaude.statusView",
+          "id": "agentLink.statusView",
           "name": "Status"
         }
       ],
-      "nativeClaudePanel": [
+      "agentLinkPanel": [
         {
-          "icon": "media/claude.svg",
+          "icon": "media/agentlink.svg",
           "type": "webview",
-          "id": "nativeClaude.approvalView",
+          "id": "agentLink.approvalView",
           "name": "Approvals"
         }
       ]
     },
     "commands": [
       {
-        "command": "native-claude.startServer",
-        "title": "Native Claude: Start MCP Server"
+        "command": "agentlink.startServer",
+        "title": "AgentLink: Start MCP Server"
       },
       {
-        "command": "native-claude.stopServer",
-        "title": "Native Claude: Stop MCP Server"
+        "command": "agentlink.stopServer",
+        "title": "AgentLink: Stop MCP Server"
       },
       {
-        "command": "native-claude.showStatus",
-        "title": "Native Claude: Show Server Status"
+        "command": "agentlink.showStatus",
+        "title": "AgentLink: Show Server Status"
       },
       {
-        "command": "native-claude.acceptDiff",
+        "command": "agentlink.acceptDiff",
         "title": "Accept Changes",
         "icon": "$(check)"
       },
       {
-        "command": "native-claude.acceptDiffMore",
+        "command": "agentlink.acceptDiffMore",
         "title": "Accept with Options...",
         "icon": "$(ellipsis)"
       },
       {
-        "command": "native-claude.rejectDiff",
+        "command": "agentlink.rejectDiff",
         "title": "Reject Changes",
         "icon": "$(close)"
       },
       {
-        "command": "native-claude.addTrustedCommand",
-        "title": "Native Claude: Add Trusted Command Pattern"
+        "command": "agentlink.addTrustedCommand",
+        "title": "AgentLink: Add Trusted Command Pattern"
       },
       {
-        "command": "native-claude.clearSessionApprovals",
-        "title": "Native Claude: Clear Session Approvals"
+        "command": "agentlink.clearSessionApprovals",
+        "title": "AgentLink: Clear Session Approvals"
       },
       {
-        "command": "native-claude.cancelToolCall",
-        "title": "Native Claude: Cancel Tool Call"
+        "command": "agentlink.cancelToolCall",
+        "title": "AgentLink: Cancel Tool Call"
       },
       {
-        "command": "native-claude.completeToolCall",
-        "title": "Native Claude: Complete Tool Call"
+        "command": "agentlink.completeToolCall",
+        "title": "AgentLink: Complete Tool Call"
+      },
+      {
+        "command": "agentlink.configureAgents",
+        "title": "AgentLink: Configure Agents"
       }
     ],
     "menus": {
       "editor/title": [
         {
-          "command": "native-claude.acceptDiff",
+          "command": "agentlink.acceptDiff",
           "group": "navigation@1",
-          "when": "nativeClaude.diffPending"
+          "when": "agentLink.diffPending"
         },
         {
-          "command": "native-claude.acceptDiffMore",
+          "command": "agentlink.acceptDiffMore",
           "group": "navigation@2",
-          "when": "nativeClaude.diffPending"
+          "when": "agentLink.diffPending"
         },
         {
-          "command": "native-claude.rejectDiff",
+          "command": "agentlink.rejectDiff",
           "group": "navigation@3",
-          "when": "nativeClaude.diffPending"
+          "when": "agentLink.diffPending"
         }
       ]
     },
     "configuration": {
-      "title": "Native Claude",
+      "title": "AgentLink",
       "properties": {
-        "native-claude.port": {
+        "agentlink.port": {
           "type": "number",
           "default": 0,
           "description": "HTTP port for the MCP server. Use 0 (default) for an OS-assigned port — required for multi-window support. Set a fixed port only if you need a stable URL."
         },
-        "native-claude.autoStart": {
+        "agentlink.autoStart": {
           "type": "boolean",
           "default": true,
           "description": "Automatically start the MCP server on extension activation"
         },
-        "native-claude.masterBypass": {
+        "agentlink.masterBypass": {
           "type": "boolean",
           "default": false,
           "description": "Skip ALL approval prompts (file writes and commands auto-approved). Use with caution."
         },
-        "native-claude.diagnosticDelay": {
+        "agentlink.diagnosticDelay": {
           "type": "number",
           "default": 1500,
           "description": "Max milliseconds to wait after file save for diagnostics to settle"
         },
-        "native-claude.requireAuth": {
+        "agentlink.agents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "claude-code",
+              "copilot",
+              "roo-code",
+              "cline",
+              "kilo-code",
+              "codex"
+            ]
+          },
+          "default": [
+            "claude-code"
+          ],
+          "description": "Which AI agents to auto-configure MCP for. Each agent's config file is written on server start and cleaned up on stop."
+        },
+        "agentlink.autoUpdateInstructions": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically update agent instruction files on startup. Enabled when you set up instructions during onboarding."
+        },
+        "agentlink.autoUpdateHooks": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically update PreToolUse hooks on startup. Enabled when you install hooks during onboarding."
+        },
+        "agentlink.requireAuth": {
           "type": "boolean",
           "default": true,
           "description": "Require auth token on the MCP endpoint (recommended)"
         },
-        "native-claude.semanticSearchEnabled": {
+        "agentlink.semanticSearchEnabled": {
           "type": "boolean",
           "default": false,
           "description": "Enable semantic codebase search via Qdrant index (built by Roo Code)"
         },
-        "native-claude.qdrantUrl": {
+        "agentlink.qdrantUrl": {
           "type": "string",
           "default": "http://localhost:6333",
           "description": "Qdrant vector database URL for semantic codebase search"
         },
-        "native-claude.openaiApiKey": {
+        "agentlink.openaiApiKey": {
           "type": "string",
           "default": "",
           "description": "OpenAI API key for embedding queries (semantic search). Falls back to OPENAI_API_KEY env var."
         },
-        "native-claude.approvalPosition": {
+        "agentlink.approvalPosition": {
           "type": "string",
           "enum": [
             "beside",
@@ -174,13 +207,13 @@
           ],
           "description": "Where to show approval dialogs."
         },
-        "native-claude.recentApprovalTtl": {
+        "agentlink.recentApprovalTtl": {
           "type": "number",
           "default": 60,
           "minimum": 0,
           "description": "Seconds to remember a single-use approval (run-once / accept). Repeat identical commands or writes to the same file within this window are auto-approved. Set to 0 to disable."
         },
-        "native-claude.writeRules": {
+        "agentlink.writeRules": {
           "type": "array",
           "default": [],
           "items": {

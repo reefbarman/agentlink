@@ -5,7 +5,7 @@ import * as os from "os";
 
 import type { CommandRule, PathRule } from "./ApprovalManager.js";
 
-export interface NativeClaudeConfig {
+export interface AgentLinkConfig {
   version: number;
   writeApproved?: boolean;
   commandRules?: CommandRule[];
@@ -13,14 +13,14 @@ export interface NativeClaudeConfig {
   writeRules?: PathRule[];
 }
 
-const EMPTY_CONFIG: NativeClaudeConfig = { version: 1 };
-const GLOBAL_DIR = path.join(os.homedir(), ".claude");
-const GLOBAL_CONFIG_PATH = path.join(GLOBAL_DIR, "native-claude.json");
-const PROJECT_CONFIG_RELATIVE = path.join(".claude", "native-claude.json");
+const EMPTY_CONFIG: AgentLinkConfig = { version: 1 };
+const GLOBAL_DIR = path.join(os.homedir(), ".agentlink");
+const GLOBAL_CONFIG_PATH = path.join(GLOBAL_DIR, "agentlink.json");
+const PROJECT_CONFIG_RELATIVE = path.join(".agentlink", "agentlink.json");
 const DEBOUNCE_MS = 200;
 
 function log(msg: string): void {
-  const ch = vscode.window.createOutputChannel("native-claude", { log: true });
+  const ch = vscode.window.createOutputChannel("agentlink", { log: true });
   ch.info(msg);
 }
 
@@ -28,8 +28,8 @@ export class ConfigStore {
   private _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
 
-  private globalConfig: NativeClaudeConfig = { ...EMPTY_CONFIG };
-  private projectConfigs = new Map<string, NativeClaudeConfig>();
+  private globalConfig: AgentLinkConfig = { ...EMPTY_CONFIG };
+  private projectConfigs = new Map<string, AgentLinkConfig>();
 
   private globalWatcher: fs.FSWatcher | null = null;
   private projectWatcher: vscode.FileSystemWatcher | null = null;
@@ -44,11 +44,11 @@ export class ConfigStore {
 
   // --- Public API ---
 
-  getGlobalConfig(): Readonly<NativeClaudeConfig> {
+  getGlobalConfig(): Readonly<AgentLinkConfig> {
     return this.globalConfig;
   }
 
-  updateGlobalConfig(updater: (config: NativeClaudeConfig) => void): boolean {
+  updateGlobalConfig(updater: (config: AgentLinkConfig) => void): boolean {
     const config = structuredClone(this.globalConfig);
     updater(config);
     if (this.writeConfig(GLOBAL_CONFIG_PATH, config)) {
@@ -59,13 +59,13 @@ export class ConfigStore {
     return false;
   }
 
-  getProjectConfig(workspaceFolder: string): Readonly<NativeClaudeConfig> {
+  getProjectConfig(workspaceFolder: string): Readonly<AgentLinkConfig> {
     return this.projectConfigs.get(workspaceFolder) ?? { ...EMPTY_CONFIG };
   }
 
   updateProjectConfig(
     workspaceFolder: string,
-    updater: (config: NativeClaudeConfig) => void,
+    updater: (config: AgentLinkConfig) => void,
   ): boolean {
     const config = structuredClone(
       this.projectConfigs.get(workspaceFolder) ?? { ...EMPTY_CONFIG },
@@ -83,7 +83,7 @@ export class ConfigStore {
   /**
    * Get the project config for the first workspace root, or null if no workspace is open.
    */
-  getProjectConfigForFirstRoot(): Readonly<NativeClaudeConfig> | null {
+  getProjectConfigForFirstRoot(): Readonly<AgentLinkConfig> | null {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) return null;
     return this.getProjectConfig(folders[0].uri.fsPath);
@@ -117,7 +117,7 @@ export class ConfigStore {
     }
   }
 
-  private readConfig(filePath: string): NativeClaudeConfig {
+  private readConfig(filePath: string): AgentLinkConfig {
     try {
       if (!fs.existsSync(filePath)) return { ...EMPTY_CONFIG };
       const raw = fs.readFileSync(filePath, "utf-8");
@@ -128,7 +128,7 @@ export class ConfigStore {
     }
   }
 
-  private writeConfig(filePath: string, config: NativeClaudeConfig): boolean {
+  private writeConfig(filePath: string, config: AgentLinkConfig): boolean {
     const dir = path.dirname(filePath);
     const tmpPath = filePath + ".tmp." + process.pid;
     try {
@@ -151,7 +151,7 @@ export class ConfigStore {
     }
   }
 
-  private parseAndValidate(raw: string, filePath: string): NativeClaudeConfig {
+  private parseAndValidate(raw: string, filePath: string): AgentLinkConfig {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -159,7 +159,7 @@ export class ConfigStore {
       log(`Warning: Malformed JSON in ${filePath}, treating as empty config`);
       vscode.window
         .showWarningMessage(
-          `native-claude: Invalid JSON in ${filePath}`,
+          `agentlink: Invalid JSON in ${filePath}`,
           "Open File",
         )
         .then((choice) => {
@@ -180,7 +180,7 @@ export class ConfigStore {
     }
 
     const obj = parsed as Record<string, unknown>;
-    const config: NativeClaudeConfig = {
+    const config: AgentLinkConfig = {
       version: typeof obj.version === "number" ? obj.version : 1,
     };
 
@@ -228,7 +228,7 @@ export class ConfigStore {
     try {
       if (fs.existsSync(GLOBAL_DIR)) {
         this.globalWatcher = fs.watch(GLOBAL_DIR, (eventType, filename) => {
-          if (filename === "native-claude.json") {
+          if (filename === "agentlink.json") {
             this.debouncedReload("global");
           }
         });
@@ -242,7 +242,7 @@ export class ConfigStore {
 
     // Watch project configs with VS Code file system watcher
     this.projectWatcher = vscode.workspace.createFileSystemWatcher(
-      "**/.claude/native-claude.json",
+      "**/.agentlink/agentlink.json",
     );
     this.projectWatcher.onDidChange(() => this.debouncedReload("project"));
     this.projectWatcher.onDidCreate(() => this.debouncedReload("project"));

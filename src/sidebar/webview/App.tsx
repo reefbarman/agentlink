@@ -1,8 +1,14 @@
 import { useReducer, useEffect } from "preact/hooks";
-import type { SidebarState, TrackedCallInfo, FeedbackEntry, ExtensionMessage, PostCommand } from "./types.js";
+import type {
+  SidebarState,
+  TrackedCallInfo,
+  FeedbackEntry,
+  ExtensionMessage,
+  PostCommand,
+} from "./types.js";
 import { ActiveToolCalls } from "./components/ActiveToolCalls.js";
 import { ServerStatus } from "./components/ServerStatus.js";
-import { ClaudeIntegration } from "./components/ClaudeIntegration.js";
+import { AgentIntegration } from "./components/AgentIntegration.js";
 import { WriteApproval } from "./components/WriteApproval.js";
 import { TrustedPaths } from "./components/TrustedPaths.js";
 import { TrustedCommands } from "./components/TrustedCommands.js";
@@ -36,7 +42,7 @@ const initialState: State = {
     port: null,
     sessions: 0,
     authEnabled: true,
-    claudeConfigured: false,
+    agentConfigured: false,
     masterBypass: false,
   },
   toolCalls: [],
@@ -80,17 +86,42 @@ export function App({ vscodeApi }: AppProps) {
     return () => window.removeEventListener("message", handler);
   }, []);
 
+  // During onboarding, show only the agent picker/confirmation
+  if (state.sidebar.onboardingStep) {
+    return (
+      <div>
+        <AgentIntegration state={state.sidebar} postCommand={postCommand} />
+      </div>
+    );
+  }
+
   return (
     <div>
       <ActiveToolCalls calls={state.toolCalls} postCommand={postCommand} />
       <ServerStatus state={state.sidebar} postCommand={postCommand} />
-      <ClaudeIntegration state={state.sidebar} postCommand={postCommand} />
+      <AgentIntegration state={state.sidebar} postCommand={postCommand} />
       <WriteApproval state={state.sidebar} postCommand={postCommand} />
       <TrustedPaths state={state.sidebar} postCommand={postCommand} />
       <TrustedCommands state={state.sidebar} postCommand={postCommand} />
       <AvailableTools />
       {__DEV_BUILD__ && (
-        <FeedbackList entries={state.feedbackEntries} postCommand={postCommand} />
+        <FeedbackList
+          entries={state.feedbackEntries}
+          postCommand={postCommand}
+        />
+      )}
+      {__DEV_BUILD__ && (
+        <div class="section">
+          <h3>Dev Tools</h3>
+          <div class="button-group">
+            <button
+              class="btn btn-secondary"
+              onClick={() => postCommand("resetOnboarding")}
+            >
+              Reset Onboarding
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

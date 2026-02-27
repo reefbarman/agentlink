@@ -50,7 +50,7 @@ export async function handleExecuteCommand(
 
     // Master bypass check
     const masterBypass = vscode.workspace
-      .getConfiguration("native-claude")
+      .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
 
     let commandToRun = params.command;
@@ -202,7 +202,12 @@ async function approveSubCommands(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
-): Promise<{ approved: boolean; reason?: string; editedCommand?: string; followUp?: string }> {
+): Promise<{
+  approved: boolean;
+  reason?: string;
+  editedCommand?: string;
+  followUp?: string;
+}> {
   // Expand wrappers: ["cd /foo", "sudo npm install"] → ["cd /foo", "sudo", "npm install"]
   const expanded = expandSubCommands(subCommands);
 
@@ -252,14 +257,21 @@ async function approveSubCommands(
       const scope = rule.scope as "session" | "project" | "global";
       approvalManager.addCommandRule(
         sessionId,
-        { pattern: rule.pattern, mode: rule.mode as "prefix" | "exact" | "regex" },
+        {
+          pattern: rule.pattern,
+          mode: rule.mode as "prefix" | "exact" | "regex",
+        },
         scope,
       );
     }
   }
 
   if (response.editedCommand) {
-    return { approved: true, editedCommand: response.editedCommand, followUp: response.followUp };
+    return {
+      approved: true,
+      editedCommand: response.editedCommand,
+      followUp: response.followUp,
+    };
   }
   return { approved: true, followUp: response.followUp };
 }

@@ -134,9 +134,7 @@ export function saveOutputTempFile(output: string): string | null {
   }
 
   try {
-    const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "native-claude-output-"),
-    );
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-output-"));
     const filePath = path.join(tmpDir, "output.txt");
     fs.writeFileSync(filePath, output, "utf-8");
     return filePath;

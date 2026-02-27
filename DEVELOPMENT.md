@@ -24,7 +24,7 @@ The following tools are registered in dev builds only. They are **not** included
 
 ### send_feedback
 
-Submit feedback about a native-claude tool — report issues, suggest improvements, or note missing features. Feedback is stored locally for the extension developer to review.
+Submit feedback about an AgentLink tool — report issues, suggest improvements, or note missing features. Feedback is stored locally for the extension developer to review.
 
 | Parameter             | Type    | Description                                              |
 | --------------------- | ------- | -------------------------------------------------------- |

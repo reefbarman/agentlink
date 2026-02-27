@@ -1,8 +1,5 @@
 import * as vscode from "vscode";
 import * as http from "http";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
 import { randomUUID } from "crypto";
 
 import { McpServerHost } from "./server/McpServerHost.js";
@@ -23,8 +20,16 @@ import {
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
 import { ToolCallTracker } from "./server/ToolCallTracker.js";
+import { KNOWN_AGENTS, getAgentById } from "./agents/registry.js";
+import { createConfigWriter } from "./agents/configWriters.js";
+import type { ConfigWriter } from "./agents/types.js";
+import {
+  setupInstructions,
+  setupAllInstructions,
+  installHooks,
+} from "./setup.js";
 
-export const DIFF_VIEW_URI_SCHEME = "native-claude-diff";
+export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 
 let outputChannel: vscode.OutputChannel;
 let httpServer: http.Server | null = null;
@@ -43,7 +48,7 @@ function log(message: string): void {
 }
 
 function getConfig<T>(key: string): T {
-  return vscode.workspace.getConfiguration("native-claude").get(key) as T;
+  return vscode.workspace.getConfiguration("agentlink").get(key) as T;
 }
 
 function getOrCreateAuthToken(context: vscode.ExtensionContext): string {
@@ -56,202 +61,59 @@ function getOrCreateAuthToken(context: vscode.ExtensionContext): string {
   return token;
 }
 
-function updateClaudeConfig(port: number, authToken?: string): boolean {
-  const config = readClaudeConfig();
-  if (!config) {
-    log(
-      `Warning: ~/.claude.json contains malformed JSON — skipping auto-configuration`,
-    );
-    return false;
-  }
+// --- Multi-agent config management ---
+// Uses the agent abstraction layer to write/cleanup config for all configured agents.
 
-  if (!config.mcpServers || typeof config.mcpServers !== "object") {
-    config.mcpServers = {};
-  }
+let activeConfigWriters: ConfigWriter[] = [];
 
-  const mcpServers = config.mcpServers as Record<string, unknown>;
-  const url = `http://localhost:${port}/mcp`;
-
-  const existing = mcpServers["native-claude"] as
-    | Record<string, unknown>
-    | undefined;
-  if (
-    existing &&
-    existing.type === "http" &&
-    existing.url === url &&
-    (!authToken ||
-      (existing.headers &&
-        (existing.headers as Record<string, string>).Authorization ===
-          `Bearer ${authToken}`))
-  ) {
-    log("~/.claude.json global entry already up to date");
-    return true;
-  }
-
-  const entry: Record<string, unknown> = { type: "http", url };
-  if (authToken) {
-    entry.headers = { Authorization: `Bearer ${authToken}` };
-  }
-  mcpServers["native-claude"] = entry;
-
-  if (writeClaudeConfig(config)) {
-    log(`Updated ~/.claude.json with native-claude MCP server (port ${port})`);
-    return true;
-  }
-  return false;
+function getConfiguredAgentIds(): string[] {
+  return getConfig<string[]>("agents") ?? ["claude-code"];
 }
 
-// --- Per-project MCP config in ~/.claude.json ---
-// Claude Code stores local-scoped MCP servers in ~/.claude.json under
-// projects.<workspace-path>.mcpServers. This keeps the workspace clean
-// (no .mcp.json files) and uses the same precedence as `claude mcp add --scope local`.
+function updateAllAgentConfigs(port: number, authToken?: string): boolean {
+  const agentIds = getConfiguredAgentIds();
+  activeConfigWriters = [];
+  let anyConfigured = false;
 
-function readClaudeConfig(): Record<string, unknown> | null {
-  const configPath = path.join(os.homedir(), ".claude.json");
-  try {
-    if (!fs.existsSync(configPath)) return {};
-    const raw = fs.readFileSync(configPath, "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function writeClaudeConfig(config: Record<string, unknown>): boolean {
-  const configPath = path.join(os.homedir(), ".claude.json");
-  const tmpPath = configPath + ".tmp." + process.pid;
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
-    fs.renameSync(tmpPath, configPath);
-    return true;
-  } catch (err) {
-    log(`Warning: Could not write ~/.claude.json: ${err}`);
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-      // ignore
+  for (const id of agentIds) {
+    const agent = getAgentById(id);
+    if (!agent) {
+      log(`Unknown agent ID in agentlink.agents: "${id}" — skipping`);
+      continue;
     }
-    return false;
+    const writer = createConfigWriter(agent, log);
+    if (!writer) continue;
+
+    if (writer.write(port, authToken)) {
+      anyConfigured = true;
+    }
+    activeConfigWriters.push(writer);
   }
+
+  return anyConfigured;
 }
 
-function updateProjectMcpConfig(port: number, authToken?: string): void {
-  const folders = vscode.workspace.workspaceFolders;
-  if (!folders) return;
-
-  const config = readClaudeConfig();
-  if (!config) return;
-
-  if (!config.projects || typeof config.projects !== "object") {
-    config.projects = {};
+function cleanupAllAgentConfigs(): void {
+  for (const writer of activeConfigWriters) {
+    writer.cleanup();
   }
-  const projects = config.projects as Record<string, Record<string, unknown>>;
-
-  const url = `http://localhost:${port}/mcp`;
-  const entry: Record<string, unknown> = { type: "http", url };
-  if (authToken) {
-    entry.headers = { Authorization: `Bearer ${authToken}` };
-  }
-
-  let changed = false;
-  for (const folder of folders) {
-    const folderPath = folder.uri.fsPath;
-    if (!projects[folderPath]) {
-      projects[folderPath] = {};
-    }
-    const project = projects[folderPath];
-    if (!project.mcpServers || typeof project.mcpServers !== "object") {
-      project.mcpServers = {};
-    }
-    const mcpServers = project.mcpServers as Record<string, unknown>;
-    mcpServers["native-claude"] = entry;
-    changed = true;
-    log(`Set native-claude for project ${folderPath} (port ${port})`);
-  }
-
-  if (changed) {
-    writeClaudeConfig(config);
-  }
+  activeConfigWriters = [];
 }
 
-function updateProjectMcpConfigForFolder(
+function updateAgentConfigsForFolder(
   folderPath: string,
   port: number,
   authToken?: string,
 ): void {
-  const config = readClaudeConfig();
-  if (!config) return;
-
-  if (!config.projects || typeof config.projects !== "object") {
-    config.projects = {};
-  }
-  const projects = config.projects as Record<string, Record<string, unknown>>;
-  if (!projects[folderPath]) {
-    projects[folderPath] = {};
-  }
-  const project = projects[folderPath];
-  if (!project.mcpServers || typeof project.mcpServers !== "object") {
-    project.mcpServers = {};
-  }
-
-  const url = `http://localhost:${port}/mcp`;
-  const entry: Record<string, unknown> = { type: "http", url };
-  if (authToken) {
-    entry.headers = { Authorization: `Bearer ${authToken}` };
-  }
-  (project.mcpServers as Record<string, unknown>)["native-claude"] = entry;
-
-  writeClaudeConfig(config);
-  log(`Set native-claude for project ${folderPath} (port ${port})`);
-}
-
-function cleanupProjectMcpConfig(): void {
-  const folders = vscode.workspace.workspaceFolders;
-  if (!folders) return;
-
-  const config = readClaudeConfig();
-  if (!config) return;
-
-  const projects = config.projects as
-    | Record<string, Record<string, unknown>>
-    | undefined;
-  if (!projects) return;
-
-  let changed = false;
-  for (const folder of folders) {
-    const project = projects[folder.uri.fsPath];
-    if (!project) continue;
-    const mcpServers = project.mcpServers as
-      | Record<string, unknown>
-      | undefined;
-    if (!mcpServers || !("native-claude" in mcpServers)) continue;
-    delete mcpServers["native-claude"];
-    changed = true;
-    log(`Removed native-claude from project ${folder.uri.fsPath}`);
-  }
-
-  if (changed) {
-    writeClaudeConfig(config);
+  for (const writer of activeConfigWriters) {
+    writer.writeForFolder?.(folderPath, port, authToken);
   }
 }
 
-function cleanupProjectMcpConfigForFolder(folderPath: string): void {
-  const config = readClaudeConfig();
-  if (!config) return;
-
-  const projects = config.projects as
-    | Record<string, Record<string, unknown>>
-    | undefined;
-  if (!projects) return;
-
-  const project = projects[folderPath];
-  if (!project) return;
-  const mcpServers = project.mcpServers as Record<string, unknown> | undefined;
-  if (!mcpServers || !("native-claude" in mcpServers)) return;
-
-  delete mcpServers["native-claude"];
-  writeClaudeConfig(config);
-  log(`Removed native-claude from project ${folderPath}`);
+function cleanupAgentConfigsForFolder(folderPath: string): void {
+  for (const writer of activeConfigWriters) {
+    writer.cleanupFolder?.(folderPath);
+  }
 }
 
 function collectRequestBody(req: http.IncomingMessage): Promise<Buffer> {
@@ -341,9 +203,19 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
     activePort = actualPort;
     activeAuthToken = authToken;
     log(`MCP server listening on http://127.0.0.1:${actualPort}/mcp`);
-    const configured = updateClaudeConfig(actualPort, authToken);
-    updateProjectMcpConfig(actualPort, authToken);
+    const configured = updateAllAgentConfigs(actualPort, authToken);
     updateStatusBar(actualPort, configured);
+
+    // Auto-update instruction files + hooks if opted in
+    const agentIds = getConfiguredAgentIds();
+    if (getConfig<boolean>("autoUpdateInstructions")) {
+      setupAllInstructions(context.extensionUri, agentIds, log, {
+        silent: true,
+      });
+    }
+    if (getConfig<boolean>("autoUpdateHooks")) {
+      installHooks(context.extensionUri, log, { silent: true });
+    }
   };
 
   return new Promise<void>((resolve, reject) => {
@@ -372,7 +244,7 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 }
 
 async function stopServer(): Promise<void> {
-  cleanupProjectMcpConfig();
+  cleanupAllAgentConfigs();
   activePort = null;
   activeAuthToken = undefined;
 
@@ -392,17 +264,14 @@ async function stopServer(): Promise<void> {
   }
 }
 
-function updateStatusBar(
-  port: number | null,
-  claudeConfigured?: boolean,
-): void {
+function updateStatusBar(port: number | null, agentConfigured?: boolean): void {
   if (port !== null) {
-    statusBarItem.text = `$(chip) Native Claude :${port}`;
-    statusBarItem.tooltip = `Native Claude MCP server running on port ${port}`;
+    statusBarItem.text = `$(chip) AgentLink :${port}`;
+    statusBarItem.tooltip = `AgentLink MCP server running on port ${port}`;
     statusBarItem.backgroundColor = undefined;
   } else {
-    statusBarItem.text = `$(chip) Native Claude`;
-    statusBarItem.tooltip = "Native Claude MCP server stopped";
+    statusBarItem.text = `$(chip) AgentLink`;
+    statusBarItem.tooltip = "AgentLink MCP server stopped";
     statusBarItem.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
     );
@@ -415,7 +284,7 @@ function updateStatusBar(
     port,
     sessions: mcpHost?.sessionCount ?? 0,
     authEnabled: getConfig<boolean>("requireAuth"),
-    claudeConfigured: claudeConfigured ?? false,
+    agentConfigured: agentConfigured ?? false,
   });
 }
 
@@ -461,13 +330,13 @@ async function addTrustedCommandViaUI(): Promise<void> {
   if (roots && roots.length > 0) {
     scopeItems.push({
       label: "$(folder) This Project",
-      description: ".claude/native-claude.json",
+      description: ".agentlink/agentlink.json",
       scope: "project",
     });
   }
   scopeItems.push({
     label: "$(globe) Global",
-    description: "~/.claude/native-claude.json",
+    description: "~/.agentlink/agentlink.json",
     scope: "global",
   });
 
@@ -488,13 +357,28 @@ async function addTrustedCommandViaUI(): Promise<void> {
   );
 }
 
+function showAgentPickerInSidebar(): void {
+  const currentAgents = getConfiguredAgentIds();
+  sidebarProvider?.updateState({
+    ...sidebarProvider.getState(),
+    onboardingStep: 1,
+    knownAgents: KNOWN_AGENTS.map((a) => ({
+      id: a.id,
+      name: a.name,
+      selected: currentAgents.includes(a.id),
+    })),
+  });
+  // Reveal the sidebar so the user sees the picker
+  vscode.commands.executeCommand("agentLink.statusView.focus");
+}
+
 export function activate(context: vscode.ExtensionContext): void {
-  outputChannel = vscode.window.createOutputChannel("Native Claude");
+  outputChannel = vscode.window.createOutputChannel("AgentLink");
   context.subscriptions.push(outputChannel);
 
   initializeTerminalManager(context.extensionUri, log);
 
-  log("Activating Native Claude extension");
+  log("Activating AgentLink extension");
 
   // Config store for disk-based approval rules
   const configStore = new ConfigStore();
@@ -554,60 +438,99 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.StatusBarAlignment.Right,
     100,
   );
-  statusBarItem.command = "native-claude.showStatus";
+  statusBarItem.command = "agentlink.showStatus";
   context.subscriptions.push(statusBarItem);
 
   // Commands
   context.subscriptions.push(
-    vscode.commands.registerCommand("native-claude.acceptDiff", () =>
+    vscode.commands.registerCommand("agentlink.acceptDiff", () =>
       resolveCurrentDiff("accept"),
     ),
-    vscode.commands.registerCommand("native-claude.acceptDiffMore", () =>
+    vscode.commands.registerCommand("agentlink.acceptDiffMore", () =>
       showDiffMoreOptions(),
     ),
-    vscode.commands.registerCommand("native-claude.rejectDiff", () =>
+    vscode.commands.registerCommand("agentlink.rejectDiff", () =>
       resolveCurrentDiff("reject"),
     ),
-    vscode.commands.registerCommand("native-claude.addTrustedCommand", () =>
+    vscode.commands.registerCommand("agentlink.addTrustedCommand", () =>
       addTrustedCommandViaUI(),
     ),
-    vscode.commands.registerCommand("nativeClaude.focusApproval", () =>
+    vscode.commands.registerCommand("agentLink.focusApproval", () =>
       approvalPanel.focusApproval(),
     ),
-    vscode.commands.registerCommand(
-      "native-claude.cancelToolCall",
-      (id: string) => toolCallTracker.cancelCall(id, approvalPanel),
+    vscode.commands.registerCommand("agentlink.cancelToolCall", (id: string) =>
+      toolCallTracker.cancelCall(id, approvalPanel),
     ),
     vscode.commands.registerCommand(
-      "native-claude.completeToolCall",
+      "agentlink.completeToolCall",
       (id: string) => toolCallTracker.completeCall(id, approvalPanel),
     ),
+    vscode.commands.registerCommand("agentlink.clearSessionApprovals", () => {
+      for (const s of approvalManager.getActiveSessions()) {
+        approvalManager.clearSession(s.id);
+      }
+      approvalManager.resetWriteApproval();
+      vscode.window.showInformationMessage("All session approvals cleared.");
+    }),
+    vscode.commands.registerCommand("agentlink.configureAgents", () =>
+      showAgentPickerInSidebar(),
+    ),
+    vscode.commands.registerCommand("agentlink.resetOnboarding", () => {
+      // Only show picker in current window — don't touch globalState
+      showAgentPickerInSidebar();
+    }),
     vscode.commands.registerCommand(
-      "native-claude.clearSessionApprovals",
-      () => {
-        for (const s of approvalManager.getActiveSessions()) {
-          approvalManager.clearSession(s.id);
+      "agentlink.applyAgentConfig",
+      (opts?: { skipAutoUpdate?: boolean }) => {
+        if (activePort !== null) {
+          cleanupAllAgentConfigs();
+          const configured = updateAllAgentConfigs(activePort, activeAuthToken);
+          updateStatusBar(activePort, configured);
+
+          if (!opts?.skipAutoUpdate) {
+            const ids = getConfiguredAgentIds();
+            if (getConfig<boolean>("autoUpdateInstructions")) {
+              setupAllInstructions(context.extensionUri, ids, log, {
+                silent: true,
+              });
+            }
+            if (getConfig<boolean>("autoUpdateHooks")) {
+              installHooks(context.extensionUri, log, { silent: true });
+            }
+          }
         }
-        approvalManager.resetWriteApproval();
-        vscode.window.showInformationMessage("All session approvals cleared.");
       },
     ),
-    vscode.commands.registerCommand("native-claude.startServer", () =>
+    vscode.commands.registerCommand(
+      "agentlink.setupInstructions",
+      (agentId?: string) => {
+        if (agentId) {
+          setupInstructions(context.extensionUri, agentId, log);
+        } else {
+          // Run for all configured agents
+          for (const id of getConfiguredAgentIds()) {
+            setupInstructions(context.extensionUri, id, log);
+          }
+        }
+      },
+    ),
+    vscode.commands.registerCommand("agentlink.installHooks", () => {
+      installHooks(context.extensionUri, log);
+    }),
+    vscode.commands.registerCommand("agentlink.startServer", () =>
       startServer(context),
     ),
-    vscode.commands.registerCommand("native-claude.stopServer", () =>
-      stopServer(),
-    ),
-    vscode.commands.registerCommand("native-claude.showStatus", () => {
+    vscode.commands.registerCommand("agentlink.stopServer", () => stopServer()),
+    vscode.commands.registerCommand("agentlink.showStatus", () => {
       const port = httpServer?.address();
       const portNum = typeof port === "object" && port ? port.port : null;
       if (portNum) {
         vscode.window.showInformationMessage(
-          `Native Claude MCP server running on port ${portNum} with ${mcpHost?.sessionCount ?? 0} active session(s).`,
+          `AgentLink MCP server running on port ${portNum} with ${mcpHost?.sessionCount ?? 0} active session(s).`,
         );
       } else {
         vscode.window.showWarningMessage(
-          "Native Claude MCP server is not running.",
+          "AgentLink MCP server is not running.",
         );
       }
     }),
@@ -618,14 +541,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeWorkspaceFolders((e) => {
       if (activePort === null) return;
       for (const added of e.added) {
-        updateProjectMcpConfigForFolder(
+        updateAgentConfigsForFolder(
           added.uri.fsPath,
           activePort,
           activeAuthToken,
         );
       }
       for (const removed of e.removed) {
-        cleanupProjectMcpConfigForFolder(removed.uri.fsPath);
+        cleanupAgentConfigsForFolder(removed.uri.fsPath);
       }
     }),
   );
@@ -638,6 +561,14 @@ export function activate(context: vscode.ExtensionContext): void {
       disposeQuickPickQueue();
     },
   });
+
+  // Onboarding: show agent picker in sidebar on first activation
+  const onboardingComplete =
+    context.globalState.get<boolean>("onboardingComplete");
+  if (!onboardingComplete) {
+    context.globalState.update("onboardingComplete", true);
+    showAgentPickerInSidebar();
+  }
 
   // Auto-start with retry
   const autoStart = getConfig<boolean>("autoStart");
@@ -658,7 +589,7 @@ export function activate(context: vscode.ExtensionContext): void {
             `Failed to start server after ${MAX_RETRIES + 1} attempts: ${err}`,
           );
           vscode.window.showErrorMessage(
-            `Native Claude: Failed to start MCP server after ${MAX_RETRIES + 1} attempts: ${err}`,
+            `AgentLink: Failed to start MCP server after ${MAX_RETRIES + 1} attempts: ${err}`,
           );
         }
       }

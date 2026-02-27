@@ -769,7 +769,7 @@ export function registerTools(
 
   server.tool(
     "execute_command",
-    "Run a command in VS Code's integrated terminal. The terminal is visible to the user. Output is captured when shell integration is available.\n\nTerminal reuse: By default, reuses an existing idle terminal — do NOT pass terminal_name or terminal_id for normal commands. Only use terminal_name when you need a genuinely separate terminal for parallel execution (e.g. a background dev server running alongside normal commands). Do not create named terminals for one-off commands.\n\nTerminal splitting: Use split_from with a terminal_id or terminal_name to create a new terminal split alongside an existing one, forming a visual group in VS Code's terminal panel. Only affects new terminal creation — if the target terminal_name already exists and is idle, it is reused without re-splitting.\n\nBackground commands: Use background=true for long-running processes (dev servers, watch modes). Returns immediately with terminal_id. Use get_terminal_output with the terminal_id to check on progress, read accumulated output, and see if the command has finished. Background terminals are never auto-reused — always use terminal_name or terminal_id to target them.\n\nOutput is capped to the last 200 lines by default. Full output is saved to a temp file (returned as output_file) for on-demand access via read_file. Use output_head, output_tail, or output_grep to customize filtering. IMPORTANT: Commands that pipe through head, tail, or grep (e.g. `cmd | head -5`) will be automatically REJECTED. Use the output_head, output_tail, and output_grep parameters instead — they filter the output returned to you while keeping the full output visible to the user in the terminal.\n\nInteractive commands: Commands that require interactive input (editors like vim/nano, REPLs without scripts, TUI apps like htop, bare database CLIs, interactive git flags like -i/-p, scaffolders without --yes) will be automatically REJECTED with a helpful suggestion. Always use non-interactive alternatives: pass -y/--yes flags, use -c/-e for inline execution, provide all arguments upfront, or use the appropriate native-claude tool (write_file, apply_diff) instead of editors.",
+    "Run a command in VS Code's integrated terminal. The terminal is visible to the user. Output is captured when shell integration is available.\n\nTerminal reuse: By default, reuses an existing idle terminal — do NOT pass terminal_name or terminal_id for normal commands. Only use terminal_name when you need a genuinely separate terminal for parallel execution (e.g. a background dev server running alongside normal commands). Do not create named terminals for one-off commands.\n\nTerminal splitting: Use split_from with a terminal_id or terminal_name to create a new terminal split alongside an existing one, forming a visual group in VS Code's terminal panel. Only affects new terminal creation — if the target terminal_name already exists and is idle, it is reused without re-splitting.\n\nBackground commands: Use background=true for long-running processes (dev servers, watch modes). Returns immediately with terminal_id. Use get_terminal_output with the terminal_id to check on progress, read accumulated output, and see if the command has finished. Background terminals are never auto-reused — always use terminal_name or terminal_id to target them.\n\nOutput is capped to the last 200 lines by default. Full output is saved to a temp file (returned as output_file) for on-demand access via read_file. Use output_head, output_tail, or output_grep to customize filtering. IMPORTANT: Commands that pipe through head, tail, or grep (e.g. `cmd | head -5`) will be automatically REJECTED. Use the output_head, output_tail, and output_grep parameters instead — they filter the output returned to you while keeping the full output visible to the user in the terminal.\n\nInteractive commands: Commands that require interactive input (editors like vim/nano, REPLs without scripts, TUI apps like htop, bare database CLIs, interactive git flags like -i/-p, scaffolders without --yes) will be automatically REJECTED with a helpful suggestion. Always use non-interactive alternatives: pass -y/--yes flags, use -c/-e for inline execution, provide all arguments upfront, or use the appropriate agentlink tool (write_file, apply_diff) instead of editors.",
     {
       command: z.string().describe("Shell command to execute"),
       cwd: z
@@ -945,7 +945,7 @@ export function registerTools(
 
   server.tool(
     "close_terminals",
-    "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by native-claude. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal).",
+    "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal).",
     {
       names: z
         .array(z.string())
@@ -1024,7 +1024,7 @@ export function registerTools(
   if (__DEV_BUILD__) {
     server.tool(
       "send_feedback",
-      "Submit feedback about a native-claude tool — report issues, suggest improvements, or note missing features/parameters. Feedback is stored locally for the extension developer to review.",
+      "Submit feedback about a agentlink tool — report issues, suggest improvements, or note missing features/parameters. Feedback is stored locally for the extension developer to review.",
       {
         tool_name: z
           .string()
@@ -1059,7 +1059,7 @@ export function registerTools(
 
     server.tool(
       "get_feedback",
-      "Read all previously submitted feedback about native-claude tools. Optionally filter by tool name.",
+      "Read all previously submitted feedback about agentlink tools. Optionally filter by tool name.",
       {
         tool_name: z
           .string()

@@ -19,13 +19,22 @@ export interface SessionInfo {
   writeRules: PathRule[];
 }
 
+export interface AgentInfo {
+  id: string;
+  name: string;
+  selected: boolean;
+}
+
 export interface SidebarState {
   serverRunning: boolean;
   port: number | null;
   sessions: number;
   authEnabled: boolean;
-  claudeConfigured: boolean;
+  agentConfigured: boolean;
   masterBypass: boolean;
+  onboardingStep?: number;
+  knownAgents?: AgentInfo[];
+  configuredAgentIds?: string[];
   writeApproval?: "prompt" | "session" | "project" | "global";
   globalCommandRules?: CommandRule[];
   projectCommandRules?: CommandRule[];
@@ -72,4 +81,7 @@ export interface WebviewCommand {
 }
 
 // Helper type for the postCommand function passed via props
-export type PostCommand = (command: string, data?: Record<string, string>) => void;
+export type PostCommand = (
+  command: string,
+  data?: Record<string, string>,
+) => void;

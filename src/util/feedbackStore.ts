@@ -4,8 +4,8 @@ import * as os from "os";
 
 const FEEDBACK_PATH = path.join(
   os.homedir(),
-  ".claude",
-  "native-claude-feedback.jsonl",
+  ".agentlink",
+  "agentlink-feedback.jsonl",
 );
 
 const MAX_FIELD_LENGTH = 500;

@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { appendFeedback, readFeedback, deleteFeedback } from "./feedbackStore.js";
+import {
+  appendFeedback,
+  readFeedback,
+  deleteFeedback,
+} from "./feedbackStore.js";
 import type { FeedbackEntry } from "./feedbackStore.js";
 
 // Override the feedback path for testing by mocking the module-level constant.
@@ -32,7 +36,11 @@ function makeEntry(overrides: Partial<FeedbackEntry> = {}): FeedbackEntry {
 let savedContent: string | null = null;
 
 beforeEach(() => {
-  feedbackPath = path.join(os.homedir(), ".claude", "native-claude-feedback.jsonl");
+  feedbackPath = path.join(
+    os.homedir(),
+    ".agentlink",
+    "agentlink-feedback.jsonl",
+  );
   // Save existing file if present
   try {
     savedContent = fs.readFileSync(feedbackPath, "utf-8");
@@ -86,7 +94,11 @@ describe("feedbackStore", () => {
   });
 
   it("returns empty array when no file exists", () => {
-    try { fs.unlinkSync(feedbackPath); } catch { /* */ }
+    try {
+      fs.unlinkSync(feedbackPath);
+    } catch {
+      /* */
+    }
     expect(readFeedback()).toEqual([]);
   });
 
@@ -127,7 +139,11 @@ describe("feedbackStore", () => {
   });
 
   it("returns 0 when deleting from nonexistent file", () => {
-    try { fs.unlinkSync(feedbackPath); } catch { /* */ }
+    try {
+      fs.unlinkSync(feedbackPath);
+    } catch {
+      /* */
+    }
     expect(deleteFeedback([0])).toBe(0);
   });
 

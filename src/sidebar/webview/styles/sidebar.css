@@ -70,6 +70,10 @@ h3 {
   background: var(--vscode-editorWarning-foreground, #cca700);
   color: #000;
 }
+.badge-pending {
+  background: var(--vscode-widget-border, rgba(128,128,128,0.4));
+  color: var(--vscode-foreground);
+}
 
 .btn {
   display: block;
@@ -95,6 +99,13 @@ h3 {
   color: var(--vscode-button-secondaryForeground);
 }
 .btn-secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+.btn-done {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  opacity: 0.7;
+  cursor: default;
+}
 
 .button-group { margin-top: 8px; }
 
@@ -376,4 +387,97 @@ h3 {
 }
 .btn-inline:hover {
   opacity: 0.85;
+}
+
+/* Agent picker */
+.agent-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.agent-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.agent-option input[type="checkbox"] {
+  accent-color: var(--vscode-button-background);
+}
+
+/* Onboarding confirmation */
+h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+  margin-bottom: 6px;
+}
+h5 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+  margin-bottom: 4px;
+}
+.onboarding-checklist {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  background: var(--vscode-editor-background, rgba(0,0,0,0.1));
+  border-radius: 4px;
+}
+.onboarding-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--vscode-foreground);
+}
+.onboarding-agent-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+.onboarding-agent-list li {
+  display: flex;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.onboarding-agent-section {
+  margin-top: 12px;
+  padding: 8px;
+  background: var(--vscode-editor-background, rgba(0,0,0,0.1));
+  border-radius: 4px;
+}
+.onboarding-step {
+  font-size: 11px;
+  margin-top: 4px;
+  line-height: 1.5;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+.onboarding-step-label {
+  font-weight: 600;
+  color: var(--vscode-foreground);
+  margin-right: 4px;
+}
+.onboarding-targets {
+  margin-top: 8px;
+}
+.onboarding-target-row {
+  font-size: 11px;
+  padding: 2px 0;
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+}
+.onboarding-target-agent {
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+.onboarding-target-path {
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10px;
 }

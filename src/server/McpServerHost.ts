@@ -142,7 +142,7 @@ export class McpServerHost {
     });
 
     const server = new McpServer({
-      name: "native-claude",
+      name: "agentlink",
       version: "0.1.0",
     });
 

@@ -19,7 +19,7 @@ export class FindReplacePreviewPanel implements vscode.Disposable {
   show(data: FindReplacePreviewData): void {
     if (!this.panel) {
       this.panel = vscode.window.createWebviewPanel(
-        "nativeClaude.findReplacePreview",
+        "agentLink.findReplacePreview",
         `Find & Replace: "${data.findText.length > 30 ? data.findText.slice(0, 30) + "…" : data.findText}"`,
         { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
         {
@@ -30,7 +30,7 @@ export class FindReplacePreviewPanel implements vscode.Disposable {
       this.panel.iconPath = vscode.Uri.joinPath(
         this.extensionUri,
         "media",
-        "claude-terminal.svg",
+        "agentlink-terminal.svg",
       );
       this.panel.webview.html = this.getHtml(this.panel.webview);
       this.panel.onDidDispose(

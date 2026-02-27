@@ -10,10 +10,7 @@ import {
 } from "../integrations/DiffViewProvider.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import {
-  decisionToScope,
-  saveWriteTrustRules,
-} from "./writeApprovalUI.js";
+import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -34,11 +31,11 @@ export async function handleWriteFile(
     // as a side effect when the user clicks "For Session"/"Always" on the diff view.
 
     const diagnosticDelay = vscode.workspace
-      .getConfiguration("native-claude")
+      .getConfiguration("agentlink")
       .get<number>("diagnosticDelay", 1500);
 
     const masterBypass = vscode.workspace
-      .getConfiguration("native-claude")
+      .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
 
     // Auto-approve check (includes recent single-use approvals within TTL)

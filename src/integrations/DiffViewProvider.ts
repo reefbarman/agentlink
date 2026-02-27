@@ -282,7 +282,7 @@ export class DiffViewProvider {
     // Show toolbar buttons via context key
     await vscode.commands.executeCommand(
       "setContext",
-      "nativeClaude.diffPending",
+      "agentLink.diffPending",
       true,
     );
 
@@ -312,8 +312,8 @@ export class DiffViewProvider {
         pendingDecisionResolve = finish;
 
         // Listen for diff tab being closed (treat as rejection).
-        const editorCloseDisposable =
-          vscode.window.tabGroups.onDidChangeTabs((e) => {
+        const editorCloseDisposable = vscode.window.tabGroups.onDidChangeTabs(
+          (e) => {
             if (resolved) return;
             if (e.closed.length === 0) return;
             const diffStillOpen = vscode.window.tabGroups.all
@@ -327,7 +327,8 @@ export class DiffViewProvider {
             if (!diffStillOpen) {
               finish("reject");
             }
-          });
+          },
+        );
 
         if (approvalPanel) {
           // ── Approval panel mode ────────────────────────────────────────
@@ -461,7 +462,7 @@ export class DiffViewProvider {
       disposeUI?.();
       await vscode.commands.executeCommand(
         "setContext",
-        "nativeClaude.diffPending",
+        "agentLink.diffPending",
         false,
       );
     }

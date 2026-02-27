@@ -36,7 +36,7 @@ export function initializeTerminalManager(
   terminalIconPath = vscode.Uri.joinPath(
     extensionUri,
     "media",
-    "claude-terminal.svg",
+    "agentlink-terminal.svg",
   );
   if (log) {
     getTerminalManager().log = log;
@@ -247,7 +247,7 @@ export class TerminalManager {
     // Prefer one with matching cwd, but fall back to any idle one
     // (the stored cwd is just the creation cwd — after commands run it may differ).
     const idleDefaults = this.terminals.filter(
-      (t) => !t.busy && !t.backgroundRunning && t.name === "Native Claude",
+      (t) => !t.busy && !t.backgroundRunning && t.name === "AgentLink",
     );
     const cwdMatch = idleDefaults.find((t) => t.cwd === cwd);
     if (cwdMatch) {
@@ -259,7 +259,7 @@ export class TerminalManager {
       return idleDefaults[0];
     }
 
-    const managed = this.createTerminal(cwd, "Native Claude");
+    const managed = this.createTerminal(cwd, "AgentLink");
     if (split_from) {
       await this.splitTerminalBeside(managed, split_from);
     }

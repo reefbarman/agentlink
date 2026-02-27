@@ -43,9 +43,6 @@ if $INSTALL; then
   echo "Installing $VSIX..."
   code --install-extension "$VSIX" --force
   echo "Installed. Reload VS Code to activate."
-
-  # Inject CLAUDE.md instructions
   echo ""
-  echo "Updating ~/.claude/CLAUDE.md..."
-  bash "$(dirname "$0")/inject-claude-md.sh" "$(dirname "$0")/../CLAUDE.md.example"
+  echo "Use 'AgentLink: Configure Agents' in the command palette to set up instructions and hooks."
 fi

@@ -22,7 +22,11 @@ const CONTEXT_LINES = 5;
 interface FileReplacement {
   uri: vscode.Uri;
   relPath: string;
-  replacements: Array<{ range: vscode.Range; newText: string; matchId: string }>;
+  replacements: Array<{
+    range: vscode.Range;
+    newText: string;
+    matchId: string;
+  }>;
   matches: FindReplaceMatch[];
 }
 
@@ -197,7 +201,7 @@ export async function handleFindAndReplace(
 
     // Check write approval
     const masterBypass = vscode.workspace
-      .getConfiguration("native-claude")
+      .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
 
     const canAutoApprove =

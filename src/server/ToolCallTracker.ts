@@ -303,7 +303,7 @@ export class ToolCallTracker extends EventEmitter {
                 method: "notifications/message",
                 params: {
                   level: "debug",
-                  logger: "native-claude",
+                  logger: "agentlink",
                   data: `${toolName}: processing… (${tick * (HEARTBEAT_INTERVAL_MS / 1000)}s)`,
                 },
               });
