@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   parseSearchReplaceBlocks,
+  parseUnifiedDiff,
+  isUnifiedDiff,
   applyBlocks,
   normalizeForComparison,
   tryFlexibleMatch,
@@ -245,8 +247,7 @@ describe("applyBlocks", () => {
   });
 
   it("flexible match works with multi-line blocks", () => {
-    const content =
-      "class Foo {\n\tmethod() {\n\t\treturn 1;\n\t}\n}";
+    const content = "class Foo {\n\tmethod() {\n\t\treturn 1;\n\t}\n}";
     const { result, failedBlocks } = applyBlocks(content, [
       {
         search: "    method() {\n        return 1;\n    }",
@@ -443,5 +444,185 @@ describe("applyBlocks — escape-aware fallback", () => {
     // Exact match should be used (first occurrence with real newlines)
     expect(result).toBe("Goodbye\nWorld\nHello\\nWorld");
     expect(failedBlocks).toEqual([]);
+  });
+});
+
+// ── Unified diff support ─────────────────────────────────────────────────
+
+describe("isUnifiedDiff", () => {
+  it("detects standard unified diff format", () => {
+    const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,3 @@
+ line 1
+-old line
++new line
+ line 3`;
+    expect(isUnifiedDiff(diff)).toBe(true);
+  });
+
+  it("rejects SEARCH/REPLACE format", () => {
+    const input = `<<<<<<< SEARCH
+hello
+======= DIVIDER =======
+world
+>>>>>>> REPLACE`;
+    expect(isUnifiedDiff(input)).toBe(false);
+  });
+
+  it("rejects plain text", () => {
+    expect(isUnifiedDiff("just some text")).toBe(false);
+  });
+
+  it("rejects partial unified diff (missing +++ header)", () => {
+    const diff = `--- a/file.ts
+@@ -1,3 +1,3 @@
+ context`;
+    expect(isUnifiedDiff(diff)).toBe(false);
+  });
+});
+
+describe("parseUnifiedDiff", () => {
+  it("parses a single hunk with additions and deletions", () => {
+    const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,3 @@
+ line 1
+-old line
++new line
+ line 3`;
+    const { blocks, malformedBlocks } = parseUnifiedDiff(diff);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe("line 1\nold line\nline 3");
+    expect(blocks[0].replace).toBe("line 1\nnew line\nline 3");
+    expect(malformedBlocks).toBe(0);
+  });
+
+  it("parses multiple hunks as separate blocks", () => {
+    const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,3 @@
+ line 1
+-old A
++new A
+ line 3
+@@ -10,3 +10,3 @@
+ line 10
+-old B
++new B
+ line 12`;
+    const { blocks } = parseUnifiedDiff(diff);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].search).toBe("line 1\nold A\nline 3");
+    expect(blocks[0].replace).toBe("line 1\nnew A\nline 3");
+    expect(blocks[1].search).toBe("line 10\nold B\nline 12");
+    expect(blocks[1].replace).toBe("line 10\nnew B\nline 12");
+  });
+
+  it("handles pure addition (no deletions)", () => {
+    const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,2 +1,4 @@
+ line 1
++added 1
++added 2
+ line 2`;
+    const { blocks } = parseUnifiedDiff(diff);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe("line 1\nline 2");
+    expect(blocks[0].replace).toBe("line 1\nadded 1\nadded 2\nline 2");
+  });
+
+  it("handles pure deletion (no additions)", () => {
+    const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,4 +1,2 @@
+ line 1
+-removed 1
+-removed 2
+ line 4`;
+    const { blocks } = parseUnifiedDiff(diff);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe("line 1\nremoved 1\nremoved 2\nline 4");
+    expect(blocks[0].replace).toBe("line 1\nline 4");
+  });
+
+  it("handles no context lines (only additions and deletions)", () => {
+    const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,2 +1,2 @@
+-old 1
+-old 2
++new 1
++new 2`;
+    const { blocks } = parseUnifiedDiff(diff);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe("old 1\nold 2");
+    expect(blocks[0].replace).toBe("new 1\nnew 2");
+  });
+
+  it("skips 'No newline at end of file' markers", () => {
+    const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,2 +1,2 @@
+-old
+\\ No newline at end of file
++new
+\\ No newline at end of file`;
+    const { blocks } = parseUnifiedDiff(diff);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe("old");
+    expect(blocks[0].replace).toBe("new");
+  });
+
+  it("preserves indentation in content lines", () => {
+    const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,3 @@
+ function foo() {
+-  return 1;
++  return 42;
+ }`;
+    const { blocks } = parseUnifiedDiff(diff);
+    expect(blocks[0].search).toBe("function foo() {\n  return 1;\n}");
+    expect(blocks[0].replace).toBe("function foo() {\n  return 42;\n}");
+  });
+
+  it("integrates with applyBlocks", () => {
+    const content = "line 1\nold line\nline 3";
+    const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,3 @@
+ line 1
+-old line
++new line
+ line 3`;
+    const { blocks } = parseUnifiedDiff(diff);
+    const { result, failedBlocks } = applyBlocks(content, blocks);
+    expect(result).toBe("line 1\nnew line\nline 3");
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("parses indented code in unified diff (real-world feedback case)", () => {
+    const diff = `--- a/templates/templates/common/common/security.ts
++++ b/templates/templates/common/common/security.ts
+@@ -332,7 +332,7 @@
+       }
+ 
+-      const opId = op.GetID();
++      const opId = op.ID;
+       if (seenIds.has(opId)) {
+         continue;
+       }`;
+    expect(isUnifiedDiff(diff)).toBe(true);
+    const { blocks, malformedBlocks } = parseUnifiedDiff(diff);
+    expect(malformedBlocks).toBe(0);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].search).toBe(
+      "      }\n\n      const opId = op.GetID();\n      if (seenIds.has(opId)) {\n        continue;\n      }",
+    );
+    expect(blocks[0].replace).toBe(
+      "      }\n\n      const opId = op.ID;\n      if (seenIds.has(opId)) {\n        continue;\n      }",
+    );
   });
 });

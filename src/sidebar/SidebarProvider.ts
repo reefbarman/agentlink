@@ -12,6 +12,7 @@ import type {
   ToolCallTracker,
   TrackedCallInfo,
 } from "../server/ToolCallTracker.js";
+import { readFeedback, deleteFeedback } from "../util/feedbackStore.js";
 
 export interface SidebarState {
   serverRunning: boolean;
@@ -80,6 +81,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       type: "updateToolCalls",
       calls: this.activeToolCalls,
     });
+    // Auto-refresh feedback after tool calls complete (may have auto-recorded failures)
+    if (__DEV_BUILD__) {
+      this.refreshFeedback();
+    }
+  }
+
+  private refreshFeedback(): void {
+    if (!this.view) return;
+    try {
+      const entries = readFeedback();
+      this.view.webview.postMessage({
+        type: "updateFeedback",
+        entries,
+      });
+    } catch {
+      // feedbackStore may not exist yet
+    }
   }
 
   resolveWebviewView(
@@ -103,6 +121,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this.log("Received webviewReady from Preact app");
           this.refreshApprovalState();
           this.refreshToolCalls();
+          if (__DEV_BUILD__) {
+            this.refreshFeedback();
+          }
           break;
         case "startServer":
           vscode.commands.executeCommand("native-claude.startServer");
@@ -264,6 +285,37 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               "session",
               message.sessionId,
             );
+          }
+          break;
+        // Feedback handlers (dev builds only)
+        case "refreshFeedback":
+          if (__DEV_BUILD__) {
+            this.refreshFeedback();
+          }
+          break;
+        case "deleteFeedbackEntry":
+          if (__DEV_BUILD__ && message.index != null) {
+            deleteFeedback([Number(message.index)]);
+            this.refreshFeedback();
+          }
+          break;
+        case "clearAllFeedback":
+          if (__DEV_BUILD__) {
+            const entries = readFeedback();
+            if (entries.length > 0) {
+              deleteFeedback(entries.map((_, i) => i));
+            }
+            this.refreshFeedback();
+          }
+          break;
+        case "openFeedbackFile":
+          if (__DEV_BUILD__) {
+            const feedbackPath = path.join(
+              os.homedir(),
+              ".claude",
+              "native-claude-feedback.jsonl",
+            );
+            vscode.window.showTextDocument(vscode.Uri.file(feedbackPath));
           }
           break;
       }

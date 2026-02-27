@@ -5,7 +5,10 @@ import * as vscode from "vscode";
  * Creates a flashing status bar item and a non-modal warning notification.
  * Call dispose() when the approval is resolved.
  */
-export function showApprovalAlert(message: string): vscode.Disposable {
+export function showApprovalAlert(
+  message: string,
+  command?: string,
+): vscode.Disposable {
   // Flashing status bar item (high priority = leftmost)
   const statusBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
@@ -15,6 +18,9 @@ export function showApprovalAlert(message: string): vscode.Disposable {
   statusBar.backgroundColor = new vscode.ThemeColor(
     "statusBarItem.warningBackground",
   );
+  if (command) {
+    statusBar.command = command;
+  }
   statusBar.show();
 
   let flash = true;
@@ -23,12 +29,15 @@ export function showApprovalAlert(message: string): vscode.Disposable {
     statusBar.text = flash ? `$(alert) ${message}` : `     ${message}`;
   }, 800);
 
-  // Dismissable notification — resolving the progress promise closes it.
+  // Dismissible notification — resolving the progress promise closes it.
   // (showWarningMessage can't be programmatically dismissed, but withProgress can.)
   let dismissNotification: (() => void) | undefined;
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `⚠ ${message}` },
-    () => new Promise<void>((resolve) => { dismissNotification = resolve; }),
+    () =>
+      new Promise<void>((resolve) => {
+        dismissNotification = resolve;
+      }),
   );
 
   // Try to bring VS Code to front (will flash taskbar if window is behind others)

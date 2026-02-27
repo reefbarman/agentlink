@@ -48,6 +48,12 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
           <div class="tool-call-args" title={c.displayArgs}>
             {c.displayArgs}
           </div>
+          {c.params && (
+            <details class="tool-call-params">
+              <summary>params</summary>
+              <pre>{c.params}</pre>
+            </details>
+          )}
           {c.lastHeartbeatAt && (
             <div class="tool-call-heartbeat" title="Time since last successful SSE heartbeat">
               heartbeat {formatElapsed(Date.now() - c.lastHeartbeatAt)} ago
@@ -80,6 +86,12 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
           <div class="tool-call-args" title={c.displayArgs}>
             {c.displayArgs}
           </div>
+          {c.params && (
+            <details class="tool-call-params">
+              <summary>params</summary>
+              <pre>{c.params}</pre>
+            </details>
+          )}
         </div>
       ))}
     </div>

@@ -41,16 +41,29 @@ export interface TrackedCallInfo {
   id: string;
   toolName: string;
   displayArgs: string;
+  params?: string;
   startedAt: number;
   status: "active" | "completed";
   completedAt?: number;
   lastHeartbeatAt?: number;
 }
 
+export interface FeedbackEntry {
+  timestamp: string;
+  tool_name: string;
+  feedback: string;
+  session_id?: string;
+  workspace?: string;
+  extension_version: string;
+  tool_params?: string;
+  tool_result_summary?: string;
+}
+
 // Extension → Webview messages
 export type ExtensionMessage =
   | { type: "stateUpdate"; state: SidebarState }
-  | { type: "updateToolCalls"; calls: TrackedCallInfo[] };
+  | { type: "updateToolCalls"; calls: TrackedCallInfo[] }
+  | { type: "updateFeedback"; entries: FeedbackEntry[] };
 
 // Webview → Extension messages
 export interface WebviewCommand {

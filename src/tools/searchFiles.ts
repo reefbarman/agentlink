@@ -1,6 +1,9 @@
 import * as path from "path";
 
-import { resolveAndValidatePath, getFirstWorkspaceRoot } from "../util/paths.js";
+import {
+  resolveAndValidatePath,
+  getFirstWorkspaceRoot,
+} from "../util/paths.js";
 import {
   getRipgrepBinPath,
   execRipgrepSearch,
@@ -14,6 +17,15 @@ const DEFAULT_MAX_RESULTS = 300;
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
+/**
+ * Fix common regex escaping mistakes that Claude makes.
+ * `\"` is not a valid regex escape (Rust/ripgrep), but Claude often sends it
+ * due to JSON string escaping confusion. Strip the backslash before quotes.
+ */
+function sanitizeRegex(regex: string): string {
+  return regex.replace(/\\"/g, '"');
+}
+
 export async function handleSearchFiles(
   params: {
     path: string;
@@ -21,9 +33,12 @@ export async function handleSearchFiles(
     file_pattern?: string;
     semantic?: boolean;
     context?: number;
+    context_before?: number;
+    context_after?: number;
     case_insensitive?: boolean;
     multiline?: boolean;
     max_results?: number;
+    offset?: number;
     output_mode?: string;
   },
   approvalManager: ApprovalManager,
@@ -31,16 +46,30 @@ export async function handleSearchFiles(
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { absolutePath: dirPath, inWorkspace } = resolveAndValidatePath(params.path);
+    const { absolutePath: dirPath, inWorkspace } = resolveAndValidatePath(
+      params.path,
+    );
 
     // Outside-workspace gate
     if (!inWorkspace && !approvalManager.isPathTrusted(sessionId, dirPath)) {
-      const { approved, reason } = await approveOutsideWorkspaceAccess(dirPath, approvalManager, approvalPanel, sessionId);
+      const { approved, reason } = await approveOutsideWorkspaceAccess(
+        dirPath,
+        approvalManager,
+        approvalPanel,
+        sessionId,
+      );
       if (!approved) {
         return {
-          content: [{ type: "text", text: JSON.stringify({
-            status: "rejected", path: params.path, ...(reason && { reason }),
-          }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "rejected",
+                path: params.path,
+                ...(reason && { reason }),
+              }),
+            },
+          ],
         };
       }
     }
@@ -69,8 +98,17 @@ export async function handleSearchFiles(
     }
 
     // --- content mode (default) ---
-    const contextLines = params.context ?? 1;
-    const args = ["--json", "-e", params.regex, "--context", String(contextLines), "--no-messages"];
+    const contextBefore = params.context_before ?? params.context ?? 1;
+    const contextAfter = params.context_after ?? params.context ?? 1;
+    const offset = params.offset ?? 0;
+    const args = ["--json", "-e", sanitizeRegex(params.regex), "--no-messages"];
+
+    // Use asymmetric -B/-A when they differ, symmetric -C when equal
+    if (contextBefore === contextAfter) {
+      args.push("--context", String(contextBefore));
+    } else {
+      args.push("-B", String(contextBefore), "-A", String(contextAfter));
+    }
 
     if (params.case_insensitive) {
       args.push("--ignore-case");
@@ -93,20 +131,40 @@ export async function handleSearchFiles(
     } catch (error) {
       // Ripgrep error — may be invalid regex syntax etc.
       const message = error instanceof Error ? error.message : String(error);
-      return { content: [{ type: "text", text: JSON.stringify({ error: message, regex: params.regex }) }] };
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ error: message, regex: params.regex }),
+          },
+        ],
+      };
     }
 
     if (!output.trim()) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ total_matches: 0, truncated: false, results: "No results found" }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              total_matches: 0,
+              truncated: false,
+              results: "No results found",
+            }),
+          },
+        ],
       };
     }
 
-    const { results: fileResults, totalMatches } = parseRipgrepOutput(output, cwd);
+    const { results: fileResults, totalMatches } = parseRipgrepOutput(
+      output,
+      cwd,
+    );
 
     // Format output — keep ## file.ts + "> linenum | content" format
     const formatted: string[] = [];
     let matchCount = 0;
+    let skipped = 0;
 
     for (const file of fileResults) {
       if (matchCount >= maxResults) break;
@@ -118,33 +176,59 @@ export async function handleSearchFiles(
       for (const result of file.searchResults) {
         if (matchCount >= maxResults) break;
 
+        const groupMatches = result.lines.filter((l) => l.isMatch).length;
+
+        // Skip this group entirely if all its matches fall within the offset
+        if (offset > 0 && skipped + groupMatches <= offset) {
+          skipped += groupMatches;
+          continue;
+        }
+
         for (const line of result.lines) {
           const prefix = line.isMatch ? ">" : " ";
           fileLines.push(`${prefix} ${line.line} | ${line.text.trimEnd()}`);
         }
         fileLines.push("---");
 
-        const groupMatches = result.lines.filter((l) => l.isMatch).length;
-        fileMatchCount += groupMatches;
-        matchCount += groupMatches;
+        // Count only the matches past the offset threshold
+        const countable = Math.max(
+          0,
+          groupMatches - Math.max(0, offset - skipped),
+        );
+        fileMatchCount += countable;
+        matchCount += countable;
+        skipped += groupMatches;
       }
 
       if (fileLines.length > 0) {
-        const countLabel = fileMatchCount === 1 ? "1 match" : `${fileMatchCount} matches`;
-        formatted.push(`## ${relPath} (${countLabel})\n${fileLines.join("\n")}`);
+        const countLabel =
+          fileMatchCount === 1 ? "1 match" : `${fileMatchCount} matches`;
+        formatted.push(
+          `## ${relPath} (${countLabel})\n${fileLines.join("\n")}`,
+        );
       }
     }
 
     const result = {
       total_matches: Math.min(totalMatches, maxResults),
-      truncated: totalMatches >= maxResults,
+      truncated: totalMatches > maxResults + offset,
+      ...(offset > 0 && { offset }),
       results: formatted.join("\n\n"),
     };
 
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }] };
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
+    };
   }
 }
 
@@ -153,9 +237,16 @@ export async function handleSearchFiles(
 async function searchFilesOnly(
   rgPath: string,
   dirPath: string,
-  params: { regex: string; file_pattern?: string; case_insensitive?: boolean; multiline?: boolean; max_results?: number },
+  params: {
+    regex: string;
+    file_pattern?: string;
+    case_insensitive?: boolean;
+    multiline?: boolean;
+    max_results?: number;
+    offset?: number;
+  },
 ): Promise<ToolResult> {
-  const args = ["--files-with-matches", "-e", params.regex, "--no-messages"];
+  const args = ["--files-with-matches", "-e", sanitizeRegex(params.regex), "--no-messages"];
 
   if (params.case_insensitive) args.push("--ignore-case");
   if (params.multiline) args.push("--multiline", "--multiline-dotall");
@@ -167,20 +258,38 @@ async function searchFilesOnly(
     output = await execRipgrepSearch(rgPath, args);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { content: [{ type: "text", text: JSON.stringify({ error: message, regex: params.regex }) }] };
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, regex: params.regex }),
+        },
+      ],
+    };
   }
 
   const files = output.trim().split("\n").filter(Boolean);
   const maxResults = params.max_results ?? DEFAULT_MAX_RESULTS;
-  const truncated = files.length > maxResults;
-  const limited = files.slice(0, maxResults).map((f) => path.relative(dirPath, f));
+  const offsetVal = params.offset ?? 0;
+  const sliced = files.slice(offsetVal, offsetVal + maxResults);
+  const limited = sliced.map((f) => path.relative(dirPath, f));
 
   return {
-    content: [{ type: "text", text: JSON.stringify({
-      total_files: Math.min(files.length, maxResults),
-      truncated,
-      files: limited,
-    }, null, 2) }],
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            total_files: limited.length,
+            truncated: files.length > offsetVal + maxResults,
+            ...(offsetVal > 0 && { offset: offsetVal }),
+            files: limited,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
   };
 }
 
@@ -189,9 +298,16 @@ async function searchFilesOnly(
 async function searchCount(
   rgPath: string,
   dirPath: string,
-  params: { regex: string; file_pattern?: string; case_insensitive?: boolean; multiline?: boolean; max_results?: number },
+  params: {
+    regex: string;
+    file_pattern?: string;
+    case_insensitive?: boolean;
+    multiline?: boolean;
+    max_results?: number;
+    offset?: number;
+  },
 ): Promise<ToolResult> {
-  const args = ["--count", "-e", params.regex, "--no-messages"];
+  const args = ["--count", "-e", sanitizeRegex(params.regex), "--no-messages"];
 
   if (params.case_insensitive) args.push("--ignore-case");
   if (params.multiline) args.push("--multiline", "--multiline-dotall");
@@ -203,32 +319,51 @@ async function searchCount(
     output = await execRipgrepSearch(rgPath, args);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { content: [{ type: "text", text: JSON.stringify({ error: message, regex: params.regex }) }] };
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, regex: params.regex }),
+        },
+      ],
+    };
   }
 
   const lines = output.trim().split("\n").filter(Boolean);
   const maxResults = params.max_results ?? DEFAULT_MAX_RESULTS;
+  const offsetVal = params.offset ?? 0;
   let totalMatches = 0;
-  const counts: Array<{ file: string; count: number }> = [];
+  const allCounts: Array<{ file: string; count: number }> = [];
 
   for (const line of lines) {
-    if (counts.length >= maxResults) break;
     const sepIdx = line.lastIndexOf(":");
     if (sepIdx === -1) continue;
     const file = path.relative(dirPath, line.substring(0, sepIdx));
     const count = parseInt(line.substring(sepIdx + 1), 10);
     if (!isNaN(count)) {
-      counts.push({ file, count });
+      allCounts.push({ file, count });
       totalMatches += count;
     }
   }
 
+  const sliced = allCounts.slice(offsetVal, offsetVal + maxResults);
+
   return {
-    content: [{ type: "text", text: JSON.stringify({
-      total_files: counts.length,
-      total_matches: totalMatches,
-      truncated: lines.length > maxResults,
-      counts,
-    }, null, 2) }],
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            total_files: sliced.length,
+            total_matches: totalMatches,
+            truncated: allCounts.length > offsetVal + maxResults,
+            ...(offsetVal > 0 && { offset: offsetVal }),
+            counts: sliced,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
   };
 }

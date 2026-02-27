@@ -39,6 +39,9 @@ const webviewBase = {
   minify: true,
   jsx: "automatic",
   jsxImportSource: "preact",
+  define: {
+    __DEV_BUILD__: JSON.stringify(devBuild),
+  },
 };
 
 /** @type {esbuild.BuildOptions} */

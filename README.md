@@ -170,10 +170,13 @@ Search file contents using regex or semantic vector search.
 | `regex`            | string   | Regex pattern, or natural language query when `semantic=true`                                                                |
 | `file_pattern`     | string?  | Glob to filter files (e.g. `*.ts`)                                                                                           |
 | `semantic`         | boolean? | Use vector similarity search instead of regex                                                                                |
-| `context`          | number?  | Number of context lines around each match (default: 1). Only used for `content` output mode.                                 |
+| `context`          | number?  | Number of context lines around each match (default: 1). Overridden by `context_before`/`context_after` if specified.         |
+| `context_before`   | number?  | Context lines BEFORE each match (like `grep -B`). Overrides `context` for before-match lines.                                |
+| `context_after`    | number?  | Context lines AFTER each match (like `grep -A`). Overrides `context` for after-match lines.                                  |
 | `case_insensitive` | boolean? | Case-insensitive search (default: false)                                                                                     |
 | `multiline`        | boolean? | Enable multiline matching where `.` matches newlines (default: false)                                                        |
 | `max_results`      | number?  | Maximum number of matches to return (default: 300)                                                                           |
+| `offset`           | number?  | Skip first N matches before returning results. Use with `max_results` for pagination.                                        |
 | `output_mode`      | string?  | `content` (default, matching lines with context), `files_with_matches` (file paths only), or `count` (match counts per file) |
 
 Regex search is powered by ripgrep with context lines and per-file match counts. Semantic search queries a Qdrant vector index (see [Semantic Search](#semantic-search)).

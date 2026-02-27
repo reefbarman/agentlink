@@ -523,7 +523,10 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // Tool call tracker (wraps tool handlers for cancel/complete from sidebar)
-  toolCallTracker = new ToolCallTracker(log);
+  const extVersion =
+    (context.extension.packageJSON as { version?: string })?.version ??
+    "unknown";
+  toolCallTracker = new ToolCallTracker(log, extVersion);
 
   // Approval panel (WebView-based approval UI for commands and path access)
   approvalPanel = new ApprovalPanelProvider(context.extensionUri);
@@ -567,6 +570,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("native-claude.addTrustedCommand", () =>
       addTrustedCommandViaUI(),
+    ),
+    vscode.commands.registerCommand("nativeClaude.focusApproval", () =>
+      approvalPanel.focusApproval(),
     ),
     vscode.commands.registerCommand(
       "native-claude.cancelToolCall",

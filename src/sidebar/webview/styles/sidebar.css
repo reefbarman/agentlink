@@ -234,6 +234,28 @@ h3 {
   white-space: nowrap;
   margin-bottom: 4px;
 }
+.tool-call-params {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 4px;
+}
+.tool-call-params summary {
+  cursor: pointer;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.tool-call-params pre {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 10px;
+  padding: 4px;
+  margin-top: 2px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 .tool-call-heartbeat {
   font-size: 10px;
   color: var(--vscode-descriptionForeground);
@@ -274,4 +296,84 @@ h3 {
 }
 .tool-call-done {
   color: var(--vscode-testing-iconPassed, #4ec94e);
+}
+
+/* Feedback list */
+.feedback-actions {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.feedback-actions .btn {
+  display: inline-block;
+  width: auto;
+  flex: 1;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.feedback-row {
+  padding: 6px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.08));
+}
+.feedback-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+.feedback-time {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground);
+  flex-shrink: 0;
+}
+.feedback-text {
+  font-size: 11px;
+  color: var(--vscode-foreground);
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+.feedback-details {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 2px;
+}
+.feedback-details summary {
+  cursor: pointer;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.feedback-details pre {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 10px;
+  padding: 4px;
+  margin-top: 2px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.feedback-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground);
+  margin-top: 4px;
+}
+.btn-inline {
+  background: none;
+  border: none;
+  font-family: var(--vscode-font-family);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: auto;
+}
+.btn-inline:hover {
+  opacity: 0.85;
 }

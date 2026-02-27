@@ -106,4 +106,42 @@ export const Range = class {
   constructor(public start: unknown, public end: unknown) {}
 };
 
+export const InlayHintKind = {
+  Type: 1,
+  Parameter: 2,
+};
+
+export const TextEditorRevealType = {
+  Default: 0,
+  InCenter: 1,
+  InCenterIfOutsideViewport: 2,
+  AtTop: 3,
+};
+
+export const CodeActionTriggerKind = {
+  Invoke: 1,
+  Automatic: 2,
+};
+
+export const CodeActionKind = {
+  Empty: {
+    append: (value: string) => ({ value }),
+    value: "",
+  },
+  QuickFix: { value: "quickfix" },
+  Refactor: { value: "refactor" },
+  Source: { value: "source" },
+};
+
+export const WorkspaceEdit = class {
+  _edits: unknown[] = [];
+  replace() {}
+  insert() {}
+  delete() {}
+  has() { return false; }
+  set() {}
+  get size() { return 0; }
+  entries() { return []; }
+};
+
 export const TabInputTextDiff = class {};

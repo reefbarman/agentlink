@@ -12,6 +12,22 @@ set -euo pipefail
 input=$(cat)
 tool_name=$(echo "$input" | jq -r '.tool_name')
 
+# Allow Read for non-text file types that native-claude can't handle
+# (images, PDFs, notebooks — Claude's built-in Read handles these natively)
+if [ "$tool_name" = "Read" ]; then
+  file_path=$(echo "$input" | jq -r '.tool_input.file_path // ""')
+  ext="${file_path##*.}"
+  ext_lower=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+  case "$ext_lower" in
+    # Images (Claude is multimodal — built-in Read displays these visually)
+    png|jpg|jpeg|gif|bmp|svg|webp|ico|tiff|tif|avif)  exit 0 ;;
+    # PDFs (built-in Read supports pages parameter)
+    pdf)  exit 0 ;;
+    # Jupyter notebooks (built-in Read renders cells + outputs)
+    ipynb)  exit 0 ;;
+  esac
+fi
+
 # Map built-in tools to native-claude equivalents
 case "$tool_name" in
   Read)     alt="read_file" ;;

@@ -8,6 +8,7 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { appendFeedback } from "../util/feedbackStore.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ export interface TrackedCall {
   id: string;
   toolName: string;
   displayArgs: string;
+  params?: string;
   sessionId: string;
   startedAt: number;
   forceResolve: (result: ToolResult) => void;
@@ -45,6 +47,7 @@ export interface TrackedCallInfo {
   id: string;
   toolName: string;
   displayArgs: string;
+  params?: string;
   startedAt: number;
   status: "active" | "completed";
   completedAt?: number;
@@ -125,6 +128,17 @@ function formatParamsForLog(params: Record<string, unknown>): string {
   }
 }
 
+function formatParamsForDisplay(params: Record<string, unknown>): string {
+  try {
+    const json = JSON.stringify(sanitizeParamsForLog(params), null, 2);
+    if (!json) return "{}";
+    return truncateLogString(json, MAX_LOG_JSON_CHARS);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `[unserializable params: ${truncateLogString(message)}]`;
+  }
+}
+
 // ── ToolCallTracker ──────────────────────────────────────────────────────────
 
 const COMPLETED_TTL_MS = 8_000;
@@ -136,14 +150,33 @@ const HEARTBEAT_INTERVAL_MS = 20_000; // 20 seconds
 
 type McpHandlerExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
+const FEEDBACK_TOOL_NAMES = new Set([
+  "send_feedback",
+  "get_feedback",
+  "delete_feedback",
+]);
+
+// Auto-failure patterns that are not actionable — skip recording them.
+// Each entry: [tool_name regex, error message regex]
+const IGNORED_FAILURE_PATTERNS: Array<[RegExp, RegExp]> = [
+  [/^read_file$/, /is a directory/i],
+  // File/path not found — Claude passed a wrong path, not a tool bug
+  [/^(read_file|list_files|search_files)$/, /no such file or directory/i],
+  [/^read_file$/, /file not found/i],
+  // apply_diff search block didn't match — Claude sent wrong search text or format
+  [/^apply_diff$/, /search.*(not found|failed)/i],
+];
+
 export class ToolCallTracker extends EventEmitter {
   private activeCalls = new Map<string, TrackedCall>();
   private recentCalls = new Map<string, TrackedCallInfo>();
   private log: (msg: string) => void;
+  private extensionVersion: string;
 
-  constructor(log?: (msg: string) => void) {
+  constructor(log?: (msg: string) => void, extensionVersion?: string) {
     super();
     this.log = log ?? (() => {});
+    this.extensionVersion = extensionVersion ?? "unknown";
   }
 
   getActiveCalls(): TrackedCallInfo[] {
@@ -152,6 +185,7 @@ export class ToolCallTracker extends EventEmitter {
         id: c.id,
         toolName: c.toolName,
         displayArgs: c.displayArgs,
+        params: c.params,
         startedAt: c.startedAt,
         status: "active" as const,
         lastHeartbeatAt: c.lastHeartbeatAt,
@@ -166,6 +200,7 @@ export class ToolCallTracker extends EventEmitter {
       id: call.id,
       toolName: call.toolName,
       displayArgs: call.displayArgs,
+      params: call.params,
       startedAt: call.startedAt,
       status: "completed",
       completedAt: Date.now(),
@@ -220,10 +255,13 @@ export class ToolCallTracker extends EventEmitter {
         forceResolve = resolve;
       });
 
+      const paramsSummary = formatParamsForLog(params);
+      const paramsDisplay = formatParamsForDisplay(params);
       const tracked: TrackedCall = {
         id,
         toolName,
         displayArgs: extractDisplayArgs(params),
+        params: paramsDisplay,
         sessionId: getSessionId(),
         startedAt: Date.now(),
         forceResolve,
@@ -236,7 +274,6 @@ export class ToolCallTracker extends EventEmitter {
       };
 
       this.activeCalls.set(id, tracked);
-      const paramsSummary = formatParamsForLog(params);
       this.log(
         `START ${toolName} (${id.slice(0, 8)}), active=${this.activeCalls.size}, listeners=${this.listenerCount("change")}, params=${paramsSummary}`,
       );
@@ -286,7 +323,16 @@ export class ToolCallTracker extends EventEmitter {
       }
 
       try {
-        return await Promise.race([handler(params, ctx), forcePromise]);
+        const result = await Promise.race([handler(params, ctx), forcePromise]);
+        if (__DEV_BUILD__) {
+          this.recordResultFailure(toolName, params, result, getSessionId());
+        }
+        return result;
+      } catch (err) {
+        if (__DEV_BUILD__) {
+          this.recordExceptionFailure(toolName, params, err, getSessionId());
+        }
+        throw err;
       } finally {
         if (heartbeat) clearInterval(heartbeat);
         const completed = this.activeCalls.get(id);
@@ -449,8 +495,7 @@ export class ToolCallTracker extends EventEmitter {
         output_captured: state.output_captured,
         output: state.output_captured ? state.output : "",
         status: "force-completed",
-        message:
-          "Output returned immediately — wait was interrupted by user.",
+        message: "Output returned immediately — wait was interrupted by user.",
       }),
     );
   }
@@ -479,5 +524,83 @@ export class ToolCallTracker extends EventEmitter {
           "No pending diff to accept — file may already be saved or approval was not yet shown",
       }),
     );
+  }
+
+  // ── Auto-failure feedback (dev builds only) ──────────────────────────────
+
+  /**
+   * Check a tool result for error indicators and record feedback automatically.
+   * Detects results where the JSON payload contains an `"error"` key.
+   */
+  private recordResultFailure(
+    toolName: string,
+    params: Record<string, unknown>,
+    result: ToolResult,
+    sessionId: string,
+  ): void {
+    if (FEEDBACK_TOOL_NAMES.has(toolName)) return;
+
+    const firstText = result.content?.find((c) => c.type === "text");
+    if (!firstText || firstText.type !== "text") return;
+
+    try {
+      const parsed = JSON.parse(firstText.text);
+      if (!parsed || typeof parsed !== "object" || !("error" in parsed)) return;
+
+      const errorStr = String(parsed.error);
+      const isIgnored = IGNORED_FAILURE_PATTERNS.some(
+        ([toolRe, errRe]) => toolRe.test(toolName) && errRe.test(errorStr),
+      );
+      if (isIgnored) return;
+
+      this.appendAutoFeedback(toolName, params, sessionId, {
+        feedback: `[auto-failure] Tool returned error: ${String(parsed.error).slice(0, 500)}`,
+        tool_result_summary: firstText.text.slice(0, 500),
+      });
+    } catch {
+      // Not JSON or parse error — skip
+    }
+  }
+
+  /**
+   * Record feedback when a tool handler throws an unhandled exception.
+   */
+  private recordExceptionFailure(
+    toolName: string,
+    params: Record<string, unknown>,
+    err: unknown,
+    sessionId: string,
+  ): void {
+    if (FEEDBACK_TOOL_NAMES.has(toolName)) return;
+
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? (err.stack ?? message) : String(err);
+
+    this.appendAutoFeedback(toolName, params, sessionId, {
+      feedback: `[auto-exception] Unhandled exception: ${message.slice(0, 500)}`,
+      tool_result_summary: stack.slice(0, 500),
+    });
+  }
+
+  private appendAutoFeedback(
+    toolName: string,
+    params: Record<string, unknown>,
+    sessionId: string,
+    extra: { feedback: string; tool_result_summary?: string },
+  ): void {
+    try {
+      appendFeedback({
+        timestamp: new Date().toISOString(),
+        tool_name: toolName,
+        feedback: extra.feedback,
+        session_id: sessionId,
+        extension_version: this.extensionVersion,
+        tool_params: formatParamsForLog(params),
+        tool_result_summary: extra.tool_result_summary,
+      });
+      this.log(`AUTO_FEEDBACK ${toolName}: ${extra.feedback.slice(0, 100)}`);
+    } catch {
+      // Don't let feedback recording break tool calls
+    }
   }
 }

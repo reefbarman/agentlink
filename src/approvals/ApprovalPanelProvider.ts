@@ -540,6 +540,19 @@ export class ApprovalPanelProvider
     return undefined;
   }
 
+  // ── Public: focus the current approval UI ───────────────────────────────
+
+  focusApproval(): void {
+    if (!this.currentEntry) return;
+    const position = this.getPosition();
+    if (position === "beside" && this.panel) {
+      this.panel.reveal(vscode.ViewColumn.Beside, false);
+    } else if (this.view) {
+      this.view.show(false);
+      vscode.commands.executeCommand("nativeClaude.approvalView.focus");
+    }
+  }
+
   // ── Alert ───────────────────────────────────────────────────────────────
 
   private showAlert(message: string): vscode.Disposable {
@@ -551,6 +564,7 @@ export class ApprovalPanelProvider
     alertBar.backgroundColor = new vscode.ThemeColor(
       "statusBarItem.warningBackground",
     );
+    alertBar.command = "nativeClaude.focusApproval";
     alertBar.show();
 
     let flash = true;
@@ -616,11 +630,15 @@ export class ApprovalPanelProvider
    * approved (within the configured TTL).  Tool implementations can call
    * this *before* enqueueing to skip expensive UI (diff views, approval
    * panels) entirely.
+   *
+   * Only applies to "command" approvals — file writes, renames, and path
+   * approvals always require explicit user review.
    */
   isRecentlyApproved(
     kind: InternalRequest["kind"],
     identifier: string,
   ): boolean {
+    if (kind !== "command") return false;
     const ttl = this.getRecentApprovalTtl();
     if (ttl <= 0) return false;
     const key = this.buildKey(kind, identifier);
@@ -654,22 +672,14 @@ export class ApprovalPanelProvider
     }
   }
 
-  private approvalKeyForRequest(
-    request: InternalRequest,
-  ): string | undefined {
+  private approvalKeyForRequest(request: InternalRequest): string | undefined {
     switch (request.kind) {
       case "command":
-        return request.fullCommand
-          ? `cmd:${request.fullCommand}`
-          : undefined;
+        return request.fullCommand ? `cmd:${request.fullCommand}` : undefined;
       case "write":
-        return request.filePath
-          ? `write:${request.filePath}`
-          : undefined;
+        return request.filePath ? `write:${request.filePath}` : undefined;
       case "path":
-        return request.filePath
-          ? `path:${request.filePath}`
-          : undefined;
+        return request.filePath ? `path:${request.filePath}` : undefined;
       case "rename":
         return request.oldName && request.newName
           ? `rename:${request.oldName}\u2192${request.newName}`
@@ -692,6 +702,7 @@ export class ApprovalPanelProvider
   }
 
   private recordApproval(request: InternalRequest): void {
+    if (request.kind !== "command") return;
     const key = this.approvalKeyForRequest(request);
     if (!key) return;
     this.recentApprovals.set(key, Date.now());
@@ -705,9 +716,8 @@ export class ApprovalPanelProvider
     }
   }
 
-  private isRecentlyApprovedRequest(
-    request: InternalRequest,
-  ): boolean {
+  private isRecentlyApprovedRequest(request: InternalRequest): boolean {
+    if (request.kind !== "command") return false;
     const key = this.approvalKeyForRequest(request);
     if (!key) return false;
     return this.hasRecentApproval(key);

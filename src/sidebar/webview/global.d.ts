@@ -4,3 +4,5 @@ declare function acquireVsCodeApi(): {
   getState(): unknown;
   setState(state: unknown): void;
 };
+
+declare const __DEV_BUILD__: boolean;

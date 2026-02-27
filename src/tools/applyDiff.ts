@@ -27,6 +27,92 @@ const REPLACE_MARKER = ">>>>>>> REPLACE";
 // Legacy delimiter for backward compatibility
 const LEGACY_DIVIDER = "=======";
 
+// ── Unified diff support ───────────────────────────────────────────────────
+
+/**
+ * Detect whether a diff string is in unified diff format (--- / +++ / @@ headers).
+ */
+export function isUnifiedDiff(diff: string): boolean {
+  return (
+    /^---\s+\S/m.test(diff) &&
+    /^\+\+\+\s+\S/m.test(diff) &&
+    /^@@\s+[+-]/m.test(diff)
+  );
+}
+
+/**
+ * Parse a unified diff into SearchReplaceBlock[].
+ *
+ * Each @@ hunk becomes one block:
+ * - Context lines (no prefix or space prefix) appear in both search and replace
+ * - `-` lines appear only in search
+ * - `+` lines appear only in replace
+ * - File headers (`---`, `+++`) and `\ No newline at end of file` are skipped
+ */
+export function parseUnifiedDiff(diff: string): ParseResult {
+  const lines = diff.split("\n");
+  const blocks: SearchReplaceBlock[] = [];
+  let blockIndex = 0;
+  let i = 0;
+
+  while (i < lines.length) {
+    // Skip until we find a hunk header
+    if (!lines[i].startsWith("@@ ")) {
+      i++;
+      continue;
+    }
+
+    // Found a hunk header — skip it and parse the hunk body
+    i++;
+    const searchLines: string[] = [];
+    const replaceLines: string[] = [];
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // Stop at next hunk header, next file header, or end of meaningful content
+      if (
+        line.startsWith("@@ ") ||
+        line.startsWith("--- ") ||
+        line.startsWith("+++ ")
+      ) {
+        break;
+      }
+
+      // Skip "no newline" markers
+      if (line.startsWith("\\ ")) {
+        i++;
+        continue;
+      }
+
+      if (line.startsWith("-")) {
+        searchLines.push(line.slice(1));
+      } else if (line.startsWith("+")) {
+        replaceLines.push(line.slice(1));
+      } else {
+        // Context line (starts with space or is empty)
+        const content = line.startsWith(" ") ? line.slice(1) : line;
+        searchLines.push(content);
+        replaceLines.push(content);
+      }
+      i++;
+    }
+
+    if (searchLines.length > 0 || replaceLines.length > 0) {
+      blocks.push({
+        search: searchLines.join("\n"),
+        replace: replaceLines.join("\n"),
+        index: blockIndex,
+      });
+      blockIndex++;
+    }
+  }
+
+  return { blocks, malformedBlocks: 0 };
+}
+
+// ── Search/replace block support ───────────────────────────────────────────
+
 /**
  * Parse search/replace blocks from the diff string.
  * Format:
@@ -322,8 +408,16 @@ export async function handleApplyDiff(
       };
     }
 
-    // Parse blocks
-    const { blocks, malformedBlocks } = parseSearchReplaceBlocks(params.diff);
+    // Parse blocks — try SEARCH/REPLACE format first, fall back to unified diff
+    let blocks: SearchReplaceBlock[];
+    let malformedBlocks: number;
+
+    if (isUnifiedDiff(params.diff)) {
+      ({ blocks, malformedBlocks } = parseUnifiedDiff(params.diff));
+    } else {
+      ({ blocks, malformedBlocks } = parseSearchReplaceBlocks(params.diff));
+    }
+
     if (blocks.length === 0) {
       return {
         content: [

@@ -91,8 +91,7 @@ export interface ExecuteOptions {
   onTerminalAssigned?: (terminalId: string) => void;
 }
 
-const SHELL_INTEGRATION_TIMEOUT = 5000; // 5 seconds
-const SHELL_INTEGRATION_POLL_INTERVAL = 100; // 100ms
+const SHELL_INTEGRATION_TIMEOUT = 15000; // 15 seconds (WSL2 / heavy shell configs can be slow)
 
 let nextTerminalId = 1;
 
@@ -378,16 +377,40 @@ export class TerminalManager {
       return true;
     }
 
-    const elapsed = { ms: 0 };
-    while (elapsed.ms < SHELL_INTEGRATION_TIMEOUT) {
-      await new Promise((r) => setTimeout(r, SHELL_INTEGRATION_POLL_INTERVAL));
-      elapsed.ms += SHELL_INTEGRATION_POLL_INTERVAL;
-      if (terminal.shellIntegration) {
-        return true;
-      }
-    }
+    return new Promise<boolean>((resolve) => {
+      let resolved = false;
+      const done = (result: boolean) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeout);
+        clearInterval(poll);
+        disposable.dispose();
+        if (!result) {
+          this.log?.(
+            `[waitForShellIntegration] TIMEOUT after ${SHELL_INTEGRATION_TIMEOUT}ms`,
+          );
+        }
+        resolve(result);
+      };
 
-    return false;
+      const timeout = setTimeout(() => done(false), SHELL_INTEGRATION_TIMEOUT);
+
+      // Primary: VS Code event fires when shell integration activates
+      const disposable = vscode.window.onDidChangeTerminalShellIntegration(
+        (e) => {
+          if (e.terminal === terminal) {
+            done(true);
+          }
+        },
+      );
+
+      // Fallback: poll the property in case the event is missed
+      const poll = setInterval(() => {
+        if (terminal.shellIntegration) {
+          done(true);
+        }
+      }, 200);
+    });
   }
 
   private async executeWithShellIntegration(

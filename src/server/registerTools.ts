@@ -148,7 +148,19 @@ export function registerTools(
         .number()
         .optional()
         .describe(
-          "Number of context lines to show around each match (default: 1). Only used for content output mode.",
+          "Number of context lines to show around each match (default: 1). Only used for content output mode. Overridden by context_before/context_after if specified.",
+        ),
+      context_before: z.coerce
+        .number()
+        .optional()
+        .describe(
+          "Number of context lines to show BEFORE each match (like grep -B). Overrides 'context' for before-match lines.",
+        ),
+      context_after: z.coerce
+        .number()
+        .optional()
+        .describe(
+          "Number of context lines to show AFTER each match (like grep -A). Overrides 'context' for after-match lines.",
         ),
       case_insensitive: z
         .boolean()
@@ -166,6 +178,12 @@ export function registerTools(
         .number()
         .optional()
         .describe("Maximum number of matches to return (default: 300)."),
+      offset: z.coerce
+        .number()
+        .optional()
+        .describe(
+          "Skip first N matches before returning results. Use with max_results for pagination (e.g. offset=100, max_results=100 for second page).",
+        ),
       output_mode: z
         .enum(["content", "files_with_matches", "count"])
         .optional()
