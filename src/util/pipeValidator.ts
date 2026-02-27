@@ -76,6 +76,15 @@ const DIRECT_FILE_COMMANDS = new Map<
         "search_files uses ripgrep with context lines, supports regex, and returns structured results",
     },
   ],
+  [
+    "sed",
+    {
+      tool: "apply_diff",
+      description: "edit files",
+      reason:
+        "apply_diff opens a diff view for user review, and find_and_replace supports bulk regex substitution",
+    },
+  ],
 ]);
 
 /**
@@ -110,6 +119,33 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
           ].join("\n"),
         };
       }
+    }
+
+    // ── Check sed -i (in-place file editing) ──────────────────────
+    if (cmd === "sed") {
+      const sedArgs = tokens.slice(1);
+      const hasSedInPlace = sedArgs.some(
+        (a: string) =>
+          a === "-i" ||
+          a === "--in-place" ||
+          a.startsWith("-i.") ||
+          a.startsWith("-i'") ||
+          a.startsWith('-i"') ||
+          // Combined flags containing i, e.g. -ie, -ni
+          (/^-[a-hj-zA-Z]*i/.test(a) && !a.startsWith("--")),
+      );
+      if (hasSedInPlace) {
+        return {
+          message: [
+            `Command rejected: "sed -i" edits files in-place, bypassing user review.`,
+            ``,
+            `Use the apply_diff tool for targeted edits (search/replace blocks with diff view),`,
+            `or find_and_replace for bulk regex substitution across files.`,
+          ].join("\n"),
+        };
+      }
+      // Non-in-place sed (e.g. in a pipeline) is fine
+      continue;
     }
 
     // Build a helpful message

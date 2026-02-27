@@ -20,7 +20,9 @@ describe("validateCommand", () => {
 
   describe("cat (write context — heredoc/redirect)", () => {
     it("rejects cat with heredoc but suggests write_file/apply_diff", () => {
-      const result = validateCommand("cat <<'EOF' > file.txt\nsome content\nEOF");
+      const result = validateCommand(
+        "cat <<'EOF' > file.txt\nsome content\nEOF",
+      );
       expect(result).not.toBeNull();
       expect(result!.message).toContain("write_file");
       expect(result!.message).toContain("apply_diff");
@@ -47,7 +49,9 @@ describe("validateCommand", () => {
     });
 
     it("rejects heredoc cat in compound command", () => {
-      const result = validateCommand("mkdir -p dir && cat <<'EOF' > dir/file.txt\ncontent\nEOF");
+      const result = validateCommand(
+        "mkdir -p dir && cat <<'EOF' > dir/file.txt\ncontent\nEOF",
+      );
       expect(result).not.toBeNull();
       expect(result!.message).toContain("write_file");
     });
@@ -87,6 +91,48 @@ describe("validateCommand", () => {
       const result = validateCommand("grep TODO");
       expect(result).not.toBeNull();
       expect(result!.message).toContain("search_files");
+    });
+  });
+
+  // ── sed -i (in-place editing) ──────────────────────────────────────
+
+  describe("sed -i (in-place editing)", () => {
+    it("rejects sed -i", () => {
+      const result = validateCommand("sed -i 's/old/new/' file.txt");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("sed -i");
+      expect(result!.message).toContain("apply_diff");
+      expect(result!.message).toContain("find_and_replace");
+    });
+
+    it("rejects sed --in-place", () => {
+      const result = validateCommand("sed --in-place 's/foo/bar/' file.txt");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("sed -i");
+    });
+
+    it("rejects sed -i with backup suffix", () => {
+      expect(
+        validateCommand("sed -i.bak 's/old/new/' file.txt"),
+      ).not.toBeNull();
+    });
+
+    it("rejects sed -i in compound command", () => {
+      const result = validateCommand("cd /tmp && sed -i 's/a/b/' config.yml");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("sed -i");
+    });
+
+    it("allows sed without -i (stdout transform)", () => {
+      expect(validateCommand("sed 's/old/new/' file.txt")).toBeNull();
+    });
+
+    it("allows sed in a pipeline", () => {
+      expect(validateCommand("echo hello | sed 's/hello/world/'")).toBeNull();
+    });
+
+    it("allows sed -n (suppress output flag, not -i)", () => {
+      expect(validateCommand("sed -n '5p' file.txt")).toBeNull();
     });
   });
 
