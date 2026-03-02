@@ -165,6 +165,8 @@ const IGNORED_FAILURE_PATTERNS: Array<[RegExp, RegExp]> = [
   [/^read_file$/, /file not found/i],
   // apply_diff search block didn't match — Claude sent wrong search text or format
   [/^apply_diff$/, /search.*(not found|failed)/i],
+  // Terminal closed between execute_command and get_terminal_output — expected lifecycle
+  [/^get_terminal_output$/, /not found.*may have been closed/i],
 ];
 
 export class ToolCallTracker extends EventEmitter {

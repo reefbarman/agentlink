@@ -85,6 +85,15 @@ const DATABASE_CLIS: Record<string, { flags: string[]; suggestion: string }> = {
     flags: ["--pipe", "--eval"],
     suggestion: "Use: redis-cli GET key or redis-cli --eval script.lua",
   },
+  // Windows
+  sqlcmd: {
+    flags: ["-Q", "-i", "-q"],
+    suggestion: "Use: sqlcmd -Q \"SELECT ...\" or sqlcmd -i script.sql",
+  },
+  "sqlcmd.exe": {
+    flags: ["-Q", "-i", "-q"],
+    suggestion: "Use: sqlcmd -Q \"SELECT ...\" or sqlcmd -i script.sql",
+  },
 };
 
 // ── REPLs (no arguments = interactive) ──────────────────────────────
@@ -160,6 +169,9 @@ const REMOTE_COMMANDS = new Set([
   "telnet",
   "ftp",
   "sftp",
+  // Windows
+  "plink",
+  "plink.exe",
 ]);
 
 // ── Interactive shell commands ───────────────────────────────────────
@@ -173,6 +185,13 @@ const SHELL_COMMANDS = new Set([
   "tcsh",
   "ksh",
   "dash",
+  // Windows
+  "powershell",
+  "powershell.exe",
+  "pwsh",
+  "pwsh.exe",
+  "cmd",
+  "cmd.exe",
 ]);
 
 // ── Scaffolding commands that often prompt ───────────────────────────

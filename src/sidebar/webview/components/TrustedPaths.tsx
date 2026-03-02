@@ -44,7 +44,13 @@ export function TrustedPaths({ state, postCommand }: Props) {
         <div style={{ marginTop: "10px" }}>
           <div class="subsection-label">Session Rules</div>
           {sessionsWithPathRules.map((s) => (
-            <SessionBlock key={s.id} sessionId={s.id}>
+            <SessionBlock
+              key={s.id}
+              sessionId={s.id}
+              clientName={s.clientName}
+              clientVersion={s.clientVersion}
+              agentId={s.agentId}
+            >
               <RuleList
                 rules={s.pathRules}
                 removeCommand="removeSessionPathRule"

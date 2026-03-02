@@ -17,6 +17,17 @@ export interface SessionInfo {
   commandRules: CommandRule[];
   pathRules: PathRule[];
   writeRules: PathRule[];
+  clientName?: string;
+  clientVersion?: string;
+  agentId?: string;
+}
+
+export interface ConnectedAgent {
+  sessionId: string;
+  clientName?: string;
+  clientVersion?: string;
+  agentId?: string;
+  agentDisplayName?: string;
 }
 
 export interface AgentInfo {
@@ -44,6 +55,7 @@ export interface SidebarState {
   projectWriteRules?: PathRule[];
   settingsWriteRules?: string[];
   activeSessions?: SessionInfo[];
+  connectedAgents?: ConnectedAgent[];
 }
 
 export interface TrackedCallInfo {

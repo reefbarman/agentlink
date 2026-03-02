@@ -69,6 +69,7 @@ h3 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   padding: 3px 0;
   font-size: 12px;
 }
@@ -77,9 +78,10 @@ h3 {
 
 .badge {
   font-size: 11px;
-  padding: 1px 6px;
+  padding: 4px 8px;
   border-radius: 3px;
   font-weight: 500;
+  white-space: nowrap;
 }
 .badge-ok {
   background: var(--vscode-testing-iconPassed, #4ec94e);
@@ -118,6 +120,22 @@ h3 {
   color: var(--vscode-button-secondaryForeground);
 }
 .btn-secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+.select {
+  background: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  cursor: pointer;
+  flex: 1;
+}
+.select:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
 
 .btn-done {
   background: var(--vscode-button-secondaryBackground);
@@ -168,6 +186,40 @@ h3 {
   font-weight: 500;
   color: var(--vscode-descriptionForeground);
   margin-bottom: 4px;
+}
+
+/* --- Connected agents (Server Status) --- */
+.connected-agents { margin-top: 10px; }
+.connected-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.agent-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.agent-dot.known { background: var(--vscode-testing-iconPassed, #4ec94e); }
+.agent-dot.unknown {
+  background: var(--vscode-descriptionForeground);
+  opacity: 0.5;
+}
+.agent-name { font-weight: 500; }
+.agent-version {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+/* --- Quick links (Configuration) --- */
+.quick-links {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.15));
 }
 
 .rule-row {

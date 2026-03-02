@@ -61,3 +61,21 @@ export const KNOWN_AGENTS: AgentDefinition[] = [
 export function getAgentById(id: string): AgentDefinition | undefined {
   return KNOWN_AGENTS.find((a) => a.id === id);
 }
+
+/**
+ * Match an MCP client name (from the initialize handshake) to a known agent ID.
+ * Returns undefined if no match is found.
+ */
+export function matchClientName(clientName: string): string | undefined {
+  const lower = clientName.toLowerCase();
+  for (const agent of KNOWN_AGENTS) {
+    // Match against agent id (e.g. "claude-code") or display name (e.g. "Claude Code")
+    if (
+      lower.includes(agent.id) ||
+      lower.includes(agent.name.toLowerCase())
+    ) {
+      return agent.id;
+    }
+  }
+  return undefined;
+}

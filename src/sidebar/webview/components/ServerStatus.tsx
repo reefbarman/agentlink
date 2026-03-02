@@ -7,22 +7,26 @@ interface Props {
 }
 
 export function ServerStatus({ state, postCommand }: Props) {
-  const { serverRunning, port, sessions, authEnabled, masterBypass } = state;
+  const { serverRunning, port, authEnabled, masterBypass, connectedAgents } =
+    state;
+
+  const agentCount = connectedAgents?.length ?? 0;
 
   return (
-    <CollapsibleSection title="Server Status">
+    <CollapsibleSection
+      title="Server Status"
+      titleExtra={
+        serverRunning && agentCount > 0 ? (
+          <span class="badge badge-ok">{agentCount}</span>
+        ) : undefined
+      }
+    >
       <div class="status-header">
         <span class={`dot ${serverRunning ? "running" : "stopped"}`} />
         <span class="status-text">
           {serverRunning ? `Running on port ${port}` : "Stopped"}
         </span>
       </div>
-      {serverRunning && (
-        <div class="info-row">
-          <span class="label">Sessions:</span>
-          <span class="value">{sessions}</span>
-        </div>
-      )}
       <div class="info-row">
         <span class="label">Auth:</span>
         <span class="value">{authEnabled ? "Enabled" : "Disabled"}</span>
@@ -48,15 +52,34 @@ export function ServerStatus({ state, postCommand }: Props) {
           </button>
         )}
       </div>
-      <div class="link-row" style={{ marginTop: "8px" }}>
-        <a onClick={() => postCommand("openSettings")}>Settings</a> &middot;{" "}
-        <a onClick={() => postCommand("openOutput")}>Output Log</a>
-      </div>
-      <div class="link-row">
-        <a onClick={() => postCommand("openGlobalConfig")}>Global Config</a>{" "}
-        &middot;{" "}
-        <a onClick={() => postCommand("openProjectConfig")}>Project Config</a>
-      </div>
+      {serverRunning && (
+        <div class="connected-agents">
+          <div class="subsection-label">Connected Agents</div>
+          {agentCount === 0 ? (
+            <p class="help-text">No agents connected.</p>
+          ) : (
+            connectedAgents!.map((a) => (
+              <div
+                key={a.sessionId}
+                class="connected-agent-row"
+                title={`Session: ${a.sessionId}`}
+              >
+                <span
+                  class={`agent-dot ${a.agentId ? "known" : "unknown"}`}
+                />
+                <span class="agent-name">
+                  {a.agentDisplayName ??
+                    a.clientName ??
+                    `Session ${a.sessionId.substring(0, 8)}...`}
+                </span>
+                {a.clientVersion && (
+                  <span class="agent-version">v{a.clientVersion}</span>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </CollapsibleSection>
   );
 }

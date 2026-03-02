@@ -8,7 +8,7 @@ import type {
 } from "./types.js";
 import { ActiveToolCalls } from "./components/ActiveToolCalls.js";
 import { ServerStatus } from "./components/ServerStatus.js";
-import { AgentIntegration } from "./components/AgentIntegration.js";
+import { Configuration } from "./components/Configuration.js";
 import { WriteApproval } from "./components/WriteApproval.js";
 import { TrustedPaths } from "./components/TrustedPaths.js";
 import { TrustedCommands } from "./components/TrustedCommands.js";
@@ -91,7 +91,7 @@ export function App({ vscodeApi }: AppProps) {
   if (state.sidebar.onboardingStep) {
     return (
       <div>
-        <AgentIntegration state={state.sidebar} postCommand={postCommand} />
+        <Configuration state={state.sidebar} postCommand={postCommand} />
       </div>
     );
   }
@@ -100,7 +100,7 @@ export function App({ vscodeApi }: AppProps) {
     <div>
       <ActiveToolCalls calls={state.toolCalls} postCommand={postCommand} />
       <ServerStatus state={state.sidebar} postCommand={postCommand} />
-      <AgentIntegration state={state.sidebar} postCommand={postCommand} />
+      <Configuration state={state.sidebar} postCommand={postCommand} />
       <WriteApproval state={state.sidebar} postCommand={postCommand} />
       <TrustedPaths state={state.sidebar} postCommand={postCommand} />
       <TrustedCommands state={state.sidebar} postCommand={postCommand} />

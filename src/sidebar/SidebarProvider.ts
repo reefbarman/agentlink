@@ -13,7 +13,12 @@ import type {
   TrackedCallInfo,
 } from "../server/ToolCallTracker.js";
 import { readFeedback, deleteFeedback } from "../util/feedbackStore.js";
-import type { AgentInfo, SidebarState } from "./webview/types.js";
+import { matchClientName, getAgentById } from "../agents/registry.js";
+import type {
+  AgentInfo,
+  ConnectedAgent,
+  SidebarState,
+} from "./webview/types.js";
 
 export type { AgentInfo, SidebarState };
 
@@ -33,6 +38,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private toolCallTracker: ToolCallTracker | undefined;
   private activeToolCalls: TrackedCallInfo[] = [];
   private log: (msg: string) => void;
+  private mcpSessionProvider?: () => Array<{
+    id: string;
+    clientName?: string;
+    clientVersion?: string;
+  }>;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -44,6 +54,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   setApprovalManager(manager: ApprovalManager): void {
     this.approvalManager = manager;
     manager.onDidChange(() => this.refreshApprovalState());
+  }
+
+  setMcpSessionProvider(
+    provider: () => Array<{
+      id: string;
+      clientName?: string;
+      clientVersion?: string;
+    }>,
+  ): void {
+    this.mcpSessionProvider = provider;
   }
 
   setToolCallTracker(tracker: ToolCallTracker): void {
@@ -171,6 +191,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "resetWriteApproval":
           this.approvalManager?.resetWriteApproval();
+          break;
+        case "setWriteApproval":
+          if (this.approvalManager && message.mode) {
+            const mode = message.mode as string;
+            // Reset everything first, then set the new level
+            this.approvalManager.resetWriteApproval();
+            if (mode !== "prompt") {
+              // For session scope, approve all active sessions
+              if (mode === "session") {
+                for (const s of this.approvalManager.getActiveSessions()) {
+                  this.approvalManager.setWriteApproval(s.id, "session");
+                }
+              } else {
+                this.approvalManager.setWriteApproval(
+                  "_sidebar",
+                  mode as "project" | "global",
+                );
+              }
+            }
+          }
           break;
         case "removeGlobalRule":
           if (message.pattern) {
@@ -541,13 +581,41 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.state.globalWriteRules = writeRules.global;
       this.state.projectWriteRules = writeRules.project;
       this.state.settingsWriteRules = writeRules.settings;
-      this.state.activeSessions = sessions.map((s) => ({
-        id: s.id,
-        writeApproved: s.writeApproved,
-        commandRules: this.approvalManager!.getCommandRules(s.id).session,
-        pathRules: this.approvalManager!.getPathRules(s.id).session,
-        writeRules: this.approvalManager!.getWriteRules(s.id).session,
-      }));
+      // Merge MCP session client info into approval sessions
+      const mcpSessions = this.mcpSessionProvider?.() ?? [];
+      const mcpMap = new Map(mcpSessions.map((s) => [s.id, s]));
+
+      this.state.activeSessions = sessions.map((s) => {
+        const mcp = mcpMap.get(s.id);
+        return {
+          id: s.id,
+          writeApproved: s.writeApproved,
+          commandRules: this.approvalManager!.getCommandRules(s.id).session,
+          pathRules: this.approvalManager!.getPathRules(s.id).session,
+          writeRules: this.approvalManager!.getWriteRules(s.id).session,
+          clientName: mcp?.clientName,
+          clientVersion: mcp?.clientVersion,
+          agentId: mcp?.clientName
+            ? matchClientName(mcp.clientName)
+            : undefined,
+        };
+      });
+
+      // Build connected agents list from all MCP sessions (not just approval sessions)
+      this.state.connectedAgents = mcpSessions.map((s) => {
+        const agentId = s.clientName
+          ? matchClientName(s.clientName)
+          : undefined;
+        return {
+          sessionId: s.id,
+          clientName: s.clientName,
+          clientVersion: s.clientVersion,
+          agentId,
+          agentDisplayName: agentId
+            ? getAgentById(agentId)?.name
+            : undefined,
+        };
+      });
     }
     this.state.masterBypass = this.getMasterBypass();
     // Send state via postMessage instead of full HTML replacement

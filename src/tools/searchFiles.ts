@@ -30,10 +30,10 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 export function sanitizeRegex(regex: string): string {
   // Collapse \\X → \X for known regex metacharacters and escape sequences.
   // Covers: \s \S \d \D \w \W \b \B \n \t \r \f and punctuation escapes
-  // like \( \) \{ \} \[ \] \. \| \+ \* \? \^ \$
+  // like \( \) \{ \} \[ \] \. \| \+ \* \? \^ \$ \/
   return regex
-    .replace(/\\\\([sSdDwWbBntrf(){}[\].|+*?^$])/g, "\\$1")
-    .replace(/\\"/g, '"');
+    .replace(/\\\\([sSdDwWbBntrf(){}[\].|+*?^$/])/g, "\\$1")
+    .replace(/\\["/]/g, (m) => m[1]);
 }
 
 /**
@@ -41,7 +41,7 @@ export function sanitizeRegex(regex: string): string {
  */
 export function getEscapingHint(regex: string): string | undefined {
   // Look for patterns like \\s, \\d, \\(, \\{ that suggest double-escaping
-  if (/\\\\[sSdDwWbBntrf(){}[\].|+*?^$]/.test(regex)) {
+  if (/\\\\[sSdDwWbBntrf(){}[\].|+*?^$/]/.test(regex)) {
     return (
       "Your regex appears double-escaped (e.g. \\\\s instead of \\s). " +
       "The regex parameter is passed directly to ripgrep — only single " +

@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useState, useEffect } from "preact/hooks";
 import type { SidebarState, PostCommand, AgentInfo } from "../types.js";
 import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
@@ -264,9 +264,27 @@ function OnboardingComplete({
   );
 }
 
+// --- Quick Links ---
+
+function QuickLinks({ postCommand }: { postCommand: PostCommand }) {
+  return (
+    <div class="quick-links">
+      <div class="link-row">
+        <a onClick={() => postCommand("openSettings")}>Settings</a> &middot;{" "}
+        <a onClick={() => postCommand("openOutput")}>Output Log</a>
+      </div>
+      <div class="link-row">
+        <a onClick={() => postCommand("openGlobalConfig")}>Global Config</a>{" "}
+        &middot;{" "}
+        <a onClick={() => postCommand("openProjectConfig")}>Project Config</a>
+      </div>
+    </div>
+  );
+}
+
 // --- Main component ---
 
-export function AgentIntegration({ state, postCommand }: Props) {
+export function Configuration({ state, postCommand }: Props) {
   const {
     serverRunning,
     agentConfigured,
@@ -274,6 +292,22 @@ export function AgentIntegration({ state, postCommand }: Props) {
     knownAgents,
     configuredAgentIds,
   } = state;
+
+  // Migrate localStorage collapse key from old section name
+  useEffect(() => {
+    try {
+      const old = localStorage.getItem("section:Agent Configuration");
+      if (
+        old !== null &&
+        localStorage.getItem("section:Configuration") === null
+      ) {
+        localStorage.setItem("section:Configuration", old);
+        localStorage.removeItem("section:Agent Configuration");
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   if (onboardingStep === 1 && knownAgents) {
     return <AgentPicker knownAgents={knownAgents} postCommand={postCommand} />;
@@ -289,50 +323,49 @@ export function AgentIntegration({ state, postCommand }: Props) {
     );
   }
 
-  if (!serverRunning) {
-    return (
-      <CollapsibleSection title="Agent Configuration">
+  return (
+    <CollapsibleSection title="Configuration">
+      <QuickLinks postCommand={postCommand} />
+      {serverRunning ? (
+        <>
+          <div class="info-row">
+            <span class="label">MCP Config:</span>
+            {agentConfigured ? (
+              <span class="badge badge-ok">Configured</span>
+            ) : (
+              <span class="badge badge-warn">Not configured</span>
+            )}
+          </div>
+          <p class="help-text">
+            The extension auto-configures your agents on startup. If you need to
+            set it up manually:
+          </p>
+          <div class="button-group">
+            <button
+              class="btn btn-secondary"
+              onClick={() => postCommand("installCli")}
+            >
+              Run CLI Setup
+            </button>
+            <button
+              class="btn btn-secondary"
+              onClick={() => postCommand("copyCliCommand")}
+            >
+              Copy CLI Command
+            </button>
+            <button
+              class="btn btn-secondary"
+              onClick={() => postCommand("copyConfig")}
+            >
+              Copy JSON Config
+            </button>
+          </div>
+        </>
+      ) : (
         <p class="help-text">
           Start the server to configure agent integration.
         </p>
-      </CollapsibleSection>
-    );
-  }
-
-  return (
-    <CollapsibleSection title="Agent Configuration">
-      <div class="info-row">
-        <span class="label">MCP Config:</span>
-        {agentConfigured ? (
-          <span class="badge badge-ok">Configured</span>
-        ) : (
-          <span class="badge badge-warn">Not configured</span>
-        )}
-      </div>
-      <p class="help-text">
-        The extension auto-configures your agents on startup. If you need to set
-        it up manually:
-      </p>
-      <div class="button-group">
-        <button
-          class="btn btn-secondary"
-          onClick={() => postCommand("installCli")}
-        >
-          Run CLI Setup
-        </button>
-        <button
-          class="btn btn-secondary"
-          onClick={() => postCommand("copyCliCommand")}
-        >
-          Copy CLI Command
-        </button>
-        <button
-          class="btn btn-secondary"
-          onClick={() => postCommand("copyConfig")}
-        >
-          Copy JSON Config
-        </button>
-      </div>
+      )}
     </CollapsibleSection>
   );
 }

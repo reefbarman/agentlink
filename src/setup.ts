@@ -164,14 +164,20 @@ export function installHooks(
   log: (msg: string) => void,
   opts: SetupOptions = {},
 ): void {
-  // Copy hook script
+  // Copy hook script (platform-specific)
+  const isWindows = process.platform === "win32";
   const hookDir = path.join(os.homedir(), ".claude", "hooks");
   fs.mkdirSync(hookDir, { recursive: true });
 
-  const hookSrc = getResourcePath(extensionUri, "enforce-agentlink.sh");
-  const hookDest = path.join(hookDir, "enforce-agentlink.sh");
+  const hookFileName = isWindows
+    ? "enforce-agentlink.ps1"
+    : "enforce-agentlink.sh";
+  const hookSrc = getResourcePath(extensionUri, hookFileName);
+  const hookDest = path.join(hookDir, hookFileName);
   fs.copyFileSync(hookSrc, hookDest);
-  fs.chmodSync(hookDest, 0o755);
+  if (!isWindows) {
+    fs.chmodSync(hookDest, 0o755);
+  }
   log(`Installed hook script to ${hookDest}`);
 
   // Update ~/.claude/settings.json
@@ -194,12 +200,16 @@ export function installHooks(
   const hooks = settings.hooks as Record<string, HookEntry[]>;
   if (!hooks.PreToolUse) hooks.PreToolUse = [];
 
+  const hookCommand = isWindows
+    ? `powershell -NoProfile -ExecutionPolicy Bypass -File "${hookDest}"`
+    : "$HOME/.claude/hooks/enforce-agentlink.sh";
+
   const hookEntry: HookEntry = {
     matcher: "^(Read|Edit|Write|Bash|Glob|Grep)$",
     hooks: [
       {
         type: "command",
-        command: "$HOME/.claude/hooks/enforce-agentlink.sh",
+        command: hookCommand,
       },
     ],
   };
@@ -215,9 +225,9 @@ export function installHooks(
       JSON.stringify(settings, null, 2) + "\n",
       "utf-8",
     );
-    log("Added PreToolUse hook to ~/.claude/settings.json");
+    log(`Added PreToolUse hook to ${settingsPath}`);
   } else {
-    log("PreToolUse hook already exists in ~/.claude/settings.json");
+    log(`PreToolUse hook already exists in ${settingsPath}`);
   }
 
   if (!opts.silent) {

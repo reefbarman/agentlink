@@ -6,6 +6,14 @@ import { getFirstWorkspaceRoot } from "../util/paths.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
+const SECRET_KEY = "openaiApiKey";
+
+let secretStorage: vscode.SecretStorage | undefined;
+
+export function setSecretStorage(storage: vscode.SecretStorage): void {
+  secretStorage = storage;
+}
+
 // --- Configuration helpers ---
 
 function getQdrantUrl(): string {
@@ -14,14 +22,10 @@ function getQdrantUrl(): string {
     .get<string>("qdrantUrl", "http://localhost:6333");
 }
 
-function getOpenAiApiKey(): string {
-  return (
-    vscode.workspace
-      .getConfiguration("agentlink")
-      .get<string>("openaiApiKey", "") ||
-    process.env.OPENAI_API_KEY ||
-    ""
-  );
+async function getOpenAiApiKey(): Promise<string> {
+  const fromSecrets = await secretStorage?.get(SECRET_KEY);
+  if (fromSecrets) return fromSecrets;
+  return process.env.OPENAI_API_KEY || "";
 }
 
 function isSemanticSearchEnabled(): boolean {
@@ -180,7 +184,7 @@ export async function semanticSearch(
     };
   }
 
-  const apiKey = getOpenAiApiKey();
+  const apiKey = await getOpenAiApiKey();
   if (!apiKey) {
     return {
       content: [
@@ -188,7 +192,7 @@ export async function semanticSearch(
           type: "text",
           text: JSON.stringify({
             error:
-              "OpenAI API key not configured. Set agentlink.openaiApiKey or OPENAI_API_KEY env var.",
+              "OpenAI API key not configured. Run 'AgentLink: Set OpenAI API Key' from the command palette, or set the OPENAI_API_KEY env var.",
           }),
         },
       ],

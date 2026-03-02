@@ -37,6 +37,11 @@ export function WriteApproval({ state, postCommand }: Props) {
       <span class="badge badge-ok">Active</span>
     );
 
+  const handleModeChange = (e: Event) => {
+    const value = (e.target as HTMLSelectElement).value;
+    postCommand("setWriteApproval", { mode: value });
+  };
+
   const sessionsWithWriteRules = (activeSessions ?? []).filter(
     (s) => s.writeRules.length > 0,
   );
@@ -50,18 +55,18 @@ export function WriteApproval({ state, postCommand }: Props) {
   return (
     <CollapsibleSection title="Write Approval">
       <div class="info-row">
-        <span class="label">{label}</span>
+        <select
+          class="select"
+          value={writeApproval}
+          onChange={handleModeChange}
+        >
+          <option value="prompt">Prompt each time</option>
+          <option value="session">Session auto-accept</option>
+          <option value="project">Project auto-accept</option>
+          <option value="global">Always auto-accept</option>
+        </select>
         {badge}
       </div>
-      {writeApproval !== "prompt" && (
-        <button
-          class="btn btn-secondary"
-          style={{ marginTop: "6px" }}
-          onClick={() => postCommand("resetWriteApproval")}
-        >
-          Reset to Prompt
-        </button>
-      )}
       {hasAnyWriteRules && (
         <div style={{ marginTop: "10px" }}>
           <p class="help-text">
@@ -72,10 +77,7 @@ export function WriteApproval({ state, postCommand }: Props) {
               <div key={p} class="rule-row">
                 <span class="rule-mode">glob</span>
                 <span class="rule-pattern">{p}</span>
-                <span
-                  class="help-text"
-                  style={{ margin: 0, fontSize: "10px" }}
-                >
+                <span class="help-text" style={{ margin: 0, fontSize: "10px" }}>
                   (settings)
                 </span>
               </div>
@@ -106,7 +108,13 @@ export function WriteApproval({ state, postCommand }: Props) {
             <div style={{ marginTop: "10px" }}>
               <div class="subsection-label">Session Rules</div>
               {sessionsWithWriteRules.map((s) => (
-                <SessionBlock key={s.id} sessionId={s.id}>
+                <SessionBlock
+                  key={s.id}
+                  sessionId={s.id}
+                  clientName={s.clientName}
+                  clientVersion={s.clientVersion}
+                  agentId={s.agentId}
+                >
                   <RuleList
                     rules={s.writeRules}
                     removeCommand="removeSessionWriteRule"

@@ -65,6 +65,14 @@ describe("sanitizeRegex", () => {
     expect(sanitizeRegex("hello world")).toBe("hello world");
   });
 
+  it("strips unnecessary forward slash escape", () => {
+    // LLMs often produce \/ from JavaScript regex syntax — ripgrep doesn't need it
+    expect(sanitizeRegex("\\/")).toBe("/");
+    expect(sanitizeRegex('prefix\\s*=\\s*.*"\\/"|startsWith')).toBe(
+      'prefix\\s*=\\s*.*"/"|startsWith',
+    );
+  });
+
   it("handles multiple double-escaped sequences in one pattern", () => {
     const input = "\\\\d{3}-\\\\d{4}";
     expect(sanitizeRegex(input)).toBe("\\d{3}-\\d{4}");
@@ -91,5 +99,9 @@ describe("getEscapingHint", () => {
 
   it("detects double-escaped braces", () => {
     expect(getEscapingHint("\\\\{\\\\}")).toBeDefined();
+  });
+
+  it("detects double-escaped forward slash", () => {
+    expect(getEscapingHint("\\\\/")).toBeDefined();
   });
 });

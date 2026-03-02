@@ -28,6 +28,7 @@ import {
   setupAllInstructions,
   installHooks,
 } from "./setup.js";
+import { setSecretStorage } from "./services/semanticSearch.js";
 
 export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 
@@ -141,6 +142,16 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
     approvalPanel,
     toolCallTracker,
     context.extensionUri,
+  );
+
+  // Notify sidebar when sessions change (connect/disconnect/initialize)
+  mcpHost.onSessionChanged = () => {
+    sidebarProvider?.updateState({
+      sessions: mcpHost?.sessionCount ?? 0,
+    });
+  };
+  sidebarProvider?.setMcpSessionProvider(
+    () => mcpHost?.getSessionInfos() ?? [],
   );
 
   httpServer = http.createServer(async (req, res) => {
@@ -378,6 +389,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   initializeTerminalManager(context.extensionUri, log);
 
+  // Initialize secret storage for secure API key access
+  setSecretStorage(context.secrets);
+
   log("Activating AgentLink extension");
 
   // Config store for disk-based approval rules
@@ -471,6 +485,18 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       approvalManager.resetWriteApproval();
       vscode.window.showInformationMessage("All session approvals cleared.");
+    }),
+    vscode.commands.registerCommand("agentlink.setOpenaiApiKey", async () => {
+      const key = await vscode.window.showInputBox({
+        title: "OpenAI API Key",
+        prompt: "Enter your OpenAI API key for semantic search embeddings",
+        password: true,
+        ignoreFocusOut: true,
+        validateInput: (v) => (v.trim() ? null : "API key cannot be empty"),
+      });
+      if (!key) return;
+      await context.secrets.store("openaiApiKey", key.trim());
+      vscode.window.showInformationMessage("OpenAI API key stored securely.");
     }),
     vscode.commands.registerCommand("agentlink.configureAgents", () =>
       showAgentPickerInSidebar(),

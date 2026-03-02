@@ -98,9 +98,10 @@ AgentLink auto-configures `~/.claude.json` with per-project MCP entries.
 
 **Instructions:** Click **Set Up Instructions** during onboarding (or run `AgentLink: Set Up Instructions` from the command palette) to inject AgentLink tool usage instructions into `~/.claude/CLAUDE.md`. This uses boundary markers (`<!-- BEGIN agentlink -->` / `<!-- END agentlink -->`) so it can be safely re-run without duplicating content.
 
-**Hooks:** Click **Install Hooks** during onboarding (or run `AgentLink: Install Hooks`) to install a [PreToolUse hook](https://docs.anthropic.com/en/docs/claude-code/hooks) that blocks built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Glob`, `Grep`) and forces Claude to use AgentLink equivalents. The hook script is installed to `~/.claude/hooks/enforce-agentlink.sh` and configured in `~/.claude/settings.json`.
+**Hooks:** Click **Install Hooks** during onboarding (or run `AgentLink: Install Hooks`) to install a [PreToolUse hook](https://docs.anthropic.com/en/docs/claude-code/hooks) that blocks built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Glob`, `Grep`) and forces Claude to use AgentLink equivalents. The hook script is installed to `~/.claude/hooks/` and configured in `~/.claude/settings.json`.
 
-> **Hooks require `jq`** — install with `brew install jq`, `apt install jq`, etc.
+> **macOS/Linux:** Hooks require `jq` — install with `brew install jq`, `apt install jq`, etc.
+> **Windows:** A PowerShell script is installed automatically (no extra dependencies).
 
 <details>
 <summary>Manual hook setup</summary>
@@ -580,13 +581,13 @@ AgentLink can query a [Qdrant](https://qdrant.tech/) vector index for semantic c
 1. Have Roo Code index your codebase (Roo Code Settings > Codebase Indexing)
 2. Enable in settings:
 
-| Setting                           | Default                 | Description                                             |
-| --------------------------------- | ----------------------- | ------------------------------------------------------- |
-| `agentlink.semanticSearchEnabled` | `false`                 | Enable semantic search                                  |
-| `agentlink.qdrantUrl`             | `http://localhost:6333` | Qdrant server URL                                       |
-| `agentlink.openaiApiKey`          | `""`                    | OpenAI API key (falls back to `OPENAI_API_KEY` env var) |
+| Setting                           | Default                 | Description            |
+| --------------------------------- | ----------------------- | ---------------------- |
+| `agentlink.semanticSearchEnabled` | `false`                 | Enable semantic search |
+| `agentlink.qdrantUrl`             | `http://localhost:6333` | Qdrant server URL      |
 
-3. Use `search_files` with `semantic: true` — the `regex` parameter is interpreted as a natural language query
+3. Set your OpenAI API key via **AgentLink: Set OpenAI API Key** in the command palette (stored securely in VS Code's SecretStorage). Falls back to `OPENAI_API_KEY` env var.
+4. Use `search_files` with `semantic: true` — the `regex` parameter is interpreted as a natural language query
 
 ## Multi-Window Support
 
@@ -613,7 +614,20 @@ Each VS Code window runs its own independent MCP server on its own port. The ext
 | `agentlink.writeRules`             | `[]`                    | Glob patterns for auto-approved file writes (settings-level)                                                     |
 | `agentlink.semanticSearchEnabled`  | `false`                 | Enable semantic codebase search via Qdrant index                                                                 |
 | `agentlink.qdrantUrl`              | `http://localhost:6333` | Qdrant vector database URL                                                                                       |
-| `agentlink.openaiApiKey`           | `""`                    | OpenAI API key for embedding queries (falls back to `OPENAI_API_KEY` env var)                                    |
+
+## Platform Notes
+
+### Windows
+
+All core features work on Windows: diff views, integrated terminal, diagnostics, language server tools, file operations, and the approval system.
+
+**Hooks:** The PreToolUse enforcement hook installs a PowerShell script (`.ps1`) on Windows instead of the bash (`.sh`) script used on macOS/Linux. This is handled automatically — just click **Install Hooks** as usual. The PowerShell script has the same logic: it blocks built-in tools and forces agents to use AgentLink equivalents.
+
+**Building from source:** `npm install && npm run build` works on all platforms. The release script (`npm run release`) requires bash — use Git Bash, WSL, or macOS/Linux.
+
+### macOS / Linux
+
+Fully supported. The enforcement hook requires `jq` — install with `brew install jq` (macOS) or `apt install jq` (Ubuntu/Debian).
 
 ## Troubleshooting
 

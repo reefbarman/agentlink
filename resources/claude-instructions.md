@@ -18,6 +18,10 @@ These MCP tools open diff views for user review, run commands in visible termina
 
 **Exception — non-text files:** The built-in `Read` tool may be used for file types that `read_file` cannot handle: **images** (PNG, JPG, GIF, etc. — Claude is multimodal), **PDFs** (with the `pages` parameter), and **Jupyter notebooks** (`.ipynb` — rendered with cells + outputs). A PreToolUse hook enforces this automatically.
 
+### Regex escaping — IMPORTANT
+
+The `search_files` `regex` parameter is passed directly to ripgrep. Use **single** backslash escapes (`\s`, `\d`, `\(`). Do NOT double-escape — `\\s` in the JSON string value is correct for matching whitespace. Common mistake: sending `\\\\s` (which ripgrep sees as literal backslash + `s`) instead of `\\s` (which ripgrep sees as `\s` = whitespace). The same applies to `\d`, `\w`, `\b`, `\n`, `\(`, `\{`, etc.
+
 ### Common mistakes — DO NOT DO THESE
 
 These are the most frequent violations. Check yourself before every tool call:
@@ -31,13 +35,33 @@ These are the most frequent violations. Check yourself before every tool call:
 
 ### Tool details
 
-| Instead of (built-in) | Use (agentlink MCP) | Why |
-|---|---|---|
-| `Read` | `read_file` | Returns line numbers, file metadata, git status, and diagnostics summary |
-| `Edit` / `Write` | `apply_diff` / `write_file` | Opens a diff view for user review. Format-on-save applies automatically. Returns user edits and diagnostics. |
-| `Bash` | `execute_command` | Runs in VS Code's integrated terminal (visible to user). Captures output via shell integration. Supports named terminals for parallel tasks. |
-| `Glob` | `list_files` | Lists files with optional recursive + depth control |
-| `Grep` | `search_files` | Ripgrep-powered search with context lines. Also supports semantic/vector search. |
+| Instead of (built-in) | Use (agentlink MCP)         | Why                                                                                                                                          |
+| --------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Read`                | `read_file`                 | Returns line numbers, file metadata, git status, and diagnostics summary                                                                     |
+| `Edit` / `Write`      | `apply_diff` / `write_file` | Opens a diff view for user review. Format-on-save applies automatically. Returns user edits and diagnostics.                                 |
+| `Bash`                | `execute_command`           | Runs in VS Code's integrated terminal (visible to user). Captures output via shell integration. Supports named terminals for parallel tasks. |
+| `Glob`                | `list_files`                | Lists files with optional recursive + depth control                                                                                          |
+| `Grep`                | `search_files`              | Ripgrep-powered search with context lines. Also supports semantic/vector search.                                                             |
+
+### Search strategy — use `codebase_search` FIRST
+
+When exploring code, understanding architecture, or investigating how something works, **always start with `codebase_search`** before falling back to `search_files` regex search. Semantic search finds conceptually related code even when you don't know the exact names, patterns, or file locations.
+
+**Use `codebase_search` when:**
+
+- Exploring unfamiliar code ("how does auth work?", "where are API routes?")
+- You don't know exact function/variable/class names
+- Looking for conceptual matches ("error handling", "database connections", "file uploads")
+- Starting a new task and need to understand the relevant parts of the codebase
+- The user asks a broad question about the codebase
+
+**Use `search_files` (regex) when:**
+
+- You know the exact symbol name, string literal, or pattern
+- You need precise text matching (e.g. finding all imports of a specific module)
+- You need to count occurrences or find-and-replace
+
+**Combine both:** Start with `codebase_search` to discover relevant files and concepts, then use `search_files` for precise lookups within those files.
 
 ### Terminal behavior — IMPORTANT
 

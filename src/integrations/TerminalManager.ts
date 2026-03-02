@@ -93,6 +93,30 @@ export interface ExecuteOptions {
 
 const SHELL_INTEGRATION_TIMEOUT = 15000; // 15 seconds (WSL2 / heavy shell configs can be slow)
 
+/** OSC 633;D completion marker emitted by VS Code shell integration */
+const MARKER_RE = /\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/;
+
+/**
+ * Check the output buffer for an OSC 633;D completion marker.
+ * If found, strips the marker from the buffer, returns the parsed exit code.
+ * @param buffer The output buffer to scan
+ * @param fromPos Start scanning from this position (with 20-char overlap for split markers)
+ * @returns `{ exitCode, stripped }` if found, `undefined` otherwise
+ */
+function findAndStripMarker(
+  buffer: string,
+  fromPos: number,
+): { exitCode: number | null; stripped: string } | undefined {
+  const searchFrom = Math.max(0, fromPos - 20);
+  const region = buffer.slice(searchFrom);
+  const match = region.match(MARKER_RE);
+  if (!match) return undefined;
+  const markerIdx = buffer.lastIndexOf("\x1b]633;D");
+  const stripped = markerIdx >= 0 ? buffer.slice(0, markerIdx) : buffer;
+  const exitCode = match[1] !== undefined ? parseInt(match[1], 10) : null;
+  return { exitCode, stripped };
+}
+
 let nextTerminalId = 1;
 
 export class TerminalManager {
@@ -591,26 +615,20 @@ export class TerminalManager {
       };
     });
 
-    const MARKER_RE = /\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/;
-
     // Track how far we've scanned so we don't re-check old data
     let lastMarkerCheckPos = 0;
 
     const checkForMarker = (source: "stream" | "poll"): boolean => {
-      // Search from last checked position (with overlap for split markers)
-      const searchFrom = Math.max(0, lastMarkerCheckPos - 20);
-      const region = managed.outputBuffer.slice(searchFrom);
-      const match = region.match(MARKER_RE);
-      if (match) {
+      const result = findAndStripMarker(managed.outputBuffer, lastMarkerCheckPos);
+      if (result) {
         if (source === "stream") {
           diag.markerInStream = true;
         } else {
           diag.markerByPoll = true;
         }
-        logDiag(`MARKER_FOUND source=${source} exitCode=${match[1] ?? "none"}`);
-        resolveStreamMarker!(
-          match[1] !== undefined ? parseInt(match[1], 10) : undefined,
-        );
+        managed.outputBuffer = result.stripped;
+        logDiag(`MARKER_FOUND source=${source} exitCode=${result.exitCode ?? "none"}`);
+        resolveStreamMarker!(result.exitCode ?? undefined);
         return true;
       }
       lastMarkerCheckPos = managed.outputBuffer.length;
@@ -672,10 +690,10 @@ export class TerminalManager {
 
     clearInterval(markerPoll);
 
-    // Strip the completion marker from output (if present)
-    const markerIdx = managed.outputBuffer.lastIndexOf("\x1b]633;D");
-    if (markerIdx >= 0) {
-      managed.outputBuffer = managed.outputBuffer.slice(0, markerIdx);
+    // Strip any remaining completion marker from output (safety net)
+    const leftover = findAndStripMarker(managed.outputBuffer, 0);
+    if (leftover) {
+      managed.outputBuffer = leftover.stripped;
     }
 
     // Clean up the output
@@ -736,7 +754,7 @@ export class TerminalManager {
     managed: ManagedTerminal,
     command: string,
     cwd: string,
-    hasShellIntegration: boolean,
+    _hasShellIntegration: boolean,
   ): CommandResult {
     // Clean up any previous background state
     for (const d of managed.backgroundDisposables) d.dispose();
@@ -745,66 +763,123 @@ export class TerminalManager {
     managed.backgroundExitCode = null;
     managed.outputBuffer = "";
 
-    if (hasShellIntegration) {
+    const execTag = `bg:${managed.id}:${Date.now()}`;
+    const startTime = Date.now();
+    const logBg = (event: string) => {
+      const elapsed = Date.now() - startTime;
+      this.log?.(
+        `[${execTag}] ${event} (+${elapsed}ms) | ` +
+          `running=${managed.backgroundRunning} captured=${managed.backgroundOutputCaptured} ` +
+          `buf=${managed.outputBuffer.length}`,
+      );
+    };
+
+    // Helper to clean up background state and dispose listeners
+    const finalize = (source: string) => {
+      if (!managed.backgroundRunning) return; // already finalized
+      managed.backgroundRunning = false;
+      managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
+      clearInterval(markerPoll);
+      for (const d of managed.backgroundDisposables) d.dispose();
+      managed.backgroundDisposables = [];
+      logBg(
+        `FINALIZED source=${source} exit_code=${managed.backgroundExitCode}`,
+      );
+    };
+
+    // --- Register listeners BEFORE executing (prevents race for fast commands) ---
+
+    // Listen for shell execution end event as primary completion signal
+    const exitDisposable = vscode.window.onDidEndTerminalShellExecution((e) => {
+      if (e.terminal === managed.terminal) {
+        logBg(`END_EVENT exitCode=${e.exitCode}`);
+        managed.backgroundExitCode = e.exitCode ?? null;
+        // If we used sendText but shell integration picked up the execution,
+        // retroactively mark output as captured since the stream may have data
+        if (
+          !managed.backgroundOutputCaptured &&
+          managed.outputBuffer.length > 0
+        ) {
+          managed.backgroundOutputCaptured = true;
+        }
+        finalize("exitEvent");
+      }
+    });
+
+    // Listen for terminal close
+    const closeDisposable = vscode.window.onDidCloseTerminal((t) => {
+      if (t === managed.terminal) {
+        logBg("TERMINAL_CLOSED");
+        finalize("terminalClosed");
+      }
+    });
+
+    managed.backgroundDisposables.push(exitDisposable, closeDisposable);
+
+    // --- Independent marker polling (catches markers if stream hangs) ---
+    let lastMarkerCheckPos = 0;
+
+    const checkForMarker = (): boolean => {
+      const result = findAndStripMarker(managed.outputBuffer, lastMarkerCheckPos);
+      if (result) {
+        logBg(`MARKER_FOUND exitCode=${result.exitCode ?? "none"}`);
+        managed.outputBuffer = result.stripped;
+        managed.backgroundExitCode = result.exitCode;
+        finalize("marker");
+        return true;
+      }
+      lastMarkerCheckPos = managed.outputBuffer.length;
+      return false;
+    };
+
+    const markerPoll = setInterval(() => {
+      if (!managed.backgroundRunning) {
+        clearInterval(markerPoll);
+        return;
+      }
+      if (managed.outputBuffer.length > lastMarkerCheckPos) {
+        checkForMarker();
+      }
+    }, 500);
+    managed.backgroundDisposables.push({
+      dispose: () => clearInterval(markerPoll),
+    });
+
+    // --- Re-verify shell integration at point of use (don't trust stale boolean) ---
+    const shellIntegration = managed.terminal.shellIntegration;
+
+    if (shellIntegration) {
       managed.backgroundOutputCaptured = true;
-      const execution =
-        managed.terminal.shellIntegration!.executeCommand(command);
+      logBg(`EXEC_START cmd="${command.slice(0, 120)}" mode=shellIntegration`);
+
+      const execution = shellIntegration.executeCommand(command);
       const stream = execution.read();
 
       // Read stream asynchronously — don't await, let it run in background
       const streamDone = (async () => {
+        let chunks = 0;
         for await (const data of stream) {
+          chunks++;
+          if (chunks === 1) logBg(`STREAM_FIRST_DATA len=${data.length}`);
           managed.outputBuffer += data;
-          // Check for OSC 633;D completion marker in stream
-          const tail = managed.outputBuffer.slice(-50);
-          const match = tail.match(/\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/);
-          if (match) {
-            const markerIdx = managed.outputBuffer.lastIndexOf("\x1b]633;D");
-            if (markerIdx >= 0)
-              managed.outputBuffer = managed.outputBuffer.slice(0, markerIdx);
-            managed.backgroundExitCode =
-              match[1] !== undefined ? parseInt(match[1], 10) : null;
-            managed.backgroundRunning = false;
-            managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
-            for (const d of managed.backgroundDisposables) d.dispose();
-            managed.backgroundDisposables = [];
-            break;
-          }
+          if (checkForMarker()) break;
         }
+        logBg(`STREAM_DONE chunks=${chunks}`);
       })();
 
-      // Listen for shell execution end event as primary completion signal
-      const exitDisposable = vscode.window.onDidEndTerminalShellExecution(
-        (e) => {
-          if (e.terminal === managed.terminal) {
-            managed.backgroundExitCode = e.exitCode ?? null;
-            managed.backgroundRunning = false;
-            managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
-            for (const d of managed.backgroundDisposables) d.dispose();
-            managed.backgroundDisposables = [];
-          }
-        },
-      );
-
-      // Listen for terminal close
-      const closeDisposable = vscode.window.onDidCloseTerminal((t) => {
-        if (t === managed.terminal) {
-          managed.backgroundRunning = false;
-          managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
-          for (const d of managed.backgroundDisposables) d.dispose();
-          managed.backgroundDisposables = [];
-        }
-      });
-
-      managed.backgroundDisposables.push(exitDisposable, closeDisposable);
-
-      // Catch stream errors silently (terminal may close mid-read)
-      streamDone.catch(() => {
-        managed.backgroundRunning = false;
+      // Catch stream errors (terminal may close mid-read)
+      streamDone.catch((err) => {
+        logBg(`STREAM_ERROR ${err?.message ?? err}`);
+        finalize("streamError");
       });
     } else {
+      // sendText fallback — shell integration not available
       managed.backgroundOutputCaptured = false;
+      logBg(`EXEC_START cmd="${command.slice(0, 120)}" mode=sendText`);
       managed.terminal.sendText(command, true);
+      // Note: exit/close listeners are already registered above.
+      // If shell integration activates after sendText, the exit listener
+      // will still fire and finalize the state properly.
     }
 
     return {

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.0.6",
+  "version": "1.0.19",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -11,7 +11,7 @@
   "icon": "media/icon.png",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.93.0"
+    "vscode": "^1.109.0"
   },
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -98,6 +98,10 @@
       {
         "command": "agentlink.completeToolCall",
         "title": "AgentLink: Complete Tool Call"
+      },
+      {
+        "command": "agentlink.setOpenaiApiKey",
+        "title": "AgentLink: Set OpenAI API Key"
       },
       {
         "command": "agentlink.configureAgents",
@@ -189,11 +193,6 @@
           "default": "http://localhost:6333",
           "description": "Qdrant vector database URL for semantic codebase search"
         },
-        "agentlink.openaiApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "OpenAI API key for embedding queries (semantic search). Falls back to OPENAI_API_KEY env var."
-        },
         "agentlink.approvalPosition": {
           "type": "string",
           "enum": [
@@ -233,20 +232,19 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@vscode/codicons": "^0.0.44",
-    "diff": "^5.2.0",
+    "diff": "^8.0.3",
     "picomatch": "^4.0.3",
     "preact": "^10.28.4",
-    "zod": "^3.25.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/diff": "^5.2.0",
-    "@types/node": "^20.0.0",
+    "@types/node": "^25.3.2",
     "@types/picomatch": "^4.0.2",
-    "@types/vscode": "^1.93.0",
-    "esbuild": "^0.25.0",
-    "typescript": "^5.8.0",
+    "@types/vscode": "^1.109.0",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }
 }

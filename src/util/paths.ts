@@ -10,6 +10,22 @@ export function getWorkspaceRoots(): string[] {
   return folders.map((f) => f.uri.fsPath);
 }
 
+/** Case-insensitive path equality on Windows, case-sensitive elsewhere. */
+function pathsEqual(a: string, b: string): boolean {
+  if (process.platform === "win32") {
+    return a.toLowerCase() === b.toLowerCase();
+  }
+  return a === b;
+}
+
+/** Check if `child` is inside `parent` directory (case-insensitive on Windows). */
+function pathStartsWith(child: string, parent: string): boolean {
+  if (process.platform === "win32") {
+    return child.toLowerCase().startsWith((parent + path.sep).toLowerCase());
+  }
+  return child.startsWith(parent + path.sep);
+}
+
 export function getFirstWorkspaceRoot(): string {
   const roots = getWorkspaceRoots();
   if (roots.length === 0) {
@@ -64,7 +80,7 @@ export function resolveAndValidatePath(inputPath: string): ResolvedPath {
   // Check workspace boundary
   const inWorkspace =
     roots.length > 0 &&
-    roots.some((root) => real === root || real.startsWith(root + path.sep));
+    roots.some((root) => pathsEqual(real, root) || pathStartsWith(real, root));
 
   return { absolutePath: real, inWorkspace };
 }
@@ -75,7 +91,7 @@ export function resolveAndValidatePath(inputPath: string): ResolvedPath {
 export function getRelativePath(absolutePath: string): string {
   const roots = getWorkspaceRoots();
   for (const root of roots) {
-    if (absolutePath.startsWith(root + path.sep) || absolutePath === root) {
+    if (pathStartsWith(absolutePath, root) || pathsEqual(absolutePath, root)) {
       return path.relative(root, absolutePath);
     }
   }
@@ -100,9 +116,10 @@ function resolveRelativeToWorkspace(
 
     // Check if path starts with a workspace folder name
     for (const folder of folders) {
+      const normalizedInput = inputPath.replace(/\\/g, "/");
       const prefix = folder.name + "/";
-      if (inputPath.startsWith(prefix)) {
-        const subPath = inputPath.slice(prefix.length);
+      if (normalizedInput.startsWith(prefix)) {
+        const subPath = normalizedInput.slice(prefix.length);
         return path.resolve(folder.uri.fsPath, subPath);
       }
       if (inputPath === folder.name) {

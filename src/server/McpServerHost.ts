@@ -16,6 +16,7 @@ interface Session {
   transport: StreamableHTTPServerTransport;
   server: McpServer;
   lastActivity: number;
+  clientInfo?: { name: string; version: string };
 }
 
 const SESSION_IDLE_TTL = 30 * 60_000; // 30 minutes
@@ -90,6 +91,9 @@ export class McpServerHost {
   private tracker: ToolCallTracker;
   private extensionUri: vscode.Uri;
 
+  /** Fired when sessions are created, initialized with clientInfo, closed, or pruned. */
+  onSessionChanged?: () => void;
+
   constructor(
     authToken: string | undefined,
     approvalManager: ApprovalManager,
@@ -156,6 +160,21 @@ export class McpServerHost {
     );
     await server.connect(transport);
 
+    // Capture client identity after MCP initialization completes
+    server.server.oninitialized = () => {
+      const clientVersion = server.server.getClientVersion();
+      if (clientVersion && transport.sessionId) {
+        const session = this.sessions.get(transport.sessionId);
+        if (session) {
+          session.clientInfo = {
+            name: clientVersion.name,
+            version: clientVersion.version,
+          };
+          this.onSessionChanged?.();
+        }
+      }
+    };
+
     // Handle the initialization request
     await transport.handleRequest(req, res, parsedBody);
 
@@ -166,11 +185,13 @@ export class McpServerHost {
         server,
         lastActivity: Date.now(),
       });
+      this.onSessionChanged?.();
     }
 
     transport.onclose = () => {
       if (transport.sessionId) {
         this.sessions.delete(transport.sessionId);
+        this.onSessionChanged?.();
       }
     };
   }
@@ -189,17 +210,34 @@ export class McpServerHost {
 
   private pruneIdleSessions(): void {
     const now = Date.now();
+    let pruned = false;
     for (const [id, session] of this.sessions) {
       if (now - session.lastActivity > SESSION_IDLE_TTL) {
         session.transport.close().catch(() => {});
         session.server.close().catch(() => {});
         this.sessions.delete(id);
+        pruned = true;
       }
+    }
+    if (pruned) {
+      this.onSessionChanged?.();
     }
   }
 
   get sessionCount(): number {
     return this.sessions.size;
+  }
+
+  getSessionInfos(): Array<{
+    id: string;
+    clientName?: string;
+    clientVersion?: string;
+  }> {
+    return Array.from(this.sessions.entries()).map(([id, s]) => ({
+      id,
+      clientName: s.clientInfo?.name,
+      clientVersion: s.clientInfo?.version,
+    }));
   }
 
   async close(): Promise<void> {
