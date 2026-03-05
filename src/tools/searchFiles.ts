@@ -48,6 +48,14 @@ export function needsMultiline(sanitizedRegex: string): boolean {
   return /(?<!\\)\\n/.test(sanitizedRegex);
 }
 
+/**
+ * Detect if a regex uses look-around assertions that require PCRE2.
+ * Matches (?=...), (?!...), (?<=...), (?<!...) patterns.
+ */
+export function needsPcre2(regex: string): boolean {
+  return /\(\?[=!]|\(\?<[=!]/.test(regex);
+}
+
 export function getEscapingHint(regex: string): string | undefined {
   // Look for patterns like \\s, \\d, \\(, \\{ that suggest double-escaping
   if (/\\\\[sSdDwWbBntrf(){}[\].|+*?^$/]/.test(regex)) {
@@ -151,6 +159,9 @@ export async function handleSearchFiles(
     }
     if (params.multiline || needsMultiline(sanitized)) {
       args.push("--multiline", "--multiline-dotall");
+    }
+    if (needsPcre2(sanitized)) {
+      args.push("--pcre2");
     }
 
     // Only add --glob if a specific file pattern is provided
@@ -293,6 +304,7 @@ async function searchFilesOnly(
   if (params.case_insensitive) args.push("--ignore-case");
   if (params.multiline || needsMultiline(sanitized))
     args.push("--multiline", "--multiline-dotall");
+  if (needsPcre2(sanitized)) args.push("--pcre2");
   if (params.file_pattern) args.push("--glob", params.file_pattern);
   args.push(dirPath);
 
@@ -361,6 +373,7 @@ async function searchCount(
   if (params.case_insensitive) args.push("--ignore-case");
   if (params.multiline || needsMultiline(sanitized))
     args.push("--multiline", "--multiline-dotall");
+  if (needsPcre2(sanitized)) args.push("--pcre2");
   if (params.file_pattern) args.push("--glob", params.file_pattern);
   args.push(dirPath);
 

@@ -11,8 +11,17 @@
  * IMPORTANT: This file MUST NOT import "vscode".
  */
 
+import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
+
+// Lower worker process priority so indexing doesn't starve the UI / other processes.
+// 19 = lowest priority on Linux/macOS (POSIX nice), 19 = IDLE on Windows.
+try {
+  os.setPriority(19);
+} catch {
+  // Non-fatal — some environments don't allow priority changes
+}
 import {
   initTreeSitter,
   treeSitterChunkFile,
@@ -50,12 +59,17 @@ import { EMBEDDING_DIM, EMBEDDING_MODEL } from "./types.js";
 
 // --- Constants ---
 
-const EMBEDDING_BATCH_SIZE = 50;
+const EMBEDDING_BATCH_SIZE = 100;
 const EMBEDDING_CONCURRENCY = 3;
 const QDRANT_UPSERT_BATCH = 100;
 const MAX_RETRIES = 3;
-/** Conservative token limit per embedding batch. Estimated via chars/4. */
-const MAX_BATCH_TOKENS = 7500;
+/**
+ * Token limit per embedding batch. Estimated via chars/4.
+ * text-embedding-3-small supports up to 8191 tokens per input, and the API
+ * accepts large batches. Roo-Code uses 100K; we use 50K as a safe middle ground
+ * that drastically reduces the number of API calls vs our old 7.5K limit.
+ */
+const MAX_BATCH_TOKENS = 50_000;
 /**
  * Max characters per individual embedding text.
  * text-embedding-3-small has an 8192 token limit. Code averages ~2.5-3
@@ -166,11 +180,16 @@ async function processFileBatch(
   let chunksCreated = 0;
   let pointsUpserted = 0;
 
-  // 1. Chunk all files in this batch
+  // 1. Chunk all files in this batch (yield every ~15ms to avoid CPU saturation)
   const allChunks: Array<{ chunk: Chunk; fileIdx: number }> = [];
+  let lastYield = Date.now();
   for (let i = 0; i < files.length; i++) {
     if (aborted) break;
-    if (i > 0 && i % 10 === 0) await sleep(0);
+    const now = Date.now();
+    if (now - lastYield >= 15) {
+      await sleep(1);
+      lastYield = Date.now();
+    }
     const file = files[i];
 
     let chunks: Chunk[];
@@ -263,6 +282,8 @@ async function processFileBatch(
         hash: file.hash,
         pointIds: ids,
         indexedAt: new Date().toISOString(),
+        mtimeMs: file.mtimeMs,
+        size: file.size,
       };
       filesIndexed++;
     }
@@ -401,7 +422,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
 
       // Read content for this batch only
       const batchErrors: string[] = [];
-      const batchFiles = readFilesBatch(batchPaths, batchErrors);
+      const batchFiles = await readFilesBatch(batchPaths, batchErrors);
       errors.push(...batchErrors);
 
       if (batchFiles.length === 0) continue;
@@ -457,7 +478,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       cancelled: aborted || undefined,
     });
   } catch (err) {
-    sendError(`Indexing failed: ${err}`, false);
+    sendError(`Indexing failed: ${err}`, true);
   }
 }
 
@@ -561,7 +582,7 @@ async function handleIncrementalUpdate(
       errors,
     });
   } catch (err) {
-    sendError(`Incremental update failed: ${err}`, false);
+    sendError(`Incremental update failed: ${err}`, true);
   }
 }
 

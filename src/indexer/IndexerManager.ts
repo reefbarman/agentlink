@@ -47,6 +47,7 @@ export class IndexerManager implements vscode.Disposable {
   private worker: ChildProcess | null = null;
   private status: IndexStatus = { state: "idle" };
   private disposables: vscode.Disposable[] = [];
+  private cancelRequested = false;
 
   // File watcher debounce state
   private pendingAdded = new Set<string>();
@@ -74,6 +75,7 @@ export class IndexerManager implements vscode.Disposable {
       return;
     }
 
+    this.cancelRequested = false;
     this.updateStatus({ state: "discovering" });
 
     try {
@@ -82,6 +84,20 @@ export class IndexerManager implements vscode.Disposable {
         "qdrantUrl",
         "http://localhost:6333",
       );
+      // Pre-flight: check Qdrant is reachable with retry + backoff
+      const qdrantReachable = await this.waitForQdrant(qdrantUrl);
+      if (!qdrantReachable) {
+        if (this.cancelRequested) {
+          this.updateStatus({ state: "idle" });
+        } else {
+          this.updateStatus({
+            state: "error",
+            error: `Qdrant not reachable at ${qdrantUrl}. Make sure Qdrant is running (e.g. docker run -p 6333:6333 qdrant/qdrant).`,
+          });
+        }
+        return;
+      }
+
       const openAiApiKey = await this.getOpenAiApiKey();
 
       if (!openAiApiKey) {
@@ -163,9 +179,22 @@ export class IndexerManager implements vscode.Disposable {
   }
 
   cancelIndexing(): void {
+    this.cancelRequested = true;
+
+    if (this.status.state === "discovering") {
+      // Cancel during Qdrant check / file discovery — waitForQdrant checks this flag
+      this.log("Cancel requested during discovery phase");
+      this.updateStatus({ state: "idle" });
+      return;
+    }
+
     if (this.worker && this.status.state === "indexing") {
       this.worker.send({ type: "cancel" });
       this.log("Sent cancel to indexer worker");
+    } else if (this.status.state === "indexing" && !this.worker) {
+      // Worker crashed but state is stuck — just reset
+      this.log("Cancel requested but worker is dead, resetting state");
+      this.updateStatus({ state: "idle" });
     }
   }
 
@@ -314,6 +343,9 @@ export class IndexerManager implements vscode.Disposable {
         this.log(`Indexer error: ${msg.message}`);
         if (msg.fatal) {
           this.updateStatus({ state: "error", error: msg.message });
+        } else {
+          // Surface non-fatal errors as detail so the UI isn't silent
+          this.updateStatus({ ...this.status, detail: msg.message });
         }
         break;
     }
@@ -401,6 +433,43 @@ export class IndexerManager implements vscode.Disposable {
       "index-cache",
       `${collectionName}.json`,
     );
+  }
+
+  /**
+   * Try to reach Qdrant with exponential backoff (1s, 2s, 4s, 8s).
+   * Updates status detail so the user sees retry progress in the sidebar.
+   * Returns false if all attempts fail or cancel is requested.
+   */
+  private async waitForQdrant(qdrantUrl: string): Promise<boolean> {
+    const baseUrl = qdrantUrl.replace(/\/+$/, "");
+    const delays = [0, 1000, 2000, 4000, 8000]; // initial + 4 retries
+
+    for (let i = 0; i < delays.length; i++) {
+      if (this.cancelRequested) return false;
+
+      if (delays[i] > 0) {
+        this.updateStatus({
+          ...this.status,
+          detail: `Qdrant not reachable, retrying (${i}/${delays.length - 1})...`,
+        });
+        await new Promise((r) => setTimeout(r, delays[i]));
+      }
+
+      if (this.cancelRequested) return false;
+
+      try {
+        const resp = await fetch(`${baseUrl}/healthz`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (resp.ok) return true;
+      } catch {
+        this.log(
+          `Qdrant health check failed (attempt ${i + 1}/${delays.length})`,
+        );
+      }
+    }
+
+    return false;
   }
 
   private async getOpenAiApiKey(): Promise<string> {

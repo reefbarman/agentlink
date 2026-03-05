@@ -115,6 +115,10 @@ export interface CachedFileEntry {
   pointIds: string[];
   /** ISO timestamp of when this file was last indexed */
   indexedAt: string;
+  /** File modification time (ms) — used for fast stat-based skip */
+  mtimeMs?: number;
+  /** File size in bytes — used for fast stat-based skip */
+  size?: number;
 }
 
 export interface IndexCache {

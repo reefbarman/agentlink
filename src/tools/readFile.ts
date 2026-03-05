@@ -406,18 +406,21 @@ export async function handleReadFile(
     const totalLines = allLines.length;
 
     const offset = Math.max(1, params.offset ?? 1);
+
     if (offset > totalLines) {
+      const emptyResult: Record<string, unknown> = {
+        total_lines: totalLines,
+        showing: "0-0",
+        content: "",
+        path: params.path,
+      };
+      emptyResult.size = stat.size;
+      emptyResult.modified = stat.mtime.toISOString();
+      const gitStatus = getGitStatus(filePath);
+      if (gitStatus) emptyResult.git_status = gitStatus;
+      emptyResult.language = detectLanguage(filePath);
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              total_lines: totalLines,
-              error: `Offset ${offset} exceeds total lines (${totalLines})`,
-              path: params.path,
-            }),
-          },
-        ],
+        content: [{ type: "text" as const, text: JSON.stringify(emptyResult) }],
       };
     }
 
@@ -480,7 +483,8 @@ export async function handleReadFile(
       if (symbolResult && "symbols" in symbolResult) {
         result.symbols = symbolResult.symbols;
       } else if (symbolResult && "timedOut" in symbolResult) {
-        result.symbols_note = "Symbol outline timed out — language server may be busy";
+        result.symbols_note =
+          "Symbol outline timed out — language server may be busy";
       }
     }
 
