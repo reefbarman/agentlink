@@ -173,16 +173,50 @@ describe("validateCommand", () => {
       expect(result!.message).toContain("sed -i");
     });
 
-    it("allows sed without -i (stdout transform)", () => {
-      expect(validateCommand("sed 's/old/new/' file.txt")).toBeNull();
+    it("rejects sed with a file argument (stdout transform)", () => {
+      const result = validateCommand("sed 's/old/new/' file.txt");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("apply_diff");
+      expect(result!.message).toContain("find_and_replace");
+    });
+
+    it("rejects sed -n with a file argument", () => {
+      const result = validateCommand("sed -n '5p' file.txt");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("read_file");
+      expect(result!.message).toContain("search_files");
+    });
+
+    it("rejects sed -n with pattern match", () => {
+      const result = validateCommand("sed -n '/error/p' app.log");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("search_files");
+    });
+
+    it("rejects sed --quiet", () => {
+      const result = validateCommand("sed --quiet '1,10p' data.txt");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("read_file");
+    });
+
+    it("rejects sed with -e and file argument", () => {
+      const result = validateCommand(
+        "sed -e 's/old/new/' -e 's/foo/bar/' file.txt",
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("apply_diff");
     });
 
     it("allows sed in a pipeline", () => {
       expect(validateCommand("echo hello | sed 's/hello/world/'")).toBeNull();
     });
 
-    it("allows sed -n (suppress output flag, not -i)", () => {
-      expect(validateCommand("sed -n '5p' file.txt")).toBeNull();
+    it("allows sed -n in a pipeline", () => {
+      expect(validateCommand("cat file | sed -n '5p'")).toBeNull();
+    });
+
+    it("allows bare sed with no file (reads stdin)", () => {
+      expect(validateCommand("sed 's/old/new/'")).toBeNull();
     });
   });
 

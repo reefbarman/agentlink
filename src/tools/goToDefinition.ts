@@ -2,9 +2,13 @@ import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { resolveAndOpenDocument, toPosition, serializeLocation } from "./languageFeatures.js";
+import {
+  resolveAndOpenDocument,
+  toPosition,
+  serializeLocation,
+} from "./languageFeatures.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleGoToDefinition(
   params: { path: string; line: number; column: number },
@@ -13,18 +17,29 @@ export async function handleGoToDefinition(
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, approvalPanel, sessionId);
+    const { uri } = await resolveAndOpenDocument(
+      params.path,
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
     const position = toPosition(params.line, params.column);
 
-    const results = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
-      "vscode.executeDefinitionProvider",
-      uri,
-      position,
-    );
+    const results = await vscode.commands.executeCommand<
+      (vscode.Location | vscode.LocationLink)[]
+    >("vscode.executeDefinitionProvider", uri, position);
 
     if (!results || results.length === 0) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ definitions: [], message: "No definition found" }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              definitions: [],
+              message: "No definition found",
+            }),
+          },
+        ],
       };
     }
 
@@ -46,7 +61,12 @@ export async function handleGoToDefinition(
     }
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
     };
   }
 }

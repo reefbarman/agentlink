@@ -13,6 +13,7 @@ import type {
   TrackedCallInfo,
 } from "../server/ToolCallTracker.js";
 import { readFeedback, deleteFeedback } from "../util/feedbackStore.js";
+import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
 import { matchClientName, getAgentById } from "../agents/registry.js";
 import type {
   AgentInfo,
@@ -34,6 +35,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     authEnabled: true,
     agentConfigured: false,
     masterBypass: false,
+    hasWorkspace: (vscode.workspace.workspaceFolders ?? []).length > 0,
   };
   private approvalManager: ApprovalManager | undefined;
   private toolCallTracker: ToolCallTracker | undefined;
@@ -134,6 +136,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this.getHtml();
     this.log("Webview resolved, HTML set");
+
+    // Refresh state when the sidebar becomes visible again — postMessage calls
+    // are silently dropped while the webview is hidden (no retainContextWhenHidden).
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this.refreshApprovalState();
+      }
+    });
+
+    webviewView.onDidDispose(() => {
+      this.view = undefined;
+    });
 
     webviewView.webview.onDidReceiveMessage((message) => {
       switch (message.command) {
@@ -418,50 +432,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     sessionId?: string,
   ): Promise<void> {
     if (!this.approvalManager) return;
-
-    type RuleMode = "prefix" | "exact" | "regex";
-    const modes: Array<{ label: string; mode: RuleMode; alwaysShow: true }> = [
-      {
-        label: "$(symbol-text) Prefix Match",
-        mode: "prefix",
-        alwaysShow: true,
-      },
-      { label: "$(symbol-key) Exact Match", mode: "exact", alwaysShow: true },
-      { label: "$(regex) Regex Match", mode: "regex", alwaysShow: true },
-    ];
-
-    const qp = vscode.window.createQuickPick<
-      vscode.QuickPickItem & { mode: RuleMode; alwaysShow: true }
-    >();
-    qp.title = "Edit rule pattern, then pick match mode";
-    qp.placeholder = "Edit the pattern above, then select match mode";
-    qp.value = oldPattern;
-    qp.items = modes;
-    // Pre-select the current mode
-    const current = modes.find((m) => m.mode === oldMode);
-    if (current) qp.activeItems = [current];
-    qp.ignoreFocusOut = true;
-
-    const result = await new Promise<{
-      pattern: string;
-      mode: RuleMode;
-    } | null>((resolve) => {
-      let resolved = false;
-      qp.onDidAccept(() => {
-        const selected = qp.selectedItems[0];
-        if (selected && qp.value.trim()) {
-          resolved = true;
-          resolve({ pattern: qp.value.trim(), mode: selected.mode });
-          qp.dispose();
-        }
-      });
-      qp.onDidHide(() => {
-        if (!resolved) resolve(null);
-        qp.dispose();
-      });
-      qp.show();
+    const result = await editRuleViaQuickPick({
+      oldPattern,
+      oldMode,
+      title: "Edit rule pattern, then pick match mode",
+      modes: [
+        {
+          label: "$(symbol-text) Prefix Match",
+          mode: "prefix" as const,
+          alwaysShow: true as const,
+        },
+        {
+          label: "$(symbol-key) Exact Match",
+          mode: "exact" as const,
+          alwaysShow: true as const,
+        },
+        {
+          label: "$(regex) Regex Match",
+          mode: "regex" as const,
+          alwaysShow: true as const,
+        },
+      ],
     });
-
     if (result) {
       this.approvalManager.editCommandRule(
         oldPattern,
@@ -479,49 +471,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     sessionId?: string,
   ): Promise<void> {
     if (!this.approvalManager) return;
-
-    type RuleMode = "glob" | "prefix" | "exact";
-    const modes: Array<{ label: string; mode: RuleMode; alwaysShow: true }> = [
-      { label: "$(symbol-misc) Glob Match", mode: "glob", alwaysShow: true },
-      {
-        label: "$(symbol-text) Prefix Match",
-        mode: "prefix",
-        alwaysShow: true,
-      },
-      { label: "$(symbol-key) Exact Match", mode: "exact", alwaysShow: true },
-    ];
-
-    const qp = vscode.window.createQuickPick<
-      vscode.QuickPickItem & { mode: RuleMode; alwaysShow: true }
-    >();
-    qp.title = "Edit path pattern, then pick match mode";
-    qp.placeholder = "Edit the pattern above, then select match mode";
-    qp.value = oldPattern;
-    qp.items = modes;
-    const current = modes.find((m) => m.mode === oldMode);
-    if (current) qp.activeItems = [current];
-    qp.ignoreFocusOut = true;
-
-    const result = await new Promise<{
-      pattern: string;
-      mode: RuleMode;
-    } | null>((resolve) => {
-      let resolved = false;
-      qp.onDidAccept(() => {
-        const selected = qp.selectedItems[0];
-        if (selected && qp.value.trim()) {
-          resolved = true;
-          resolve({ pattern: qp.value.trim(), mode: selected.mode });
-          qp.dispose();
-        }
-      });
-      qp.onDidHide(() => {
-        if (!resolved) resolve(null);
-        qp.dispose();
-      });
-      qp.show();
+    const result = await editRuleViaQuickPick({
+      oldPattern,
+      oldMode,
+      title: "Edit path pattern, then pick match mode",
+      modes: [
+        {
+          label: "$(symbol-misc) Glob Match",
+          mode: "glob" as const,
+          alwaysShow: true as const,
+        },
+        {
+          label: "$(symbol-text) Prefix Match",
+          mode: "prefix" as const,
+          alwaysShow: true as const,
+        },
+        {
+          label: "$(symbol-key) Exact Match",
+          mode: "exact" as const,
+          alwaysShow: true as const,
+        },
+      ],
     });
-
     if (result) {
       this.approvalManager.editPathRule(oldPattern, result, scope, sessionId);
     }
@@ -534,49 +505,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     sessionId?: string,
   ): Promise<void> {
     if (!this.approvalManager) return;
-
-    type RuleMode = "glob" | "prefix" | "exact";
-    const modes: Array<{ label: string; mode: RuleMode; alwaysShow: true }> = [
-      { label: "$(symbol-misc) Glob Match", mode: "glob", alwaysShow: true },
-      {
-        label: "$(symbol-text) Prefix Match",
-        mode: "prefix",
-        alwaysShow: true,
-      },
-      { label: "$(symbol-key) Exact Match", mode: "exact", alwaysShow: true },
-    ];
-
-    const qp = vscode.window.createQuickPick<
-      vscode.QuickPickItem & { mode: RuleMode; alwaysShow: true }
-    >();
-    qp.title = "Edit write rule pattern, then pick match mode";
-    qp.placeholder = "Edit the pattern above, then select match mode";
-    qp.value = oldPattern;
-    qp.items = modes;
-    const current = modes.find((m) => m.mode === oldMode);
-    if (current) qp.activeItems = [current];
-    qp.ignoreFocusOut = true;
-
-    const result = await new Promise<{
-      pattern: string;
-      mode: RuleMode;
-    } | null>((resolve) => {
-      let resolved = false;
-      qp.onDidAccept(() => {
-        const selected = qp.selectedItems[0];
-        if (selected && qp.value.trim()) {
-          resolved = true;
-          resolve({ pattern: qp.value.trim(), mode: selected.mode });
-          qp.dispose();
-        }
-      });
-      qp.onDidHide(() => {
-        if (!resolved) resolve(null);
-        qp.dispose();
-      });
-      qp.show();
+    const result = await editRuleViaQuickPick({
+      oldPattern,
+      oldMode,
+      title: "Edit write rule pattern, then pick match mode",
+      modes: [
+        {
+          label: "$(symbol-misc) Glob Match",
+          mode: "glob" as const,
+          alwaysShow: true as const,
+        },
+        {
+          label: "$(symbol-text) Prefix Match",
+          mode: "prefix" as const,
+          alwaysShow: true as const,
+        },
+        {
+          label: "$(symbol-key) Exact Match",
+          mode: "exact" as const,
+          alwaysShow: true as const,
+        },
+      ],
     });
-
     if (result) {
       this.approvalManager.editWriteRule(oldPattern, result, scope, sessionId);
     }
@@ -586,6 +536,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     // Always sync tool call state before full re-render to avoid races
     // where a postMessage update is lost during webview reload.
     this.activeToolCalls = this.toolCallTracker?.getActiveCalls() ?? [];
+
+    const mcpSessions = this.mcpSessionProvider?.() ?? [];
 
     if (this.approvalManager) {
       const sessions = this.approvalManager.getActiveSessions();
@@ -611,7 +563,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.state.projectWriteRules = writeRules.project;
       this.state.settingsWriteRules = writeRules.settings;
       // Merge MCP session client info into approval sessions
-      const mcpSessions = this.mcpSessionProvider?.() ?? [];
       const mcpMap = new Map(mcpSessions.map((s) => [s.id, s]));
 
       this.state.activeSessions = sessions.map((s) => {
@@ -629,30 +580,29 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             : undefined,
         };
       });
-
-      // Build connected agents list from all MCP sessions (not just approval sessions).
-      // Filter out sessions idle for more than 5 minutes.
-      const STALE_REMOVE_MS = 5 * 60_000;
-      const now = Date.now();
-      this.state.connectedAgents = mcpSessions
-        .filter((s) => now - s.lastActivity < STALE_REMOVE_MS)
-        .map((s) => {
-          const agentId = s.clientName
-            ? matchClientName(s.clientName)
-            : undefined;
-          return {
-            sessionId: s.id,
-            clientName: s.clientName,
-            clientVersion: s.clientVersion,
-            agentId,
-            agentDisplayName: agentId
-              ? getAgentById(agentId)?.name
-              : undefined,
-            lastActivity: s.lastActivity,
-            trustState: s.trusted ? ("trusted" as const) : ("untrusted" as const),
-          };
-        });
     }
+
+    // Build connected agents list from all MCP sessions (not just approval sessions).
+    // This is outside the approvalManager block so trust-state changes always
+    // propagate to the sidebar even before any approval interaction.
+    const STALE_REMOVE_MS = 5 * 60_000;
+    const now = Date.now();
+    this.state.connectedAgents = mcpSessions
+      .filter((s) => now - s.lastActivity < STALE_REMOVE_MS)
+      .map((s) => {
+        const agentId = s.clientName
+          ? matchClientName(s.clientName)
+          : undefined;
+        return {
+          sessionId: s.id,
+          clientName: s.clientName,
+          clientVersion: s.clientVersion,
+          agentId,
+          agentDisplayName: agentId ? getAgentById(agentId)?.name : undefined,
+          lastActivity: s.lastActivity,
+          trustState: s.trusted ? ("trusted" as const) : ("untrusted" as const),
+        };
+      });
     this.state.masterBypass = this.getMasterBypass();
     // Send state via postMessage instead of full HTML replacement
     this.view?.webview.postMessage({ type: "stateUpdate", state: this.state });

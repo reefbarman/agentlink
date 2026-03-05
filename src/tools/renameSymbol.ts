@@ -6,7 +6,7 @@ import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.j
 import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
 import { decisionToScope, applyInlineTrustScope } from "./writeApprovalUI.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleRenameSymbol(
   params: { path: string; line: number; column: number; new_name: string },

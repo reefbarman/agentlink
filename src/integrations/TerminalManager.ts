@@ -66,7 +66,7 @@ interface ManagedTerminal {
 export interface CommandResult {
   exit_code: number | null;
   output: string;
-  cwd: string;
+  cwd?: string;
   output_captured: boolean;
   terminal_id: string;
   output_file?: string;
@@ -112,7 +112,9 @@ function findAndStripMarker(
   const region = buffer.slice(searchFrom);
   const match = region.match(MARKER_RE);
   if (!match) return undefined;
-  const markerIdx = buffer.lastIndexOf("\x1b]633;D");
+  // Use the match index within the region to find the exact marker position,
+  // rather than lastIndexOf on the full buffer which could find a stale marker.
+  const markerIdx = match.index !== undefined ? searchFrom + match.index : -1;
   const stripped = markerIdx >= 0 ? buffer.slice(0, markerIdx) : buffer;
   const exitCode = match[1] !== undefined ? parseInt(match[1], 10) : null;
   return { exitCode, stripped };
@@ -213,23 +215,17 @@ export class TerminalManager {
       );
 
       if (options.background) {
-        return this.executeBackground(
-          managed,
-          command,
-          options.cwd,
-          hasShellIntegration,
-        );
+        return this.executeBackground(managed, command, hasShellIntegration);
       }
 
       if (hasShellIntegration) {
         return await this.executeWithShellIntegration(
           managed,
           command,
-          options.cwd,
           options.timeout,
         );
       } else {
-        return this.executeWithSendText(managed, command, options.cwd);
+        return this.executeWithSendText(managed, command);
       }
     } finally {
       managed.lastCommandEndedAt = Date.now();
@@ -441,7 +437,6 @@ export class TerminalManager {
   private async executeWithShellIntegration(
     managed: ManagedTerminal,
     command: string,
-    cwd: string,
     timeout?: number,
   ): Promise<CommandResult> {
     const terminal = managed.terminal;
@@ -620,7 +615,10 @@ export class TerminalManager {
     let lastMarkerCheckPos = 0;
 
     const checkForMarker = (source: "stream" | "poll"): boolean => {
-      const result = findAndStripMarker(managed.outputBuffer, lastMarkerCheckPos);
+      const result = findAndStripMarker(
+        managed.outputBuffer,
+        lastMarkerCheckPos,
+      );
       if (result) {
         if (source === "stream") {
           diag.markerInStream = true;
@@ -628,7 +626,9 @@ export class TerminalManager {
           diag.markerByPoll = true;
         }
         managed.outputBuffer = result.stripped;
-        logDiag(`MARKER_FOUND source=${source} exitCode=${result.exitCode ?? "none"}`);
+        logDiag(
+          `MARKER_FOUND source=${source} exitCode=${result.exitCode ?? "none"}`,
+        );
         resolveStreamMarker!(result.exitCode ?? undefined);
         return true;
       }
@@ -717,10 +717,16 @@ export class TerminalManager {
     // Clean up all listeners
     for (const d of disposables) d.dispose();
 
+    // Read the terminal's actual cwd after execution (reflects cd, etc.)
+    const actualCwd = shellIntegration.cwd?.fsPath;
+    if (actualCwd) {
+      managed.cwd = actualCwd;
+    }
+
     const result: CommandResult = {
       exit_code: exitCode ?? null,
       output: managed.outputBuffer,
-      cwd,
+      ...(actualCwd && { cwd: actualCwd }),
       output_captured: true,
       terminal_id: managed.id,
     };
@@ -738,7 +744,6 @@ export class TerminalManager {
   private executeWithSendText(
     managed: ManagedTerminal,
     command: string,
-    cwd: string,
   ): CommandResult {
     managed.terminal.sendText(command, true);
 
@@ -747,7 +752,6 @@ export class TerminalManager {
       output:
         "Command sent to terminal. Output capture unavailable — shell integration is not active. " +
         "Check VS Code terminal settings to enable shell integration.",
-      cwd,
       output_captured: false,
       terminal_id: managed.id,
     };
@@ -785,7 +789,9 @@ export class TerminalManager {
       clearInterval(markerPoll);
       for (const d of managed.backgroundDisposables) d.dispose();
       managed.backgroundDisposables = [];
-      logBg(`FINALIZED source=${source} exit_code=${managed.backgroundExitCode}`);
+      logBg(
+        `FINALIZED source=${source} exit_code=${managed.backgroundExitCode}`,
+      );
     };
 
     // Listen for shell execution end event
@@ -842,7 +848,6 @@ export class TerminalManager {
   private executeBackground(
     managed: ManagedTerminal,
     command: string,
-    cwd: string,
     _hasShellIntegration: boolean,
   ): CommandResult {
     // Clean up any previous background state
@@ -909,7 +914,10 @@ export class TerminalManager {
     let lastMarkerCheckPos = 0;
 
     const checkForMarker = (): boolean => {
-      const result = findAndStripMarker(managed.outputBuffer, lastMarkerCheckPos);
+      const result = findAndStripMarker(
+        managed.outputBuffer,
+        lastMarkerCheckPos,
+      );
       if (result) {
         logBg(`MARKER_FOUND exitCode=${result.exitCode ?? "none"}`);
         managed.outputBuffer = result.stripped;
@@ -974,7 +982,6 @@ export class TerminalManager {
     return {
       exit_code: null,
       output: `Background command started in terminal "${managed.name}". Use terminal_id "${managed.id}" with get_terminal_output to check on progress.`,
-      cwd,
       output_captured: false,
       terminal_id: managed.id,
     };

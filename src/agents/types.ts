@@ -25,8 +25,8 @@ export interface AgentDefinition {
 export interface ConfigWriter {
   /** Write the MCP server config for this agent. Returns true if successful. */
   write(port: number, authToken?: string): boolean;
-  /** Write per-project config for a specific folder. */
-  writeForFolder?(folderPath: string, port: number, authToken?: string): void;
+  /** Write per-project config for a specific folder. Returns true if successful. */
+  writeForFolder?(folderPath: string, port: number, authToken?: string): boolean;
   /** Remove config entries on server stop. */
   cleanup(): void;
   /** Remove config for a specific folder. */

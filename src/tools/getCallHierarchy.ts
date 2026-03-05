@@ -2,12 +2,18 @@ import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { resolveAndOpenDocument, toPosition, SYMBOL_KIND_NAMES } from "./languageFeatures.js";
+import {
+  resolveAndOpenDocument,
+  toPosition,
+  SYMBOL_KIND_NAMES,
+} from "./languageFeatures.js";
 import { getRelativePath } from "../util/paths.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
-function serializeHierarchyItem(item: vscode.CallHierarchyItem): Record<string, unknown> {
+function serializeHierarchyItem(
+  item: vscode.CallHierarchyItem,
+): Record<string, unknown> {
   return {
     name: item.name,
     kind: SYMBOL_KIND_NAMES[item.kind] ?? "symbol",
@@ -32,22 +38,28 @@ export async function handleGetCallHierarchy(
 ): Promise<ToolResult> {
   try {
     const { uri } = await resolveAndOpenDocument(
-      params.path, approvalManager, approvalPanel, sessionId,
+      params.path,
+      approvalManager,
+      approvalPanel,
+      sessionId,
     );
     const position = toPosition(params.line, params.column);
 
     // Prepare call hierarchy
-    const items = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
-      "vscode.prepareCallHierarchy",
-      uri,
-      position,
-    );
+    const items = await vscode.commands.executeCommand<
+      vscode.CallHierarchyItem[]
+    >("vscode.prepareCallHierarchy", uri, position);
 
     if (!items || items.length === 0) {
       return {
-        content: [{ type: "text", text: JSON.stringify({
-          message: "No call hierarchy available at this position",
-        }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              message: "No call hierarchy available at this position",
+            }),
+          },
+        ],
       };
     }
 
@@ -76,7 +88,12 @@ export async function handleGetCallHierarchy(
     }
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
     };
   }
 }
@@ -86,10 +103,9 @@ async function getIncomingCalls(
   maxDepth: number,
   currentDepth: number,
 ): Promise<unknown[]> {
-  const calls = await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
-    "vscode.provideIncomingCalls",
-    item,
-  );
+  const calls = await vscode.commands.executeCommand<
+    vscode.CallHierarchyIncomingCall[]
+  >("vscode.provideIncomingCalls", item);
 
   if (!calls || calls.length === 0) return [];
 
@@ -104,7 +120,11 @@ async function getIncomingCalls(
     };
 
     if (currentDepth < maxDepth) {
-      const nested = await getIncomingCalls(call.from, maxDepth, currentDepth + 1);
+      const nested = await getIncomingCalls(
+        call.from,
+        maxDepth,
+        currentDepth + 1,
+      );
       if (nested.length > 0) entry.incoming = nested;
     }
 
@@ -118,10 +138,9 @@ async function getOutgoingCalls(
   maxDepth: number,
   currentDepth: number,
 ): Promise<unknown[]> {
-  const calls = await vscode.commands.executeCommand<vscode.CallHierarchyOutgoingCall[]>(
-    "vscode.provideOutgoingCalls",
-    item,
-  );
+  const calls = await vscode.commands.executeCommand<
+    vscode.CallHierarchyOutgoingCall[]
+  >("vscode.provideOutgoingCalls", item);
 
   if (!calls || calls.length === 0) return [];
 
@@ -136,7 +155,11 @@ async function getOutgoingCalls(
     };
 
     if (currentDepth < maxDepth) {
-      const nested = await getOutgoingCalls(call.to, maxDepth, currentDepth + 1);
+      const nested = await getOutgoingCalls(
+        call.to,
+        maxDepth,
+        currentDepth + 1,
+      );
       if (nested.length > 0) entry.outgoing = nested;
     }
 

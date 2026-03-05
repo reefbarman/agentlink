@@ -5,7 +5,7 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleOpenFile(
   params: {
@@ -23,7 +23,10 @@ export async function handleOpenFile(
     const { absolutePath, inWorkspace } = resolveAndValidatePath(params.path);
     const relPath = getRelativePath(absolutePath);
 
-    if (!inWorkspace && !approvalManager.isPathTrusted(sessionId, absolutePath)) {
+    if (
+      !inWorkspace &&
+      !approvalManager.isPathTrusted(sessionId, absolutePath)
+    ) {
       const { approved, reason } = await approveOutsideWorkspaceAccess(
         absolutePath,
         approvalManager,
@@ -32,13 +35,24 @@ export async function handleOpenFile(
       );
       if (!approved) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ status: "rejected", path: params.path, reason }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "rejected",
+                path: params.path,
+                reason,
+              }),
+            },
+          ],
         };
       }
     }
 
     const doc = await vscode.workspace.openTextDocument(absolutePath);
-    const editor = await vscode.window.showTextDocument(doc, { preview: false });
+    const editor = await vscode.window.showTextDocument(doc, {
+      preview: false,
+    });
 
     if (params.line) {
       const line = Math.max(0, params.line - 1);
@@ -65,7 +79,10 @@ export async function handleOpenFile(
       }
     }
 
-    const response: Record<string, unknown> = { status: "opened", path: relPath };
+    const response: Record<string, unknown> = {
+      status: "opened",
+      path: relPath,
+    };
     if (params.line) response.line = params.line;
     if (params.column) response.column = params.column;
     if (params.end_line) response.end_line = params.end_line;
@@ -77,7 +94,12 @@ export async function handleOpenFile(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
     };
   }
 }

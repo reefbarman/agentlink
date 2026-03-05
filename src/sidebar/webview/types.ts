@@ -65,6 +65,7 @@ export interface SidebarState {
   authEnabled: boolean;
   agentConfigured: boolean;
   masterBypass: boolean;
+  hasWorkspace: boolean;
   onboardingStep?: number;
   knownAgents?: AgentInfo[];
   configuredAgentIds?: string[];
@@ -87,7 +88,7 @@ export interface TrackedCallInfo {
   displayArgs: string;
   params?: string;
   startedAt: number;
-  status: "active" | "completed";
+  status: "active" | "completed" | "rejected";
   completedAt?: number;
   lastHeartbeatAt?: number;
 }
@@ -111,10 +112,23 @@ export type ExtensionMessage =
   | { type: "updateIndexStatus"; status: IndexStatusInfo };
 
 // Webview → Extension messages
-export interface WebviewCommand {
-  command: string;
-  [key: string]: unknown;
-}
+export type WebviewCommand =
+  | { command: "startServer" }
+  | { command: "stopServer" }
+  | { command: "showStatus" }
+  | { command: "clearSessionApprovals" }
+  | { command: "rebuildIndex" }
+  | { command: "cancelIndex" }
+  | { command: "resumeIndex" }
+  | { command: "setOpenaiApiKey" }
+  | { command: "addTrustedCommand" }
+  | { command: "configureAgents" }
+  | { command: "cancelToolCall"; id: string }
+  | { command: "completeToolCall"; id: string }
+  | { command: "saveAgents"; agentIds: string[] }
+  | { command: "deleteRule"; ruleType: string; index: number; scope: string }
+  | { command: "editRule"; ruleType: string; index: number; scope: string }
+  | { command: string; [key: string]: unknown };
 
 // Helper type for the postCommand function passed via props
 export type PostCommand = (

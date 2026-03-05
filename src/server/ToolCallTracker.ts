@@ -12,12 +12,7 @@ import { appendFeedback } from "../util/feedbackStore.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type ToolResult = {
-  content: Array<
-    | { type: "text"; text: string }
-    | { type: "image"; data: string; mimeType: string }
-  >;
-};
+import { type ToolResult } from "../shared/types.js";
 
 const MAX_LOG_STRING_CHARS = 240;
 const MAX_LOG_JSON_CHARS = 1_200;
@@ -49,7 +44,7 @@ export interface TrackedCallInfo {
   displayArgs: string;
   params?: string;
   startedAt: number;
-  status: "active" | "completed";
+  status: "active" | "completed" | "rejected";
   completedAt?: number;
   lastHeartbeatAt?: number;
 }
@@ -174,11 +169,25 @@ export class ToolCallTracker extends EventEmitter {
   private recentCalls = new Map<string, TrackedCallInfo>();
   private log: (msg: string) => void;
   private extensionVersion: string;
+  private _defaultGate?: () => ToolResult | null;
 
   constructor(log?: (msg: string) => void, extensionVersion?: string) {
     super();
     this.log = log ?? (() => {});
     this.extensionVersion = extensionVersion ?? "unknown";
+  }
+
+  /**
+   * Set a default gate function that wrapHandler captures at registration time.
+   * The gate runs after a call is tracked as active but before the actual handler.
+   * If the gate returns a ToolResult, the call is immediately marked as rejected.
+   */
+  setDefaultGate(gate: () => ToolResult | null): void {
+    this._defaultGate = gate;
+  }
+
+  clearDefaultGate(): void {
+    this._defaultGate = undefined;
   }
 
   getActiveCalls(): TrackedCallInfo[] {
@@ -250,6 +259,10 @@ export class ToolCallTracker extends EventEmitter {
     extractDisplayArgs: (params: P) => string,
     getSessionId: () => string,
   ): (params: P, extra?: McpHandlerExtra) => Promise<ToolResult> {
+    // Capture the gate at registration time so each session keeps its own gate
+    // even though the tracker instance is shared across sessions.
+    const gate = this._defaultGate;
+
     return async (params: P, extra?: McpHandlerExtra) => {
       const id = randomUUID();
       let forceResolve!: (result: ToolResult) => void;
@@ -280,6 +293,33 @@ export class ToolCallTracker extends EventEmitter {
         `START ${toolName} (${id.slice(0, 8)}), active=${this.activeCalls.size}, listeners=${this.listenerCount("change")}, params=${paramsSummary}`,
       );
       this.emit("change");
+
+      // Gate check — runs after tracking starts so rejected calls appear in the sidebar
+      if (gate) {
+        const gateResult = gate();
+        if (gateResult) {
+          this.log(
+            `REJECTED ${toolName} (${id.slice(0, 8)}) — gate returned rejection`,
+          );
+          this.activeCalls.delete(id);
+          const info: TrackedCallInfo = {
+            id,
+            toolName,
+            displayArgs: tracked.displayArgs,
+            params: tracked.params,
+            startedAt: tracked.startedAt,
+            status: "rejected",
+            completedAt: Date.now(),
+          };
+          this.recentCalls.set(id, info);
+          setTimeout(() => {
+            this.recentCalls.delete(id);
+            this.emit("change");
+          }, COMPLETED_TTL_MS);
+          this.emit("change");
+          return gateResult;
+        }
+      }
 
       // Start SSE heartbeat to prevent client idle timeouts (~2.5min).
       // Notifications sent via extra.sendNotification are routed to the
@@ -320,7 +360,7 @@ export class ToolCallTracker extends EventEmitter {
         };
 
         // Send immediately, then continue on interval
-        sendHeartbeat();
+        sendHeartbeat().catch(() => {});
         heartbeat = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
       }
 
@@ -366,6 +406,9 @@ export class ToolCallTracker extends EventEmitter {
         ({ getTerminalManager }) => {
           getTerminalManager().interruptTerminal(call.terminalId!);
         },
+        (err) => {
+          this.log(`CANCEL_INTERRUPT import failed: ${err}`);
+        },
       );
     }
 
@@ -381,6 +424,9 @@ export class ToolCallTracker extends EventEmitter {
     import("../integrations/DiffViewProvider.js").then(
       ({ resolveCurrentDiff }) => {
         resolveCurrentDiff("reject");
+      },
+      (err) => {
+        this.log(`CANCEL_DIFF import failed: ${err}`);
       },
     );
 

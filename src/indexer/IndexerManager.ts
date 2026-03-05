@@ -124,7 +124,7 @@ export class IndexerManager implements vscode.Disposable {
         .filter((f) => {
           try {
             const stat = fs.statSync(f);
-            return stat.size > 0 && stat.size <= MAX_FILE_SIZE;
+            return stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_SIZE;
           } catch {
             return false;
           }
@@ -135,6 +135,7 @@ export class IndexerManager implements vscode.Disposable {
 
       // Ensure worker is running
       this.ensureWorker();
+      const worker = this.worker!; // guaranteed non-null after ensureWorker()
 
       const granularity = config.get<"standard" | "fine">(
         "chunkGranularity",
@@ -142,7 +143,7 @@ export class IndexerManager implements vscode.Disposable {
       );
 
       // Send start message
-      this.worker!.send({
+      worker.send({
         type: "start",
         files,
         workspaceRoot,
@@ -364,7 +365,8 @@ export class IndexerManager implements vscode.Disposable {
     );
 
     this.ensureWorker();
-    this.worker!.send({
+    const worker = this.worker!; // guaranteed non-null after ensureWorker()
+    worker.send({
       type: "incrementalUpdate",
       added,
       removed,

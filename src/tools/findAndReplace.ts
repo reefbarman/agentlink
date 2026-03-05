@@ -2,12 +2,13 @@ import * as vscode from "vscode";
 
 import {
   resolveAndValidatePath,
-  getFirstWorkspaceRoot,
+  tryGetFirstWorkspaceRoot,
   getRelativePath,
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { decisionToScope, applyInlineTrustScope } from "./writeApprovalUI.js";
+import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { FindReplacePreviewPanel } from "../findReplace/FindReplacePreviewPanel.js";
 import type {
   FindReplaceMatch,
@@ -15,7 +16,7 @@ import type {
   FindReplacePreviewData,
 } from "../findReplace/webview/types.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 const CONTEXT_LINES = 5;
 
@@ -46,7 +47,12 @@ export async function handleFindAndReplace(
   let previewPanel: FindReplacePreviewPanel | undefined;
 
   try {
-    const workspaceRoot = getFirstWorkspaceRoot();
+    const workspaceRoot = tryGetFirstWorkspaceRoot();
+    if (!workspaceRoot) {
+      return error(
+        "No workspace folder open. find_and_replace with glob requires a workspace.",
+      );
+    }
     const findStr = params.find;
     const replaceStr = params.replace;
 
@@ -72,7 +78,35 @@ export async function handleFindAndReplace(
     let fileUris: vscode.Uri[];
 
     if (params.path) {
-      const { absolutePath } = resolveAndValidatePath(params.path);
+      const { absolutePath, inWorkspace } = resolveAndValidatePath(params.path);
+
+      // Outside-workspace gate — consistent with read/write tools
+      if (
+        !inWorkspace &&
+        !approvalManager.isPathTrusted(sessionId, absolutePath)
+      ) {
+        const { approved, reason } = await approveOutsideWorkspaceAccess(
+          absolutePath,
+          approvalManager,
+          approvalPanel,
+          sessionId,
+        );
+        if (!approved) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "rejected",
+                  path: params.path,
+                  ...(reason && { reason }),
+                }),
+              },
+            ],
+          };
+        }
+      }
+
       fileUris = [vscode.Uri.file(absolutePath)];
     } else if (params.glob) {
       // Use VS Code's file finder with the glob pattern
@@ -117,13 +151,12 @@ export async function handleFindAndReplace(
         const range = new vscode.Range(startPos, endPos);
 
         // For regex, support capture group references ($1, $2, etc.)
-        const newText = params.regex
-          ? regexMatch[0].replace(pattern, replaceStr)
-          : replaceStr;
-
-        // Reset pattern since we used it for the replacement
+        // Use the match array directly to avoid re-executing the pattern
+        // (which fails for anchored patterns like ^, $, lookahead).
+        const m = regexMatch;
+        let newText = replaceStr;
         if (params.regex) {
-          pattern.lastIndex = regexMatch.index + regexMatch[0].length;
+          newText = replaceStr.replace(/\$(\d+)/g, (_, n) => m[parseInt(n, 10)] ?? "");
         }
 
         const matchId = `${fileIdx}:${matchIdx}`;

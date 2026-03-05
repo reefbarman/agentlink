@@ -14,7 +14,10 @@ function readJsonFile(filePath: string): Record<string, unknown> | null {
   try {
     if (!fs.existsSync(filePath)) return {};
     return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  } catch {
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return {};
+    // EACCES, corrupt JSON, etc. — return null to signal read failure
     return null;
   }
 }
@@ -80,50 +83,40 @@ export function createClaudeJsonWriter(log: LogFn): ConfigWriter {
         return false;
       }
 
-      if (!config.mcpServers || typeof config.mcpServers !== "object") {
-        config.mcpServers = {};
-      }
-      const mcpServers = config.mcpServers as Record<string, unknown>;
-
-      const entry = buildEntry("http", port, authToken);
-      const existing = mcpServers[SERVER_NAME] as
+      // Remove any lingering global entry (migration from older versions)
+      const mcpServers = config.mcpServers as
         | Record<string, unknown>
         | undefined;
-      if (
-        existing &&
-        existing.type === "http" &&
-        existing.url === entry.url &&
-        (!authToken ||
-          (existing.headers &&
-            (existing.headers as Record<string, string>).Authorization ===
-              `Bearer ${authToken}`))
-      ) {
-        log("~/.claude.json global entry already up to date");
-        return true;
+      if (mcpServers && SERVER_NAME in mcpServers) {
+        delete mcpServers[SERVER_NAME];
       }
 
-      mcpServers[SERVER_NAME] = entry;
-
-      // Also write per-project entries
+      // Write per-project entries only (no global entry).
+      // Each VS Code window writes to its own project keys, avoiding
+      // multi-window conflicts where the global entry gets overwritten.
       const folders = vscode.workspace.workspaceFolders;
-      if (folders) {
-        if (!config.projects || typeof config.projects !== "object") {
-          config.projects = {};
+      if (!folders || folders.length === 0) {
+        log("No workspace folders — skipping Claude Code config");
+        return false;
+      }
+
+      if (!config.projects || typeof config.projects !== "object") {
+        config.projects = {};
+      }
+      const projects = config.projects as Record<
+        string,
+        Record<string, unknown>
+      >;
+      const entry = buildEntry("http", port, authToken);
+      for (const folder of folders) {
+        const folderPath = folder.uri.fsPath;
+        if (!projects[folderPath]) projects[folderPath] = {};
+        const project = projects[folderPath];
+        if (!project.mcpServers || typeof project.mcpServers !== "object") {
+          project.mcpServers = {};
         }
-        const projects = config.projects as Record<
-          string,
-          Record<string, unknown>
-        >;
-        for (const folder of folders) {
-          const folderPath = folder.uri.fsPath;
-          if (!projects[folderPath]) projects[folderPath] = {};
-          const project = projects[folderPath];
-          if (!project.mcpServers || typeof project.mcpServers !== "object") {
-            project.mcpServers = {};
-          }
-          (project.mcpServers as Record<string, unknown>)[SERVER_NAME] = entry;
-          log(`Set agentlink for Claude Code project ${folderPath}`);
-        }
+        (project.mcpServers as Record<string, unknown>)[SERVER_NAME] = entry;
+        log(`Set agentlink for Claude Code project ${folderPath}`);
       }
 
       if (save(config)) {
@@ -135,7 +128,7 @@ export function createClaudeJsonWriter(log: LogFn): ConfigWriter {
 
     writeForFolder(folderPath, port, authToken) {
       const config = read();
-      if (!config) return;
+      if (!config) return false;
 
       if (!config.projects || typeof config.projects !== "object") {
         config.projects = {};
@@ -155,15 +148,16 @@ export function createClaudeJsonWriter(log: LogFn): ConfigWriter {
         port,
         authToken,
       );
-      save(config);
+      const ok = save(config);
       log(`Set agentlink for Claude Code project ${folderPath}`);
+      return ok;
     },
 
     cleanup() {
       const config = read();
       if (!config) return;
 
-      // Remove global entry
+      // Remove any lingering global entry (migration from older versions)
       const mcpServers = config.mcpServers as
         | Record<string, unknown>
         | undefined;
@@ -221,10 +215,20 @@ export function createClaudeJsonWriter(log: LogFn): ConfigWriter {
     isConfigured() {
       const config = read();
       if (!config) return false;
-      const mcpServers = config.mcpServers as
-        | Record<string, unknown>
+      const projects = config.projects as
+        | Record<string, Record<string, unknown>>
         | undefined;
-      return !!mcpServers && SERVER_NAME in mcpServers;
+      if (!projects) return false;
+      const folders = vscode.workspace.workspaceFolders;
+      if (!folders) return false;
+      for (const folder of folders) {
+        const proj = projects[folder.uri.fsPath];
+        const projServers = proj?.mcpServers as
+          | Record<string, unknown>
+          | undefined;
+        if (projServers && SERVER_NAME in projServers) return true;
+      }
+      return false;
     },
   };
 }
@@ -290,8 +294,9 @@ export function createWorkspaceJsonWriter(
       }
       const servers = config[topLevelKey] as Record<string, unknown>;
       servers[SERVER_NAME] = buildEntry(httpType, port, authToken);
-      writeJsonFileAtomic(configPath, config, log);
+      const ok = writeJsonFileAtomic(configPath, config, log);
       log(`Set agentlink for ${agentName} in ${folderPath}`);
+      return ok;
     },
 
     cleanup() {
@@ -527,8 +532,44 @@ export function createConfigWriter(
   log: LogFn,
 ): ConfigWriter | null {
   switch (agent.configMethod) {
-    case "claude-json":
-      return createClaudeJsonWriter(log);
+    case "claude-json": {
+      // Write both ~/.claude.json (per-project) AND .mcp.json in workspace root.
+      // The VS Code extension reads .mcp.json, which project-level claude.json
+      // settings don't always reach.
+      const claudeWriter = createClaudeJsonWriter(log);
+      const mcpJsonWriter = createWorkspaceJsonWriter(
+        {
+          relativePath: ".mcp.json",
+          topLevelKey: "mcpServers",
+          httpType: "http",
+          agentName: "Claude Code",
+        },
+        log,
+      );
+      return {
+        write(port, authToken) {
+          const a = claudeWriter.write(port, authToken);
+          const b = mcpJsonWriter.write(port, authToken);
+          return a || b;
+        },
+        writeForFolder(folderPath, port, authToken) {
+          const a = claudeWriter.writeForFolder?.(folderPath, port, authToken) ?? false;
+          const b = mcpJsonWriter.writeForFolder?.(folderPath, port, authToken) ?? false;
+          return a || b;
+        },
+        cleanup() {
+          claudeWriter.cleanup();
+          mcpJsonWriter.cleanup();
+        },
+        cleanupFolder(folderPath) {
+          claudeWriter.cleanupFolder?.(folderPath);
+          mcpJsonWriter.cleanupFolder?.(folderPath);
+        },
+        isConfigured() {
+          return claudeWriter.isConfigured() || mcpJsonWriter.isConfigured();
+        },
+      };
+    }
 
     case "vscode-mcp-json":
       return createWorkspaceJsonWriter(
@@ -572,5 +613,13 @@ export function createConfigWriter(
     case "manual":
       // No auto-config for this agent
       return null;
+
+    default: {
+      // Exhaustiveness check — TypeScript will error here if a new configMethod
+      // is added to the union without handling it in this switch.
+      const _exhaustive: never = agent.configMethod;
+      log(`Unknown configMethod: ${_exhaustive}`);
+      return null;
+    }
   }
 }

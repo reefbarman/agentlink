@@ -1,6 +1,6 @@
 import { getTerminalManager } from "../integrations/TerminalManager.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleCloseTerminals(params: {
   names?: string[];

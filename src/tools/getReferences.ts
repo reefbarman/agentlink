@@ -2,20 +2,34 @@ import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { resolveAndOpenDocument, toPosition, serializeLocation } from "./languageFeatures.js";
+import {
+  resolveAndOpenDocument,
+  toPosition,
+  serializeLocation,
+} from "./languageFeatures.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 const MAX_REFERENCES = 200;
 
 export async function handleGetReferences(
-  params: { path: string; line: number; column: number; include_declaration?: boolean },
+  params: {
+    path: string;
+    line: number;
+    column: number;
+    include_declaration?: boolean;
+  },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, approvalPanel, sessionId);
+    const { uri } = await resolveAndOpenDocument(
+      params.path,
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
     const position = toPosition(params.line, params.column);
 
     const locations = await vscode.commands.executeCommand<vscode.Location[]>(
@@ -26,7 +40,16 @@ export async function handleGetReferences(
 
     if (!locations || locations.length === 0) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ total_references: 0, truncated: false, references: [] }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              total_references: 0,
+              truncated: false,
+              references: [],
+            }),
+          },
+        ],
       };
     }
 
@@ -49,14 +72,16 @@ export async function handleGetReferences(
     const capped = truncated ? filtered.slice(0, MAX_REFERENCES) : filtered;
 
     return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          total_references: total,
-          truncated,
-          references: capped.map(serializeLocation),
-        }),
-      }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            total_references: total,
+            truncated,
+            references: capped.map(serializeLocation),
+          }),
+        },
+      ],
     };
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
@@ -64,7 +89,12 @@ export async function handleGetReferences(
     }
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
     };
   }
 }

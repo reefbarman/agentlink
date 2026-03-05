@@ -121,8 +121,6 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 300px;
-  overflow-y: auto;
   margin-bottom: 16px;
 }
 
@@ -173,8 +171,7 @@ body {
   resize: none;
   outline: none;
   min-height: 22px;
-  max-height: 250px;
-  overflow-y: auto;
+  overflow-y: hidden;
   padding: 0;
 }
 .terminal-input.edited {

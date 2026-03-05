@@ -19,13 +19,15 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
   const [, setTick] = useState(0);
 
   const activeCalls = calls.filter((c) => c.status === "active");
+  const rejectedCalls = calls.filter((c) => c.status === "rejected");
   const completedCalls = calls.filter((c) => c.status === "completed");
 
+  const hasActiveCalls = activeCalls.length > 0;
   useEffect(() => {
-    if (calls.length === 0) return;
+    if (!hasActiveCalls) return;
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
-  }, [calls.length]);
+  }, [hasActiveCalls]);
 
   return (
     <CollapsibleSection
@@ -77,6 +79,19 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
             >
               Cancel
             </button>
+          </div>
+        </div>
+      ))}
+      {rejectedCalls.map((c) => (
+        <div key={c.id} class="tool-call-row tool-call-rejected">
+          <div class="tool-call-header">
+            <code class="tool-call-name">{c.toolName}</code>
+            <span class="tool-call-elapsed tool-call-rejected-label">
+              rejected
+            </span>
+          </div>
+          <div class="tool-call-args" title={c.displayArgs}>
+            {c.displayArgs}
           </div>
         </div>
       ))}

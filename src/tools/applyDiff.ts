@@ -12,7 +12,7 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 interface SearchReplaceBlock {
   search: string;
@@ -258,20 +258,21 @@ export function applyBlocks(
 }
 
 /**
- * Normalize a line for whitespace-flexible comparison:
- * - Convert leading tabs to 4 spaces
- * - Trim trailing whitespace
+ * Normalize a line for whitespace-agnostic comparison:
+ * - Trim leading and trailing whitespace
+ * - Collapse all internal whitespace runs to a single space
  *
- * This allows matching when Claude generates spaces but the file uses tabs
- * (or vice versa), which commonly happens because read_file output can make
- * tabs and spaces visually indistinguishable.
+ * This handles ALL whitespace mismatches between agent-provided SEARCH
+ * blocks and actual file content: tabs vs spaces, mid-line tabs (Go
+ * struct alignment), any tab width, mixed indentation, and trailing
+ * whitespace — in one simple expression.
+ *
+ * Safe because the normalized form is only used for *finding* the match
+ * location, not for the replacement content. The ambiguity check (reject
+ * if 2+ locations match) prevents false positives.
  */
 export function normalizeForComparison(line: string): string {
-  const trimmedEnd = line.trimEnd();
-  const leadingMatch = trimmedEnd.match(/^(\s*)/);
-  const leadingWS = leadingMatch?.[1] ?? "";
-  const rest = trimmedEnd.slice(leadingWS.length);
-  return leadingWS.replace(/\t/g, "    ") + rest;
+  return line.trim().replace(/\s+/g, " ");
 }
 
 /**
@@ -401,13 +402,22 @@ export async function handleApplyDiff(
     let originalContent: string;
     try {
       originalContent = await fs.readFile(filePath, "utf-8");
-    } catch {
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const errorMsg =
+        code === "ENOENT"
+          ? "File not found"
+          : code === "EACCES"
+            ? "Permission denied"
+            : code === "EISDIR"
+              ? "Path is a directory"
+              : `Failed to read file: ${err instanceof Error ? err.message : err}`;
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify({
-              error: "File not found",
+              error: errorMsg,
               path: params.path,
             }),
           },
@@ -501,44 +511,67 @@ export async function handleApplyDiff(
       .get<boolean>("masterBypass", false);
 
     // Auto-approve check (includes recent single-use approvals within TTL)
-    const canAutoApprove = inWorkspace
-      ? masterBypass ||
-        approvalManager.isWriteApproved(sessionId, filePath) ||
-        approvalPanel.isRecentlyApproved("write", relPath)
-      : approvalManager.isFileWriteApproved(sessionId, filePath) ||
-        approvalPanel.isRecentlyApproved("write", relPath);
+    const canAutoApprove =
+      masterBypass ||
+      (inWorkspace
+        ? approvalManager.isWriteApproved(sessionId, filePath)
+        : approvalManager.isFileWriteApproved(sessionId, filePath));
 
     if (canAutoApprove) {
-      // Snapshot diagnostics before the write (registers listener eagerly)
-      const snap = snapshotDiagnostics(filePath);
+      // Use file lock to prevent concurrent auto-approved writes from
+      // interleaving WorkspaceEdit + format-on-save sequences,
+      // which can corrupt file content.
+      const autoResult = await withFileLock(filePath, async () => {
+        // Snapshot diagnostics before the write (registers listener eagerly)
+        const snap = snapshotDiagnostics(filePath);
 
-      await fs.writeFile(filePath, newContent, "utf-8");
+        // Update content through the document model, then save — this avoids
+        // a race where fs.writeFile changes disk, the file watcher fires
+        // after applyEdit makes the doc dirty, and VS Code shows the
+        // "overwrite or revert" dialog.
+        const doc = await vscode.workspace.openTextDocument(filePath);
+        await vscode.window.showTextDocument(doc, {
+          preview: false,
+          preserveFocus: true,
+        });
 
-      // Open the file in VS Code so the user can see what was changed
-      const doc = await vscode.workspace.openTextDocument(filePath);
-      await vscode.window.showTextDocument(doc, {
-        preview: false,
-        preserveFocus: true,
+        if (doc.getText() !== newContent) {
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(
+            doc.uri,
+            new vscode.Range(
+              doc.positionAt(0),
+              doc.positionAt(doc.getText().length),
+            ),
+            newContent,
+          );
+          await vscode.workspace.applyEdit(edit);
+        }
+        if (doc.isDirty) {
+          await doc.save();
+        }
+
+        // Collect new diagnostics
+        const newDiagnostics = await snap.collectNewErrors(diagnosticDelay);
+
+        const response: Record<string, unknown> = {
+          status: "accepted",
+          path: relPath,
+          operation: "modified",
+        };
+        if (failedBlocks.length > 0 || malformedBlocks > 0) {
+          response.partial = true;
+          if (failedBlocks.length > 0) response.failed_blocks = failedBlocks;
+          if (malformedBlocks > 0) response.malformed_blocks = malformedBlocks;
+        }
+        if (newDiagnostics) {
+          response.new_diagnostics = newDiagnostics;
+        }
+        return response;
       });
 
-      // Collect new diagnostics
-      const newDiagnostics = await snap.collectNewErrors(diagnosticDelay);
-
-      const response: Record<string, unknown> = {
-        status: "accepted",
-        path: relPath,
-        operation: "modified",
-      };
-      if (failedBlocks.length > 0 || malformedBlocks > 0) {
-        response.partial = true;
-        if (failedBlocks.length > 0) response.failed_blocks = failedBlocks;
-        if (malformedBlocks > 0) response.malformed_blocks = malformedBlocks;
-      }
-      if (newDiagnostics) {
-        response.new_diagnostics = newDiagnostics;
-      }
       return {
-        content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(autoResult, null, 2) }],
       };
     }
 
@@ -559,13 +592,12 @@ export async function handleApplyDiff(
       // Handle session/always acceptance — save rules.
       const scope = decisionToScope(decision);
       if (scope) {
-        await saveWriteTrustRules({
+        saveWriteTrustRules({
           panelResponse: diffView.writeApprovalResponse,
           approvalManager,
           sessionId,
           scope,
           relPath,
-          filePath,
           inWorkspace,
         });
       }

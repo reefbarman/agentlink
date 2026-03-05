@@ -15,6 +15,7 @@ export function WriteApproval({ state, postCommand }: Props) {
     projectWriteRules,
     settingsWriteRules,
     activeSessions,
+    hasWorkspace,
   } = state;
 
   const label =
@@ -62,7 +63,7 @@ export function WriteApproval({ state, postCommand }: Props) {
         >
           <option value="prompt">Prompt each time</option>
           <option value="session">Session auto-accept</option>
-          <option value="project">Project auto-accept</option>
+          <option value="project" disabled={!hasWorkspace}>Project auto-accept</option>
           <option value="global">Always auto-accept</option>
         </select>
         {badge}

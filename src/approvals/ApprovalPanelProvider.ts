@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { randomUUID } from "crypto";
 import type { SubCommandEntry, ApprovalRequest } from "./webview/types.js";
+import type { StatusBarManager } from "../util/StatusBarManager.js";
 
 // ── Response types ──────────────────────────────────────────────────────────
 
@@ -111,7 +112,6 @@ export class ApprovalPanelProvider
 
   // Alert
   private alertDisposable: vscode.Disposable | undefined;
-  private statusBar: vscode.StatusBarItem;
 
   // Listener cleanup for panel mode
   private viewMessageDisposable: vscode.Disposable | undefined;
@@ -119,16 +119,10 @@ export class ApprovalPanelProvider
   // Track whether the Preact app has signalled it's ready
   private webviewReady = false;
 
-  constructor(private readonly extensionUri: vscode.Uri) {
-    this.statusBar = vscode.window.createStatusBarItem(
-      vscode.StatusBarAlignment.Left,
-      9999,
-    );
-    this.statusBar.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.warningBackground",
-    );
-    this.statusBar.command = "agentLink.approvalView.focus";
-  }
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly statusBarManager: StatusBarManager,
+  ) {}
 
   // ── WebviewViewProvider (for "panel" mode) ──────────────────────────────
 
@@ -465,7 +459,7 @@ export class ApprovalPanelProvider
   private onQueueEmpty(): void {
     this.alertDisposable?.dispose();
     this.alertDisposable = undefined;
-    this.statusBar.hide();
+    this.statusBarManager.setPendingCount(0);
 
     const position = this.getPosition();
     if (position === "beside") {
@@ -556,39 +550,11 @@ export class ApprovalPanelProvider
   // ── Alert ───────────────────────────────────────────────────────────────
 
   private showAlert(message: string): vscode.Disposable {
-    const alertBar = vscode.window.createStatusBarItem(
-      vscode.StatusBarAlignment.Left,
-      10000,
-    );
-    alertBar.text = `$(alert) ${message}`;
-    alertBar.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.warningBackground",
-    );
-    alertBar.command = "agentLink.focusApproval";
-    alertBar.show();
-
-    let flash = true;
-    const interval = setInterval(() => {
-      flash = !flash;
-      alertBar.text = flash ? `$(alert) ${message}` : `     ${message}`;
-    }, 800);
-
-    return {
-      dispose() {
-        clearInterval(interval);
-        alertBar.dispose();
-      },
-    };
+    return this.statusBarManager.showAlert(message);
   }
 
   private updatePendingCount(): void {
-    const pending = this.queue.length;
-    if (pending > 0) {
-      this.statusBar.text = `$(ellipsis) ${pending} more approval${pending > 1 ? "s" : ""} pending`;
-      this.statusBar.show();
-    } else {
-      this.statusBar.hide();
-    }
+    this.statusBarManager.setPendingCount(this.queue.length);
   }
 
   // ── HTML shell (loads Preact bundle) ────────────────────────────────────
@@ -718,9 +684,10 @@ export class ApprovalPanelProvider
 
   private isRecentlyApprovedRequest(request: InternalRequest): boolean {
     if (request.kind !== "command") return false;
-    const key = this.approvalKeyForRequest(request);
-    if (!key) return false;
-    return this.hasRecentApproval(key);
+    const identifier =
+      request.kind === "command" ? request.fullCommand : undefined;
+    if (!identifier) return false;
+    return this.isRecentlyApproved(request.kind, identifier);
   }
 
   private makeAutoApproveResponse(
@@ -749,7 +716,6 @@ export class ApprovalPanelProvider
     this.panel?.dispose();
     this.panel = undefined;
     this.viewMessageDisposable?.dispose();
-    this.statusBar.dispose();
     this.alertDisposable?.dispose();
   }
 }

@@ -20,8 +20,8 @@ import { CollapsibleSection } from "./components/common/CollapsibleSection.js";
 
 interface VsCodeApi {
   postMessage(message: unknown): void;
-  getState(): unknown;
-  setState(state: unknown): void;
+  getState<T = unknown>(): T | undefined;
+  setState<T = unknown>(state: T): T;
 }
 
 interface AppProps {

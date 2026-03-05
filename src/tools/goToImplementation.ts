@@ -8,7 +8,7 @@ import {
   serializeLocation,
 } from "./languageFeatures.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleGoToImplementation(
   params: { path: string; line: number; column: number },

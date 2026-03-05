@@ -64,8 +64,10 @@ export function filterOutput(
     lines = lines.slice(-DEFAULT_OUTPUT_LINES);
   }
 
+  // Preserve trailing newline if the original output had one
+  const trailingNewline = fullOutput.endsWith("\n") ? "\n" : "";
   return {
-    filtered: lines.join("\n"),
+    filtered: lines.join("\n") + trailingNewline,
     totalLines,
     linesShown: lines.length,
   };

@@ -34,6 +34,12 @@ export function getFirstWorkspaceRoot(): string {
   return roots[0];
 }
 
+/** Returns the first workspace root, or `undefined` if no workspace is open. */
+export function tryGetFirstWorkspaceRoot(): string | undefined {
+  const roots = getWorkspaceRoots();
+  return roots.length > 0 ? roots[0] : undefined;
+}
+
 export interface ResolvedPath {
   absolutePath: string;
   inWorkspace: boolean;

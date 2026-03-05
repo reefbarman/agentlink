@@ -2,12 +2,18 @@ import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { resolveAndOpenDocument, toPosition, SYMBOL_KIND_NAMES } from "./languageFeatures.js";
+import {
+  resolveAndOpenDocument,
+  toPosition,
+  SYMBOL_KIND_NAMES,
+} from "./languageFeatures.js";
 import { getRelativePath } from "../util/paths.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
-function serializeTypeItem(item: vscode.TypeHierarchyItem): Record<string, unknown> {
+function serializeTypeItem(
+  item: vscode.TypeHierarchyItem,
+): Record<string, unknown> {
   return {
     name: item.name,
     kind: SYMBOL_KIND_NAMES[item.kind] ?? "symbol",
@@ -32,21 +38,27 @@ export async function handleGetTypeHierarchy(
 ): Promise<ToolResult> {
   try {
     const { uri } = await resolveAndOpenDocument(
-      params.path, approvalManager, approvalPanel, sessionId,
+      params.path,
+      approvalManager,
+      approvalPanel,
+      sessionId,
     );
     const position = toPosition(params.line, params.column);
 
-    const items = await vscode.commands.executeCommand<vscode.TypeHierarchyItem[]>(
-      "vscode.prepareTypeHierarchy",
-      uri,
-      position,
-    );
+    const items = await vscode.commands.executeCommand<
+      vscode.TypeHierarchyItem[]
+    >("vscode.prepareTypeHierarchy", uri, position);
 
     if (!items || items.length === 0) {
       return {
-        content: [{ type: "text", text: JSON.stringify({
-          message: "No type hierarchy available at this position",
-        }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              message: "No type hierarchy available at this position",
+            }),
+          },
+        ],
       };
     }
 
@@ -75,7 +87,12 @@ export async function handleGetTypeHierarchy(
     }
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
     };
   }
 }
@@ -85,10 +102,9 @@ async function getSupertypes(
   maxDepth: number,
   currentDepth: number,
 ): Promise<unknown[]> {
-  const supertypes = await vscode.commands.executeCommand<vscode.TypeHierarchyItem[]>(
-    "vscode.provideTypeHierarchySupertypes",
-    item,
-  );
+  const supertypes = await vscode.commands.executeCommand<
+    vscode.TypeHierarchyItem[]
+  >("vscode.provideTypeHierarchySupertypes", item);
 
   if (!supertypes || supertypes.length === 0) return [];
 
@@ -111,10 +127,9 @@ async function getSubtypes(
   maxDepth: number,
   currentDepth: number,
 ): Promise<unknown[]> {
-  const subtypes = await vscode.commands.executeCommand<vscode.TypeHierarchyItem[]>(
-    "vscode.provideTypeHierarchySubtypes",
-    item,
-  );
+  const subtypes = await vscode.commands.executeCommand<
+    vscode.TypeHierarchyItem[]
+  >("vscode.provideTypeHierarchySubtypes", item);
 
   if (!subtypes || subtypes.length === 0) return [];
 

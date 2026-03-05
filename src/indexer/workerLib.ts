@@ -181,6 +181,7 @@ export function diffFiles(
 
     try {
       const stat = fs.statSync(absPath);
+      if (!stat.isFile()) continue;
       if (stat.size > MAX_FILE_SIZE || stat.size === 0) continue;
 
       const content = fs.readFileSync(absPath, "utf-8");
@@ -256,6 +257,7 @@ export async function scanFiles(
 
     try {
       const stat = fs.statSync(absPath);
+      if (!stat.isFile()) continue;
       if (stat.size > MAX_FILE_SIZE || stat.size === 0) continue;
 
       const content = fs.readFileSync(absPath, "utf-8");

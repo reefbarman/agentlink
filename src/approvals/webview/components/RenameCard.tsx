@@ -53,10 +53,11 @@ export function RenameCard({ request, submit, followUpRef }: RenameCardProps) {
         rulePattern: pattern,
         ruleMode: mode,
       }),
-      ...(trustScope === "this-file" && {
-        rulePattern: affectedFiles[0]?.path ?? "",
-        ruleMode: "exact",
-      }),
+      ...(trustScope === "this-file" &&
+        affectedFiles.length > 0 && {
+          rulePattern: affectedFiles[0].path,
+          ruleMode: "exact",
+        }),
     });
   }, [request.id, scope, trustScope, pattern, mode, affectedFiles, submit]);
 

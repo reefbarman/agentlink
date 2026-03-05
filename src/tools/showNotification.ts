@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleShowNotification(params: {
   message: string;
@@ -21,6 +21,15 @@ export async function handleShowNotification(params: {
   }
 
   return {
-    content: [{ type: "text", text: JSON.stringify({ status: "shown", type, message: params.message }) }],
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: "shown",
+          type,
+          message: params.message,
+        }),
+      },
+    ],
   };
 }

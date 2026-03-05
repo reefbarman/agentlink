@@ -376,6 +376,16 @@ h3 {
   opacity: 0.85;
 }
 
+/* Rejected tool calls (untrusted session) */
+.tool-call-rejected {
+  opacity: 0.6;
+  border-left: 2px solid var(--vscode-testing-iconFailed, #f14c4c);
+}
+.tool-call-rejected-label {
+  color: var(--vscode-testing-iconFailed, #f14c4c);
+  font-weight: 600;
+}
+
 /* Completed tool calls */
 .tool-call-completed {
   opacity: 0.5;

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -257,7 +257,7 @@
           "type": "number",
           "default": 60,
           "minimum": 0,
-          "description": "Seconds to remember a single-use approval (run-once / accept). Repeat identical commands or writes to the same file within this window are auto-approved. Set to 0 to disable."
+          "description": "Seconds to remember a single-use command approval (run-once / accept). Repeat identical commands within this window are auto-approved. Set to 0 to disable."
         },
         "agentlink.writeRules": {
           "type": "array",
@@ -292,6 +292,7 @@
     "@types/node": "^25.3.2",
     "@types/picomatch": "^4.0.2",
     "@types/vscode": "^1.109.0",
+    "@vitest/coverage-v8": "^4.0.18",
     "esbuild": "^0.27.3",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"

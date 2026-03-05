@@ -1,7 +1,7 @@
 import { getTerminalManager } from "../integrations/TerminalManager.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

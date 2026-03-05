@@ -5,10 +5,11 @@ import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.j
 import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
 import { getRelativePath } from "../util/paths.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 // --- Code action cache ---
-// Stores the last get_code_actions result so apply_code_action can reference by index.
+// Stores the last get_code_actions result per session so apply_code_action can reference by index.
+// Scoped by sessionId to prevent concurrent sessions from overwriting each other's cache.
 
 interface CachedActions {
   path: string;
@@ -17,7 +18,7 @@ interface CachedActions {
   actions: vscode.CodeAction[];
 }
 
-let cachedActions: CachedActions | null = null;
+const cachedActionsPerSession = new Map<string, CachedActions>();
 
 // --- Get code actions ---
 
@@ -37,7 +38,10 @@ export async function handleGetCodeActions(
 ): Promise<ToolResult> {
   try {
     const { uri, document } = await resolveAndOpenDocument(
-      params.path, approvalManager, approvalPanel, sessionId,
+      params.path,
+      approvalManager,
+      approvalPanel,
+      sessionId,
     );
 
     const startPos = toPosition(params.line, params.column);
@@ -47,9 +51,9 @@ export async function handleGetCodeActions(
     const range = new vscode.Range(startPos, endPos);
 
     // Build context with diagnostics at the range
-    const diagnostics = vscode.languages.getDiagnostics(uri).filter(
-      (d) => range.intersection(d.range) !== undefined,
-    );
+    const diagnostics = vscode.languages
+      .getDiagnostics(uri)
+      .filter((d) => range.intersection(d.range) !== undefined);
     const context: vscode.CodeActionContext = {
       diagnostics,
       triggerKind: vscode.CodeActionTriggerKind.Invoke,
@@ -66,9 +70,17 @@ export async function handleGetCodeActions(
     );
 
     if (!actions || actions.length === 0) {
-      cachedActions = null;
+      cachedActionsPerSession.delete(sessionId);
       return {
-        content: [{ type: "text", text: JSON.stringify({ actions: [], message: "No code actions available" }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              actions: [],
+              message: "No code actions available",
+            }),
+          },
+        ],
       };
     }
 
@@ -77,13 +89,13 @@ export async function handleGetCodeActions(
       actions = actions.filter((a) => a.isPreferred);
     }
 
-    // Cache for apply_code_action
-    cachedActions = {
+    // Cache for apply_code_action (scoped by session)
+    cachedActionsPerSession.set(sessionId, {
       path: params.path,
       line: params.line,
       column: params.column,
       actions,
-    };
+    });
 
     // Serialize actions
     const serialized = actions.map((action, index) => {
@@ -96,16 +108,22 @@ export async function handleGetCodeActions(
       if (action.diagnostics?.length) {
         result.fixes_diagnostics = action.diagnostics.map((d) => ({
           message: d.message,
-          severity: d.severity === vscode.DiagnosticSeverity.Error ? "error"
-            : d.severity === vscode.DiagnosticSeverity.Warning ? "warning"
-            : "info",
+          severity:
+            d.severity === vscode.DiagnosticSeverity.Error
+              ? "error"
+              : d.severity === vscode.DiagnosticSeverity.Warning
+                ? "warning"
+                : "info",
         }));
       }
       // Summarize what the action does
       if (action.edit) {
         const entries = action.edit.entries();
         const fileCount = entries.length;
-        const editCount = entries.reduce((sum, [, edits]) => sum + edits.length, 0);
+        const editCount = entries.reduce(
+          (sum, [, edits]) => sum + edits.length,
+          0,
+        );
         result.changes = { files: fileCount, edits: editCount };
       }
       if (action.command) {
@@ -115,7 +133,12 @@ export async function handleGetCodeActions(
     });
 
     return {
-      content: [{ type: "text", text: JSON.stringify({ actions: serialized }, null, 2) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ actions: serialized }, null, 2),
+        },
+      ],
     };
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
@@ -123,7 +146,12 @@ export async function handleGetCodeActions(
     }
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
     };
   }
 }
@@ -132,13 +160,20 @@ export async function handleGetCodeActions(
 
 export async function handleApplyCodeAction(
   params: { index: number },
+  sessionId: string,
 ): Promise<ToolResult> {
   try {
+    const cachedActions = cachedActionsPerSession.get(sessionId) ?? null;
     if (!cachedActions) {
       return {
-        content: [{ type: "text", text: JSON.stringify({
-          error: "No cached code actions. Call get_code_actions first.",
-        }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: "No cached code actions. Call get_code_actions first.",
+            }),
+          },
+        ],
       };
     }
 
@@ -146,9 +181,14 @@ export async function handleApplyCodeAction(
 
     if (params.index < 0 || params.index >= actions.length) {
       return {
-        content: [{ type: "text", text: JSON.stringify({
-          error: `Invalid index ${params.index}. Available: 0-${actions.length - 1}`,
-        }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: `Invalid index ${params.index}. Available: 0-${actions.length - 1}`,
+            }),
+          },
+        ],
       };
     }
 
@@ -160,10 +200,15 @@ export async function handleApplyCodeAction(
       const success = await vscode.workspace.applyEdit(action.edit);
       if (!success) {
         return {
-          content: [{ type: "text", text: JSON.stringify({
-            error: "Failed to apply workspace edit",
-            action: action.title,
-          }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: "Failed to apply workspace edit",
+                action: action.title,
+              }),
+            },
+          ],
         };
       }
 
@@ -188,15 +233,20 @@ export async function handleApplyCodeAction(
     }
 
     // Clear cache after successful apply
-    cachedActions = null;
+    cachedActionsPerSession.delete(sessionId);
 
     return {
-      content: [{ type: "text", text: JSON.stringify({
-        status: "applied",
-        action: action.title,
-        kind: action.kind?.value,
-        ...(changedFiles.length > 0 && { changed_files: changedFiles }),
-      }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "applied",
+            action: action.title,
+            kind: action.kind?.value,
+            ...(changedFiles.length > 0 && { changed_files: changedFiles }),
+          }),
+        },
+      ],
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

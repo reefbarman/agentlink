@@ -150,7 +150,45 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
           ].join("\n"),
         };
       }
-      // Non-in-place sed (e.g. in a pipeline) is fine
+
+      // sed in a pipeline (e.g. `echo foo | sed 's/a/b/'`) is a legitimate stdout transform
+      const pipeSegments = splitOnUnquotedPipes(trimmed);
+      if (pipeSegments.length > 1) continue;
+
+      // Standalone sed -n (print/filter mode) — should use read_file or search_files
+      const hasQuietFlag = sedArgs.some(
+        (a: string) =>
+          a === "-n" ||
+          a === "--quiet" ||
+          a === "--silent" ||
+          (/^-[a-hj-mo-zA-Z]*n/.test(a) && !a.startsWith("--")),
+      );
+      if (hasQuietFlag) {
+        return {
+          message: [
+            `Command rejected: "sed -n" reads/filters file content in the terminal.`,
+            ``,
+            `• To read specific lines: use read_file with offset and limit`,
+            `• To find lines matching a pattern: use search_files with regex`,
+          ].join("\n"),
+        };
+      }
+
+      // Standalone sed with a file argument (not -i, not pipeline) — previewing a
+      // transform that should use our editing tools instead
+      const sedFileArg = findSedFileArg(sedArgs);
+      if (sedFileArg) {
+        return {
+          message: [
+            `Command rejected: "sed" with a file argument should not be run in the terminal.`,
+            ``,
+            `Use apply_diff for targeted edits (search/replace blocks with diff view),`,
+            `or find_and_replace for bulk regex substitution across files.`,
+          ].join("\n"),
+        };
+      }
+
+      // Bare sed with no file (reads stdin) — unlikely but not harmful
       continue;
     }
 
@@ -226,6 +264,50 @@ function findFileArg(
       continue;
     }
 
+    return stripQuotes(arg);
+  }
+
+  return null;
+}
+
+/**
+ * Find a file argument in sed's token list.
+ * Skips flags, -e/-f values, and the first positional (the sed expression).
+ */
+function findSedFileArg(args: string[]): string | null {
+  let hasExplicitExpr = false;
+  let seenImplicitExpr = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    // -e expression or -f script-file — consume the next token
+    if ((arg === "-e" || arg === "-f") && i + 1 < args.length) {
+      if (arg === "-e") hasExplicitExpr = true;
+      i++;
+      continue;
+    }
+    // Combined short flags ending in e or f (e.g. -ne, -nf) — next token is value
+    if (
+      /^-[a-zA-Z]*[ef]$/.test(arg) &&
+      !arg.startsWith("--") &&
+      i + 1 < args.length
+    ) {
+      if (arg.includes("e")) hasExplicitExpr = true;
+      i++;
+      continue;
+    }
+
+    // Skip any other flags
+    if (arg.startsWith("-")) continue;
+
+    // First positional is the expression (when no -e was given)
+    if (!seenImplicitExpr && !hasExplicitExpr) {
+      seenImplicitExpr = true;
+      continue;
+    }
+
+    // This is a file argument
     return stripQuotes(arg);
   }
 
@@ -370,9 +452,9 @@ function checkSegment(segment: string): PipeViolation | null {
 
   switch (cmd) {
     case "head":
-      return { command: cmd, segment, suggestions: parseHeadArgs(args) };
+      return { command: cmd, segment, suggestions: ensurePositive(parseHeadArgs(args)) };
     case "tail":
-      return { command: cmd, segment, suggestions: parseTailArgs(args) };
+      return { command: cmd, segment, suggestions: ensurePositive(parseTailArgs(args)) };
     case "grep":
       return { command: cmd, segment, suggestions: parseGrepArgs(args) };
     default:
@@ -414,6 +496,15 @@ function parseHeadArgs(args: string[]): Record<string, number> {
 
   // Default: head with no args means 10 lines
   return { output_head: 10 };
+}
+
+function ensurePositive(
+  result: Record<string, number>,
+): Record<string, number> {
+  for (const key of Object.keys(result)) {
+    if (result[key] <= 0) result[key] = 1;
+  }
+  return result;
 }
 
 /**

@@ -5,7 +5,7 @@ import * as path from "path";
 import {
   resolveAndValidatePath,
   isBinaryFile,
-  getFirstWorkspaceRoot,
+  tryGetFirstWorkspaceRoot,
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
@@ -13,12 +13,7 @@ import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { SYMBOL_KIND_NAMES } from "./languageFeatures.js";
 import { Semaphore } from "../util/Semaphore.js";
 
-type ToolResult = {
-  content: Array<
-    | { type: "text"; text: string }
-    | { type: "image"; data: string; mimeType: string }
-  >;
-};
+import { type ToolResult } from "../shared/types.js";
 
 // --- Image support ---
 
@@ -245,21 +240,28 @@ const CONTAINER_KINDS = new Set([
   vscode.SymbolKind.Module,
 ]);
 
+type SymbolOutlineResult =
+  | { symbols: Record<string, string[]> }
+  | { timedOut: true }
+  | undefined;
+
 async function getSymbolOutline(
   filePath: string,
-): Promise<Record<string, string[]> | undefined> {
+): Promise<SymbolOutlineResult> {
   try {
     const uri = vscode.Uri.file(filePath);
+    const TIMED_OUT = Symbol("timeout");
     const symbols = await Promise.race([
       vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
         "vscode.executeDocumentSymbolProvider",
         uri,
       ),
-      new Promise<undefined>((resolve) =>
-        setTimeout(() => resolve(undefined), SYMBOL_TIMEOUT_MS),
+      new Promise<typeof TIMED_OUT>((resolve) =>
+        setTimeout(() => resolve(TIMED_OUT), SYMBOL_TIMEOUT_MS),
       ),
     ]);
 
+    if (symbols === TIMED_OUT) return { timedOut: true };
     if (!symbols || symbols.length === 0) return undefined;
 
     // Group by kind for token efficiency — avoids repeating "method" 100+ times
@@ -276,11 +278,13 @@ async function getSymbolOutline(
           const childKind = SYMBOL_KIND_NAMES[child.kind] ?? "symbol";
           const childLine = child.range.start.line + 1;
           if (!grouped[childKind]) grouped[childKind] = [];
-          grouped[childKind].push(`${s.name}.${child.name} (line ${childLine})`);
+          grouped[childKind].push(
+            `${s.name}.${child.name} (line ${childLine})`,
+          );
         }
       }
     }
-    return grouped;
+    return { symbols: grouped };
   } catch {
     return undefined;
   }
@@ -294,7 +298,7 @@ function friendlyError(err: unknown, inputPath: string): string {
   const code = (err as NodeJS.ErrnoException).code;
   switch (code) {
     case "ENOENT":
-      return `File not found: ${inputPath}. Working directory: ${getFirstWorkspaceRoot()}`;
+      return `File not found: ${inputPath}. Working directory: ${tryGetFirstWorkspaceRoot() ?? "(no workspace)"}`;
     case "EACCES":
       return `Permission denied: ${inputPath}`;
     case "EISDIR":
@@ -418,10 +422,21 @@ export async function handleReadFile(
     }
 
     const defaultLimit = 2000;
-    const limit = Math.min(
-      params.limit ?? defaultLimit,
-      totalLines - offset + 1,
-    );
+    const rawLimit = params.limit ?? defaultLimit;
+    if (rawLimit <= 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: `Invalid limit: ${rawLimit}. Must be a positive number.`,
+              path: params.path,
+            }),
+          },
+        ],
+      };
+    }
+    const limit = Math.min(rawLimit, totalLines - offset + 1);
 
     const lines = allLines.slice(offset - 1, offset - 1 + limit);
 
@@ -461,8 +476,12 @@ export async function handleReadFile(
     // Skip symbols for JSON/JSONC — every key becomes a "symbol" which is noisy
     const isDataFile = language === "json" || language === "jsonc";
     if (params.include_symbols !== false && !isDataFile) {
-      const symbols = await getSymbolOutline(filePath);
-      if (symbols) result.symbols = symbols;
+      const symbolResult = await getSymbolOutline(filePath);
+      if (symbolResult && "symbols" in symbolResult) {
+        result.symbols = symbolResult.symbols;
+      } else if (symbolResult && "timedOut" in symbolResult) {
+        result.symbols_note = "Symbol outline timed out — language server may be busy";
+      }
     }
 
     if (language) result.language = language;

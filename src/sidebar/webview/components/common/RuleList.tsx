@@ -19,8 +19,8 @@ export function RuleList({
 
   return (
     <>
-      {rules.map((r) => (
-        <div key={r.pattern + r.mode} class="rule-row">
+      {rules.map((r, i) => (
+        <div key={`${r.pattern}\0${r.mode}\0${i}`} class="rule-row">
           <span class="rule-mode">{r.mode}</span>
           <span
             class="rule-pattern"

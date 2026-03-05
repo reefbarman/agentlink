@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import picomatch from "picomatch";
 
-import { getFirstWorkspaceRoot, getRelativePath } from "../util/paths.js";
+import { tryGetFirstWorkspaceRoot, getRelativePath } from "../util/paths.js";
 import type { ConfigStore } from "./ConfigStore.js";
 
 export interface CommandRule {
@@ -86,7 +86,7 @@ export class ApprovalManager {
       oldWriteRules.length > 0;
 
     if (hasData) {
-      this.configStore.updateGlobalConfig((config) => {
+      const migrated = this.configStore.updateGlobalConfig((config) => {
         config.writeApproved = config.writeApproved || oldWriteApproved;
         config.commandRules = deduplicateRules([
           ...(config.commandRules ?? []),
@@ -101,6 +101,8 @@ export class ApprovalManager {
           ...oldWriteRules,
         ]);
       });
+
+      if (!migrated) return; // Don't mark as done if config write failed
 
       // Clear old globalState keys
       await this.globalState.update("globalCommandRules", undefined);
@@ -164,7 +166,8 @@ export class ApprovalManager {
         c.writeApproved = true;
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         c.writeApproved = true;
       });
@@ -261,7 +264,8 @@ export class ApprovalManager {
         }
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         const rules = c.pathRules ?? [];
         if (
@@ -294,7 +298,8 @@ export class ApprovalManager {
         c.pathRules = (c.pathRules ?? []).filter((r) => r.pattern !== pattern);
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         c.pathRules = (c.pathRules ?? []).filter((r) => r.pattern !== pattern);
       });
@@ -322,7 +327,8 @@ export class ApprovalManager {
         if (idx !== -1) rules[idx] = newRule;
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         const rules = c.pathRules ?? [];
         const idx = rules.findIndex((r) => r.pattern === oldPattern);
@@ -419,7 +425,8 @@ export class ApprovalManager {
         }
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         const rules = c.writeRules ?? [];
         if (
@@ -454,7 +461,8 @@ export class ApprovalManager {
         );
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         c.writeRules = (c.writeRules ?? []).filter(
           (r) => r.pattern !== pattern,
@@ -484,7 +492,8 @@ export class ApprovalManager {
         if (idx !== -1) rules[idx] = newRule;
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         const rules = c.writeRules ?? [];
         const idx = rules.findIndex((r) => r.pattern === oldPattern);
@@ -571,7 +580,8 @@ export class ApprovalManager {
         }
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         const rules = c.commandRules ?? [];
         if (
@@ -609,7 +619,8 @@ export class ApprovalManager {
         if (idx !== -1) rules[idx] = newRule;
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         const rules = c.commandRules ?? [];
         const idx = rules.findIndex((r) => r.pattern === oldPattern);
@@ -639,7 +650,8 @@ export class ApprovalManager {
         );
       });
     } else if (scope === "project") {
-      const folder = getFirstWorkspaceRoot();
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
       this.configStore.updateProjectConfig(folder, (c) => {
         c.commandRules = (c.commandRules ?? []).filter(
           (r) => r.pattern !== pattern,
@@ -731,9 +743,18 @@ export class ApprovalManager {
     }
   }
 
-  private getSession(sessionId: string): SessionState {
-    return this.sessions.get(sessionId) ?? this.newSession();
+  /** Get session state for reading. Returns an empty session if none exists (no side effect). */
+  private getSession(sessionId: string): Readonly<SessionState> {
+    return this.sessions.get(sessionId) ?? this.emptySession;
   }
+
+  private readonly emptySession: Readonly<SessionState> = Object.freeze({
+    writeApproved: false,
+    commandRules: [],
+    pathRules: [],
+    writeRules: [],
+    lastActivity: 0,
+  });
 
   private newSession(): SessionState {
     return {

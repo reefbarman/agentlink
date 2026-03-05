@@ -4,7 +4,7 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 const INLAY_HINT_KIND_NAMES: Record<number, string> = {
   [vscode.InlayHintKind.Type]: "type",

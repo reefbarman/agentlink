@@ -4,7 +4,6 @@ import { DiffBlock } from "./DiffBlock.js";
 
 interface FileSectionProps {
   group: FindReplaceFileGroup;
-  fileIndex: number;
   accepted: Map<string, boolean>;
   allAccepted: boolean;
   onToggleMatch: (matchId: string) => void;

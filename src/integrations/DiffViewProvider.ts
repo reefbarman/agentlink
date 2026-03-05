@@ -4,8 +4,6 @@ import * as fs from "fs/promises";
 import * as diffLib from "diff";
 
 import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
-import { showApprovalAlert } from "../util/approvalAlert.js";
-import { enqueueApproval } from "../util/quickPickQueue.js";
 import type {
   ApprovalPanelProvider,
   WriteApprovalResponse,
@@ -37,40 +35,35 @@ export function resolveCurrentDiff(decision: DiffDecision): boolean {
 export async function showDiffMoreOptions(): Promise<void> {
   if (!pendingDecisionResolve) return;
 
-  await enqueueApproval("Write scope options", async () => {
-    // Re-check after waiting in queue — decision may have been resolved
-    if (!pendingDecisionResolve) return;
+  const items: Array<vscode.QuickPickItem & { decision: DiffDecision }> = [
+    {
+      label: "$(bookmark) Accept for Session",
+      description:
+        "Accept this change and auto-accept future writes in this session",
+      decision: "accept-session",
+    },
+    {
+      label: "$(folder) Accept for Project",
+      description:
+        "Accept this change and auto-accept future writes for this project",
+      decision: "accept-project",
+    },
+    {
+      label: "$(globe) Always Accept",
+      description: "Accept this change and auto-accept all future writes",
+      decision: "accept-always",
+    },
+  ];
 
-    const items: Array<vscode.QuickPickItem & { decision: DiffDecision }> = [
-      {
-        label: "$(bookmark) Accept for Session",
-        description:
-          "Accept this change and auto-accept future writes in this session",
-        decision: "accept-session",
-      },
-      {
-        label: "$(folder) Accept for Project",
-        description:
-          "Accept this change and auto-accept future writes for this project",
-        decision: "accept-project",
-      },
-      {
-        label: "$(globe) Always Accept",
-        description: "Accept this change and auto-accept all future writes",
-        decision: "accept-always",
-      },
-    ];
-
-    const picked = await vscode.window.showQuickPick(items, {
-      title: "Accept with options",
-      placeHolder: "Choose scope for auto-acceptance",
-      ignoreFocusOut: true,
-    });
-
-    if (picked) {
-      resolveCurrentDiff(picked.decision);
-    }
+  const picked = await vscode.window.showQuickPick(items, {
+    title: "Accept with options",
+    placeHolder: "Choose scope for auto-acceptance",
+    ignoreFocusOut: true,
   });
+
+  if (picked) {
+    resolveCurrentDiff(picked.decision);
+  }
 }
 
 // Per-path mutex to prevent concurrent edits to the same file
@@ -81,31 +74,37 @@ export async function withFileLock<T>(
   filePath: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const existing = pathLocks.get(filePath);
+  // Normalize the path to prevent different representations from getting separate locks
+  const lockKey = path.resolve(filePath);
+  const existing = pathLocks.get(lockKey);
 
-  // Create a deferred to control the lock
+  // Create a deferred to control the lock.  We insert it into the map
+  // immediately so later callers chain on *our* promise (linked-list lock).
   let releaseLock: () => void;
   const lockPromise = new Promise<void>((resolve) => {
     releaseLock = resolve;
   });
-  pathLocks.set(filePath, lockPromise);
+  pathLocks.set(lockKey, lockPromise);
 
   // Wait for existing lock with timeout
   if (existing) {
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(`Lock timeout: another edit to ${filePath} is pending`),
-          ),
-        LOCK_TIMEOUT,
-      ),
-    );
-    try {
-      await Promise.race([existing, timeout]);
-    } catch (err) {
-      pathLocks.delete(filePath);
-      throw err;
+    const TIMED_OUT = Symbol("timeout");
+    let timerId: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+      timerId = setTimeout(() => resolve(TIMED_OUT), LOCK_TIMEOUT);
+    });
+    const result = await Promise.race([
+      existing.then(() => undefined as void),
+      timeout,
+    ]);
+    clearTimeout(timerId!);
+    if (result === TIMED_OUT) {
+      // Release our promise so callers chained behind us aren't stranded
+      releaseLock!();
+      if (pathLocks.get(lockKey) === lockPromise) {
+        pathLocks.delete(lockKey);
+      }
+      throw new Error(`Lock timeout: another edit to ${filePath} is pending`);
     }
   }
 
@@ -113,8 +112,8 @@ export async function withFileLock<T>(
     return await fn();
   } finally {
     releaseLock!();
-    if (pathLocks.get(filePath) === lockPromise) {
-      pathLocks.delete(filePath);
+    if (pathLocks.get(lockKey) === lockPromise) {
+      pathLocks.delete(lockKey);
     }
   }
 }
@@ -277,7 +276,7 @@ export class DiffViewProvider {
   }
 
   async waitForUserDecision(
-    approvalPanel?: ApprovalPanelProvider,
+    approvalPanel: ApprovalPanelProvider,
   ): Promise<DiffDecision> {
     // Show toolbar buttons via context key
     await vscode.commands.executeCommand(
@@ -330,133 +329,31 @@ export class DiffViewProvider {
           },
         );
 
-        if (approvalPanel) {
-          // ── Approval panel mode ────────────────────────────────────────
-          const { promise: panelPromise, id: approvalId } =
-            approvalPanel.enqueueWriteApproval(this.relPath!, {
-              operation: this.editType!,
-              outsideWorkspace: this.outsideWorkspace,
-            });
-
-          // If title bar or editor close resolves first, cancel the panel entry
-          disposeUI = () => {
-            approvalPanel.cancelApproval(approvalId);
-          };
-
-          // When panel resolves, store the rich response and map to DiffDecision
-          panelPromise.then((response) => {
-            if (resolved) return; // title bar or editor close already resolved
-            this.writeApprovalResponse = response;
-            const decisionMap: Record<string, DiffDecision> = {
-              accept: "accept",
-              reject: "reject",
-              "accept-session": "accept-session",
-              "accept-project": "accept-project",
-              "accept-always": "accept-always",
-            };
-            finish(decisionMap[response.decision] ?? "reject");
+        // Enqueue write approval in the panel
+        const { promise: panelPromise, id: approvalId } =
+          approvalPanel.enqueueWriteApproval(this.relPath!, {
+            operation: this.editType!,
+            outsideWorkspace: this.outsideWorkspace,
           });
-        } else {
-          // ── QuickPick fallback ─────────────────────────────────────────
-          const action = this.editType === "create" ? "create" : "modify";
-          const outsideWarning = this.outsideWorkspace
-            ? " [OUTSIDE WORKSPACE]"
-            : "";
-          type WriteItem = vscode.QuickPickItem & {
-            decision: DiffDecision | "review";
+
+        // If title bar or editor close resolves first, cancel the panel entry
+        disposeUI = () => {
+          approvalPanel.cancelApproval(approvalId);
+        };
+
+        // When panel resolves, store the rich response and map to DiffDecision
+        panelPromise.then((response) => {
+          if (resolved) return; // title bar or editor close already resolved
+          this.writeApprovalResponse = response;
+          const decisionMap: Record<string, DiffDecision> = {
+            accept: "accept",
+            reject: "reject",
+            "accept-session": "accept-session",
+            "accept-project": "accept-project",
+            "accept-always": "accept-always",
           };
-          const writeItems: WriteItem[] = [
-            {
-              label: "$(eye) Review",
-              description: "Dismiss this and review the diff in the editor",
-              decision: "review",
-              alwaysShow: true,
-            },
-            {
-              label: "$(check) Accept",
-              description: "Save this file change",
-              decision: "accept",
-              alwaysShow: true,
-            },
-            {
-              label: "$(check) For Session",
-              description: "Auto-accept writes this session",
-              decision: "accept-session",
-              alwaysShow: true,
-            },
-            {
-              label: "$(folder) For Project",
-              description: "Auto-accept writes for this project",
-              decision: "accept-project",
-              alwaysShow: true,
-            },
-            {
-              label: "$(globe) Always",
-              description: "Auto-accept writes globally",
-              decision: "accept-always",
-              alwaysShow: true,
-            },
-            {
-              label: "$(close) Reject",
-              description: "Discard this change",
-              decision: "reject",
-              alwaysShow: true,
-            },
-          ];
-          const showApproval = () => {
-            enqueueApproval(
-              "Write approval",
-              () =>
-                new Promise<void>((releaseQueue) => {
-                  if (resolved) {
-                    releaseQueue();
-                    return;
-                  }
-
-                  let queueReleased = false;
-                  const releaseOnce = () => {
-                    if (queueReleased) return;
-                    queueReleased = true;
-                    releaseQueue();
-                  };
-
-                  const alert = showApprovalAlert(
-                    `Write approval: ${this.relPath}`,
-                  );
-                  const qp = vscode.window.createQuickPick<WriteItem>();
-                  qp.title = `${action}: ${this.relPath}${outsideWarning}`;
-                  qp.placeholder =
-                    "Review the diff in the editor. You can edit the right side before accepting.";
-                  qp.items = writeItems;
-                  qp.activeItems = [];
-                  qp.ignoreFocusOut = true;
-
-                  disposeUI = () => {
-                    alert.dispose();
-                    qp.dispose();
-                    releaseOnce();
-                  };
-
-                  qp.onDidAccept(() => {
-                    const selected = qp.selectedItems[0];
-                    if (!selected) return;
-                    disposeUI?.();
-                    disposeUI = undefined;
-                    if (resolved) return;
-                    if (selected.decision === "review") return;
-                    finish(selected.decision);
-                  });
-                  qp.onDidHide(() => {
-                    disposeUI?.();
-                    disposeUI = undefined;
-                  });
-                  qp.show();
-                  qp.activeItems = [];
-                }),
-            );
-          };
-          showApproval();
-        }
+          finish(decisionMap[response.decision] ?? "reject");
+        });
       });
     } finally {
       disposeUI?.();
@@ -682,8 +579,9 @@ export class DiffViewProvider {
  * Returns -1 if the contents are identical.
  */
 function findFirstChangeLine(original: string, modified: string): number {
-  const origLines = original.split("\n");
-  const modLines = modified.split("\n");
+  // Normalize \r\n to \n to prevent false positives on Windows
+  const origLines = original.replace(/\r\n/g, "\n").split("\n");
+  const modLines = modified.replace(/\r\n/g, "\n").split("\n");
   const maxLines = Math.max(origLines.length, modLines.length);
   for (let i = 0; i < maxLines; i++) {
     if (origLines[i] !== modLines[i]) {

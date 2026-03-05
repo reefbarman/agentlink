@@ -311,33 +311,102 @@ describe("applyBlocks", () => {
     expect(result).toBe("b c b");
     expect(failedBlocks).toEqual([1]);
   });
+
+  // ── Whitespace-agnostic matching ──────────────────────────────────────
+
+  it("matches Go code with mid-line tab alignment", () => {
+    const content = "type Config struct {\n\tName\tstring\n\tValue\tint\n}";
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search: "    Name    string\n    Value    int",
+        replace: "    Name    string\n    Value    int\n    Extra    bool",
+        index: 0,
+      },
+    ]);
+    expect(failedBlocks).toEqual([]);
+    expect(result).toContain("Extra");
+  });
+
+  it("matches with 2-space tab rendering", () => {
+    const content = "func main() {\n\tfmt.Println(\"hello\")\n}";
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search: "  fmt.Println(\"hello\")",
+        replace: "  fmt.Println(\"goodbye\")",
+        index: 0,
+      },
+    ]);
+    expect(failedBlocks).toEqual([]);
+    expect(result).toContain("goodbye");
+  });
+
+  it("matches with 8-space tab rendering", () => {
+    const content = "func main() {\n\tfmt.Println(\"hello\")\n}";
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search: "        fmt.Println(\"hello\")",
+        replace: "        fmt.Println(\"goodbye\")",
+        index: 0,
+      },
+    ]);
+    expect(failedBlocks).toEqual([]);
+    expect(result).toContain("goodbye");
+  });
+
+  it("matches deeply nested tab code with spaces", () => {
+    const content =
+      "func foo() {\n\tif true {\n\t\tif bar {\n\t\t\tfmt.Println()\n\t\t}\n\t}\n}";
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search:
+          "        if bar {\n            fmt.Println()\n        }",
+        replace:
+          "        if bar {\n            fmt.Println(\"changed\")\n        }",
+        index: 0,
+      },
+    ]);
+    expect(failedBlocks).toEqual([]);
+    expect(result).toContain("changed");
+  });
+
+  it("rejects ambiguous whitespace-agnostic matches", () => {
+    // Same trimmed content at two different indent levels
+    const content = "\treturn 1;\nmore code\n\t\treturn 1;";
+    const { failedBlocks } = applyBlocks(content, [
+      { search: "    return 1;", replace: "    return 42;", index: 0 },
+    ]);
+    expect(failedBlocks).toEqual([0]);
+  });
 });
 
 describe("normalizeForComparison", () => {
-  it("converts leading tabs to 4 spaces", () => {
-    expect(normalizeForComparison("\thello")).toBe("    hello");
-    expect(normalizeForComparison("\t\thello")).toBe("        hello");
-  });
-
-  it("preserves leading spaces", () => {
-    expect(normalizeForComparison("    hello")).toBe("    hello");
+  it("strips leading whitespace", () => {
+    expect(normalizeForComparison("\thello")).toBe("hello");
+    expect(normalizeForComparison("\t\thello")).toBe("hello");
+    expect(normalizeForComparison("    hello")).toBe("hello");
   });
 
   it("trims trailing whitespace", () => {
     expect(normalizeForComparison("hello   ")).toBe("hello");
-    expect(normalizeForComparison("\thello  ")).toBe("    hello");
+    expect(normalizeForComparison("\thello  ")).toBe("hello");
   });
 
-  it("handles mixed tabs and spaces in leading whitespace", () => {
-    expect(normalizeForComparison("\t  hello")).toBe("      hello");
+  it("collapses mid-line whitespace to single space", () => {
+    expect(normalizeForComparison("hello\tworld")).toBe("hello world");
+    expect(normalizeForComparison("hello    world")).toBe("hello world");
+    expect(normalizeForComparison("type\tFoo\tstruct {")).toBe("type Foo struct {");
   });
 
-  it("preserves tabs inside content (non-leading)", () => {
-    expect(normalizeForComparison("hello\tworld")).toBe("hello\tworld");
-  });
-
-  it("handles empty string", () => {
+  it("handles empty and whitespace-only lines", () => {
     expect(normalizeForComparison("")).toBe("");
+    expect(normalizeForComparison("   ")).toBe("");
+    expect(normalizeForComparison("\t")).toBe("");
+    expect(normalizeForComparison("\t  \t")).toBe("");
+  });
+
+  it("handles Go-style tab alignment", () => {
+    expect(normalizeForComparison("\tName\tstring")).toBe("Name string");
+    expect(normalizeForComparison("    Name    string")).toBe("Name string");
   });
 });
 
@@ -357,7 +426,6 @@ describe("tryFlexibleMatch", () => {
     const search = "    return 1;";
     const result = tryFlexibleMatch(content, search);
     expect(result).not.toBeNull();
-    // The matched range should cover "\treturn 1;"
     expect(content.slice(result!.start, result!.end)).toBe("\treturn 1;");
   });
 
@@ -377,6 +445,32 @@ describe("tryFlexibleMatch", () => {
     const result = tryFlexibleMatch(content, search);
     expect(result).not.toBeNull();
     expect(content.slice(result!.start, result!.end)).toBe("\tb\n\tc");
+  });
+
+  it("matches mid-line tabs vs spaces (Go struct fields)", () => {
+    const content = "type Config struct {\n\tName\tstring\n\tValue\tint\n}";
+    const search = "    Name    string\n    Value    int";
+    const result = tryFlexibleMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(content.slice(result!.start, result!.end)).toBe(
+      "\tName\tstring\n\tValue\tint",
+    );
+  });
+
+  it("matches with 2-space tab width", () => {
+    const content = "func main() {\n\tfmt.Println()\n}";
+    const search = "  fmt.Println()";
+    const result = tryFlexibleMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(content.slice(result!.start, result!.end)).toBe("\tfmt.Println()");
+  });
+
+  it("matches with 8-space tab width", () => {
+    const content = "func main() {\n\tfmt.Println()\n}";
+    const search = "        fmt.Println()";
+    const result = tryFlexibleMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(content.slice(result!.start, result!.end)).toBe("\tfmt.Println()");
   });
 });
 

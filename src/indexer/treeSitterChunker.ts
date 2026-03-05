@@ -378,7 +378,7 @@ export async function treeSitterChunkFile(
       if (currentGranularity === "fine" && chunks.length > 0) {
         const seen = new Set<string>();
         chunks = chunks.filter((c) => {
-          const key = `${c.startLine}:${c.endLine}:${c.content.length}`;
+          const key = `${c.startLine}:${c.endLine}:${c.content.length}:${c.content.slice(0, 64)}`;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;

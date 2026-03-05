@@ -3,9 +3,12 @@ import * as vscode from "vscode";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { getRelativePath } from "../util/paths.js";
-import { resolveAndOpenDocument, SYMBOL_KIND_NAMES } from "./languageFeatures.js";
+import {
+  resolveAndOpenDocument,
+  SYMBOL_KIND_NAMES,
+} from "./languageFeatures.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 const MAX_WORKSPACE_SYMBOLS = 100;
 
@@ -36,47 +39,79 @@ export async function handleGetSymbols(
   try {
     if (!params.path && !params.query) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ error: "Either 'path' (for document symbols) or 'query' (for workspace symbol search) is required" }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error:
+                "Either 'path' (for document symbols) or 'query' (for workspace symbol search) is required",
+            }),
+          },
+        ],
       };
     }
 
     // Document symbols mode
     if (params.path) {
-      const { uri, relPath } = await resolveAndOpenDocument(params.path, approvalManager, approvalPanel, sessionId);
-
-      const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
-        "vscode.executeDocumentSymbolProvider",
-        uri,
+      const { uri, relPath } = await resolveAndOpenDocument(
+        params.path,
+        approvalManager,
+        approvalPanel,
+        sessionId,
       );
+
+      const symbols = await vscode.commands.executeCommand<
+        vscode.DocumentSymbol[]
+      >("vscode.executeDocumentSymbolProvider", uri);
 
       if (!symbols || symbols.length === 0) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ mode: "document", path: relPath, symbols: [] }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                mode: "document",
+                path: relPath,
+                symbols: [],
+              }),
+            },
+          ],
         };
       }
 
       return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            mode: "document",
-            path: relPath,
-            symbols: symbols.map(serializeDocumentSymbol),
-          }),
-        }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              mode: "document",
+              path: relPath,
+              symbols: symbols.map(serializeDocumentSymbol),
+            }),
+          },
+        ],
       };
     }
 
     // Workspace symbols mode
     const query = params.query!;
-    const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
-      "vscode.executeWorkspaceSymbolProvider",
-      query,
-    );
+    const symbols = await vscode.commands.executeCommand<
+      vscode.SymbolInformation[]
+    >("vscode.executeWorkspaceSymbolProvider", query);
 
     if (!symbols || symbols.length === 0) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ mode: "workspace", query, total: 0, symbols: [] }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              mode: "workspace",
+              query,
+              total: 0,
+              symbols: [],
+            }),
+          },
+        ],
       };
     }
 
@@ -92,16 +127,18 @@ export async function handleGetSymbols(
     }));
 
     return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          mode: "workspace",
-          query,
-          total,
-          truncated: total > MAX_WORKSPACE_SYMBOLS,
-          symbols: serialized,
-        }),
-      }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            mode: "workspace",
+            query,
+            total,
+            truncated: total > MAX_WORKSPACE_SYMBOLS,
+            symbols: serialized,
+          }),
+        },
+      ],
     };
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {

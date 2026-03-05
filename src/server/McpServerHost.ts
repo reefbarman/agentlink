@@ -164,6 +164,7 @@ export class McpServerHost {
       if (s) {
         s.trusted = true;
         s.trustAttempts = 0;
+        this.onSessionChanged?.();
       }
     };
     const getTrustAttempts = (): number =>

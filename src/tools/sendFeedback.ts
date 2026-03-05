@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { appendFeedback } from "../util/feedbackStore.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleSendFeedback(
   params: {

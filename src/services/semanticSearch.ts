@@ -2,9 +2,9 @@ import * as vscode from "vscode";
 import * as path from "path";
 import { createHash } from "crypto";
 
-import { getFirstWorkspaceRoot } from "../util/paths.js";
+import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 const SECRET_KEY = "openaiApiKey";
 
@@ -277,9 +277,13 @@ function buildQdrantFilter(
         ? normalized.slice(2)
         : normalized;
       const segments = cleaned.split("/").filter(Boolean);
-      segments.forEach((segment, index) => {
-        must.push({ key: `pathSegments.${index}`, match: { value: segment } });
-      });
+      for (let index = 0; index < segments.length; index++) {
+        const segment = segments[index];
+        // Skip segments with special characters that could cause Qdrant filter issues
+        if (/^[a-zA-Z0-9._\-@]+$/.test(segment)) {
+          must.push({ key: `pathSegments.${index}`, match: { value: segment } });
+        }
+      }
     }
   }
 
@@ -508,7 +512,20 @@ export async function semanticSearch(
   }
 
   const qdrantUrl = getQdrantUrl();
-  const workspacePath = getFirstWorkspaceRoot();
+  const workspacePath = tryGetFirstWorkspaceRoot();
+  if (!workspacePath) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            error:
+              "No workspace folder open. Semantic search requires a workspace.",
+          }),
+        },
+      ],
+    };
+  }
   const collectionName = getAlCollectionName(workspacePath);
 
   // Compute directory prefix relative to workspace

@@ -2,9 +2,13 @@ import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { resolveAndOpenDocument, toPosition, extractHoverContent } from "./languageFeatures.js";
+import {
+  resolveAndOpenDocument,
+  toPosition,
+  extractHoverContent,
+} from "./languageFeatures.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleGetHover(
   params: { path: string; line: number; column: number },
@@ -13,7 +17,12 @@ export async function handleGetHover(
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, approvalPanel, sessionId);
+    const { uri } = await resolveAndOpenDocument(
+      params.path,
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
     const position = toPosition(params.line, params.column);
 
     const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
@@ -24,7 +33,15 @@ export async function handleGetHover(
 
     if (!hovers || hovers.length === 0) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ hover: null, message: "No hover information available at this position" }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              hover: null,
+              message: "No hover information available at this position",
+            }),
+          },
+        ],
       };
     }
 
@@ -37,7 +54,12 @@ export async function handleGetHover(
     }
 
     return {
-      content: [{ type: "text", text: JSON.stringify({ hover: parts.join("\n---\n") || null }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ hover: parts.join("\n---\n") || null }),
+        },
+      ],
     };
   } catch (err) {
     // Rejection from resolveAndOpenDocument
@@ -46,7 +68,12 @@ export async function handleGetHover(
     }
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
     };
   }
 }

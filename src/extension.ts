@@ -1,9 +1,11 @@
 import * as vscode from "vscode";
 import * as http from "http";
+import * as fs from "fs";
+import * as path from "path";
 import { randomUUID } from "crypto";
 
 import { McpServerHost } from "./server/McpServerHost.js";
-import { disposeQuickPickQueue } from "./util/quickPickQueue.js";
+import { StatusBarManager } from "./util/StatusBarManager.js";
 import {
   disposeTerminalManager,
   initializeTerminalManager,
@@ -36,7 +38,7 @@ export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 let outputChannel: vscode.OutputChannel;
 let httpServer: http.Server | null = null;
 let mcpHost: McpServerHost | null = null;
-let statusBarItem: vscode.StatusBarItem;
+let statusBarManager: StatusBarManager;
 let sidebarProvider: SidebarProvider;
 let approvalManager: ApprovalManager;
 let approvalPanel: ApprovalPanelProvider;
@@ -68,6 +70,29 @@ function getOrCreateAuthToken(context: vscode.ExtensionContext): string {
 // Uses the agent abstraction layer to write/cleanup config for all configured agents.
 
 let activeConfigWriters: ConfigWriter[] = [];
+
+/** Read the port from the first workspace's .mcp.json, if it exists. */
+function readPortFromMcpJson(): number | undefined {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return undefined;
+  try {
+    const mcpPath = path.join(folder.uri.fsPath, ".mcp.json");
+    const raw = fs.readFileSync(mcpPath, "utf-8");
+    const config = JSON.parse(raw);
+    const url = config?.mcpServers?.agentlink?.url as string | undefined;
+    if (!url) return undefined;
+    const match = url.match(/:(\d+)\//);
+    if (!match) return undefined;
+    const port = parseInt(match[1], 10);
+    if (port > 0 && port < 65536) {
+      log(`Found previous port ${port} in .mcp.json`);
+      return port;
+    }
+  } catch {
+    // file doesn't exist or is malformed — ignore
+  }
+  return undefined;
+}
 
 function getConfiguredAgentIds(): string[] {
   return getConfig<string[]>("agents") ?? ["claude-code"];
@@ -134,7 +159,7 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
     return;
   }
 
-  const port = getConfig<number>("port");
+  const port = getConfig<number>("port") || readPortFromMcpJson();
   const requireAuth = getConfig<boolean>("requireAuth");
   const authToken = requireAuth ? getOrCreateAuthToken(context) : undefined;
 
@@ -146,11 +171,15 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
     context.extensionUri,
   );
 
-  // Notify sidebar when sessions change (connect/disconnect/initialize)
+  // Notify sidebar + status bar when sessions change (connect/disconnect/trust)
   mcpHost.onSessionChanged = () => {
+    const sessions = mcpHost?.getSessionInfos() ?? [];
     sidebarProvider?.updateState({
-      sessions: mcpHost?.sessionCount ?? 0,
+      sessions: sessions.length,
     });
+    if (activePort !== null) {
+      statusBarManager.setRunning(activePort, sessions);
+    }
   };
   sidebarProvider?.setMcpSessionProvider(
     () => mcpHost?.getSessionInfos() ?? [],
@@ -184,7 +213,12 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
       });
 
       try {
-        await mcpHost!.handleRequest(req, res, parsedBody);
+        if (!mcpHost) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Server is shutting down" }));
+          return;
+        }
+        await mcpHost.handleRequest(req, res, parsedBody);
       } catch (err) {
         if (clientDisconnected) {
           log(`MCP request aborted (client disconnected): ${err}`);
@@ -203,13 +237,19 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
     if (url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({ status: "ok", sessions: mcpHost!.sessionCount }),
+        JSON.stringify({ status: "ok", sessions: mcpHost?.sessionCount ?? 0 }),
       );
       return;
     }
 
-    res.writeHead(404);
-    res.end();
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "not_found",
+        error_description:
+          "This server does not support OAuth. Authentication is managed via Bearer tokens configured automatically by the extension.",
+      }),
+    );
   });
 
   const onListening = (actualPort: number) => {
@@ -249,7 +289,7 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 
     httpServer!.listen(port, "127.0.0.1", () => {
       const addr = httpServer!.address();
-      const actualPort = typeof addr === "object" && addr ? addr.port : port;
+      const actualPort = typeof addr === "object" && addr ? addr.port : (port ?? 0);
       onListening(actualPort);
       resolve();
     });
@@ -279,17 +319,11 @@ async function stopServer(): Promise<void> {
 
 function updateStatusBar(port: number | null, agentConfigured?: boolean): void {
   if (port !== null) {
-    statusBarItem.text = `$(chip) AgentLink :${port}`;
-    statusBarItem.tooltip = `AgentLink MCP server running on port ${port}`;
-    statusBarItem.backgroundColor = undefined;
+    const sessions = mcpHost?.getSessionInfos() ?? [];
+    statusBarManager.setRunning(port, sessions);
   } else {
-    statusBarItem.text = `$(chip) AgentLink`;
-    statusBarItem.tooltip = "AgentLink MCP server stopped";
-    statusBarItem.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.warningBackground",
-    );
+    statusBarManager.setStopped();
   }
-  statusBarItem.show();
 
   // Update sidebar
   sidebarProvider?.updateState({
@@ -428,8 +462,15 @@ export function activate(context: vscode.ExtensionContext): void {
     "unknown";
   toolCallTracker = new ToolCallTracker(log, extVersion);
 
+  // Status bar manager (unified status bar for port info + approval alerts)
+  statusBarManager = new StatusBarManager();
+  context.subscriptions.push(statusBarManager);
+
   // Approval panel (WebView-based approval UI for commands and path access)
-  approvalPanel = new ApprovalPanelProvider(context.extensionUri);
+  approvalPanel = new ApprovalPanelProvider(
+    context.extensionUri,
+    statusBarManager,
+  );
   context.subscriptions.push(approvalPanel);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -448,14 +489,6 @@ export function activate(context: vscode.ExtensionContext): void {
       sidebarProvider,
     ),
   );
-
-  // Status bar
-  statusBarItem = vscode.window.createStatusBarItem(
-    vscode.StatusBarAlignment.Right,
-    100,
-  );
-  statusBarItem.command = "agentlink.showStatus";
-  context.subscriptions.push(statusBarItem);
 
   // Commands
   context.subscriptions.push(
@@ -550,17 +583,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("agentlink.stopServer", () => stopServer()),
     vscode.commands.registerCommand("agentlink.showStatus", () => {
-      const port = httpServer?.address();
-      const portNum = typeof port === "object" && port ? port.port : null;
-      if (portNum) {
-        vscode.window.showInformationMessage(
-          `AgentLink MCP server running on port ${portNum} with ${mcpHost?.sessionCount ?? 0} active session(s).`,
-        );
-      } else {
-        vscode.window.showWarningMessage(
-          "AgentLink MCP server is not running.",
-        );
-      }
+      vscode.commands.executeCommand("agentLink.statusView.focus");
     }),
   );
 
@@ -594,9 +617,14 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     context.subscriptions.push(indexerManager);
 
-    // Forward index status to sidebar
+    // Forward index status to sidebar + status bar error
     indexerManager.onStatusChanged((status) => {
       sidebarProvider.updateIndexStatus(status);
+      if (status.state === "error" && status.error) {
+        statusBarManager.setError(`Indexing: ${status.error}`);
+      } else if (status.state !== "error") {
+        statusBarManager.clearError();
+      }
     });
 
     // Start file watching for incremental updates
@@ -629,7 +657,6 @@ export function activate(context: vscode.ExtensionContext): void {
     dispose: () => {
       stopServer();
       disposeTerminalManager();
-      disposeQuickPickQueue();
     },
   });
 
@@ -645,6 +672,13 @@ export function activate(context: vscode.ExtensionContext): void {
   const autoStart = getConfig<boolean>("autoStart");
   if (autoStart) {
     const MAX_RETRIES = 3;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    // Track retry timer for cleanup on deactivation
+    context.subscriptions.push({
+      dispose: () => {
+        if (retryTimer) clearTimeout(retryTimer);
+      },
+    });
     const startWithRetry = async (attempt: number): Promise<void> => {
       try {
         await startServer(context);
@@ -663,11 +697,12 @@ export function activate(context: vscode.ExtensionContext): void {
           log(
             `Server start attempt ${attempt + 1} failed, retrying in ${delay}ms: ${err}`,
           );
-          setTimeout(() => startWithRetry(attempt + 1), delay);
+          retryTimer = setTimeout(() => startWithRetry(attempt + 1), delay);
         } else {
           log(
             `Failed to start server after ${MAX_RETRIES + 1} attempts: ${err}`,
           );
+          statusBarManager.setError(`Server failed to start: ${err}`);
           vscode.window.showErrorMessage(
             `AgentLink: Failed to start MCP server after ${MAX_RETRIES + 1} attempts: ${err}`,
           );

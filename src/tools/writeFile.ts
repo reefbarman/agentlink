@@ -12,7 +12,7 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleWriteFile(
   params: { path: string; content: string },
@@ -39,56 +39,72 @@ export async function handleWriteFile(
       .get<boolean>("masterBypass", false);
 
     // Auto-approve check (includes recent single-use approvals within TTL)
-    const canAutoApprove = inWorkspace
-      ? masterBypass ||
-        approvalManager.isWriteApproved(sessionId, filePath) ||
-        approvalPanel.isRecentlyApproved("write", relPath)
-      : approvalManager.isFileWriteApproved(sessionId, filePath) ||
-        approvalPanel.isRecentlyApproved("write", relPath);
+    const canAutoApprove =
+      masterBypass ||
+      (inWorkspace
+        ? approvalManager.isWriteApproved(sessionId, filePath)
+        : approvalManager.isFileWriteApproved(sessionId, filePath));
 
     if (canAutoApprove) {
-      // Snapshot diagnostics before the write (registers listener eagerly)
-      const snap = snapshotDiagnostics(filePath);
+      // Use file lock to prevent concurrent auto-approved writes from
+      // interleaving WorkspaceEdit + format-on-save sequences,
+      // which can corrupt file content.
+      const autoResult = await withFileLock(filePath, async () => {
+        // Snapshot diagnostics before the write (registers listener eagerly)
+        const snap = snapshotDiagnostics(filePath);
 
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, params.content, "utf-8");
+        // Ensure parent directories exist (for new files)
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
 
-      // Open the file in VS Code so the user can see what was written
-      const doc = await vscode.workspace.openTextDocument(filePath);
-      await vscode.window.showTextDocument(doc, {
-        preview: false,
-        preserveFocus: true,
+        // Create file on disk if it doesn't exist (openTextDocument needs it)
+        try {
+          await fs.access(filePath);
+        } catch {
+          await fs.writeFile(filePath, "", "utf-8");
+        }
+
+        // Update content through the document model, then save — this avoids
+        // a race where fs.writeFile changes disk, the file watcher fires
+        // after applyEdit makes the doc dirty, and VS Code shows the
+        // "overwrite or revert" dialog.
+        const doc = await vscode.workspace.openTextDocument(filePath);
+        await vscode.window.showTextDocument(doc, {
+          preview: false,
+          preserveFocus: true,
+        });
+
+        if (doc.getText() !== params.content) {
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(
+            doc.uri,
+            new vscode.Range(
+              doc.positionAt(0),
+              doc.positionAt(doc.getText().length),
+            ),
+            params.content,
+          );
+          await vscode.workspace.applyEdit(edit);
+        }
+        if (doc.isDirty) {
+          await doc.save();
+        }
+
+        // Collect new diagnostics
+        const newDiagnostics = await snap.collectNewErrors(diagnosticDelay);
+
+        const response: Record<string, unknown> = {
+          status: "accepted",
+          path: relPath,
+          operation: "auto-approved",
+        };
+        if (newDiagnostics) {
+          response.new_diagnostics = newDiagnostics;
+        }
+        return response;
       });
 
-      // Force-sync document model with disk content (see applyDiff.ts)
-      if (doc.getText() !== params.content) {
-        const edit = new vscode.WorkspaceEdit();
-        edit.replace(
-          doc.uri,
-          new vscode.Range(
-            doc.positionAt(0),
-            doc.positionAt(doc.getText().length),
-          ),
-          params.content,
-        );
-        await vscode.workspace.applyEdit(edit);
-        await doc.save();
-      }
-
-      // Collect new diagnostics
-      const newDiagnostics = await snap.collectNewErrors(diagnosticDelay);
-
-      const response: Record<string, unknown> = {
-        status: "accepted",
-        path: relPath,
-        operation: "auto-approved",
-      };
-      if (newDiagnostics) {
-        response.new_diagnostics = newDiagnostics;
-      }
-
       return {
-        content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(autoResult, null, 2) }],
       };
     }
 
@@ -110,13 +126,12 @@ export async function handleWriteFile(
       // Handle session/always acceptance — save rules.
       const scope = decisionToScope(decision);
       if (scope) {
-        await saveWriteTrustRules({
+        saveWriteTrustRules({
           panelResponse: diffView.writeApprovalResponse,
           approvalManager,
           sessionId,
           scope,
           relPath,
-          filePath,
           inWorkspace,
         });
       }

@@ -7,7 +7,7 @@ Before using any other agentlink tool, you **MUST** call the `handshake` tool to
 handshake({ working_directories: ["<your primary working directory>", "<additional dir 1>", ...] })
 ```
 
-Pass **all** your known working directories (primary + additional). The server checks that its workspace folders are present in your list. On success you get `{ status: "trusted" }` and all other tools become available. On failure you get `{ status: "rejected", missing_count: N }`.
+Pass **all** your known working directories (primary + additional). The server checks that its workspace folders are present in your list. On success you get `{ status: "trusted" }` and all other tools become available. On failure you get `{ status: "rejected" }`.
 
 If the handshake keeps failing, you are likely connected to the wrong MCP server instance. Tell the user to reload the VS Code window or refresh their AI agent's MCP connections.
 
@@ -60,6 +60,7 @@ These are the most frequent violations. Check yourself before every tool call:
 
 `execute_command` automatically reuses an existing idle terminal. You do NOT need to pass `terminal_name` or `terminal_id` for normal sequential commands — just omit both and the tool will reuse the default terminal.
 
+- **Working directory**: The response includes a `cwd` field showing the terminal's actual working directory after the command finished. This reflects any `cd` commands — do NOT run `pwd`, just read `cwd` from the response. The `cwd` parameter only applies when creating a new terminal; on reused terminals it is ignored. If `cwd` is absent from the response, shell integration was unavailable and the directory is unknown.
 - **DO NOT** pass `terminal_name` unless you specifically need a *separate* terminal (e.g. a long-running dev server alongside normal commands, or truly parallel tasks).
 - **DO NOT** invent terminal names like "Build", "Git", "Lint" for one-off commands — this creates unnecessary terminals that clutter the user's workspace.
 - `terminal_id` is only needed if a previous background command returned one and you need to interact with that specific terminal.
@@ -118,4 +119,5 @@ agentlink also provides tools that Claude Code doesn't have natively. Use these 
 - **`open_file`** — Open a file in the VS Code editor, optionally scrolling to a specific line. Supports range selection with `end_line`/`end_column` to highlight code.
 - **`show_notification`** — Show a notification in VS Code. Use sparingly for important status updates.
 - **`find_and_replace`** — Bulk find-and-replace across **multiple files** using a glob pattern (e.g. `src/**/*.ts`). Supports literal strings and regex with capture groups. Opens a rich preview panel showing each match in context with inline diffs — the user can toggle individual matches on/off before accepting. **For single-file edits, prefer `apply_diff`** — it provides better diff review and format-on-save. Only use `find_and_replace` on a single file when making many identical replacements (e.g. renaming a variable throughout a file).
+- **`get_terminal_output`** — Check on a background or timed-out command. Pass the `terminal_id` returned by `execute_command`. Works for both `background: true` commands and foreground commands that timed out (indicated by `timed_out: true` in the response). Returns accumulated output, whether the command is still running, and the exit code when finished. Use `wait_seconds` to poll for new output (avoids needing two calls when a command was just started). Use `kill: true` to send Ctrl+C (SIGINT) and stop the command. Supports the same output filtering params as `execute_command` (`output_head`, `output_tail`, `output_grep`, etc.).
 - **`get_terminal_output`** — Check on a background or timed-out command. Pass the `terminal_id` returned by `execute_command`. Works for both `background: true` commands and foreground commands that timed out (indicated by `timed_out: true` in the response). Returns accumulated output, whether the command is still running, and the exit code when finished. Use `wait_seconds` to poll for new output (avoids needing two calls when a command was just started). Use `kill: true` to send Ctrl+C (SIGINT) and stop the command. Supports the same output filtering params as `execute_command` (`output_head`, `output_tail`, `output_grep`, etc.).

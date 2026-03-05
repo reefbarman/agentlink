@@ -2,7 +2,7 @@ import * as path from "path";
 
 import {
   resolveAndValidatePath,
-  getFirstWorkspaceRoot,
+  tryGetFirstWorkspaceRoot,
 } from "../util/paths.js";
 import {
   getRipgrepBinPath,
@@ -15,7 +15,7 @@ import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
 const DEFAULT_MAX_RESULTS = 300;
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 /**
  * Fix common regex escaping mistakes that Claude makes.
@@ -111,7 +111,7 @@ export async function handleSearchFiles(
 
     // Ripgrep regex search
     const rgPath = await getRipgrepBinPath();
-    const cwd = getFirstWorkspaceRoot();
+    const cwd = tryGetFirstWorkspaceRoot() ?? path.resolve(".");
 
     // --- files_with_matches mode ---
     if (outputMode === "files_with_matches") {

@@ -6,3 +6,4 @@ dist/
 releases/
 .env.local
 plans/
+.mcp.json

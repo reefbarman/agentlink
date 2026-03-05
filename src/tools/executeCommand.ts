@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 import * as path from "path";
+import * as os from "os";
 
-import { getFirstWorkspaceRoot } from "../util/paths.js";
+import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
 import { getTerminalManager } from "../integrations/TerminalManager.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
@@ -19,7 +20,7 @@ import { Semaphore } from "../util/Semaphore.js";
 /** Serializes the approval-check phase so pending dialogs block other commands. */
 const approvalGate = new Semaphore(1);
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleExecuteCommand(
   params: {
@@ -43,14 +44,20 @@ export async function handleExecuteCommand(
   trackerCtx?: TrackerContext,
 ): Promise<ToolResult> {
   try {
-    const workspaceRoot = getFirstWorkspaceRoot();
+    if (!params.command || params.command.trim().length === 0) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: "Command cannot be empty" }) }],
+      };
+    }
+
+    const workspaceRoot = tryGetFirstWorkspaceRoot();
 
     // Resolve cwd
-    let cwd = workspaceRoot;
+    let cwd = workspaceRoot ?? os.homedir();
     if (params.cwd) {
       cwd = path.isAbsolute(params.cwd)
         ? params.cwd
-        : path.resolve(workspaceRoot, params.cwd);
+        : path.resolve(cwd, params.cwd);
     }
 
     // Master bypass check

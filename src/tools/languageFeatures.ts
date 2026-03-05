@@ -7,7 +7,7 @@ import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
 // --- Types ---
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export interface ResolvedDocument {
   uri: vscode.Uri;

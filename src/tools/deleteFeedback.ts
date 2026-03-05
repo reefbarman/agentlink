@@ -1,6 +1,6 @@
 import { deleteFeedback } from "../util/feedbackStore.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 export async function handleDeleteFeedback(params: {
   indices: number[];

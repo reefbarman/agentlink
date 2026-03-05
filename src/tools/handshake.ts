@@ -3,7 +3,7 @@ import * as path from "path";
 
 import { getWorkspaceRoots } from "../util/paths.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 type LogFn = (msg: string) => void;
 
@@ -76,7 +76,7 @@ export async function handleHandshake(
     };
   }
 
-  // Rejection — log missing paths server-side only (never send to agent)
+  // Rejection — log details server-side only, never leak to the agent
   log(
     `Handshake failed for session ${shortSessionId}: ${missingRoots.length} of ${workspaceRoots.length} workspace folders not found in agent's list. Missing: ${missingRoots.join(", ")}`,
   );
@@ -87,7 +87,6 @@ export async function handleHandshake(
         type: "text",
         text: JSON.stringify({
           status: "rejected",
-          missing_count: missingRoots.length,
         }),
       },
     ],

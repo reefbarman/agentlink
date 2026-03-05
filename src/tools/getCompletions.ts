@@ -2,23 +2,34 @@ import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { resolveAndOpenDocument, toPosition, COMPLETION_KIND_NAMES } from "./languageFeatures.js";
+import {
+  resolveAndOpenDocument,
+  toPosition,
+  COMPLETION_KIND_NAMES,
+} from "./languageFeatures.js";
 
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+import { type ToolResult } from "../shared/types.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_DOC_LENGTH = 200;
 
-function extractDocumentation(doc: string | vscode.MarkdownString | undefined): string | undefined {
+function extractDocumentation(
+  doc: string | vscode.MarkdownString | undefined,
+): string | undefined {
   if (!doc) return undefined;
   const text = typeof doc === "string" ? doc : doc.value;
   if (!text) return undefined;
-  return text.length > MAX_DOC_LENGTH ? text.slice(0, MAX_DOC_LENGTH) + "..." : text;
+  return text.length > MAX_DOC_LENGTH
+    ? text.slice(0, MAX_DOC_LENGTH) + "..."
+    : text;
 }
 
 function extractInsertText(item: vscode.CompletionItem): string | undefined {
   if (!item.insertText) return undefined;
-  const text = typeof item.insertText === "string" ? item.insertText : item.insertText.value;
+  const text =
+    typeof item.insertText === "string"
+      ? item.insertText
+      : item.insertText.value;
   // Omit if same as label
   const label = typeof item.label === "string" ? item.label : item.label.label;
   return text === label ? undefined : text;
@@ -31,19 +42,35 @@ export async function handleGetCompletions(
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { uri } = await resolveAndOpenDocument(params.path, approvalManager, approvalPanel, sessionId);
+    const { uri } = await resolveAndOpenDocument(
+      params.path,
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
     const position = toPosition(params.line, params.column);
     const limit = params.limit ?? DEFAULT_LIMIT;
 
-    const completionList = await vscode.commands.executeCommand<vscode.CompletionList>(
-      "vscode.executeCompletionItemProvider",
-      uri,
-      position,
-    );
+    const completionList =
+      await vscode.commands.executeCommand<vscode.CompletionList>(
+        "vscode.executeCompletionItemProvider",
+        uri,
+        position,
+      );
 
     if (!completionList || completionList.items.length === 0) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ is_incomplete: false, total_items: 0, showing: 0, items: [] }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              is_incomplete: false,
+              total_items: 0,
+              showing: 0,
+              items: [],
+            }),
+          },
+        ],
       };
     }
 
@@ -51,9 +78,8 @@ export async function handleGetCompletions(
     const capped = completionList.items.slice(0, limit);
 
     const items = capped.map((item) => {
-      const label = typeof item.label === "string"
-        ? item.label
-        : item.label.label;
+      const label =
+        typeof item.label === "string" ? item.label : item.label.label;
 
       const result: Record<string, unknown> = { label };
 
@@ -72,15 +98,17 @@ export async function handleGetCompletions(
     });
 
     return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          is_incomplete: completionList.isIncomplete,
-          total_items: total,
-          showing: capped.length,
-          items,
-        }),
-      }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            is_incomplete: completionList.isIncomplete,
+            total_items: total,
+            showing: capped.length,
+            items,
+          }),
+        },
+      ],
     };
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
@@ -88,7 +116,12 @@ export async function handleGetCompletions(
     }
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: JSON.stringify({ error: message, path: params.path }) }],
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: message, path: params.path }),
+        },
+      ],
     };
   }
 }
