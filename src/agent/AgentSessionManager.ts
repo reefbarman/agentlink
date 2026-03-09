@@ -297,6 +297,8 @@ export class AgentSessionManager {
     if (!session) return;
 
     const engine = this.getEngine();
+    session.status = "streaming";
+    this.onSessionsChanged?.();
 
     try {
       for await (const event of engine.condenseSession(session, false)) {
@@ -307,6 +309,9 @@ export class AgentSessionManager {
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : String(err);
       this.onEvent?.(session.id, { type: "condense_error", error });
+    } finally {
+      session.status = "idle";
+      this.onSessionsChanged?.();
     }
   }
 

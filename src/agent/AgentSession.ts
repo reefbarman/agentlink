@@ -237,10 +237,7 @@ export class AgentSession {
         if (Array.isArray(msg.content)) {
           return (
             msg.content
-              .filter(
-                (b): b is import("@anthropic-ai/sdk").TextBlock =>
-                  b.type === "text",
-              )
+              .filter((b): b is Anthropic.TextBlock => b.type === "text")
               .map((b) => b.text)
               .join("")
               .trim() || undefined

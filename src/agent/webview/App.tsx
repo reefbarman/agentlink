@@ -467,7 +467,10 @@ function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TODO_UPDATE":
-      return { ...state, todos: action.todos };
+      return {
+        ...state,
+        todos: Array.isArray(action.todos) ? action.todos : [],
+      };
 
     case "ERROR": {
       const all = ensureAssistant(state.messages);
@@ -505,10 +508,18 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, thinkingEnabled: !state.thinkingEnabled };
 
     case "SET_MODES":
-      return { ...state, modes: action.modes };
+      return {
+        ...state,
+        modes: Array.isArray(action.modes) ? action.modes : state.modes,
+      };
 
     case "SET_SLASH_COMMANDS":
-      return { ...state, slashCommands: action.commands };
+      return {
+        ...state,
+        slashCommands: Array.isArray(action.commands)
+          ? action.commands
+          : state.slashCommands,
+      };
 
     case "ENQUEUE_MESSAGE":
       return {
@@ -562,7 +573,9 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, questionRequest: null };
 
     case "CONDENSE_START": {
-      // Add a pending condense row — replaced with final stats when complete
+      // Add a pending condense row — replaced with final stats when complete.
+      // Set streaming: true so the input area queues messages during condense
+      // (prevents racing with message history changes).
       const tail = state.messages[state.messages.length - 1];
       const base =
         tail?.role === "assistant" && tail.blocks.length === 0 && !tail.error
@@ -570,6 +583,7 @@ function reducer(state: AppState, action: AppAction): AppState {
           : state.messages;
       return {
         ...state,
+        streaming: true,
         messages: [
           ...base,
           {

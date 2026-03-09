@@ -2008,6 +2008,7 @@ body {
     rgba(78, 201, 176, 0) 99%
   );
   min-width: 20px;
+  margin-left: 4px;
 }
 
 .checkpoint-row-actions {
@@ -2018,6 +2019,7 @@ body {
   transition: opacity 0.15s ease;
   position: relative;
   flex-shrink: 0;
+  margin-right: 8px;
 }
 
 .checkpoint-row-actions.visible {

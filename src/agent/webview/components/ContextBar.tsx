@@ -62,7 +62,8 @@ export function ContextBar({
         )}
       </div>
       <span class="context-bar-label">
-        {formatTokens(used)} / {formatTokens(maxContextWindow)}
+        {formatTokens(used)} / {formatTokens(maxContextWindow)} (
+        {Math.round(usedPct)}%)
       </span>
     </div>
   );

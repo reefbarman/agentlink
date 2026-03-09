@@ -1101,7 +1101,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSlashCommand": {
         const name = msg.name as string;
         if (name === "condense") {
+          const fg = this.sessionManager?.getForegroundSession();
           await this.sessionManager?.condenseCurrentSession();
+          // Manual condense doesn't go through run() — emit agentDone so the
+          // webview drains any messages queued during the condense operation.
+          if (fg) {
+            this.postMessage({
+              type: "agentDone",
+              sessionId: fg.id,
+              totalInputTokens: fg.totalInputTokens,
+              totalOutputTokens: fg.totalOutputTokens,
+              totalCacheReadTokens: fg.totalCacheReadTokens,
+              totalCacheCreationTokens: fg.totalCacheCreationTokens,
+            });
+          }
         } else if (name === "mcp") {
           const scope =
             (msg.args as string) === "global" ? "global" : "project";

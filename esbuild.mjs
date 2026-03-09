@@ -37,6 +37,7 @@ const webviewBase = {
   platform: "browser",
   target: "es2022",
   sourcemap: true,
+  keepNames: true,
   minify: true,
   jsx: "automatic",
   jsxImportSource: "preact",

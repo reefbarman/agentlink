@@ -359,6 +359,18 @@ export class AgentEngine {
           if (usedFraction >= effectiveThreshold) {
             yield* this.condenseSession(session, true);
             if (signal.aborted) break;
+            // Check for messages queued during condense — inject them now
+            // so they're included in the next API call rather than waiting
+            // until the next tool batch.
+            const interjection = session.consumePendingInterjection();
+            if (interjection) {
+              session.addUserMessage(interjection.text);
+              yield {
+                type: "user_interjection" as const,
+                text: interjection.text,
+                queueId: interjection.queueId,
+              };
+            }
           }
         }
 

@@ -95,7 +95,7 @@ export function handleTodoWrite(input: TodoToolInput): {
   content: Anthropic.ToolResultBlockParam["content"];
   todos: TodoItem[];
 } {
-  const { todos } = input;
+  const todos = Array.isArray(input.todos) ? input.todos : [];
 
   const counts = countTodos(todos);
   const summary = `Updated: ${counts.completed}/${counts.total} complete, ${counts.inProgress} in progress, ${counts.pending} pending`;
