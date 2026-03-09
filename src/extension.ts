@@ -32,6 +32,11 @@ import {
 } from "./setup.js";
 import { setSecretStorage } from "./services/semanticSearch.js";
 import { IndexerManager } from "./indexer/IndexerManager.js";
+import { ChatViewProvider } from "./agent/ChatViewProvider.js";
+import { AgentSessionManager } from "./agent/AgentSessionManager.js";
+import { SessionStore } from "./agent/SessionStore.js";
+import type { AgentConfig } from "./agent/types.js";
+import { AgentCodeActionProvider } from "./agent/AgentCodeActionProvider.js";
 
 export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 
@@ -43,9 +48,12 @@ let sidebarProvider: SidebarProvider;
 let approvalManager: ApprovalManager;
 let approvalPanel: ApprovalPanelProvider;
 let toolCallTracker: ToolCallTracker;
+let builtinApprovalPanel: ApprovalPanelProvider;
 let activePort: number | null = null;
 let activeAuthToken: string | undefined;
 let indexerManager: IndexerManager | null = null;
+let chatViewProvider: ChatViewProvider;
+let agentSessionManager: AgentSessionManager;
 
 function log(message: string): void {
   const timestamp = new Date().toISOString();
@@ -289,7 +297,8 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 
     httpServer!.listen(port, "127.0.0.1", () => {
       const addr = httpServer!.address();
-      const actualPort = typeof addr === "object" && addr ? addr.port : (port ?? 0);
+      const actualPort =
+        typeof addr === "object" && addr ? addr.port : (port ?? 0);
       onListening(actualPort);
       resolve();
     });
@@ -490,6 +499,109 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   );
 
+  // Agent chat view
+  const agentConfig: AgentConfig = {
+    model: getConfig<string>("agentModel") ?? "claude-sonnet-4-6",
+    maxTokens: getConfig<number>("agentMaxTokens") ?? 8192,
+    thinkingBudget: getConfig<number>("thinkingBudget") ?? 10000,
+    showThinking: getConfig<boolean>("showThinking") ?? true,
+    autoCondense: getConfig<boolean>("autoCondense") ?? true,
+    autoCondenseThreshold: getConfig<number>("autoCondenseThreshold") ?? 0.9,
+  };
+
+  const workspaceCwd =
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+  const isDevMode = context.extensionMode === vscode.ExtensionMode.Development;
+  chatViewProvider = new ChatViewProvider(
+    context.extensionUri,
+    context.globalState,
+  );
+  const sessionStore = new SessionStore(workspaceCwd);
+  agentSessionManager = new AgentSessionManager(
+    agentConfig,
+    workspaceCwd,
+    undefined,
+    isDevMode,
+    sessionStore,
+    log,
+  );
+
+  // Initialize modes, slash commands, MCP hub, and file watchers
+  chatViewProvider.initialize(workspaceCwd).catch((err) => {
+    log(`[agent] ChatViewProvider.initialize failed: ${err}`);
+  });
+
+  // Dedicated approval panel for the built-in agent — routes rich approval cards
+  // (CommandCard, WriteCard, etc.) inline into the chat webview instead of the
+  // separate approval panel (which is reserved for external MCP agents like Claude Code).
+  builtinApprovalPanel = new ApprovalPanelProvider(
+    context.extensionUri,
+    statusBarManager,
+  );
+  context.subscriptions.push(builtinApprovalPanel);
+  builtinApprovalPanel.onForwardApproval = (req, respond) =>
+    chatViewProvider.forwardApproval(req, respond);
+  builtinApprovalPanel.onForwardApprovalIdle = () =>
+    chatViewProvider.sendApprovalIdle();
+
+  // Wire up tool dispatch context (mcpHub provided by ChatViewProvider after initialize)
+  agentSessionManager.setToolContext({
+    approvalManager,
+    approvalPanel: builtinApprovalPanel,
+    sessionId: "agent", // synthetic session ID for the built-in agent
+    extensionUri: context.extensionUri,
+    mcpHub: chatViewProvider.getMcpHub(),
+    onModeSwitch: (mode, reason) =>
+      chatViewProvider.handleModeSwitch(mode, reason),
+    onApprovalRequest: (request) => chatViewProvider.requestApproval(request),
+    onQuestion: (questions, sessionId) =>
+      chatViewProvider.requestQuestion(questions, sessionId),
+    onFileRead: (filePath) => {
+      agentSessionManager.getForegroundSession()?.trackFileRead(filePath);
+    },
+    onSpawnBackground: (task, message) =>
+      agentSessionManager.spawnBackground(task, message),
+    onGetBackgroundStatus: (sessionId) =>
+      agentSessionManager.getBackgroundStatus(sessionId),
+    onGetBackgroundResult: (sessionId) =>
+      agentSessionManager.waitForBackground(sessionId),
+  });
+
+  chatViewProvider.setApprovalManager(approvalManager);
+  chatViewProvider.setSessionManager(agentSessionManager);
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      ChatViewProvider.viewType,
+      chatViewProvider,
+      { webviewOptions: { retainContextWhenHidden: true } },
+    ),
+  );
+
+  // Update agent config when settings change
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        e.affectsConfiguration("agentlink.agentModel") ||
+        e.affectsConfiguration("agentlink.agentMaxTokens") ||
+        e.affectsConfiguration("agentlink.thinkingBudget") ||
+        e.affectsConfiguration("agentlink.showThinking") ||
+        e.affectsConfiguration("agentlink.autoCondense") ||
+        e.affectsConfiguration("agentlink.autoCondenseThreshold")
+      ) {
+        agentSessionManager.updateConfig({
+          model: getConfig<string>("agentModel") ?? "claude-sonnet-4-6",
+          maxTokens: getConfig<number>("agentMaxTokens") ?? 8192,
+          thinkingBudget: getConfig<number>("thinkingBudget") ?? 10000,
+          showThinking: getConfig<boolean>("showThinking") ?? true,
+          autoCondense: getConfig<boolean>("autoCondense") ?? true,
+          autoCondenseThreshold:
+            getConfig<number>("autoCondenseThreshold") ?? 0.9,
+        });
+      }
+    }),
+  );
+
   // Commands
   context.subscriptions.push(
     vscode.commands.registerCommand("agentlink.acceptDiff", () =>
@@ -584,6 +696,76 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("agentlink.stopServer", () => stopServer()),
     vscode.commands.registerCommand("agentlink.showStatus", () => {
       vscode.commands.executeCommand("agentLink.statusView.focus");
+    }),
+  );
+
+  // ── Code Actions & Context Menu Commands ──
+
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider(
+      { scheme: "file" },
+      new AgentCodeActionProvider(),
+      {
+        providedCodeActionKinds:
+          AgentCodeActionProvider.providedCodeActionKinds,
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "agentlink.fixWithAgent",
+      (
+        uri: vscode.Uri,
+        range: vscode.Range,
+        diagnostics: vscode.Diagnostic[],
+      ) => {
+        const relPath = vscode.workspace.asRelativePath(uri);
+        const diagText = diagnostics
+          .map(
+            (d) =>
+              `[${d.source ?? ""}] ${d.message} (line ${d.range.start.line + 1})`,
+          )
+          .join("\n");
+        const prompt = `Fix the following issue(s) in \`${relPath}\`:\n\n${diagText}`;
+        chatViewProvider.injectPrompt(prompt, [relPath]);
+      },
+    ),
+    vscode.commands.registerCommand(
+      "agentlink.explainWithAgent",
+      (uri?: vscode.Uri, range?: vscode.Range) => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) return;
+        // When invoked from context menu, no args are passed — use editor selection
+        const targetUri = uri ?? editor.document.uri;
+        const targetRange = range ?? editor.selection;
+        if (targetRange.isEmpty) return;
+        const selection = editor.document.getText(targetRange);
+        const relPath = vscode.workspace.asRelativePath(targetUri);
+        const startLine = targetRange.start.line + 1;
+        const endLine = targetRange.end.line + 1;
+        const prompt = `Explain this code from \`${relPath}\` (lines ${startLine}-${endLine}):\n\n\`\`\`\n${selection}\n\`\`\``;
+        chatViewProvider.injectPrompt(prompt, [], true);
+      },
+    ),
+    vscode.commands.registerCommand(
+      "agentlink.addFileToChat",
+      (uri?: vscode.Uri) => {
+        const targetUri = uri ?? vscode.window.activeTextEditor?.document.uri;
+        if (!targetUri) return;
+        const relPath = vscode.workspace.asRelativePath(targetUri);
+        chatViewProvider.injectAttachment(relPath);
+      },
+    ),
+    vscode.commands.registerCommand("agentlink.addSelectionToChat", () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.selection.isEmpty) return;
+      const selection = editor.document.getText(editor.selection);
+      const relPath = vscode.workspace.asRelativePath(editor.document.uri);
+      const startLine = editor.selection.start.line + 1;
+      const endLine = editor.selection.end.line + 1;
+      const context = `From \`${relPath}\` (lines ${startLine}-${endLine}):\n\`\`\`\n${selection}\n\`\`\``;
+      chatViewProvider.injectContext(context);
     }),
   );
 

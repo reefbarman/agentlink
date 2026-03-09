@@ -140,7 +140,15 @@ describe("parseSearchReplaceBlocks", () => {
       "<<<<<<< SEARCH  \nhello\n======= DIVIDER =======  \nworld\n>>>>>>> REPLACE  ";
     const { blocks } = parseSearchReplaceBlocks(input);
     expect(blocks).toHaveLength(1);
+  });
+
+  it("accepts trailing '>' on SEARCH marker (<<<<<<< SEARCH>)", () => {
+    const input =
+      "<<<<<<< SEARCH>\nhello\n======= DIVIDER =======\nworld\n>>>>>>> REPLACE";
+    const { blocks } = parseSearchReplaceBlocks(input);
+    expect(blocks).toHaveLength(1);
     expect(blocks[0].search).toBe("hello");
+    expect(blocks[0].replace).toBe("world");
   });
 });
 
@@ -328,11 +336,11 @@ describe("applyBlocks", () => {
   });
 
   it("matches with 2-space tab rendering", () => {
-    const content = "func main() {\n\tfmt.Println(\"hello\")\n}";
+    const content = 'func main() {\n\tfmt.Println("hello")\n}';
     const { result, failedBlocks } = applyBlocks(content, [
       {
-        search: "  fmt.Println(\"hello\")",
-        replace: "  fmt.Println(\"goodbye\")",
+        search: '  fmt.Println("hello")',
+        replace: '  fmt.Println("goodbye")',
         index: 0,
       },
     ]);
@@ -341,11 +349,11 @@ describe("applyBlocks", () => {
   });
 
   it("matches with 8-space tab rendering", () => {
-    const content = "func main() {\n\tfmt.Println(\"hello\")\n}";
+    const content = 'func main() {\n\tfmt.Println("hello")\n}';
     const { result, failedBlocks } = applyBlocks(content, [
       {
-        search: "        fmt.Println(\"hello\")",
-        replace: "        fmt.Println(\"goodbye\")",
+        search: '        fmt.Println("hello")',
+        replace: '        fmt.Println("goodbye")',
         index: 0,
       },
     ]);
@@ -358,10 +366,9 @@ describe("applyBlocks", () => {
       "func foo() {\n\tif true {\n\t\tif bar {\n\t\t\tfmt.Println()\n\t\t}\n\t}\n}";
     const { result, failedBlocks } = applyBlocks(content, [
       {
-        search:
-          "        if bar {\n            fmt.Println()\n        }",
+        search: "        if bar {\n            fmt.Println()\n        }",
         replace:
-          "        if bar {\n            fmt.Println(\"changed\")\n        }",
+          '        if bar {\n            fmt.Println("changed")\n        }',
         index: 0,
       },
     ]);
@@ -394,7 +401,9 @@ describe("normalizeForComparison", () => {
   it("collapses mid-line whitespace to single space", () => {
     expect(normalizeForComparison("hello\tworld")).toBe("hello world");
     expect(normalizeForComparison("hello    world")).toBe("hello world");
-    expect(normalizeForComparison("type\tFoo\tstruct {")).toBe("type Foo struct {");
+    expect(normalizeForComparison("type\tFoo\tstruct {")).toBe(
+      "type Foo struct {",
+    );
   });
 
   it("handles empty and whitespace-only lines", () => {
@@ -598,11 +607,29 @@ world
     expect(isUnifiedDiff("just some text")).toBe(false);
   });
 
-  it("rejects partial unified diff (missing +++ header)", () => {
+  it("detects abbreviated unified diff (only @@ hunk headers, no --- / +++ file headers)", () => {
+    const diff = `@@ -121,7 +121,7 @@
+   private webviewReady = false;
+-  private mcpHub: McpClientHub | undefined;
++  private mcpHub: McpClientHub | undefined;`;
+    expect(isUnifiedDiff(diff)).toBe(true);
+  });
+
+  it("detects abbreviated unified diff with function context in header", () => {
+    const diff = `@@ -717,6 +717,29 @@ func stripDescriptiveFields(node *yaml.Node) {
+ \t}
+ }
+ 
++// stripExtensions removes all extension keys`;
+    expect(isUnifiedDiff(diff)).toBe(true);
+  });
+
+  it("accepts partial unified diff (--- header present but +++ missing)", () => {
+    // Previously rejected, but now @@ alone is sufficient
     const diff = `--- a/file.ts
 @@ -1,3 +1,3 @@
  context`;
-    expect(isUnifiedDiff(diff)).toBe(false);
+    expect(isUnifiedDiff(diff)).toBe(true);
   });
 });
 

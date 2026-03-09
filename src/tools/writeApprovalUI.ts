@@ -1,10 +1,17 @@
 import * as vscode from "vscode";
 
-import type { ApprovalManager, PathRule } from "../approvals/ApprovalManager.js";
+import type {
+  ApprovalManager,
+  PathRule,
+} from "../approvals/ApprovalManager.js";
 import type { WriteApprovalResponse } from "../approvals/ApprovalPanelProvider.js";
 import type { DiffDecision } from "../integrations/DiffViewProvider.js";
 
-export type WriteApprovalScopeChoice = "this-file" | "pattern" | "all-files" | null;
+export type WriteApprovalScopeChoice =
+  | "this-file"
+  | "pattern"
+  | "all-files"
+  | null;
 export type RuleScope = "session" | "project" | "global";
 
 /**
@@ -12,10 +19,14 @@ export type RuleScope = "session" | "project" | "global";
  */
 export function decisionToScope(decision: DiffDecision): RuleScope | null {
   switch (decision) {
-    case "accept-session": return "session";
-    case "accept-project": return "project";
-    case "accept-always": return "global";
-    default: return null;
+    case "accept-session":
+      return "session";
+    case "accept-project":
+      return "project";
+    case "accept-always":
+      return "global";
+    default:
+      return null;
   }
 }
 
@@ -32,10 +43,24 @@ export function saveWriteTrustRules(opts: {
   relPath: string;
   inWorkspace: boolean;
 }): void {
-  const { panelResponse, approvalManager, sessionId, scope, relPath, inWorkspace } = opts;
+  const {
+    panelResponse,
+    approvalManager,
+    sessionId,
+    scope,
+    relPath,
+    inWorkspace,
+  } = opts;
 
   if (panelResponse?.trustScope) {
-    applyInlineTrustScope(panelResponse, approvalManager, sessionId, scope, relPath, inWorkspace);
+    applyInlineTrustScope(
+      panelResponse,
+      approvalManager,
+      sessionId,
+      scope,
+      relPath,
+      inWorkspace,
+    );
   }
 }
 
@@ -52,15 +77,22 @@ export function applyInlineTrustScope(
   inWorkspace = true,
 ): void {
   if (panelResponse.trustScope === "all-files") {
-    approvalManager.setWriteApproval(sessionId, scope);
+    approvalManager.setAgentWriteApproval(sessionId, scope);
   } else if (panelResponse.trustScope === "this-file") {
-    approvalManager.addWriteRule(sessionId, { pattern: relPath, mode: "exact" }, scope);
+    approvalManager.addWriteRule(
+      sessionId,
+      { pattern: relPath, mode: "exact" },
+      scope,
+    );
   } else if (
     panelResponse.trustScope === "pattern" &&
     panelResponse.rulePattern &&
     panelResponse.ruleMode
   ) {
-    const rule = { pattern: panelResponse.rulePattern, mode: panelResponse.ruleMode };
+    const rule = {
+      pattern: panelResponse.rulePattern,
+      mode: panelResponse.ruleMode,
+    };
     approvalManager.addWriteRule(sessionId, rule, scope);
     if (!inWorkspace) {
       approvalManager.addPathRule(sessionId, rule, scope);
@@ -72,8 +104,12 @@ export function applyInlineTrustScope(
  * QuickPick asking the user what scope they want for write auto-approval.
  * Returns null if the user dismisses the dialog.
  */
-export async function showWriteApprovalScopeChoice(relPath: string): Promise<WriteApprovalScopeChoice> {
-  const items: Array<vscode.QuickPickItem & { choice: WriteApprovalScopeChoice }> = [
+export async function showWriteApprovalScopeChoice(
+  relPath: string,
+): Promise<WriteApprovalScopeChoice> {
+  const items: Array<
+    vscode.QuickPickItem & { choice: WriteApprovalScopeChoice }
+  > = [
     {
       label: "$(file) This File Only",
       description: relPath,
@@ -104,9 +140,13 @@ export async function showWriteApprovalScopeChoice(relPath: string): Promise<Wri
  * Pattern editor for write rules — the file path is pre-filled in the input field,
  * and the user picks a match mode. Mirrors showPatternEditor from executeCommand.ts.
  */
-export function showWritePatternEditor(relPath: string): Promise<PathRule | null> {
+export function showWritePatternEditor(
+  relPath: string,
+): Promise<PathRule | null> {
   return new Promise((resolve) => {
-    const qp = vscode.window.createQuickPick<vscode.QuickPickItem & { mode: PathRule["mode"] }>();
+    const qp = vscode.window.createQuickPick<
+      vscode.QuickPickItem & { mode: PathRule["mode"] }
+    >();
     qp.title = "Edit pattern, then pick match mode";
     qp.placeholder = "Edit the path above → then select how to match it";
     qp.value = relPath;

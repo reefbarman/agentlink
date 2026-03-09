@@ -329,8 +329,14 @@ export async function handleReadFile(
       params.path,
     );
 
-    // Outside-workspace gate
-    if (!inWorkspace && !approvalManager.isPathTrusted(sessionId, filePath)) {
+    // Outside-workspace gate — agentlink tmp artifacts (truncated tool results)
+    // are always readable without approval since we wrote them ourselves.
+    const isTmpArtifact = filePath.startsWith("/tmp/agentlink-results/");
+    if (
+      !inWorkspace &&
+      !isTmpArtifact &&
+      !approvalManager.isPathTrusted(sessionId, filePath)
+    ) {
       const { approved, reason } = await approveOutsideWorkspaceAccess(
         filePath,
         approvalManager,

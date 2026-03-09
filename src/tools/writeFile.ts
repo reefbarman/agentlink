@@ -12,13 +12,14 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
-import { type ToolResult } from "../shared/types.js";
+import { type ToolResult, type OnApprovalRequest } from "../shared/types.js";
 
 export async function handleWriteFile(
   params: { path: string; content: string },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  onApprovalRequest?: OnApprovalRequest,
 ): Promise<ToolResult> {
   try {
     const { absolutePath: filePath, inWorkspace } = resolveAndValidatePath(
@@ -42,7 +43,7 @@ export async function handleWriteFile(
     const canAutoApprove =
       masterBypass ||
       (inWorkspace
-        ? approvalManager.isWriteApproved(sessionId, filePath)
+        ? approvalManager.isAgentWriteApproved(sessionId, filePath)
         : approvalManager.isFileWriteApproved(sessionId, filePath));
 
     if (canAutoApprove) {
@@ -115,7 +116,10 @@ export async function handleWriteFile(
       await diffView.open(filePath, relPath, params.content, {
         outsideWorkspace: !inWorkspace,
       });
-      const decision = await diffView.waitForUserDecision(approvalPanel);
+      const decision = await diffView.waitForUserDecision(
+        approvalPanel,
+        onApprovalRequest,
+      );
 
       if (decision === "reject") {
         return await diffView.revertChanges(

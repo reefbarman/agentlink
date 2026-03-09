@@ -16,7 +16,7 @@ import type {
   FindReplacePreviewData,
 } from "../findReplace/webview/types.js";
 
-import { type ToolResult } from "../shared/types.js";
+import { type ToolResult, type OnApprovalRequest } from "../shared/types.js";
 
 const CONTEXT_LINES = 5;
 
@@ -43,6 +43,7 @@ export async function handleFindAndReplace(
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
   extensionUri: vscode.Uri,
+  onApprovalRequest?: OnApprovalRequest,
 ): Promise<ToolResult> {
   let previewPanel: FindReplacePreviewPanel | undefined;
 
@@ -156,7 +157,10 @@ export async function handleFindAndReplace(
         const m = regexMatch;
         let newText = replaceStr;
         if (params.regex) {
-          newText = replaceStr.replace(/\$(\d+)/g, (_, n) => m[parseInt(n, 10)] ?? "");
+          newText = replaceStr.replace(
+            /\$(\d+)/g,
+            (_, n) => m[parseInt(n, 10)] ?? "",
+          );
         }
 
         const matchId = `${fileIdx}:${matchIdx}`;
@@ -238,7 +242,7 @@ export async function handleFindAndReplace(
       .get<boolean>("masterBypass", false);
 
     const canAutoApprove =
-      masterBypass || approvalManager.isWriteApproved(sessionId);
+      masterBypass || approvalManager.isAgentWriteApproved(sessionId);
     let followUp: string | undefined;
     let acceptedIds: Set<string> | undefined;
 
@@ -254,52 +258,89 @@ export async function handleFindAndReplace(
       };
       previewPanel.show(previewData);
 
-      // Enqueue approval (shows summary in approval panel)
-      const { promise } = approvalPanel.enqueueRenameApproval(
-        findStr,
-        replaceStr,
-        filesPreview,
-        totalChanges,
-      );
-
-      const response = await promise;
-      followUp = response.followUp;
-
-      if (response.decision === "reject") {
+      if (onApprovalRequest) {
+        const filesDetail = filesPreview
+          .map(
+            (f) =>
+              `${f.path} (${f.changes} change${f.changes !== 1 ? "s" : ""})`,
+          )
+          .join("\n");
+        const decision = await onApprovalRequest({
+          kind: "rename",
+          title: `Replace \`${findStr}\` → \`${replaceStr}\`?`,
+          detail: `${totalChanges} match${totalChanges !== 1 ? "es" : ""} across ${filesPreview.length} file${filesPreview.length !== 1 ? "s" : ""}:\n${filesDetail}`,
+          choices: [
+            { label: "Accept all", value: "accept", isPrimary: true },
+            { label: "Reject", value: "reject", isDanger: true },
+          ],
+        });
+        if (decision === "reject") {
+          previewPanel.close();
+          previewPanel = undefined;
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "rejected_by_user",
+                  find: findStr,
+                  replace: replaceStr,
+                }),
+              },
+            ],
+          };
+        }
+        acceptedIds = previewPanel.getAcceptedMatchIds();
         previewPanel.close();
         previewPanel = undefined;
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "rejected",
-                find: findStr,
-                replace: replaceStr,
-                reason: response.rejectionReason,
-              }),
-            },
-          ],
-        };
-      }
-
-      // Read accepted matches from preview panel
-      acceptedIds = previewPanel.getAcceptedMatchIds();
-      previewPanel.close();
-      previewPanel = undefined;
-
-      // Save trust rules
-      const scope = decisionToScope(response.decision);
-      if (scope && response.trustScope) {
-        const repPath =
-          filesPreview.length > 0 ? filesPreview[0].path : "find-and-replace";
-        applyInlineTrustScope(
-          response,
-          approvalManager,
-          sessionId,
-          scope,
-          repPath,
+      } else {
+        // Enqueue approval (shows summary in approval panel)
+        const { promise } = approvalPanel.enqueueRenameApproval(
+          findStr,
+          replaceStr,
+          filesPreview,
+          totalChanges,
         );
+
+        const response = await promise;
+        followUp = response.followUp;
+
+        if (response.decision === "reject") {
+          previewPanel.close();
+          previewPanel = undefined;
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "rejected_by_user",
+                  find: findStr,
+                  replace: replaceStr,
+                  reason: response.rejectionReason,
+                }),
+              },
+            ],
+          };
+        }
+
+        // Read accepted matches from preview panel
+        acceptedIds = previewPanel.getAcceptedMatchIds();
+        previewPanel.close();
+        previewPanel = undefined;
+
+        // Save trust rules
+        const scope = decisionToScope(response.decision);
+        if (scope && response.trustScope) {
+          const repPath =
+            filesPreview.length > 0 ? filesPreview[0].path : "find-and-replace";
+          applyInlineTrustScope(
+            response,
+            approvalManager,
+            sessionId,
+            scope,
+            repPath,
+          );
+        }
       }
     }
 

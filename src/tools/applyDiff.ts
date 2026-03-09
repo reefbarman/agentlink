@@ -12,7 +12,7 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
-import { type ToolResult } from "../shared/types.js";
+import { type ToolResult, type OnApprovalRequest } from "../shared/types.js";
 
 interface SearchReplaceBlock {
   search: string;
@@ -33,11 +33,10 @@ const LEGACY_DIVIDER = "=======";
  * Detect whether a diff string is in unified diff format (--- / +++ / @@ headers).
  */
 export function isUnifiedDiff(diff: string): boolean {
-  return (
-    /^---\s+\S/m.test(diff) &&
-    /^\+\+\+\s+\S/m.test(diff) &&
-    /^@@\s+[+-]/m.test(diff)
-  );
+  // Detect unified diff by the presence of hunk headers (@@ -N,N +N,N @@).
+  // File headers (--- / +++) are optional — many tools emit abbreviated diffs
+  // with only hunk headers, so we don't require them.
+  return /^@@\s+[+-]/m.test(diff);
 }
 
 /**
@@ -141,8 +140,9 @@ export function parseSearchReplaceBlocks(diff: string): ParseResult {
   const useNewDelimiter = lines.some((l) => l.trimEnd() === DIVIDER_MARKER);
 
   while (i < lines.length) {
-    // Look for <<<<<<< SEARCH — compare without leading/trailing whitespace
-    if (lines[i].trimEnd() === SEARCH_MARKER) {
+    // Look for <<<<<<< SEARCH — compare without leading/trailing whitespace.
+    // Also accept trailing characters (e.g. "<<<<<<< SEARCH>" with a stray ">").
+    if (lines[i].trimEnd().startsWith(SEARCH_MARKER)) {
       i++;
       const searchLines: string[] = [];
       const replaceLines: string[] = [];
@@ -387,6 +387,7 @@ export async function handleApplyDiff(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  onApprovalRequest?: OnApprovalRequest,
 ): Promise<ToolResult> {
   try {
     const { absolutePath: filePath, inWorkspace } = resolveAndValidatePath(
@@ -514,7 +515,7 @@ export async function handleApplyDiff(
     const canAutoApprove =
       masterBypass ||
       (inWorkspace
-        ? approvalManager.isWriteApproved(sessionId, filePath)
+        ? approvalManager.isAgentWriteApproved(sessionId, filePath)
         : approvalManager.isFileWriteApproved(sessionId, filePath));
 
     if (canAutoApprove) {
@@ -581,7 +582,10 @@ export async function handleApplyDiff(
       await diffView.open(filePath, relPath, newContent, {
         outsideWorkspace: !inWorkspace,
       });
-      const decision = await diffView.waitForUserDecision(approvalPanel);
+      const decision = await diffView.waitForUserDecision(
+        approvalPanel,
+        onApprovalRequest,
+      );
 
       if (decision === "reject") {
         return await diffView.revertChanges(

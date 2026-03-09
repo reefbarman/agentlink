@@ -89,8 +89,9 @@ export function CommandCard({
       id: request.id,
       decision: isEdited ? "edit" : "run-once",
       ...(isEdited && { editedCommand: command }),
+      followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [request.id, isEdited, command, submit]);
+  }, [request.id, isEdited, command, submit, followUpRef]);
 
   const handleSaveAndRun = useCallback(() => {
     const activeRules = rules.filter((r) => r.scope !== "skip");
@@ -99,8 +100,9 @@ export function CommandCard({
       decision: "run-once",
       rules: activeRules.length > 0 ? rules : undefined,
       ...(isEdited && { editedCommand: command }),
+      followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [request.id, rules, isEdited, command, submit]);
+  }, [request.id, rules, isEdited, command, submit, followUpRef]);
 
   const handleReject = useCallback(
     (reason?: string) => {

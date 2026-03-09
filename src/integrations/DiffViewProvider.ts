@@ -8,6 +8,7 @@ import type {
   ApprovalPanelProvider,
   WriteApprovalResponse,
 } from "../approvals/ApprovalPanelProvider.js";
+import type { OnApprovalRequest } from "../shared/types.js";
 
 export type DiffDecision =
   | "accept"
@@ -119,7 +120,7 @@ export async function withFileLock<T>(
 }
 
 export interface DiffResult {
-  status: "accepted" | "rejected";
+  status: "accepted" | "rejected" | "rejected_by_user";
   path: string;
   operation?: "created" | "modified";
   user_edits?: string;
@@ -277,6 +278,7 @@ export class DiffViewProvider {
 
   async waitForUserDecision(
     approvalPanel: ApprovalPanelProvider,
+    onApprovalRequest?: OnApprovalRequest,
   ): Promise<DiffDecision> {
     // Show toolbar buttons via context key
     await vscode.commands.executeCommand(
@@ -329,31 +331,67 @@ export class DiffViewProvider {
           },
         );
 
-        // Enqueue write approval in the panel
-        const { promise: panelPromise, id: approvalId } =
-          approvalPanel.enqueueWriteApproval(this.relPath!, {
-            operation: this.editType!,
-            outsideWorkspace: this.outsideWorkspace,
+        if (onApprovalRequest) {
+          // Inline chat approval — show rich WriteCard in the webview
+          const operation = this.editType === "create" ? "Create" : "Modify";
+          onApprovalRequest({
+            kind: "write",
+            title: `${operation} \`${this.relPath}\`?`,
+            choices: [],
+          }).then((raw) => {
+            if (resolved) return;
+            // Extract decision from the rich response
+            const decision = typeof raw === "string" ? raw : raw.decision;
+            const followUp = typeof raw === "string" ? undefined : raw.followUp;
+            const rejectionReason =
+              typeof raw === "string" ? undefined : raw.rejectionReason;
+            // Store rich response for saveChanges() / revertChanges()
+            this.writeApprovalResponse = {
+              decision: decision as WriteApprovalResponse["decision"],
+              followUp,
+              rejectionReason,
+              // Map trust scopes from the WriteCard decision
+              ...(typeof raw !== "string" && {
+                trustScope: (raw as Record<string, unknown>)
+                  .trustScope as WriteApprovalResponse["trustScope"],
+                rulePattern: (raw as Record<string, unknown>).rulePattern as
+                  | string
+                  | undefined,
+                ruleMode: (raw as Record<string, unknown>)
+                  .ruleMode as WriteApprovalResponse["ruleMode"],
+              }),
+            };
+            finish((decision as DiffDecision) ?? "reject");
           });
+          // disposeUI is a no-op since there's no panel entry to cancel
+          disposeUI = () => undefined;
+        } else {
+          // Enqueue write approval in the panel
+          const { promise: panelPromise, id: approvalId } =
+            approvalPanel.enqueueWriteApproval(this.relPath!, {
+              operation: this.editType!,
+              outsideWorkspace: this.outsideWorkspace,
+            });
 
-        // If title bar or editor close resolves first, cancel the panel entry
-        disposeUI = () => {
-          approvalPanel.cancelApproval(approvalId);
-        };
-
-        // When panel resolves, store the rich response and map to DiffDecision
-        panelPromise.then((response) => {
-          if (resolved) return; // title bar or editor close already resolved
-          this.writeApprovalResponse = response;
-          const decisionMap: Record<string, DiffDecision> = {
-            accept: "accept",
-            reject: "reject",
-            "accept-session": "accept-session",
-            "accept-project": "accept-project",
-            "accept-always": "accept-always",
+          // If title bar or editor close resolves first, cancel the panel entry
+          disposeUI = () => {
+            approvalPanel.cancelApproval(approvalId);
           };
-          finish(decisionMap[response.decision] ?? "reject");
-        });
+
+          // When panel resolves, store the rich response and map to DiffDecision
+          panelPromise.then((response) => {
+            if (resolved) return; // title bar or editor close already resolved
+            this.writeApprovalResponse = response;
+            const decisionMap: Record<string, DiffDecision> = {
+              accept: "accept",
+              reject: "reject",
+              "accept-session": "accept-session",
+              "accept-project": "accept-project",
+              "accept-always": "accept-always",
+            };
+            finish(decisionMap[response.decision] ?? "reject");
+          });
+        }
       });
     } finally {
       disposeUI?.();
@@ -493,7 +531,7 @@ export class DiffViewProvider {
     }
 
     return {
-      status: "rejected",
+      status: "rejected_by_user",
       path: this.relPath,
       ...(reason && { reason }),
     };

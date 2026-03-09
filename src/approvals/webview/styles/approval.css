@@ -541,3 +541,49 @@ body {
   resize: vertical;
   min-height: 36px;
 }
+
+/* ── MCP card ────────────────────────────────────────────────────────── */
+
+.mcp-secondary-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.mcp-choice-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+
+/* ── Mode switch card ────────────────────────────────────────────────── */
+
+.mode-switch-card {
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.mode-switch-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.mode-switch-header .codicon {
+  font-size: 16px;
+  color: var(--vscode-terminal-ansiYellow, #e5c07b);
+}
+.mode-switch-title {
+  color: var(--vscode-foreground);
+}
+.mode-switch-reason {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.4;
+}
+.mode-switch-reason-label {
+  font-weight: 600;
+}

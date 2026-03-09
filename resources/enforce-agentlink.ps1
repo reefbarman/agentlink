@@ -34,7 +34,7 @@ if ($toolName -in $fileTools) {
             }
         }
     }
-    if ($planPath -and $planPath -match '[/\\]plans[/\\][^/\\]*\.md$') {
+    if ($planPath -and $planPath -match '(^|[/\\])plans[/\\][^/\\]*\.md$') {
         exit 0
     }
 }

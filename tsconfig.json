@@ -17,5 +17,12 @@
     "resolveJsonModule": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "Roo-Code"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "Roo-Code",
+    "src/agent/webview",
+    "src/approvals/webview",
+    "src/sidebar/webview"
+  ]
 }

@@ -1,6 +1,10 @@
 import * as vscode from "vscode";
 import { randomUUID } from "crypto";
-import type { SubCommandEntry, ApprovalRequest } from "./webview/types.js";
+import type {
+  SubCommandEntry,
+  ApprovalRequest,
+  DecisionMessage,
+} from "./webview/types.js";
 import type { StatusBarManager } from "../util/StatusBarManager.js";
 
 // ── Response types ──────────────────────────────────────────────────────────
@@ -118,6 +122,15 @@ export class ApprovalPanelProvider
 
   // Track whether the Preact app has signalled it's ready
   private webviewReady = false;
+
+  /** When set, route approvals to this callback instead of showing the approval webview. */
+  public onForwardApproval?: (
+    request: ApprovalRequest,
+    respond: (msg: DecisionMessage) => void,
+  ) => void;
+
+  /** Called when the approval queue empties, if onForwardApproval is set. */
+  public onForwardApprovalIdle?: () => void;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -280,6 +293,29 @@ export class ApprovalPanelProvider
     if (!this.currentEntry) return;
 
     const { request } = this.currentEntry;
+
+    // If a forwarding hook is set, delegate rendering to the caller (e.g. chat webview)
+    if (this.onForwardApproval) {
+      const queuePosition = 1;
+      const queueTotal = 1 + this.queue.length;
+      const msg: ApprovalRequest = {
+        kind: request.kind,
+        id: request.id,
+        command: request.command,
+        subCommands: request.subCommands,
+        filePath: request.filePath,
+        writeOperation: request.writeOperation,
+        outsideWorkspace: request.outsideWorkspace,
+        oldName: request.oldName,
+        newName: request.newName,
+        affectedFiles: request.affectedFiles,
+        totalChanges: request.totalChanges,
+        queuePosition,
+        queueTotal,
+      };
+      this.onForwardApproval(msg, (decision) => this.handleMessage(decision));
+      return;
+    }
 
     // Always show alert and focus window, even if webview isn't ready yet
     this.alertDisposable?.dispose();
@@ -460,6 +496,11 @@ export class ApprovalPanelProvider
     this.alertDisposable?.dispose();
     this.alertDisposable = undefined;
     this.statusBarManager.setPendingCount(0);
+
+    if (this.onForwardApproval) {
+      this.onForwardApprovalIdle?.();
+      return;
+    }
 
     const position = this.getPosition();
     if (position === "beside") {

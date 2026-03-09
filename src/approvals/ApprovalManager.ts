@@ -18,6 +18,7 @@ export type RuleScope = "session" | "project" | "global";
 
 interface SessionState {
   writeApproved: boolean;
+  agentWriteApproved: boolean;
   commandRules: CommandRule[];
   pathRules: PathRule[];
   writeRules: PathRule[];
@@ -34,6 +35,9 @@ export class ApprovalManager {
 
   // Sessions are now in-memory only (ephemeral, tied to MCP transport sessions)
   private sessions = new Map<string, SessionState>();
+
+  // Per-session MCP tool approvals: key is "sessionId:toolName" or "sessionId:server:*"
+  private mcpApprovals = new Set<string>();
   private configStoreListener: vscode.Disposable;
 
   constructor(
@@ -49,6 +53,27 @@ export class ApprovalManager {
     this.configStoreListener = configStore.onDidChange(() =>
       this._onDidChange.fire(),
     );
+  }
+
+  // --- MCP tool approvals (in-memory, session-scoped) ---
+
+  /** True if this tool (or its server) has been approved for this session. */
+  isMcpApproved(sessionId: string, toolName: string): boolean {
+    const server = toolName.split("__")[0];
+    return (
+      this.mcpApprovals.has(`${sessionId}:tool:${toolName}`) ||
+      this.mcpApprovals.has(`${sessionId}:server:${server}`)
+    );
+  }
+
+  /** Approve a single tool for the rest of this session. */
+  approveMcpTool(sessionId: string, toolName: string): void {
+    this.mcpApprovals.add(`${sessionId}:tool:${toolName}`);
+  }
+
+  /** Approve all tools from a server for the rest of this session. */
+  approveMcpServer(sessionId: string, serverName: string): void {
+    this.mcpApprovals.add(`${sessionId}:server:${serverName}`);
   }
 
   dispose(): void {
@@ -136,7 +161,7 @@ export class ApprovalManager {
     }
   }
 
-  // --- Write approval ---
+  // --- Write approval (MCP / sidebar path) ---
 
   isWriteApproved(sessionId: string, filePath?: string): boolean {
     // Global blanket approval
@@ -215,6 +240,88 @@ export class ApprovalManager {
     }
     const session = this.getSession(sessionId);
     if (session.writeApproved) {
+      return "session";
+    }
+    return "prompt";
+  }
+
+  // --- Agent write approval (independent from MCP/sidebar path) ---
+
+  isAgentWriteApproved(sessionId: string, filePath?: string): boolean {
+    // Global blanket approval
+    if (this.configStore.getGlobalConfig().agentWriteApproved) {
+      return true;
+    }
+    // Project blanket approval
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    if (projectConfig?.agentWriteApproved) {
+      return true;
+    }
+    // Session blanket approval
+    const session = this.getSession(sessionId);
+    if (session.agentWriteApproved) {
+      return true;
+    }
+    // File-level checks (only when filePath provided)
+    if (filePath) {
+      return this.isFileWriteApproved(sessionId, filePath);
+    }
+    return false;
+  }
+
+  setAgentWriteApproval(sessionId: string, scope: RuleScope): void {
+    if (scope === "global") {
+      this.configStore.updateGlobalConfig((c) => {
+        c.agentWriteApproved = true;
+      });
+    } else if (scope === "project") {
+      const folder = tryGetFirstWorkspaceRoot();
+      if (!folder) return;
+      this.configStore.updateProjectConfig(folder, (c) => {
+        c.agentWriteApproved = true;
+      });
+    } else {
+      const session = this.sessions.get(sessionId) ?? this.newSession();
+      session.agentWriteApproved = true;
+      session.lastActivity = Date.now();
+      this.sessions.set(sessionId, session);
+    }
+    this._onDidChange.fire();
+  }
+
+  resetAgentWriteApproval(): void {
+    this.configStore.updateGlobalConfig((c) => {
+      c.agentWriteApproved = false;
+    });
+    const folders = vscode.workspace.workspaceFolders;
+    if (folders) {
+      for (const folder of folders) {
+        const config = this.configStore.getProjectConfig(folder.uri.fsPath);
+        if (config.agentWriteApproved) {
+          this.configStore.updateProjectConfig(folder.uri.fsPath, (c) => {
+            c.agentWriteApproved = false;
+          });
+        }
+      }
+    }
+    for (const session of this.sessions.values()) {
+      session.agentWriteApproved = false;
+    }
+    this._onDidChange.fire();
+  }
+
+  getAgentWriteApprovalState(
+    sessionId: string,
+  ): "prompt" | "session" | "project" | "global" {
+    if (this.configStore.getGlobalConfig().agentWriteApproved) {
+      return "global";
+    }
+    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+    if (projectConfig?.agentWriteApproved) {
+      return "project";
+    }
+    const session = this.getSession(sessionId);
+    if (session.agentWriteApproved) {
       return "session";
     }
     return "prompt";
@@ -750,6 +857,7 @@ export class ApprovalManager {
 
   private readonly emptySession: Readonly<SessionState> = Object.freeze({
     writeApproved: false,
+    agentWriteApproved: false,
     commandRules: [],
     pathRules: [],
     writeRules: [],
@@ -759,6 +867,7 @@ export class ApprovalManager {
   private newSession(): SessionState {
     return {
       writeApproved: false,
+      agentWriteApproved: false,
       commandRules: [],
       pathRules: [],
       writeRules: [],
