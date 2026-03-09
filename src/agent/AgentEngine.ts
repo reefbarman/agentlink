@@ -294,8 +294,8 @@ export class AgentEngine {
   }
 
   /**
-   * Attempt to refresh CLI credentials (runs `claude auth status` to trigger
-   * token refresh), then re-create the Anthropic client with the new token.
+   * Attempt to refresh CLI credentials (runs `claude -p` to force the SDK
+   * to refresh the OAuth token), then re-create the Anthropic client.
    * Returns true if the client was successfully refreshed.
    */
   private refreshClient(): boolean {
@@ -639,8 +639,7 @@ export class AgentEngine {
           ) {
             yield {
               type: "warning",
-              message:
-                "Authentication expired — refreshing credentials via `claude auth status`…",
+              message: "Authentication expired — refreshing credentials…",
             };
             if (this.refreshClient()) {
               yield {

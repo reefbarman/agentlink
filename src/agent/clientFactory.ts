@@ -27,30 +27,62 @@ export function readClaudeCliCredentials(): string | undefined {
 }
 
 /**
- * Run `claude auth status` to trigger a token refresh, then verify
- * the result indicates a logged-in state. Returns true if refresh succeeded.
+ * Force the Claude CLI to refresh its OAuth token by running a trivial
+ * print-mode query (`claude -p "hi"`), which boots the SDK and triggers
+ * the refresh flow.  Then verify via `claude auth status`.
+ * Returns true if the credentials were successfully refreshed.
  */
 export function refreshClaudeCredentials(log?: (msg: string) => void): boolean {
   const logLine = log ?? console.log;
+  const tokenBefore = readClaudeCliCredentials();
+
+  // Step 1: Run a trivial print-mode query to force the Claude CLI SDK
+  // to boot and refresh the OAuth access token using the stored refresh token.
+  // `claude auth status` does NOT trigger a refresh — it only reads state.
   try {
-    logLine("[auth] running `claude auth status` to refresh credentials...");
+    logLine("[auth] running `claude -p` to trigger OAuth token refresh...");
+    execFileSync("claude", ["-p", "hi", "--max-turns", "1"], {
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: { ...process.env, FORCE_COLOR: "0" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    logLine("[auth] claude -p completed successfully");
+  } catch (err) {
+    // The -p call itself may fail (e.g. expired token couldn't be refreshed,
+    // network error, or --max-turns not supported on older CLI versions).
+    // The token might still have been refreshed before the failure, so
+    // continue to the verification step.
+    logLine(`[auth] claude -p failed (may still have refreshed): ${err}`);
+  }
+
+  // Step 2: Verify via `claude auth status` that we're logged in.
+  try {
     const output = execFileSync("claude", ["auth", "status"], {
       encoding: "utf-8",
       timeout: 15_000,
       env: { ...process.env, FORCE_COLOR: "0" },
     });
-    logLine(`[auth] claude auth status output: ${output.trim()}`);
+    logLine(`[auth] auth status: ${output.trim()}`);
     const parsed = JSON.parse(output.trim());
-    if (parsed.loggedIn === true) {
-      logLine("[auth] credential refresh successful — logged in");
-      return true;
+    if (parsed.loggedIn !== true) {
+      logLine("[auth] credential refresh failed — not logged in");
+      return false;
     }
-    logLine("[auth] credential refresh failed — not logged in");
-    return false;
   } catch (err) {
-    logLine(`[auth] credential refresh failed: ${err}`);
+    logLine(`[auth] auth status check failed: ${err}`);
     return false;
   }
+
+  // Step 3: Confirm the token actually changed (informational).
+  const tokenAfter = readClaudeCliCredentials();
+  if (tokenBefore && tokenAfter && tokenBefore === tokenAfter) {
+    logLine("[auth] warning: token unchanged after refresh attempt");
+  } else if (tokenAfter) {
+    logLine("[auth] token refreshed successfully");
+  }
+
+  return true;
 }
 
 /**

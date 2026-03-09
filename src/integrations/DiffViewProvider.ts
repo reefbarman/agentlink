@@ -17,15 +17,43 @@ export type DiffDecision =
   | "accept-always"
   | "reject";
 
-// Module-level pending decision resolver — allows editor title bar commands to resolve the diff
-let pendingDecisionResolve: ((decision: DiffDecision) => void) | null = null;
+// Map of file path → pending decision resolver.
+// Allows multiple diff views to be open simultaneously (e.g. agent + MCP)
+// without overwriting each other's resolve callbacks.
+const pendingDecisionResolvers = new Map<
+  string,
+  (decision: DiffDecision) => void
+>();
 
+/**
+ * Resolve the diff for the currently active editor tab.
+ * Falls back to resolving the single pending diff if only one exists.
+ */
 export function resolveCurrentDiff(decision: DiffDecision): boolean {
-  if (pendingDecisionResolve) {
-    pendingDecisionResolve(decision);
-    pendingDecisionResolve = null;
+  if (pendingDecisionResolvers.size === 0) return false;
+
+  // Determine which diff to resolve based on the active editor
+  const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (activeTab?.input instanceof vscode.TabInputTextDiff) {
+    const filePath = activeTab.input.modified.fsPath;
+    const resolve = pendingDecisionResolvers.get(filePath);
+    if (resolve) {
+      pendingDecisionResolvers.delete(filePath);
+      resolve(decision);
+      return true;
+    }
+  }
+
+  // Fallback: if only one diff is pending, resolve it
+  if (pendingDecisionResolvers.size === 1) {
+    const [filePath, resolve] = pendingDecisionResolvers
+      .entries()
+      .next().value!;
+    pendingDecisionResolvers.delete(filePath);
+    resolve(decision);
     return true;
   }
+
   return false;
 }
 
@@ -34,7 +62,7 @@ export function resolveCurrentDiff(decision: DiffDecision): boolean {
  * Called from the "more options" toolbar button command.
  */
 export async function showDiffMoreOptions(): Promise<void> {
-  if (!pendingDecisionResolve) return;
+  if (pendingDecisionResolvers.size === 0) return;
 
   const items: Array<vscode.QuickPickItem & { decision: DiffDecision }> = [
     {
@@ -280,17 +308,17 @@ export class DiffViewProvider {
     approvalPanel: ApprovalPanelProvider,
     onApprovalRequest?: OnApprovalRequest,
   ): Promise<DiffDecision> {
-    // Show toolbar buttons via context key
+    // Track UI elements for cleanup — when the decision comes from outside
+    // the panel/QuickPick (title bar buttons, editor close), the UI
+    // must still be disposed to avoid orphaned state.
+    let disposeUI: (() => void) | undefined;
+
+    // Show toolbar buttons via context key (true if any diff is pending)
     await vscode.commands.executeCommand(
       "setContext",
       "agentLink.diffPending",
       true,
     );
-
-    // Track UI elements for cleanup — when the decision comes from outside
-    // the panel/QuickPick (title bar buttons, editor close), the UI
-    // must still be disposed to avoid orphaned state.
-    let disposeUI: (() => void) | undefined;
 
     try {
       return await new Promise<DiffDecision>((resolve) => {
@@ -299,7 +327,7 @@ export class DiffViewProvider {
         const finish = (decision: DiffDecision) => {
           if (resolved) return;
           resolved = true;
-          pendingDecisionResolve = null;
+          pendingDecisionResolvers.delete(this.absolutePath!);
           editorCloseDisposable.dispose();
           try {
             disposeUI?.();
@@ -310,7 +338,7 @@ export class DiffViewProvider {
         };
 
         // Allow editor title bar commands to resolve this decision
-        pendingDecisionResolve = finish;
+        pendingDecisionResolvers.set(this.absolutePath!, finish);
 
         // Listen for diff tab being closed (treat as rejection).
         const editorCloseDisposable = vscode.window.tabGroups.onDidChangeTabs(
@@ -395,11 +423,14 @@ export class DiffViewProvider {
       });
     } finally {
       disposeUI?.();
-      await vscode.commands.executeCommand(
-        "setContext",
-        "agentLink.diffPending",
-        false,
-      );
+      // Only clear context key if no other diffs are still pending
+      if (pendingDecisionResolvers.size === 0) {
+        await vscode.commands.executeCommand(
+          "setContext",
+          "agentLink.diffPending",
+          false,
+        );
+      }
     }
   }
 
@@ -597,11 +628,8 @@ export class DiffViewProvider {
       .flatMap((tg) => tg.tabs)
       .filter((tab) => {
         if (tab.input instanceof vscode.TabInputTextDiff) {
-          const diffInput = tab.input;
-          return (
-            diffInput.original.scheme === DIFF_VIEW_URI_SCHEME ||
-            diffInput.modified.fsPath === this.absolutePath
-          );
+          // Only close diff tabs for THIS file, not all agentlink diffs
+          return tab.input.modified.fsPath === this.absolutePath;
         }
         return false;
       });

@@ -143,10 +143,11 @@ You are in **Architect mode** — your primary role is to plan, design, and stra
 - Each step should be clear enough to implement independently.
 - Consider dependencies between steps.
 - Identify risks, trade-offs, and alternative approaches.
-- Write the plan to a Markdown file in \`./plans\` at the project root (create the directory if needed).
-- Use a descriptive kebab-case filename ending in \`.md\` (for example: \`./plans/auth-token-rotation-plan.md\`).
-- In your response, include the plan file path and a concise summary of its contents.
-- Never provide time estimates — focus on what needs to be done, not how long it takes.`,
+  - Write the plan to a Markdown file in \`./plans\` at the project root.
+  - Use a descriptive kebab-case filename ending in \`.md\` (for example: \`./plans/auth-token-rotation-plan.md\`).
+  - Use \`execute_command\` to run \`mkdir -p ./plans\` first if the directory may not exist, then use \`write_file\` to create the plan file. Use \`apply_diff\` to edit an existing plan file.
+  - In your response, include the plan file path and a concise summary of its contents.
+  - Never provide time estimates — focus on what needs to be done, not how long it takes.`,
 
   debug: `
 ## Debug Mode

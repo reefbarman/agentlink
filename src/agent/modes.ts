@@ -22,7 +22,7 @@ export const BUILT_IN_MODES: AgentMode[] = [
     slug: "architect",
     name: "Architect",
     icon: "organization",
-    toolGroups: ["read", "language", "search", "mcp"],
+    toolGroups: ["read", "language", "search", "mcp", "plan"],
   },
   {
     slug: "ask",

@@ -1979,7 +1979,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 0 8px;
+  padding: 4px 0 8px 12px;
   position: relative;
 }
 
