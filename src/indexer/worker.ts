@@ -633,7 +633,9 @@ async function batchEmbed(
   const safeTexts = texts.map((t) =>
     t.length > MAX_EMBEDDING_CHARS ? t.slice(0, MAX_EMBEDDING_CHARS) : t,
   );
-  const results: (number[] | null)[] = new Array(safeTexts.length).fill(null);
+  const results: (number[] | null)[] = Array.from<number[] | null>({
+    length: safeTexts.length,
+  }).fill(null);
   let done = 0;
   let cursor = 0;
 

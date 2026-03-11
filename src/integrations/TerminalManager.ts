@@ -70,6 +70,7 @@ export interface CommandResult {
   output_captured: boolean;
   terminal_id: string;
   output_file?: string;
+  output_warning?: string;
   total_lines?: number;
   lines_shown?: number;
   command?: string;
@@ -95,6 +96,7 @@ export interface ExecuteOptions {
 const SHELL_INTEGRATION_TIMEOUT = 15000; // 15 seconds (WSL2 / heavy shell configs can be slow)
 
 /** OSC 633;D completion marker emitted by VS Code shell integration */
+// oxlint-disable-next-line no-control-regex -- intentionally matching ANSI escape sequences
 const MARKER_RE = /\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/;
 
 /**

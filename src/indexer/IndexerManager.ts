@@ -10,11 +10,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { fork, type ChildProcess } from "child_process";
 import { createHash } from "crypto";
-import type {
-  WorkerToExtensionMessage,
-  IndexStats,
-  IndexPhase,
-} from "./types.js";
+import type { WorkerToExtensionMessage, IndexPhase } from "./types.js";
 
 // --- Public types ---
 

@@ -155,7 +155,7 @@ export async function handleWriteFile(
       return await diffView.saveChanges();
     });
 
-    const { finalContent, ...response } = result;
+    const { finalContent: _finalContent, ...response } = result;
     return {
       content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
     };

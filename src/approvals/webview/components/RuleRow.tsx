@@ -1,4 +1,3 @@
-import { useState } from "preact/hooks";
 import type { RuleEntry, SubCommandEntry } from "../types.js";
 
 const MODES = ["prefix", "exact", "regex"] as const;
@@ -39,7 +38,10 @@ export function RuleRow({ entry, value, onChange }: RuleRowProps) {
           class={`text-input rule-pattern-input ${isSkipped ? "skipped" : ""}`}
           value={value.pattern}
           onInput={(e) =>
-            onChange({ ...value, pattern: (e.target as HTMLInputElement).value })
+            onChange({
+              ...value,
+              pattern: (e.target as HTMLInputElement).value,
+            })
           }
           disabled={isSkipped}
         />

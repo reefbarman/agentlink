@@ -106,6 +106,15 @@ export function handleTodoWrite(input: TodoToolInput): {
   };
 }
 
+export function hasPendingTodos(todos: TodoItem[]): boolean {
+  return todos.some(
+    (t) =>
+      t.status === "pending" ||
+      t.status === "in_progress" ||
+      (t.children ? hasPendingTodos(t.children) : false),
+  );
+}
+
 function countTodos(items: TodoItem[]): {
   total: number;
   completed: number;

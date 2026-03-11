@@ -477,6 +477,7 @@ Output is capped to the **last 200 lines** by default. Full output is saved to a
 | `output_offset`       | number?  | Skip first N lines before applying head/tail                                                                                                            |
 | `output_grep`         | string?  | Filter output to lines matching this regex (case-insensitive)                                                                                           |
 | `output_grep_context` | number?  | Context lines around each grep match                                                                                                                    |
+| `reason`              | string?  | Short reason explaining why the agent needs to run this command (shown in the approval dialog)                                                          |
 
 ### close_terminals
 

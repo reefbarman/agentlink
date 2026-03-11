@@ -333,6 +333,12 @@ export const executeCommandSchema = {
     .describe(
       "Required when force=true. Explain why the rejection is a false positive (e.g. 'grep target is a $VAR path that read_file cannot resolve'). Commands with force=true but no force_reason will be rejected.",
     ),
+  reason: z
+    .string()
+    .optional()
+    .describe(
+      "Short reason explaining why you need to run this command (shown to the user in the approval dialog). Keep it to one sentence.",
+    ),
 };
 
 export const getTerminalOutputSchema = {

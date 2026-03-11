@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 
-import { resolveAndValidatePath, getWorkspaceRoots } from "../util/paths.js";
+import { resolveAndValidatePath } from "../util/paths.js";
 
 export async function handleGetDiagnostics(params: {
   path?: string;

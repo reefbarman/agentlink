@@ -108,7 +108,7 @@ export async function handleRenameSymbol(
               `${f.path} (${f.changes} change${f.changes !== 1 ? "s" : ""})`,
           )
           .join("\n");
-        decision = await onApprovalRequest({
+        const result = await onApprovalRequest({
           kind: "rename",
           title: `Rename \`${oldName}\` → \`${params.new_name}\`?`,
           detail: `${totalChanges} change${totalChanges !== 1 ? "s" : ""} across ${filesPreview.length} file${filesPreview.length !== 1 ? "s" : ""}:\n${filesDetail}`,
@@ -117,6 +117,7 @@ export async function handleRenameSymbol(
             { label: "Reject", value: "reject", isDanger: true },
           ],
         });
+        decision = typeof result === "string" ? result : result.decision;
         if (decision === "reject") {
           return {
             content: [

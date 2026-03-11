@@ -4,8 +4,6 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 import type {
   ApprovalManager,
-  CommandRule,
-  PathRule,
   RuleScope,
 } from "../approvals/ApprovalManager.js";
 import type {
@@ -17,7 +15,6 @@ import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
 import { matchClientName, getAgentById } from "../agents/registry.js";
 import type {
   AgentInfo,
-  ConnectedAgent,
   IndexStatusInfo,
   SidebarState,
 } from "./webview/types.js";

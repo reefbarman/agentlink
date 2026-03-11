@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 import { randomUUID } from "crypto";
 import { providerRegistry } from "./providers/index.js";
 import type { AgentSessionManager } from "./AgentSessionManager.js";
@@ -10,7 +9,7 @@ import type { TodoItem } from "./todoTool.js";
 import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
 import { McpClientHub } from "./McpClientHub.js";
 import { loadMcpConfigs, getMcpConfigFilePaths } from "./mcpConfig.js";
-import { BUILT_IN_MODES, loadCustomModes, getAllModes } from "./modes.js";
+import { loadCustomModes, getAllModes } from "./modes.js";
 import { buildSystemPrompt } from "./systemPrompt.js";
 import { loadAllInstructionBlocks } from "./configLoader.js";
 import type {
@@ -195,6 +194,11 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentWarning";
+      sessionId: string;
+      message: string;
+    }
+  | {
+      type: "agentStatusUpdate";
       sessionId: string;
       message: string;
     }
@@ -1871,6 +1875,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.log(`[agent] warning: ${event.message}`);
         this.postMessage({
           type: "agentWarning",
+          sessionId,
+          message: event.message,
+        });
+        break;
+
+      case "status_update":
+        this.log(`[agent] status_update: ${event.message}`);
+        this.postMessage({
+          type: "agentStatusUpdate",
           sessionId,
           message: event.message,
         });

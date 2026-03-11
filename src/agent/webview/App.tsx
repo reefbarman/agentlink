@@ -65,6 +65,8 @@ interface AppState {
   slashCommands: SlashCommandInfo[];
   messageQueue: Array<{ id: string; text: string; fullText?: string }>;
   questionRequest: { id: string; questions: Question[] } | null;
+  /** Temporary status override shown in the streaming spinner (e.g. "Refreshing credentials…") */
+  statusOverride: string | null;
 }
 
 type AppAction =
@@ -124,6 +126,7 @@ type AppAction =
     }
   | { type: "ADD_CONDENSE_ERROR"; errorMessage: string }
   | { type: "ADD_WARNING"; message: string }
+  | { type: "SET_STATUS_OVERRIDE"; message: string | null }
   | {
       type: "LOAD_SESSION";
       sessionId: string;
@@ -414,7 +417,7 @@ function reducer(state: AppState, action: AppAction): AppState {
         text: "",
         complete: false,
       });
-      return { ...state, messages: msgs };
+      return { ...state, messages: msgs, statusOverride: null };
     }
 
     case "THINKING_DELTA": {
@@ -448,7 +451,7 @@ function reducer(state: AppState, action: AppAction): AppState {
         result: "",
         complete: false,
       });
-      return { ...state, messages: msgs };
+      return { ...state, messages: msgs, statusOverride: null };
     }
 
     case "TOOL_INPUT_DELTA": {
@@ -601,7 +604,12 @@ function reducer(state: AppState, action: AppAction): AppState {
       const all = ensureAssistant(state.messages);
       const { msgs, last } = cloneLast(all);
       last.error = { message: action.error, retryable: action.retryable };
-      return { ...state, streaming: false, messages: msgs };
+      return {
+        ...state,
+        streaming: false,
+        messages: msgs,
+        statusOverride: null,
+      };
     }
 
     case "CLEAR_ERROR": {
@@ -655,6 +663,7 @@ function reducer(state: AppState, action: AppAction): AppState {
         streaming: false,
         messages: doneMessages,
         todos: stopTodos(state.todos),
+        statusOverride: null,
       };
     }
 
@@ -669,6 +678,7 @@ function reducer(state: AppState, action: AppAction): AppState {
         todos: [],
         messageQueue: [],
         questionRequest: null,
+        statusOverride: null,
       };
 
     case "TOGGLE_THINKING":
@@ -835,6 +845,10 @@ function reducer(state: AppState, action: AppAction): AppState {
       };
     }
 
+    case "SET_STATUS_OVERRIDE": {
+      return { ...state, statusOverride: action.message };
+    }
+
     case "ADD_CONDENSE_ERROR": {
       const filtered = state.messages.filter(
         (m) => !(m.role === "condense" && m.condenseInfo?.condensing),
@@ -977,6 +991,7 @@ const initialState: AppState = {
   slashCommands: [],
   messageQueue: [],
   questionRequest: null,
+  statusOverride: null,
 };
 
 export interface Injection {
@@ -1346,6 +1361,13 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         case "agentWarning":
           dispatch({
             type: "ADD_WARNING",
+            message: msg.message,
+          });
+          break;
+
+        case "agentStatusUpdate":
+          dispatch({
+            type: "SET_STATUS_OVERRIDE",
             message: msg.message,
           });
           break;
@@ -2242,13 +2264,14 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           <div class="streaming-status-bar">
             <i class="codicon codicon-loading codicon-modifier-spin" />
             <span>
-              {(() => {
-                const lastMsg = state.messages[state.messages.length - 1];
-                if (lastMsg?.role === "assistant") {
-                  return getStreamingActivity(lastMsg.blocks);
-                }
-                return "Waiting for response…";
-              })()}
+              {state.statusOverride ??
+                (() => {
+                  const lastMsg = state.messages[state.messages.length - 1];
+                  if (lastMsg?.role === "assistant") {
+                    return getStreamingActivity(lastMsg.blocks);
+                  }
+                  return "Waiting for response…";
+                })()}
             </span>
           </div>
         )}

@@ -6,7 +6,7 @@ import {
   applyBlocks,
   normalizeForComparison,
   tryFlexibleMatch,
-  tryEscapeAwareMatch,
+  tryEscapeNormalizedMatch,
 } from "./applyDiff.js";
 
 // Helper to build a diff string with the new delimiter format
@@ -483,44 +483,95 @@ describe("tryFlexibleMatch", () => {
   });
 });
 
-describe("tryEscapeAwareMatch", () => {
-  it("matches when file has \\\\n but search has real newlines", () => {
+// ── Escape-normalized matching ────────────────────────────────────────────
+
+describe("tryEscapeNormalizedMatch", () => {
+  it("matches when file has literal \\n but search has real newline", () => {
+    // File has literal \n (backslash + n = 2 chars)
+    const content = "Hello\\nWorld";
+    const search = "Hello\nWorld";
+    const result = tryEscapeNormalizedMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(content.slice(result!.start, result!.end)).toBe("Hello\\nWorld");
+  });
+
+  it("matches when file has literal \\\\n but search has real newline", () => {
     // File has literal \\n (backslash + backslash + n = 3 chars)
     const content = 'const desc = "Hello\\\\nWorld\\\\nFoo";';
     // Search has actual newlines where the escapes were
     const search = 'const desc = "Hello\nWorld\nFoo";';
-    const result = tryEscapeAwareMatch(content, search);
+    const result = tryEscapeNormalizedMatch(content, search);
     expect(result).not.toBeNull();
     expect(result!.start).toBe(0);
     expect(result!.end).toBe(content.length);
-    expect(result!.escapeSequence).toBe("\\\\n");
   });
 
-  it("matches when file has \\n (2 chars) but search has real newlines", () => {
-    // File has literal \n (backslash + n = 2 chars)
-    const content = "Hello\\nWorld";
-    const search = "Hello\nWorld";
-    const result = tryEscapeAwareMatch(content, search);
+  it("matches when file has literal \\t but search has real tab", () => {
+    const content = 'msg = "col1\\tcol2"';
+    const search = 'msg = "col1\tcol2"';
+    const result = tryEscapeNormalizedMatch(content, search);
     expect(result).not.toBeNull();
-    expect(content.slice(result!.start, result!.end)).toBe("Hello\\nWorld");
-    expect(result!.escapeSequence).toBe("\\n");
+    expect(content.slice(result!.start, result!.end)).toBe(content);
   });
 
-  it("returns null when search has no newlines", () => {
-    expect(tryEscapeAwareMatch("hello world", "hello world")).toBeNull();
+  it("matches when file has literal \\r but search has real CR", () => {
+    const content = 'msg = "line1\\rline2"';
+    const search = 'msg = "line1\rline2"';
+    const result = tryEscapeNormalizedMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(content.slice(result!.start, result!.end)).toBe(content);
+  });
+
+  it("matches combined \\n and \\t in same content", () => {
+    const content = '"line1\\nline2\\tcol2"';
+    const search = '"line1\nline2\tcol2"';
+    const result = tryEscapeNormalizedMatch(content, search);
+    expect(result).not.toBeNull();
+    expect(content.slice(result!.start, result!.end)).toBe(content);
+  });
+
+  it("transforms replacement with same escape style", () => {
+    const content = 'msg = "Hello\\nWorld"';
+    const search = 'msg = "Hello\nWorld"';
+    const result = tryEscapeNormalizedMatch(content, search);
+    expect(result).not.toBeNull();
+    const transformed = result!.transformReplace('msg = "Goodbye\nWorld"');
+    expect(transformed).toBe('msg = "Goodbye\\nWorld"');
+  });
+
+  it("transforms replacement for \\\\n escape style", () => {
+    const content = 'msg = "Hello\\\\nWorld"';
+    const search = 'msg = "Hello\nWorld"';
+    const result = tryEscapeNormalizedMatch(content, search);
+    expect(result).not.toBeNull();
+    const transformed = result!.transformReplace('msg = "Goodbye\nWorld"');
+    expect(transformed).toBe('msg = "Goodbye\\\\nWorld"');
+  });
+
+  it("transforms replacement for combined escapes", () => {
+    const content = '"A\\nB\\tC"';
+    const search = '"A\nB\tC"';
+    const result = tryEscapeNormalizedMatch(content, search);
+    expect(result).not.toBeNull();
+    const transformed = result!.transformReplace('"X\nY\tZ"');
+    expect(transformed).toBe('"X\\nY\\tZ"');
+  });
+
+  it("returns null when no interpreted escapes in search", () => {
+    expect(tryEscapeNormalizedMatch("hello world", "hello world")).toBeNull();
   });
 
   it("returns null when no variant matches", () => {
     const content = "completely different content";
     const search = "hello\nworld";
-    expect(tryEscapeAwareMatch(content, search)).toBeNull();
+    expect(tryEscapeNormalizedMatch(content, search)).toBeNull();
   });
 
   it("returns null for ambiguous matches", () => {
     // Two occurrences of the escaped form
     const content = "Hello\\nWorld and Hello\\nWorld again";
     const search = "Hello\nWorld";
-    expect(tryEscapeAwareMatch(content, search)).toBeNull();
+    expect(tryEscapeNormalizedMatch(content, search)).toBeNull();
   });
 
   it("works with long single-line strings like tool descriptions", () => {
@@ -530,13 +581,12 @@ describe("tryEscapeAwareMatch", () => {
     // Claude's search has actual newlines where \\n was
     const search =
       '    "Run a command.\n\nTerminal reuse: reuses an idle terminal.\n\nBackground: Use background=true for long-running processes.",';
-    const result = tryEscapeAwareMatch(content, search);
+    const result = tryEscapeNormalizedMatch(content, search);
     expect(result).not.toBeNull();
-    expect(result!.escapeSequence).toBe("\\\\n");
   });
 });
 
-describe("applyBlocks — escape-aware fallback", () => {
+describe("applyBlocks — escape-normalized fallback", () => {
   it("applies replacement when file has \\\\n but search has newlines", () => {
     const content = 'const msg = "Hello\\\\nWorld";';
     const { result, failedBlocks } = applyBlocks(content, [
@@ -564,7 +614,20 @@ describe("applyBlocks — escape-aware fallback", () => {
     expect(failedBlocks).toEqual([]);
   });
 
-  it("prefers exact match over escape-aware match", () => {
+  it("applies replacement when file has \\t but search has tab", () => {
+    const content = 'cols = "A\\tB\\tC"';
+    const { result, failedBlocks } = applyBlocks(content, [
+      {
+        search: 'cols = "A\tB\tC"',
+        replace: 'cols = "X\tY\tZ"',
+        index: 0,
+      },
+    ]);
+    expect(result).toBe('cols = "X\\tY\\tZ"');
+    expect(failedBlocks).toEqual([]);
+  });
+
+  it("prefers exact match over escape-normalized match", () => {
     // Content has both a real newline version and an escaped version
     const content = "Hello\nWorld\nHello\\nWorld";
     const { result, failedBlocks } = applyBlocks(content, [

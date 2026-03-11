@@ -455,11 +455,9 @@ export function ToolCallBlock({ toolCall, onOpenFile }: ToolCallBlockProps) {
     formattedInput = JSON.stringify(input, null, 2);
   }
 
-  const hasSummary =
-    summaryParts.length > 0 &&
-    summaryParts.some(
-      (p) => p.type === "file" || (p.type === "text" && p.text),
-    );
+  const hasSummary = summaryParts.some(
+    (p) => p.type === "file" || (p.type === "text" && p.text),
+  );
 
   return (
     <div class={`tool-call-block ${statusClass}`}>

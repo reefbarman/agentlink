@@ -1,4 +1,4 @@
-import { useState, useEffect } from "preact/hooks";
+import { useState, useEffect, useRef } from "preact/hooks";
 
 export interface BgSessionInfoProps {
   id: string;
@@ -140,12 +140,24 @@ export function BackgroundSessionStrip({
     });
   }, [sessions]);
 
-  // Tick every second while any session is active
+  // Tick every second while any session is active.
+  // Use a ref to track active state so the interval doesn't depend on
+  // `sessions` — otherwise the interval is torn down and recreated on every
+  // bg sessions update (~150ms during streaming), preventing it from ever
+  // reaching its 1000ms tick.
+  const hasActive = sessions.some((s) => ACTIVE_STATUSES.has(s.status));
+  const hasActiveRef = useRef(hasActive);
+  hasActiveRef.current = hasActive;
+
   useEffect(() => {
-    if (!sessions.some((s) => ACTIVE_STATUSES.has(s.status))) return;
-    const interval = setInterval(() => setNow(Date.now()), 1000);
+    if (!hasActive) return;
+    const interval = setInterval(() => {
+      if (hasActiveRef.current) {
+        setNow(Date.now());
+      }
+    }, 1000);
     return () => clearInterval(interval);
-  }, [sessions]);
+  }, [hasActive]);
 
   const visibleSessions = sessions.filter((s) => !dismissed.has(s.id));
   if (visibleSessions.length === 0) return null;

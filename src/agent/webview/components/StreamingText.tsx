@@ -148,7 +148,7 @@ function parseMarkdown(text: string): {
 
 // Matches file paths like `src/foo/bar.ts`, `/abs/path.ts`, `src/foo.ts:42`
 const FILE_PATH_RE =
-  /(?<![:/])\b((?:(?:\/[\w.\-]+)+|[\w][\w\-]*(?:\/[\w.\-]+)+)\.\w{1,8})(?::(\d+)(?:-\d+)?)?/g;
+  /(?<![:/])\b((?:(?:\/[\w.-]+)+|[\w][\w-]*(?:\/[\w.-]+)+)\.\w{1,8})(?::(\d+)(?:-\d+)?)?/g;
 
 function linkifyFilePathNodes(
   container: HTMLElement,

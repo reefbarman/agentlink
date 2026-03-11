@@ -23,7 +23,6 @@ import {
 } from "./condense.js";
 import type {
   ModelProvider,
-  ProviderStreamEvent,
   ContentBlock,
   ToolUseBlock,
   ToolDefinition,
@@ -476,13 +475,13 @@ export class AgentEngine {
               provider instanceof AnthropicProvider ? provider : null;
             if (anthropicProvider?.currentAuthSource === "cli-credentials") {
               yield {
-                type: "warning",
-                message: "Authentication expired — refreshing credentials…",
+                type: "status_update",
+                message: "Refreshing credentials…",
               };
               if (anthropicProvider.refreshClient()) {
                 yield {
-                  type: "warning",
-                  message: "Credentials refreshed — retrying request…",
+                  type: "status_update",
+                  message: "Credentials refreshed — retrying…",
                 };
                 continue;
               }
@@ -826,9 +825,9 @@ export class AgentEngine {
     signal: AbortSignal,
     ctx: ToolDispatchContext,
   ): Promise<Array<ToolCallResult>> {
-    const resultSlots = new Array<ToolCallResult | null>(calls.length).fill(
-      null,
-    );
+    const resultSlots = Array.from<ToolCallResult | null>({
+      length: calls.length,
+    }).fill(null);
 
     // Partition into read-only (parallel) and write (sequential)
     const readOnlyIndices: number[] = [];

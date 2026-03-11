@@ -84,9 +84,9 @@ export function resolveAndValidatePath(inputPath: string): ResolvedPath {
   }
 
   // Check workspace boundary
-  const inWorkspace =
-    roots.length > 0 &&
-    roots.some((root) => pathsEqual(real, root) || pathStartsWith(real, root));
+  const inWorkspace = roots.some(
+    (root) => pathsEqual(real, root) || pathStartsWith(real, root),
+  );
 
   return { absolutePath: real, inWorkspace };
 }

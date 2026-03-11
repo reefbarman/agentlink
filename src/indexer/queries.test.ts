@@ -317,7 +317,7 @@ module Greeting
     end
 
     def greet
-      "Hello, \#{@name}"
+      "Hello, #{@name}"
     end
 
     def self.default

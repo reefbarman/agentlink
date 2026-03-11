@@ -147,6 +147,11 @@ export type ExtensionMessage =
       sessionId: string;
       message: string;
     }
+  | {
+      type: "agentStatusUpdate";
+      sessionId: string;
+      message: string;
+    }
   | { type: "agentSessionUpdate"; sessions: SessionInfo[] }
   | {
       type: "agentDebugInfo";

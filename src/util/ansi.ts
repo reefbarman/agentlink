@@ -1,3 +1,5 @@
+/* oxlint-disable no-control-regex -- this entire file intentionally matches ANSI control characters */
+
 /**
  * Strip ANSI escape sequences and VS Code shell integration markers from terminal output.
  * Adapted from Roo Code's TerminalProcess.ts patterns.

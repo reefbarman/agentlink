@@ -59,7 +59,7 @@ function makeModel(
     id,
     displayName: id,
     provider,
-    capabilities: { ...CAPS, ...(overrides ?? {}) },
+    capabilities: { ...CAPS, ...overrides },
   };
 }
 

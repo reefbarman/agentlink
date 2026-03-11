@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
+import * as path from "path";
 import {
   sanitizeRegex,
   getEscapingHint,
   needsMultiline,
+  resolveFilePatternAsPath,
 } from "./searchFiles.js";
 
 describe("sanitizeRegex", () => {
@@ -132,5 +134,62 @@ describe("needsMultiline", () => {
     // After sanitizeRegex, double-escaped \\n becomes \n
     const sanitized = sanitizeRegex("servers:\\\\s*\\\\n\\\\s*-\\\\s*url:");
     expect(needsMultiline(sanitized)).toBe(true);
+  });
+});
+
+describe("resolveFilePatternAsPath", () => {
+  // Use this test file itself as a known-existing file
+  const searchDir = path.resolve(__dirname, "..");
+  const thisFile = "tools/searchFiles.test.ts";
+
+  it("resolves a relative file path that exists", () => {
+    const result = resolveFilePatternAsPath(thisFile, searchDir);
+    expect(result).toBe(path.resolve(searchDir, thisFile));
+  });
+
+  it("resolves an absolute file path that exists", () => {
+    const absPath = path.resolve(searchDir, thisFile);
+    const result = resolveFilePatternAsPath(absPath, searchDir);
+    expect(result).toBe(absPath);
+  });
+
+  it("returns undefined for a bare filename (no path separator)", () => {
+    expect(resolveFilePatternAsPath("*.ts", searchDir)).toBeUndefined();
+    expect(
+      resolveFilePatternAsPath("searchFiles.ts", searchDir),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for patterns with glob metacharacters", () => {
+    expect(resolveFilePatternAsPath("src/**/*.ts", searchDir)).toBeUndefined();
+    expect(
+      resolveFilePatternAsPath("src/tools/search*.ts", searchDir),
+    ).toBeUndefined();
+    expect(
+      resolveFilePatternAsPath("src/tools/[sS]earch.ts", searchDir),
+    ).toBeUndefined();
+    expect(resolveFilePatternAsPath("src/{a,b}.ts", searchDir)).toBeUndefined();
+  });
+
+  it("returns undefined for a file path that does not exist", () => {
+    expect(
+      resolveFilePatternAsPath("src/tools/nonexistent.ts", searchDir),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for a directory path", () => {
+    // "tools" is a directory, not a file — statSync will succeed but isFile() is false
+    expect(resolveFilePatternAsPath("tools/", searchDir)).toBeUndefined();
+  });
+
+  it("rejects path traversal outside search directory", () => {
+    // ../package.json exists but is outside searchDir
+    expect(
+      resolveFilePatternAsPath("../../package.json", searchDir),
+    ).toBeUndefined();
+  });
+
+  it("rejects absolute path outside search directory", () => {
+    expect(resolveFilePatternAsPath("/etc/hosts", searchDir)).toBeUndefined();
   });
 });

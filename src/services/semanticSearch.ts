@@ -266,7 +266,7 @@ export function extractKeywords(query: string): string[] {
   const tokens: string[] = [];
 
   // Split the query into raw words
-  const rawWords = query.split(/[\s,;:.()\[\]{}<>'"]+/).filter(Boolean);
+  const rawWords = query.split(/[\s,;:.()[\]{}<>'"]+/).filter(Boolean);
 
   for (const word of rawWords) {
     // Split CamelCase: "TerminalManager" → ["Terminal", "Manager"]

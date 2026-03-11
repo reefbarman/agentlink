@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
-import * as path from "path";
 
 import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
 import {
@@ -219,14 +218,10 @@ export function applyBlocks(
         continue;
       }
 
-      // Fallback 2: try escape-aware matching (\\n in file → \n in search)
-      const escMatch = tryEscapeAwareMatch(result, block.search);
+      // Fallback 2: try escape-normalized matching (JSON escape corruption)
+      const escMatch = tryEscapeNormalizedMatch(result, block.search);
       if (escMatch) {
-        // Apply the same escape transformation to the replacement content
-        const transformedReplace = block.replace.replace(
-          /\n/g,
-          escMatch.escapeSequence,
-        );
+        const transformedReplace = escMatch.transformReplace(block.replace);
         result =
           result.slice(0, escMatch.start) +
           transformedReplace +
@@ -330,41 +325,100 @@ export function tryFlexibleMatch(
   return { start, end };
 }
 
+// ── Escape-normalized matching ─────────────────────────────────────────────
+
+/**
+ * All JSON escape sequences that JSON.parse interprets, mapped to the literal
+ * text that might appear in the file.
+ *
+ * When an LLM generates JSON for a tool call, it may under-escape backslash
+ * sequences. For example, a file containing literal \n (2 chars: \ + n)
+ * should be represented in JSON as \\n, but the LLM may write \n which
+ * JSON.parse turns into a real newline character (0x0A).
+ *
+ * Each entry maps the interpreted character to one or more literal sequences
+ * that might appear in the file (ordered from most to least common).
+ */
+const ESCAPE_PAIRS: Array<{ interpreted: string; literal: string[] }> = [
+  { interpreted: "\n", literal: ["\\n", "\\\\n"] }, // newline -> \n or \\n
+  { interpreted: "\t", literal: ["\\t"] }, // tab -> \t
+  { interpreted: "\r", literal: ["\\r"] }, // CR -> \r
+];
+
 /**
  * Try to match search content against file content when escape sequences
- * may have been corrupted during JSON serialization.
+ * have been corrupted during JSON serialization/deserialization.
  *
- * Common case: file has `\\n` (literal backslash + n) on a single line, but
- * JSON serialization collapsed the escapes into real newline characters,
- * splitting the search content across multiple lines.
+ * JSON.parse turns \\n -> \n (newline), \\t -> \t (tab), etc. When the file
+ * has literal escape sequences (e.g., \n as 2 chars), the search content
+ * will have the interpreted character instead.
  *
- * Returns the character offset range { start, end } in the content plus the
- * escape string that was used (so the caller can apply the same transformation
- * to the replacement content), or null if no unique match is found.
+ * Strategy: For each escape pair, try replacing the interpreted character
+ * in the search with the literal text, then check for a unique match.
+ * Tries each escape individually first, then all relevant escapes combined.
+ *
+ * Returns the match range and a transform function that converts the
+ * replacement content to use the same escape style as the file.
  */
-export function tryEscapeAwareMatch(
+export function tryEscapeNormalizedMatch(
   content: string,
   search: string,
-): { start: number; end: number; escapeSequence: string } | null {
-  // Only relevant when search has newlines that might be escaped in the file
-  if (!search.includes("\n")) return null;
+): {
+  start: number;
+  end: number;
+  transformReplace: (replace: string) => string;
+} | null {
+  // Find which escape pairs are relevant (search contains the interpreted char)
+  const relevantPairs = ESCAPE_PAIRS.filter((p) =>
+    search.includes(p.interpreted),
+  );
+  if (relevantPairs.length === 0) return null;
 
-  // Variants: replace actual newlines with escape sequences that might appear in the file
-  const escapeVariants = [
-    "\\n", // 2 chars: \ + n  (e.g. \n in a raw string)
-    "\\\\n", // 3 chars: \ + \ + n  (e.g. \\n in JS/TS source)
-  ];
+  // Try single-escape replacements first (most common case: only \n collapsed)
+  for (const pair of relevantPairs) {
+    for (const lit of pair.literal) {
+      const variant = search.replaceAll(pair.interpreted, lit);
+      if (variant === search) continue;
 
-  for (const esc of escapeVariants) {
-    const variant = search.replace(/\n/g, esc);
+      const count = countOccurrences(content, variant);
+      if (count === 1) {
+        const start = content.indexOf(variant);
+        const interpreted = pair.interpreted;
+        return {
+          start,
+          end: start + variant.length,
+          transformReplace: (replace: string) =>
+            replace.replaceAll(interpreted, lit),
+        };
+      }
+    }
+  }
 
-    // Skip if identical to original (shouldn't happen since we checked for \n)
-    if (variant === search) continue;
-
-    const count = countOccurrences(content, variant);
-    if (count === 1) {
-      const start = content.indexOf(variant);
-      return { start, end: start + variant.length, escapeSequence: esc };
+  // Try all relevant escapes combined (e.g., file has both \n and \t as literals)
+  if (relevantPairs.length > 1) {
+    let variant = search;
+    const transforms: Array<{ interpreted: string; literal: string }> = [];
+    for (const pair of relevantPairs) {
+      const lit = pair.literal[0];
+      variant = variant.replaceAll(pair.interpreted, lit);
+      transforms.push({ interpreted: pair.interpreted, literal: lit });
+    }
+    if (variant !== search) {
+      const count = countOccurrences(content, variant);
+      if (count === 1) {
+        const start = content.indexOf(variant);
+        return {
+          start,
+          end: start + variant.length,
+          transformReplace: (replace: string) => {
+            let r = replace;
+            for (const t of transforms) {
+              r = r.replaceAll(t.interpreted, t.literal);
+            }
+            return r;
+          },
+        };
+      }
     }
   }
 
@@ -609,7 +663,7 @@ export async function handleApplyDiff(
       return await diffView.saveChanges();
     });
 
-    const { finalContent, ...response } = result;
+    const { finalContent: _finalContent, ...response } = result;
     const responseObj = response as Record<string, unknown>;
 
     // Add partial failure info if applicable

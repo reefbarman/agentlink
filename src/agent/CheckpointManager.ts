@@ -238,7 +238,7 @@ export class CheckpointManager {
           .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
           .commit(message, { "--allow-empty": null });
         commitHash = result.commit;
-      } catch (err) {
+      } catch {
         // Nothing changed — get HEAD
         const head = await this.git
           .env({ ...env, GIT_WORK_TREE: this.workspaceDir })

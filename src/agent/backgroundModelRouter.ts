@@ -50,7 +50,7 @@ function getTaskRule(taskClass?: string): {
     taskClass: resolvedClass,
     rule: {
       ...routingConfig.defaults,
-      ...(routingConfig.taskClasses[resolvedClass] ?? {}),
+      ...routingConfig.taskClasses[resolvedClass],
     },
   };
 }
@@ -150,9 +150,7 @@ export async function resolveBackgroundRoute(
   if (requestedModel) {
     const modelInfo = allModels.find((m) => m.id === requestedModel);
     if (!modelInfo) {
-      throw new Error(
-        `Requested model \"${requestedModel}\" is not available.`,
-      );
+      throw new Error(`Requested model "${requestedModel}" is not available.`);
     }
     const providerMismatch = Boolean(
       requestedProvider && requestedProvider !== modelInfo.provider,

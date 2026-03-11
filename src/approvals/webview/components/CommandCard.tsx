@@ -151,6 +151,8 @@ export function CommandCard({
       </>
     ) : undefined;
 
+  const reason = request.reason;
+
   return (
     <ApprovalLayout
       queuePosition={request.queuePosition}
@@ -164,6 +166,12 @@ export function CommandCard({
       onReject={handleReject}
       followUpRef={followUpRef}
     >
+      {reason && (
+        <div class="command-reason">
+          <span class="codicon codicon-info" />
+          <span>{reason}</span>
+        </div>
+      )}
       <div class="terminal-box">
         <div class="terminal-header">
           <span class="codicon codicon-terminal" />

@@ -24,7 +24,7 @@ export function SlashCommandPopup({
   selectedIndex,
   anchor,
   onSelect,
-  onClose,
+  onClose: _onClose,
   isSubView,
   subViewTitle,
   onBack,

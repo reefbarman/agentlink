@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentConfig, SessionInfo } from "./types.js";
+import { hasPendingTodos, type TodoItem } from "./todoTool.js";
 import { AgentSession } from "./AgentSession.js";
 import { AgentEngine } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
@@ -284,12 +285,55 @@ export class AgentSessionManager {
 
     this.onSessionsChanged?.();
 
+    const MAX_AUTO_CONTINUE = 5;
+    let autoContinueCount = 0;
+    let lastTodos: TodoItem[] = [];
+
     try {
-      for await (const event of this.getEngine().run(session)) {
-        if (event.type === "done") {
-          this.store?.save(session);
+      while (true) {
+        let naturalDone = false;
+        for await (const event of this.getEngine().run(session)) {
+          if (event.type === "todo_update") {
+            lastTodos = event.todos;
+          }
+          if (event.type === "done") {
+            this.store?.save(session);
+            naturalDone = true;
+            // Don't forward yet — check for pending todos first
+            continue;
+          }
+          this.onEvent?.(session.id, event);
         }
-        this.onEvent?.(session.id, event);
+
+        // Aborted — let ChatViewProvider handle the done notification
+        if (session.isAborted) break;
+
+        // Check if we should auto-continue due to pending todos
+        if (
+          naturalDone &&
+          autoContinueCount < MAX_AUTO_CONTINUE &&
+          hasPendingTodos(lastTodos)
+        ) {
+          autoContinueCount++;
+          this.log?.(
+            `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): pending todos remain`,
+          );
+          session.addUserMessage(
+            "You stopped but there are still pending tasks. Continue with the remaining items.",
+          );
+          session.status = "streaming";
+          continue;
+        }
+
+        // Emit the deferred done
+        this.onEvent?.(session.id, {
+          type: "done",
+          totalInputTokens: session.totalInputTokens,
+          totalOutputTokens: session.totalOutputTokens,
+          totalCacheReadTokens: session.totalCacheReadTokens,
+          totalCacheCreationTokens: session.totalCacheCreationTokens,
+        });
+        break;
       }
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : String(err);

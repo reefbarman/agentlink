@@ -59,7 +59,7 @@ export function MessageBubble({
   onOpenTranscript,
 }: MessageBubbleProps) {
   // Track whether the streaming text block has started its reveal animation
-  const [textRevealed, setTextRevealed] = useState(false);
+  const [_textRevealed, setTextRevealed] = useState(false);
 
   // Reset when streaming starts a new message
   useEffect(() => {
@@ -113,8 +113,6 @@ export function MessageBubble({
     (b) => !(b.type === "tool_call" && b.name === "spawn_background_agent"),
   );
   const lastIdx = blocks.length - 1;
-  const lastIsStreamingText =
-    streaming && lastIdx >= 0 && blocks[lastIdx].type === "text";
 
   // Show dots while streaming — always visible at the bottom until response completes.
   // This ensures there's always a visible loading indicator during any streaming gap.
@@ -158,6 +156,11 @@ export function MessageBubble({
                   sessionId={block.sessionId}
                   task={block.task}
                   message={block.message}
+                  resolvedModel={block.resolvedModel}
+                  resolvedProvider={block.resolvedProvider}
+                  resolvedMode={block.resolvedMode}
+                  taskClass={block.taskClass}
+                  routingReason={block.routingReason}
                   bgSession={bgSessions?.find((s) => s.id === block.sessionId)}
                   onStop={onStopBackground}
                 />
@@ -232,7 +235,7 @@ export function MessageBubble({
 
 // FILE_PATH_RE for plain text (user messages) — same pattern as StreamingText
 const FILE_PATH_RE =
-  /(?<![:/])\b((?:(?:\/[\w.\-]+)+|[\w][\w\-]*(?:\/[\w.\-]+)+)\.\w{1,8})(?::(\d+)(?:-\d+)?)?/g;
+  /(?<![:/])\b((?:(?:\/[\w.-]+)+|[\w][\w-]*(?:\/[\w.-]+)+)\.\w{1,8})(?::(\d+)(?:-\d+)?)?/g;
 
 function UserText({
   text,

@@ -38,6 +38,7 @@ export async function handleExecuteCommand(
     output_grep_context?: number;
     force?: boolean;
     force_reason?: string;
+    reason?: string;
   },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
@@ -138,6 +139,7 @@ export async function handleExecuteCommand(
           approvalManager,
           approvalPanel,
           sessionId,
+          params.reason,
         );
 
         if (!approvalResult.approved) {
@@ -199,6 +201,8 @@ export async function handleExecuteCommand(
         const outputFile = saveOutputTempFile(result.output);
         if (outputFile) {
           result.output_file = outputFile;
+          result.output_warning =
+            "⚠️ Output was truncated. Full output saved to output_file — use read_file(output_file) to access it. Do NOT re-run this command.";
         }
       }
 
@@ -246,6 +250,7 @@ async function approveSubCommands(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  reason?: string,
 ): Promise<{
   approved: boolean;
   reason?: string;
@@ -284,7 +289,7 @@ async function approveSubCommands(
   const { promise } = approvalPanel.enqueueCommandApproval(
     fullCommand,
     fullCommand,
-    { subCommands: entries },
+    { subCommands: entries, reason },
   );
   const response = await promise;
 

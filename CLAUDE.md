@@ -10,6 +10,15 @@
 - **Brand color**: `#4EC9B0` (teal) — used in `media/agentlink-terminal.svg` and throughout the chat webview UI (file picker indicator, active states)
 - **Icon**: `media/agentlink.svg` uses `currentColor` (themed by VS Code); `media/agentlink-terminal.svg` uses the hardcoded brand color
 
+## Verification
+
+After completing any task, **always** run:
+
+1. `npm run lint` — type-checks all tsconfigs (`tsc --noEmit`) and runs oxlint. Fix **all** errors and warnings before considering the task done.
+2. `npm test` — runs the vitest suite. Fix any failures.
+
+Both must pass cleanly (zero exit code, no warnings) before a task is considered complete.
+
 ## Adding or Changing Tools
 
 When adding a new tool or changing tool parameters:

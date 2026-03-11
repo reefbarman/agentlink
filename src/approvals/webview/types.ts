@@ -35,6 +35,8 @@ export interface ApprovalRequest {
   /** Queue position info */
   queuePosition?: number;
   queueTotal?: number;
+  /** For commands: agent-provided reason for running this command */
+  reason?: string;
   /** For MCP: detail text (input preview) */
   mcpDetail?: string;
   /** For MCP: approval choices */

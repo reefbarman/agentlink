@@ -48,6 +48,7 @@ const initialState: State = {
     authEnabled: true,
     agentConfigured: false,
     masterBypass: false,
+    hasWorkspace: false,
   },
   toolCalls: [],
   feedbackEntries: [],

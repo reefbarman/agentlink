@@ -79,6 +79,7 @@ export type AgentEvent =
       timeToFirstToken: number;
     }
   | { type: "warning"; message: string }
+  | { type: "status_update"; message: string }
   | { type: "error"; error: string; retryable: boolean }
   | {
       type: "done";
