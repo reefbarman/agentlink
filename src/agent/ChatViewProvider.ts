@@ -574,75 +574,78 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /** Called by the tool dispatcher when the agent requests a mode switch. */
-  public handleModeSwitch(mode: string, reason?: string): void {
+  public async handleModeSwitch(
+    mode: string,
+    reason?: string,
+  ): Promise<{ approved: boolean; mode: string }> {
     const requestedBy =
       reason && reason.trim().length > 0 ? reason.trim() : "agent";
 
-    this.requestApproval({
-      id: `mode-switch-${randomUUID()}`,
-      kind: "mode-switch",
-      title: `Switch to "${mode}" mode`,
-      detail: requestedBy,
-      choices: [
-        { label: "Allow", value: "run-once", isPrimary: true },
-        { label: "Reject", value: "reject", isDanger: true },
-      ],
-    })
-      .then((approval) => {
-        const decision =
-          typeof approval === "string" ? approval : approval.decision;
-        const rejectionReason =
-          typeof approval === "string" ? undefined : approval.rejectionReason;
-        const followUp =
-          typeof approval === "string" ? undefined : approval.followUp;
-
-        if (decision === "reject") {
-          const reasonText = rejectionReason?.trim() || "No reason provided";
-          this.log(`[mode] denied switch to ${mode}: ${reasonText}`);
-          this.postMessage({
-            type: "agentUserAnnotation",
-            sessionId:
-              this.sessionManager?.getForegroundSession()?.id ?? "agent",
-            text: `Mode switch to "${mode}" denied: ${reasonText}`,
-            badge: "rejection",
-          });
-          return;
-        }
-
-        if (!this.sessionManager) {
-          this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
-          return;
-        }
-
-        this.sessionManager
-          .switchForegroundMode(mode)
-          .then((session) => {
-            if (!session) {
-              // No active session yet — fall back to creating a new session in target mode.
-              this.postMessage({
-                type: "agentModeSwitchRequest",
-                mode,
-                reason,
-              });
-              return;
-            }
-            // Reset session-level write approval when switching modes — "session"
-            // approval was granted for the previous mode, not the new one.
-            this.approvalManager?.resetSessionAgentWriteApproval(session.id);
-            this.sendInitialState();
-            const suffix = followUp?.trim() ? ` | ${followUp.trim()}` : "";
-            this.log(
-              `[mode] switched foreground session ${session.id} to ${mode}${suffix}`,
-            );
-          })
-          .catch((err) => {
-            this.log(`[mode] failed to switch mode in-place: ${err}`);
-            this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
-          });
-      })
-      .catch((err) => {
-        this.log(`[mode] approval flow failed for switch to ${mode}: ${err}`);
+    try {
+      const approval = await this.requestApproval({
+        id: `mode-switch-${randomUUID()}`,
+        kind: "mode-switch",
+        title: `Switch to "${mode}" mode`,
+        detail: requestedBy,
+        choices: [
+          { label: "Allow", value: "run-once", isPrimary: true },
+          { label: "Reject", value: "reject", isDanger: true },
+        ],
       });
+
+      const decision =
+        typeof approval === "string" ? approval : approval.decision;
+      const rejectionReason =
+        typeof approval === "string" ? undefined : approval.rejectionReason;
+      const followUp =
+        typeof approval === "string" ? undefined : approval.followUp;
+
+      if (decision === "reject") {
+        const reasonText = rejectionReason?.trim() || "No reason provided";
+        this.log(`[mode] denied switch to ${mode}: ${reasonText}`);
+        this.postMessage({
+          type: "agentUserAnnotation",
+          sessionId: this.sessionManager?.getForegroundSession()?.id ?? "agent",
+          text: `Mode switch to "${mode}" denied: ${reasonText}`,
+          badge: "rejection",
+        });
+        return { approved: false, mode };
+      }
+
+      if (!this.sessionManager) {
+        this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
+        return { approved: true, mode };
+      }
+
+      try {
+        const session = await this.sessionManager.switchForegroundMode(mode);
+        if (!session) {
+          // No active session yet — fall back to creating a new session in target mode.
+          this.postMessage({
+            type: "agentModeSwitchRequest",
+            mode,
+            reason,
+          });
+          return { approved: true, mode };
+        }
+        // Reset session-level write approval when switching modes — "session"
+        // approval was granted for the previous mode, not the new one.
+        this.approvalManager?.resetSessionAgentWriteApproval(session.id);
+        this.sendInitialState();
+        const suffix = followUp?.trim() ? ` | ${followUp.trim()}` : "";
+        this.log(
+          `[mode] switched foreground session ${session.id} to ${mode}${suffix}`,
+        );
+        return { approved: true, mode };
+      } catch (err) {
+        this.log(`[mode] failed to switch mode in-place: ${err}`);
+        this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
+        return { approved: true, mode };
+      }
+    } catch (err) {
+      this.log(`[mode] approval flow failed for switch to ${mode}: ${err}`);
+      return { approved: false, mode };
+    }
   }
 
   /**
@@ -1129,6 +1132,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
           });
           effectiveSessionId = newSession.id;
+          // Migrate any approval state that was set before the session existed
+          // (stored under the "agent" fallback ID).
+          this.approvalManager?.migrateSessionState(
+            "agent",
+            effectiveSessionId,
+          );
         }
 
         mgr
@@ -1233,6 +1242,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.sendInitialState();
           this.log(`New session created: ${session.id}`);
         });
+        break;
+      }
+
+      case "agentSwitchMode": {
+        const mode = (msg.mode as string) ?? "code";
+        const fg = this.sessionManager.getForegroundSession();
+        if (fg && fg.mode !== mode) {
+          this.sessionManager
+            .switchForegroundMode(mode)
+            .then((session) => {
+              if (!session) {
+                // No active session — create a new one in the target mode
+                return this.sessionManager!.createSession(mode);
+              }
+              this.approvalManager?.resetSessionAgentWriteApproval(session.id);
+              return session;
+            })
+            .then(() => {
+              this.sendInitialState();
+              this.log(`[mode] user switched mode to ${mode}`);
+            })
+            .catch((err) => {
+              this.log(`[mode] failed to switch mode: ${err}`);
+            });
+        } else if (!fg) {
+          // No session yet — create one in the target mode
+          this.sessionManager.createSession(mode).then(() => {
+            this.sendInitialState();
+            this.log(`[mode] new session created in mode ${mode}`);
+          });
+        }
         break;
       }
 

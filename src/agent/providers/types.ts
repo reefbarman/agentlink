@@ -47,11 +47,44 @@ export interface ToolResultBlock {
   is_error?: boolean;
 }
 
+/** MIME types accepted by the Anthropic Messages API for image content. */
+export type ImageMediaType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/gif"
+  | "image/webp";
+
+const SUPPORTED_IMAGE_TYPES = new Set<ImageMediaType>([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+
+/** Map common non-standard MIME strings to a supported ImageMediaType. */
+const MIME_ALIASES: Record<string, ImageMediaType> = {
+  "image/jpg": "image/jpeg",
+  "image/x-png": "image/png",
+};
+
+/**
+ * Normalise a MIME type string to a supported ImageMediaType.
+ * Returns null if the type is not recognised/supported.
+ */
+export function toSupportedImageMediaType(
+  mimeType: string,
+): ImageMediaType | null {
+  if (SUPPORTED_IMAGE_TYPES.has(mimeType as ImageMediaType)) {
+    return mimeType as ImageMediaType;
+  }
+  return MIME_ALIASES[mimeType] ?? null;
+}
+
 export interface ImageBlock {
   type: "image";
   source: {
     type: "base64";
-    media_type: string;
+    media_type: ImageMediaType;
     data: string;
   };
 }

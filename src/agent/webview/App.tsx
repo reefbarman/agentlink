@@ -1664,9 +1664,15 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
   const handleSwitchMode = useCallback(
     (slug: string) => {
-      dispatch({ type: "NEW_SESSION" });
-      setBgSessions([]);
-      vscodeApi.postMessage({ command: "agentNewSession", mode: slug });
+      // If there's an active session, switch mode in-place without creating
+      // a new session. Otherwise create a fresh session in the target mode.
+      if (stateRef.current.sessionId) {
+        vscodeApi.postMessage({ command: "agentSwitchMode", mode: slug });
+      } else {
+        dispatch({ type: "NEW_SESSION" });
+        setBgSessions([]);
+        vscodeApi.postMessage({ command: "agentNewSession", mode: slug });
+      }
     },
     [vscodeApi],
   );

@@ -27,7 +27,9 @@ import type {
   ToolUseBlock,
   ToolDefinition,
   MessageParam,
+  ImageBlock,
 } from "./providers/types.js";
+import { toSupportedImageMediaType } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_API_RETRIES = 3;
@@ -200,23 +202,33 @@ function toolResultToContent(
     return truncateToolText(joined, maxChars, toolUseId);
   }
   // Mixed content: pass blocks so images are preserved; cap text blocks.
-  return result.content.map((c): ContentBlock => {
-    if (c.type === "text")
+  return result.content
+    .map((c): ContentBlock | null => {
+      if (c.type === "text")
+        return {
+          type: "text" as const,
+          text: truncateToolText(c.text, maxChars, toolUseId),
+        };
+      // image — validate media_type before sending to the API
+      const raw = (c as { type: "image"; data: string; mimeType: string })
+        .mimeType;
+      const mediaType = toSupportedImageMediaType(raw);
+      if (!mediaType) {
+        return {
+          type: "text" as const,
+          text: `[Image with unsupported format: ${raw}]`,
+        };
+      }
       return {
-        type: "text" as const,
-        text: truncateToolText(c.text, maxChars, toolUseId),
+        type: "image" as const,
+        source: {
+          type: "base64" as const,
+          media_type: mediaType,
+          data: (c as { type: "image"; data: string; mimeType: string }).data,
+        },
       };
-    // image
-    return {
-      type: "image" as const,
-      source: {
-        type: "base64" as const,
-        media_type: (c as { type: "image"; data: string; mimeType: string })
-          .mimeType,
-        data: (c as { type: "image"; data: string; mimeType: string }).data,
-      },
-    };
-  });
+    })
+    .filter((b): b is ContentBlock => b !== null);
 }
 
 export class AgentEngine {
@@ -346,15 +358,28 @@ export class AgentEngine {
             .map(({ role, content }, idx) => {
               const media = session.getPendingMedia(idx);
               if (media && role === "user" && typeof content === "string") {
+                const imageBlocks: ImageBlock[] = media.images
+                  .map((img) => {
+                    const mediaType = toSupportedImageMediaType(img.mimeType);
+                    if (!mediaType) {
+                      this.log?.(
+                        `[media] skipping unsupported image type: ${img.mimeType}`,
+                      );
+                      return null;
+                    }
+                    return {
+                      type: "image" as const,
+                      source: {
+                        type: "base64" as const,
+                        media_type: mediaType,
+                        data: img.base64,
+                      },
+                    };
+                  })
+                  .filter((b): b is ImageBlock => b !== null);
+
                 const blocks: ContentBlock[] = [
-                  ...media.images.map((img) => ({
-                    type: "image" as const,
-                    source: {
-                      type: "base64" as const,
-                      media_type: img.mimeType,
-                      data: img.base64,
-                    },
-                  })),
+                  ...imageBlocks,
                   ...media.documents.map((doc) => ({
                     type: "document" as const,
                     source: {

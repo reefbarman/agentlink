@@ -18,15 +18,13 @@ import { semanticFileQuery } from "../services/semanticSearch.js";
 
 // --- Image support ---
 
+/** Only types accepted by the Anthropic Messages API (image content blocks). */
 const IMAGE_EXTENSIONS: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".webp": "image/webp",
-  ".bmp": "image/bmp",
-  ".ico": "image/x-icon",
-  ".avif": "image/avif",
 };
 
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB

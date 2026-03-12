@@ -520,7 +520,10 @@ export interface ToolDispatchContext {
   mcpHub?: McpClientHub;
   /** Current agent mode slug (e.g. "architect", "code"). Used for mode-specific approval logic. */
   mode?: string;
-  onModeSwitch?: (mode: string, reason?: string) => void;
+  onModeSwitch?: (
+    mode: string,
+    reason?: string,
+  ) => Promise<{ approved: boolean; mode: string }>;
   onApprovalRequest?: import("../shared/types.js").OnApprovalRequest;
   onQuestion?: (
     questions: import("../agent/webview/types.js").Question[],
@@ -957,9 +960,39 @@ export async function dispatchToolCall(
     case "switch_mode": {
       const mode = String(params.mode ?? "");
       const reason = params.reason ? String(params.reason) : undefined;
-      ctx.onModeSwitch?.(mode, reason);
+      if (!ctx.onModeSwitch) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: "Mode switching not available",
+              }),
+            },
+          ],
+        };
+      }
+      const switchResult = await ctx.onModeSwitch(mode, reason);
+      if (!switchResult.approved) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "rejected_by_user",
+                reason: `User denied mode switch to "${mode}"`,
+              }),
+            },
+          ],
+        };
+      }
       return {
-        content: [{ type: "text", text: JSON.stringify({ ok: true, mode }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ ok: true, mode: switchResult.mode }),
+          },
+        ],
       };
     }
 

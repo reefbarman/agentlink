@@ -289,6 +289,19 @@ export class ApprovalManager {
     this._onDidChange.fire();
   }
 
+  /**
+   * Migrate all session-level approval state from one ID to another.
+   * Used when a session is created after approval state was stored under
+   * a placeholder ID (e.g. "agent").
+   */
+  migrateSessionState(fromId: string, toId: string): void {
+    const source = this.sessions.get(fromId);
+    if (!source) return;
+    this.sessions.set(toId, { ...source, lastActivity: Date.now() });
+    this.sessions.delete(fromId);
+    this._onDidChange.fire();
+  }
+
   /** Reset session-level agent write approval for a single session (e.g. on mode switch). */
   resetSessionAgentWriteApproval(sessionId: string): void {
     const session = this.sessions.get(sessionId);
