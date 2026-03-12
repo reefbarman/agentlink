@@ -995,6 +995,10 @@ export class AgentSessionManager {
     });
 
     session.title = task.slice(0, 80);
+    // Set status to "streaming" BEFORE registering the session, so the first
+    // bgSessionsUpdate the UI receives already shows the agent as running
+    // (not briefly "idle"/done).
+    session.status = "streaming";
     this.sessions.set(session.id, session);
     this.bgMeta.set(session.id, {
       resolvedMode: route.resolvedMode,
@@ -1032,7 +1036,6 @@ export class AgentSessionManager {
     bgEngine.setToolContext(bgCtx);
 
     session.addUserMessage(message);
-    session.status = "streaming";
 
     // Fire-and-forget — runs concurrently alongside the foreground session.
     // Background agents run indefinitely (like foreground agents) using

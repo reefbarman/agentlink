@@ -129,6 +129,12 @@ function AgentPicker({
           Continue
         </button>
       </div>
+      <p class="help-text" style={{ marginTop: "12px", textAlign: "center" }}>
+        Only using the{" "}
+        <a onClick={() => postCommand("dismissOnboarding")}>
+          built-in agent? Skip setup →
+        </a>
+      </p>
     </div>
   );
 }
