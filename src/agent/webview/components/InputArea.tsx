@@ -249,6 +249,7 @@ export function InputArea({
         if (c.name === "condense") return { ...c, icon: "fold" };
         if (c.name === "checkpoint") return { ...c, icon: "git-commit" };
         if (c.name === "revert") return { ...c, icon: "history" };
+        if (c.name === "btw") return { ...c, icon: "comment-discussion" };
         return c;
       });
   })();

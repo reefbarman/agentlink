@@ -44,7 +44,7 @@ export const BUILT_IN_MODES: AgentMode[] = [
   },
 ];
 
-/** Custom mode schema as stored in .agentlink/modes.json */
+/** Custom mode schema as stored in modes.json */
 interface CustomModeJson {
   slug: string;
   name: string;
@@ -54,14 +54,8 @@ interface CustomModeJson {
   customInstructions?: string;
 }
 
-/**
- * Load custom mode definitions from .agentlink/modes.json.
- * Returns an empty array if the file doesn't exist or is malformed.
- */
-export async function loadCustomModes(cwd: string): Promise<AgentMode[]> {
-  const filePath = path.join(cwd, ".agentlink", "modes.json");
+function parseModesJson(raw: string): AgentMode[] {
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
     const parsed = JSON.parse(raw) as CustomModeJson[];
     if (!Array.isArray(parsed)) return [];
 
@@ -83,6 +77,34 @@ export async function loadCustomModes(cwd: string): Promise<AgentMode[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Load custom mode definitions from modes.json files (project-level only).
+ *
+ * Priority (.agents → .claude → .agentlink): later sources override
+ * earlier for the same slug.
+ */
+export async function loadCustomModes(cwd: string): Promise<AgentMode[]> {
+  const sources = [
+    path.join(cwd, ".agents", "modes.json"),
+    path.join(cwd, ".claude", "modes.json"),
+    path.join(cwd, ".agentlink", "modes.json"),
+  ];
+
+  const merged = new Map<string, AgentMode>();
+  for (const filePath of sources) {
+    try {
+      const raw = await fs.readFile(filePath, "utf-8");
+      for (const mode of parseModesJson(raw)) {
+        merged.set(mode.slug, mode);
+      }
+    } catch {
+      // File doesn't exist or is unreadable — skip
+    }
+  }
+
+  return Array.from(merged.values());
 }
 
 /**

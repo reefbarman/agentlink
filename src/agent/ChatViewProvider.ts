@@ -303,6 +303,14 @@ export type ExtensionToWebview =
       sessionId: string;
       task: string;
       messages: unknown[];
+    }
+  | { type: "agentBtwLoading"; requestId: string; question: string }
+  | {
+      type: "agentBtwResponse";
+      requestId: string;
+      question: string;
+      answer: string;
+      error?: boolean;
     };
 
 export interface ChatState {
@@ -1483,6 +1491,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             infos,
             open: true,
           } as ExtensionToWebview);
+        } else if (name === "btw") {
+          const question = String(msg.args ?? "").trim();
+          if (question) {
+            void this.handleBtwQuestion(question);
+          }
         } else {
           this.log(`[slash] /${name} not yet implemented`);
           vscode.window.showInformationMessage(
@@ -2272,6 +2285,66 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const doc = await vscode.workspace.openTextDocument(filePath);
     await vscode.window.showTextDocument(doc, { preview: true });
     this.log(`Transcript exported to ${filePath}`);
+  }
+
+  /**
+   * Handle /btw side question: make a one-shot completion using the current
+   * session's context, without modifying conversation history.
+   */
+  private async handleBtwQuestion(question: string): Promise<void> {
+    const requestId = randomUUID();
+
+    this.postMessage({
+      type: "agentBtwLoading",
+      requestId,
+      question,
+    } as ExtensionToWebview);
+
+    const fg = this.sessionManager?.getForegroundSession();
+    const systemPrompt = fg?.systemPrompt ?? "";
+    const model =
+      fg?.model ??
+      this.sessionManager?.getConfig().model ??
+      "claude-sonnet-4-6";
+
+    // Build provider-safe messages: use the effective API history (already
+    // filtered for condense) and append the side question.
+    const sessionMessages = fg?.getMessages() ?? [];
+    const messages: import("./providers/types.js").MessageParam[] = [
+      ...sessionMessages,
+      { role: "user", content: question },
+    ];
+
+    try {
+      const provider = providerRegistry.resolveProvider(model);
+      const result = await provider.complete({
+        model,
+        systemPrompt,
+        messages,
+        maxTokens: 4096,
+      });
+
+      this.postMessage({
+        type: "agentBtwResponse",
+        requestId,
+        question,
+        answer: result.text,
+      } as ExtensionToWebview);
+
+      this.log(
+        `[btw] answered (${result.usage?.inputTokens ?? "?"}in/${result.usage?.outputTokens ?? "?"}out)`,
+      );
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.log(`[btw] error: ${errorMsg}`);
+      this.postMessage({
+        type: "agentBtwResponse",
+        requestId,
+        question,
+        answer: errorMsg,
+        error: true,
+      } as ExtensionToWebview);
+    }
   }
 
   private async revertCheckpointWithConfirmation(

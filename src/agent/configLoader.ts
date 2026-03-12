@@ -76,16 +76,24 @@ function getSubdirChain(cwd: string, targetDir: string): string[] {
 /**
  * Load all instruction sources in priority order (later entries take precedence).
  *
- * 1. ~/.agents/AGENTS.md — global agents instructions
- * 2. ~/.agents/rules/*.md — global agents rules
- * 3. ~/.claude/CLAUDE.md — global user instructions
- * 4. AGENTS.md / AGENT.md / CLAUDE.md in workspace root (first found wins)
- * 5. .claude/CLAUDE.md in workspace root
- * 6. .agents/rules/*.md in workspace root
- * 7. .agentlink/CLAUDE.md in workspace root
- * 8. Subfolder AGENTS.md files (from root child down to activeFilePath's dir)
- * 9. Subfolder AGENTS.local.md files (from root child down to activeFilePath's dir)
- * 10. AGENTS.local.md in workspace root (personal overrides, gitignored by convention)
+ * Global instructions (.agents → .claude → .agentlink):
+ *   1. ~/.agents/AGENTS.md
+ *   2. ~/.agents/rules/*.md
+ *   3. ~/.claude/CLAUDE.md
+ *   4. ~/.claude/rules/*.md
+ *   5. ~/.agentlink/CLAUDE.md
+ *   6. ~/.agentlink/rules/*.md
+ *
+ * Project-level:
+ *   7. AGENTS.md / AGENT.md / CLAUDE.md in workspace root (first found wins)
+ *   8. .agents/AGENTS.md & .agents/rules/*.md
+ *   9. .claude/CLAUDE.md & .claude/rules/*.md
+ *  10. .agentlink/CLAUDE.md & .agentlink/rules/*.md
+ *
+ * Subfolder & local:
+ *  11. Subfolder AGENTS.md files (from root child down to activeFilePath's dir)
+ *  12. Subfolder AGENTS.local.md files (from root child down to activeFilePath's dir)
+ *  13. AGENTS.local.md in workspace root (personal overrides, gitignored by convention)
  *
  * Returns an array of InstructionBlocks for display and concatenation.
  */
@@ -94,18 +102,21 @@ export async function loadAllInstructionBlocks(
   opts?: { activeFilePath?: string },
 ): Promise<InstructionBlock[]> {
   const blocks: InstructionBlock[] = [];
+  const home = os.homedir();
 
-  // 1. ~/.agents/AGENTS.md (global agents dir)
+  // --- Global instructions (.agents → .claude → .agentlink) ---
+
+  // ~/.agents/AGENTS.md
   const globalAgents = await safeReadFile(
-    path.join(os.homedir(), ".agents", "AGENTS.md"),
+    path.join(home, ".agents", "AGENTS.md"),
   );
   if (globalAgents) {
     blocks.push({ source: "~/.agents/AGENTS.md", content: globalAgents });
   }
 
-  // 2. ~/.agents/rules/*.md (global agents rules)
+  // ~/.agents/rules/*.md
   const globalAgentRules = await readMdDirectory(
-    path.join(os.homedir(), ".agents", "rules"),
+    path.join(home, ".agents", "rules"),
   );
   for (const b of globalAgentRules) {
     blocks.push({
@@ -114,15 +125,50 @@ export async function loadAllInstructionBlocks(
     });
   }
 
-  // 3. ~/.claude/CLAUDE.md (global user instructions)
+  // ~/.claude/CLAUDE.md
   const globalClaude = await safeReadFile(
-    path.join(os.homedir(), ".claude", "CLAUDE.md"),
+    path.join(home, ".claude", "CLAUDE.md"),
   );
   if (globalClaude) {
     blocks.push({ source: "~/.claude/CLAUDE.md", content: globalClaude });
   }
 
-  // 4. Workspace root — first of AGENTS.md / AGENT.md / CLAUDE.md wins
+  // ~/.claude/rules/*.md
+  const globalClaudeRules = await readMdDirectory(
+    path.join(home, ".claude", "rules"),
+  );
+  for (const b of globalClaudeRules) {
+    blocks.push({
+      source: `~/.claude/rules/${path.basename(b.source)}`,
+      content: b.content,
+    });
+  }
+
+  // ~/.agentlink/CLAUDE.md
+  const globalAgentlink = await safeReadFile(
+    path.join(home, ".agentlink", "CLAUDE.md"),
+  );
+  if (globalAgentlink) {
+    blocks.push({
+      source: "~/.agentlink/CLAUDE.md",
+      content: globalAgentlink,
+    });
+  }
+
+  // ~/.agentlink/rules/*.md
+  const globalAgentlinkRules = await readMdDirectory(
+    path.join(home, ".agentlink", "rules"),
+  );
+  for (const b of globalAgentlinkRules) {
+    blocks.push({
+      source: `~/.agentlink/rules/${path.basename(b.source)}`,
+      content: b.content,
+    });
+  }
+
+  // --- Project-level instructions ---
+
+  // Workspace root — first of AGENTS.md / AGENT.md / CLAUDE.md wins
   for (const filename of ["AGENTS.md", "AGENT.md", "CLAUDE.md"]) {
     const content = await safeReadFile(path.join(cwd, filename));
     if (content) {
@@ -131,15 +177,13 @@ export async function loadAllInstructionBlocks(
     }
   }
 
-  // 5. .claude/CLAUDE.md (Claude Code subdirectory convention)
-  const dotClaudeClaude = await safeReadFile(
-    path.join(cwd, ".claude", "CLAUDE.md"),
+  // .agents/AGENTS.md & .agents/rules/*.md
+  const dotAgentsFile = await safeReadFile(
+    path.join(cwd, ".agents", "AGENTS.md"),
   );
-  if (dotClaudeClaude) {
-    blocks.push({ source: ".claude/CLAUDE.md", content: dotClaudeClaude });
+  if (dotAgentsFile) {
+    blocks.push({ source: ".agents/AGENTS.md", content: dotAgentsFile });
   }
-
-  // 6. .agents/rules/*.md (project-level agents convention)
   const agentRules = await readMdDirectory(path.join(cwd, ".agents", "rules"));
   for (const b of agentRules) {
     blocks.push({
@@ -148,12 +192,36 @@ export async function loadAllInstructionBlocks(
     });
   }
 
-  // 7. .agentlink/CLAUDE.md (agentlink-specific overrides)
+  // .claude/CLAUDE.md & .claude/rules/*.md
+  const dotClaudeClaude = await safeReadFile(
+    path.join(cwd, ".claude", "CLAUDE.md"),
+  );
+  if (dotClaudeClaude) {
+    blocks.push({ source: ".claude/CLAUDE.md", content: dotClaudeClaude });
+  }
+  const claudeRules = await readMdDirectory(path.join(cwd, ".claude", "rules"));
+  for (const b of claudeRules) {
+    blocks.push({
+      source: `.claude/rules/${path.basename(b.source)}`,
+      content: b.content,
+    });
+  }
+
+  // .agentlink/CLAUDE.md & .agentlink/rules/*.md
   const agentlinkClaude = await safeReadFile(
     path.join(cwd, ".agentlink", "CLAUDE.md"),
   );
   if (agentlinkClaude) {
     blocks.push({ source: ".agentlink/CLAUDE.md", content: agentlinkClaude });
+  }
+  const agentlinkRules = await readMdDirectory(
+    path.join(cwd, ".agentlink", "rules"),
+  );
+  for (const b of agentlinkRules) {
+    blocks.push({
+      source: `.agentlink/rules/${path.basename(b.source)}`,
+      content: b.content,
+    });
   }
 
   // 8 & 9. Subfolder instruction files (when activeFilePath is within cwd)
@@ -211,10 +279,10 @@ export async function loadAllInstructions(
 /**
  * Load per-mode rule files for a given mode slug.
  *
- * Loads from:
- * - .agentlink/rules/*.md         (all modes, agentlink convention)
- * - .agentlink/rules-{slug}/*.md  (mode-specific, agentlink convention)
+ * Loads from (.agents → .claude → .agentlink priority):
  * - .agents/rules-{slug}/*.md     (mode-specific, .agents convention)
+ * - .claude/rules-{slug}/*.md     (mode-specific, .claude convention)
+ * - .agentlink/rules-{slug}/*.md  (mode-specific, agentlink convention)
  *
  * Files within each directory are loaded alphabetically and concatenated.
  */
@@ -224,23 +292,23 @@ export async function loadModeRules(
 ): Promise<string> {
   const sections: string[] = [];
 
-  // .agentlink/rules/ (all modes)
-  const agentlinkGlobal = await readMdDirectory(
-    path.join(cwd, ".agentlink", "rules"),
-  );
-  sections.push(...agentlinkGlobal.map((b) => b.content));
-
-  // .agentlink/rules-{slug}/ (mode-specific)
-  const agentlinkMode = await readMdDirectory(
-    path.join(cwd, ".agentlink", `rules-${modeSlug}`),
-  );
-  sections.push(...agentlinkMode.map((b) => b.content));
-
-  // .agents/rules-{slug}/ (mode-specific, .agents convention)
+  // .agents/rules-{slug}/ (lowest priority)
   const agentsMode = await readMdDirectory(
     path.join(cwd, ".agents", `rules-${modeSlug}`),
   );
   sections.push(...agentsMode.map((b) => b.content));
+
+  // .claude/rules-{slug}/
+  const claudeMode = await readMdDirectory(
+    path.join(cwd, ".claude", `rules-${modeSlug}`),
+  );
+  sections.push(...claudeMode.map((b) => b.content));
+
+  // .agentlink/rules-{slug}/ (highest priority)
+  const agentlinkMode = await readMdDirectory(
+    path.join(cwd, ".agentlink", `rules-${modeSlug}`),
+  );
+  sections.push(...agentlinkMode.map((b) => b.content));
 
   return sections.join("\n\n");
 }

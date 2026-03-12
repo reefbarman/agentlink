@@ -324,7 +324,15 @@ export type ExtensionMessage =
       /** The foreground agent's answer */
       answer: string;
     }
-  | ShowBgTranscriptMessage;
+  | ShowBgTranscriptMessage
+  | { type: "agentBtwLoading"; requestId: string; question: string }
+  | {
+      type: "agentBtwResponse";
+      requestId: string;
+      question: string;
+      answer: string;
+      error?: boolean;
+    };
 
 export type ShowBgTranscriptMessage = {
   type: "showBgTranscript";

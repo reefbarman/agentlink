@@ -63,13 +63,23 @@ function resolveEnvVars(
  * Load and merge MCP server configs from all sources.
  *
  * Priority (later entries override earlier for the same server name):
- * 1. ~/.agentlink/mcp.json  (global)
- * 2. .agentlink/mcp.json    (project — overrides global)
+ *   .agents → .claude → .agentlink, global → project
+ *
+ * 1. ~/.agents/mcp.json       (global, lowest)
+ * 2. ~/.claude/mcp.json        (global)
+ * 3. ~/.agentlink/mcp.json     (global)
+ * 4. <cwd>/.agents/mcp.json    (project)
+ * 5. <cwd>/.claude/mcp.json    (project)
+ * 6. <cwd>/.agentlink/mcp.json (project, highest)
  */
 export async function loadMcpConfigs(cwd: string): Promise<McpServerConfig[]> {
   const home = os.homedir();
   const sources = [
+    path.join(home, ".agents", "mcp.json"),
+    path.join(home, ".claude", "mcp.json"),
     path.join(home, ".agentlink", "mcp.json"),
+    path.join(cwd, ".agents", "mcp.json"),
+    path.join(cwd, ".claude", "mcp.json"),
     path.join(cwd, ".agentlink", "mcp.json"),
   ];
 
@@ -134,7 +144,11 @@ export async function loadMcpConfigs(cwd: string): Promise<McpServerConfig[]> {
 export function getMcpConfigPaths(cwd: string): string[] {
   const home = os.homedir();
   return [
+    path.join(home, ".agents", "mcp.json"),
+    path.join(home, ".claude", "mcp.json"),
     path.join(home, ".agentlink", "mcp.json"),
+    path.join(cwd, ".agents", "mcp.json"),
+    path.join(cwd, ".claude", "mcp.json"),
     path.join(cwd, ".agentlink", "mcp.json"),
   ];
 }

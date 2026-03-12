@@ -146,6 +146,12 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     source: "builtin",
     builtin: true,
   },
+  {
+    name: "btw",
+    description: "Ask a quick side question: /btw <question>",
+    source: "builtin",
+    builtin: true,
+  },
 ];
 
 export class SlashCommandRegistry {
@@ -156,27 +162,41 @@ export class SlashCommandRegistry {
     this.cwd = cwd;
   }
 
-  /** Load all user-defined commands from disk. Call on startup and on file changes. */
+  /**
+   * Load all user-defined commands from disk. Call on startup and on file changes.
+   *
+   * Priority (later entries override earlier for the same command name):
+   *   .agents → .claude → .agentlink, global → project
+   */
   async reload(): Promise<void> {
-    const [project, global_, agentlink] = await Promise.all([
+    const home = os.homedir();
+    const cwd = this.cwd;
+
+    // Load all sources in ascending priority order
+    const sources = await Promise.all([
+      // Global .agents (lowest)
+      loadCommandsFromDir(path.join(home, ".agents", "commands"), "global"),
+      // Global .claude
+      loadCommandsFromDir(path.join(home, ".claude", "commands"), "global"),
+      // Global .agentlink
+      loadCommandsFromDir(path.join(home, ".agentlink", "commands"), "global"),
+      // Project .agents
+      loadCommandsFromDir(path.join(cwd, ".agents", "commands"), "project"),
+      // Project .claude
+      loadCommandsFromDir(path.join(cwd, ".claude", "commands"), "project"),
+      // Project .agentlink (highest)
       loadCommandsFromDir(
-        path.join(this.cwd, ".claude", "commands"),
-        "project",
-      ),
-      loadCommandsFromDir(
-        path.join(os.homedir(), ".claude", "commands"),
-        "global",
-      ),
-      loadCommandsFromDir(
-        path.join(this.cwd, ".agentlink", "commands"),
+        path.join(cwd, ".agentlink", "commands"),
         "agentlink",
       ),
     ]);
 
-    // Build deduplicated list: project > global > agentlink (later sources override earlier for same name)
+    // Build deduplicated list — later sources override earlier for same name
     const byName = new Map<string, SlashCommand>();
-    for (const cmd of [...global_, ...agentlink, ...project]) {
-      byName.set(cmd.name, cmd);
+    for (const cmds of sources) {
+      for (const cmd of cmds) {
+        byName.set(cmd.name, cmd);
+      }
     }
 
     this.commands = [...BUILTIN_COMMANDS, ...Array.from(byName.values())];

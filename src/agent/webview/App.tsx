@@ -38,6 +38,8 @@ import { BackgroundSessionStrip } from "./components/BackgroundSessionStrip";
 import type { BgSessionInfoProps } from "./components/BackgroundSessionStrip";
 import { getStreamingActivity } from "./components/MessageBubble";
 import { TranscriptView } from "./components/TranscriptView";
+import { BtwPanel } from "./components/BtwPanel";
+import type { BtwState } from "./components/BtwPanel";
 import type { WebviewModelInfo } from "./types";
 
 const DEFAULT_MAX_TOKENS = 200_000;
@@ -1088,6 +1090,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     task: string;
     messages: ChatMessage[];
   } | null>(null);
+  const [btwState, setBtwState] = useState<BtwState | null>(null);
 
   useEffect(() => {
     // Drain all delta buffers, dispatching one action per buffer.
@@ -1508,6 +1511,26 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         }
 
+        case "agentBtwLoading":
+          setBtwState({
+            requestId: msg.requestId,
+            question: msg.question,
+            answer: "",
+          });
+          break;
+
+        case "agentBtwResponse":
+          setBtwState((prev) => {
+            // Discard stale responses
+            if (!prev || prev.requestId !== msg.requestId) return prev;
+            return {
+              ...prev,
+              answer: msg.answer,
+              error: msg.error,
+            };
+          });
+          break;
+
         case "showBgTranscript": {
           const converted = agentMessagesToChatMessages(
             (msg.messages as unknown[]) ?? [],
@@ -1749,6 +1772,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         case "mcp-refresh":
         case "mcp-status":
+          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
+          break;
+        case "btw":
           vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
           break;
         case "condense":
@@ -2306,6 +2332,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               />
             )}
           </div>
+        )}
+        {btwState && (
+          <BtwPanel state={btwState} onDismiss={() => setBtwState(null)} />
         )}
         {state.streaming && (
           <div class="streaming-status-bar">

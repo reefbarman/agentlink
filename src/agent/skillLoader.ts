@@ -68,12 +68,16 @@ async function scanSkillsDir(dir: string): Promise<Map<string, RawSkill>> {
  * Sources in ascending priority (later entries win on name collision):
  *   1. ~/.agents/skills/                  — global cross-agent (lowest)
  *   2. ~/.agents/skills-{mode}/           — global cross-agent, mode-specific
- *   3. ~/.agentlink/skills/               — global agentlink
- *   4. ~/.agentlink/skills-{mode}/        — global agentlink, mode-specific
- *   5. <cwd>/.agents/skills/              — project cross-agent
- *   6. <cwd>/.agents/skills-{mode}/       — project cross-agent, mode-specific
- *   7. <cwd>/.agentlink/skills/           — project agentlink
- *   8. <cwd>/.agentlink/skills-{mode}/    — project agentlink, mode-specific (highest)
+ *   3. ~/.claude/skills/                  — global Claude Code
+ *   4. ~/.claude/skills-{mode}/           — global Claude Code, mode-specific
+ *   5. ~/.agentlink/skills/               — global agentlink
+ *   6. ~/.agentlink/skills-{mode}/        — global agentlink, mode-specific
+ *   7. <cwd>/.agents/skills/              — project cross-agent
+ *   8. <cwd>/.agents/skills-{mode}/       — project cross-agent, mode-specific
+ *   9. <cwd>/.claude/skills/              — project Claude Code
+ *  10. <cwd>/.claude/skills-{mode}/       — project Claude Code, mode-specific
+ *  11. <cwd>/.agentlink/skills/           — project agentlink
+ *  12. <cwd>/.agentlink/skills-{mode}/    — project agentlink, mode-specific (highest)
  *
  * Skills that declare `modeSlugs` in their SKILL.md frontmatter are only included
  * when the current mode slug appears in that list.
@@ -87,10 +91,14 @@ export async function loadSkills(
   const sources = [
     path.join(home, ".agents", "skills"),
     path.join(home, ".agents", `skills-${modeSlug}`),
+    path.join(home, ".claude", "skills"),
+    path.join(home, ".claude", `skills-${modeSlug}`),
     path.join(home, ".agentlink", "skills"),
     path.join(home, ".agentlink", `skills-${modeSlug}`),
     path.join(cwd, ".agents", "skills"),
     path.join(cwd, ".agents", `skills-${modeSlug}`),
+    path.join(cwd, ".claude", "skills"),
+    path.join(cwd, ".claude", `skills-${modeSlug}`),
     path.join(cwd, ".agentlink", "skills"),
     path.join(cwd, ".agentlink", `skills-${modeSlug}`),
   ];
