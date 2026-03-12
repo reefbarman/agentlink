@@ -25,6 +25,9 @@ export interface TrackerContext {
   setTerminalId: (terminalId: string) => void;
 }
 
+/** Where the tool call originated from. */
+export type ToolCallSource = "mcp" | "agent";
+
 export interface TrackedCall {
   id: string;
   toolName: string;
@@ -36,6 +39,7 @@ export interface TrackedCall {
   approvalId?: string;
   terminalId?: string;
   lastHeartbeatAt?: number;
+  source: ToolCallSource;
 }
 
 export interface TrackedCallInfo {
@@ -47,6 +51,8 @@ export interface TrackedCallInfo {
   status: "active" | "completed" | "rejected";
   completedAt?: number;
   lastHeartbeatAt?: number;
+  /** Where this tool call originated — "mcp" for external agents, "agent" for the built-in agent. */
+  source: ToolCallSource;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -200,6 +206,7 @@ export class ToolCallTracker extends EventEmitter {
         startedAt: c.startedAt,
         status: "active" as const,
         lastHeartbeatAt: c.lastHeartbeatAt,
+        source: c.source,
       }),
     );
     const recent: TrackedCallInfo[] = [...this.recentCalls.values()];
@@ -215,6 +222,7 @@ export class ToolCallTracker extends EventEmitter {
       startedAt: call.startedAt,
       status: "completed",
       completedAt: Date.now(),
+      source: call.source,
     };
     this.recentCalls.set(call.id, info);
     setTimeout(() => {
@@ -240,6 +248,68 @@ export class ToolCallTracker extends EventEmitter {
       this.log(
         `TERMINAL_ASSIGNED ${call.toolName} (${toolCallId.slice(0, 8)}), terminalId=${terminalId}`,
       );
+    }
+  }
+
+  // ── Agent call registration (lightweight — no wrapping) ──────────────────
+
+  /**
+   * Register an agent tool call so it appears in the sidebar's active tools list.
+   * Unlike wrapHandler (used for MCP calls), this doesn't wrap execution — the
+   * caller is responsible for calling completeAgentCall when done.
+   */
+  registerAgentCall(
+    toolCallId: string,
+    toolName: string,
+    displayArgs: string,
+    sessionId: string,
+  ): void {
+    const tracked: TrackedCall = {
+      id: toolCallId,
+      toolName,
+      displayArgs,
+      sessionId,
+      startedAt: Date.now(),
+      forceResolve: () => {}, // Agent calls don't use force-resolve
+      source: "agent",
+    };
+    this.activeCalls.set(toolCallId, tracked);
+    this.log(
+      `AGENT_START ${toolName} (${toolCallId.slice(0, 8)}), active=${this.activeCalls.size}`,
+    );
+    this.emit("change");
+  }
+
+  /**
+   * Mark an agent tool call as completed. Moves it to the recent list with TTL.
+   */
+  completeAgentCall(toolCallId: string): void {
+    const call = this.activeCalls.get(toolCallId);
+    if (!call) return;
+    this.activeCalls.delete(toolCallId);
+    this.markCompleted(call);
+    this.log(
+      `AGENT_END ${call.toolName} (${toolCallId.slice(0, 8)}), active=${this.activeCalls.size}, recent=${this.recentCalls.size}`,
+    );
+    this.emit("change");
+  }
+
+  /**
+   * Remove all active agent calls for a given session (e.g. when the session is stopped).
+   */
+  clearAgentCalls(sessionId: string): void {
+    let removed = 0;
+    for (const [id, call] of this.activeCalls) {
+      if (call.source === "agent" && call.sessionId === sessionId) {
+        this.activeCalls.delete(id);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      this.log(
+        `AGENT_CLEAR sessionId=${sessionId.slice(0, 8)}, removed=${removed}, active=${this.activeCalls.size}`,
+      );
+      this.emit("change");
     }
   }
 
@@ -280,6 +350,7 @@ export class ToolCallTracker extends EventEmitter {
         sessionId: getSessionId(),
         startedAt: Date.now(),
         forceResolve,
+        source: "mcp",
       };
 
       const ctx: TrackerContext = {
@@ -310,6 +381,7 @@ export class ToolCallTracker extends EventEmitter {
             startedAt: tracked.startedAt,
             status: "rejected",
             completedAt: Date.now(),
+            source: "mcp",
           };
           this.recentCalls.set(id, info);
           setTimeout(() => {
@@ -397,6 +469,15 @@ export class ToolCallTracker extends EventEmitter {
       return;
     }
 
+    // Agent calls are handled by stopping the agent session
+    if (call.source === "agent") {
+      this.log(
+        `CANCEL_AGENT ${call.toolName} (${id.slice(0, 8)}), session=${call.sessionId.slice(0, 8)}`,
+      );
+      this.emit("agentCancel", call.sessionId);
+      return;
+    }
+
     this.log(`CANCEL ${call.toolName} (${id.slice(0, 8)})`);
 
     // Kill the running terminal process if applicable
@@ -449,6 +530,16 @@ export class ToolCallTracker extends EventEmitter {
     const call = this.activeCalls.get(id);
     if (!call) {
       this.log(`COMPLETE_MISS (${id.slice(0, 8)}) — not found in active calls`);
+      return;
+    }
+
+    // Agent calls: stop the session (same as cancel — individual tool
+    // force-resolve isn't supported for the built-in agent)
+    if (call.source === "agent") {
+      this.log(
+        `COMPLETE_AGENT ${call.toolName} (${id.slice(0, 8)}), session=${call.sessionId.slice(0, 8)}`,
+      );
+      this.emit("agentCancel", call.sessionId);
       return;
     }
 

@@ -13,6 +13,11 @@ interface ChatViewProps {
   onOpenFile?: (path: string, line?: number) => void;
   onOpenMermaidPanel?: (source: string) => void;
   onRevertCheckpoint?: (sessionId: string, checkpointId: string) => void;
+  onViewCheckpointDiff?: (
+    sessionId: string,
+    checkpointId: string,
+    scope: "turn" | "all",
+  ) => void;
   onRetry?: () => void;
   onSignIn?: () => void;
   bgSessions?: BgSessionInfoProps[];
@@ -27,6 +32,7 @@ export function ChatView({
   onOpenFile,
   onOpenMermaidPanel,
   onRevertCheckpoint,
+  onViewCheckpointDiff,
   onRetry,
   onSignIn,
   bgSessions,
@@ -155,6 +161,7 @@ export function ChatView({
                     checkpointId={msg.checkpointId}
                     sessionId={sessionId}
                     onRevert={onRevertCheckpoint}
+                    onViewDiff={onViewCheckpointDiff}
                   />
                 )}
               <MessageBubble

@@ -512,6 +512,31 @@ function reducer(state: AppState, action: AppAction): AppState {
       );
       msgs[targetIdx] = target;
 
+      // When ask_user completes, add a question_answer summary block
+      if (action.toolName === "ask_user") {
+        try {
+          const parsed = JSON.parse(action.result);
+          if (parsed.responses && Array.isArray(parsed.responses)) {
+            const items = parsed.responses.map(
+              (r: { question: string; answer: unknown; note?: string }) => ({
+                question: r.question ?? "",
+                answer: r.answer ?? null,
+                ...(r.note ? { note: r.note } : {}),
+              }),
+            );
+            if (items.length > 0) {
+              target.blocks = [
+                ...target.blocks,
+                { type: "question_answer" as const, items },
+              ];
+              msgs[targetIdx] = target;
+            }
+          }
+        } catch {
+          // ignore parse error
+        }
+      }
+
       // When spawn_background_agent completes, add a bg_agent block to track progress
       if (action.toolName === "spawn_background_agent") {
         try {
@@ -1130,9 +1155,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
       // Filter session-scoped foreground events from non-foreground sessions.
       // agentSessionLoaded is excluded — it intentionally switches the active session.
+      // showBgTranscript is excluded — it carries the bg session's ID but is a
+      // response to a user-initiated action, not a stream event.
       if (
         eventSessionId &&
         msg.type !== "agentSessionLoaded" &&
+        msg.type !== "showBgTranscript" &&
         !isBackgroundEvent &&
         eventSessionId !== currentSessionId
       ) {
@@ -1798,6 +1826,18 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
+  const handleViewCheckpointDiff = useCallback(
+    (sessionId: string, checkpointId: string, scope: "turn" | "all") => {
+      vscodeApi.postMessage({
+        command: "agentViewCheckpointDiff",
+        sessionId,
+        checkpointId,
+        scope,
+      });
+    },
+    [vscodeApi],
+  );
+
   const handleRetry = useCallback(() => {
     if (stateRef.current.sessionId) {
       streamingRef.current = true;
@@ -2006,6 +2046,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onOpenFile={handleOpenFile}
           onOpenMermaidPanel={handleOpenMermaidPanel}
           onRevertCheckpoint={handleRevertCheckpoint}
+          onViewCheckpointDiff={handleViewCheckpointDiff}
           onRetry={handleRetry}
           onSignIn={handleErrorSignIn}
           bgSessions={bgSessions}

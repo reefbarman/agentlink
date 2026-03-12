@@ -61,6 +61,10 @@ export function saveWriteTrustRules(opts: {
       relPath,
       inWorkspace,
     );
+  } else {
+    // Title bar / QuickPick acceptance — no trust scope UI was shown,
+    // so default to blanket "all-files" write approval at the chosen scope.
+    approvalManager.setAgentWriteApproval(sessionId, scope);
   }
 }
 
@@ -79,11 +83,11 @@ export function applyInlineTrustScope(
   if (panelResponse.trustScope === "all-files") {
     approvalManager.setAgentWriteApproval(sessionId, scope);
   } else if (panelResponse.trustScope === "this-file") {
-    approvalManager.addWriteRule(
-      sessionId,
-      { pattern: relPath, mode: "exact" },
-      scope,
-    );
+    const rule = { pattern: relPath, mode: "exact" as const };
+    approvalManager.addWriteRule(sessionId, rule, scope);
+    if (!inWorkspace) {
+      approvalManager.addPathRule(sessionId, rule, scope);
+    }
   } else if (
     panelResponse.trustScope === "pattern" &&
     panelResponse.rulePattern &&

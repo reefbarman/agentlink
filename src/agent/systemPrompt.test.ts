@@ -216,11 +216,12 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Narrate your work");
   });
 
-  it("does not include provider section for anthropic provider", async () => {
+  it("includes provider section for anthropic provider", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
       providerId: "anthropic",
     });
-    expect(result).not.toContain("Provider-Specific Behavior");
+    expect(result).toContain("Provider-Specific Behavior");
+    expect(result).toContain("Be concise");
   });
 
   it("does not include provider section when no providerId is given", async () => {

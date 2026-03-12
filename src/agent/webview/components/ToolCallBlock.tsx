@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from "preact/hooks";
 import type { ContentBlock } from "../types";
+import { InlineDiff } from "./InlineDiff";
 
 type ToolCallData = ContentBlock & { type: "tool_call" };
 
@@ -507,6 +508,7 @@ export function ToolCallBlock({ toolCall, onOpenFile }: ToolCallBlockProps) {
 
       {expanded && (
         <div class="tool-call-details">
+          <InlineDiff toolName={toolCall.name} input={input} />
           {formattedInput && (
             <div class="tool-call-section">
               <div class="tool-call-section-label">Input</div>

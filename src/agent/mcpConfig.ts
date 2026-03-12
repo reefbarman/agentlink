@@ -9,8 +9,8 @@ export interface McpServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
-  /** sse or streamable-http transport */
-  type?: "stdio" | "sse" | "streamable-http";
+  /** sse or streamable-http transport ("http" is an alias for "streamable-http") */
+  type?: "stdio" | "sse" | "streamable-http" | "http";
   url?: string;
   /** Per-server timeout in ms (default 60000) */
   timeout?: number;

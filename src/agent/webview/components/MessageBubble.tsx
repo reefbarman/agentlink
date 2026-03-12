@@ -9,6 +9,7 @@ import { ApiRequestBlock } from "./ApiRequestBlock";
 import { BgAgentBlock } from "./BgAgentBlock";
 import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import { BgQuestionBlock } from "./BgQuestionBlock";
+import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 
 /**
@@ -96,10 +97,19 @@ export function MessageBubble({
         </div>
       );
     }
+    const { files, mediaLabel, cleanText } = parseAttachments(message.content);
+    const hasAttachments = files.length > 0 || mediaLabel !== null;
     return (
       <div class="message user-message">
         <div class="message-content user-content">
-          <UserText text={message.content} onOpenFile={onOpenFile} />
+          {hasAttachments && (
+            <UserAttachments
+              files={files}
+              mediaLabel={mediaLabel}
+              onOpenFile={onOpenFile}
+            />
+          )}
+          <UserText text={cleanText} onOpenFile={onOpenFile} />
         </div>
         <CopyButton text={message.content} />
       </div>
@@ -185,6 +195,8 @@ export function MessageBubble({
                   answer={block.answer}
                 />
               );
+            case "question_answer":
+              return <QuestionAnswerBlock key={`qa-${i}`} block={block} />;
           }
         })}
 
@@ -228,6 +240,85 @@ export function MessageBubble({
           onRetry={message.error.retryable ? onRetry : undefined}
           onSignIn={onSignIn}
         />
+      )}
+    </div>
+  );
+}
+
+// Regex to extract [Attached: path] markers from user message content
+const ATTACHED_FILE_RE = /\[Attached: ([^\]]+)\]\n*/g;
+// Regex to extract [N image(s), N PDF(s) attached] media indicator
+const MEDIA_INDICATOR_RE = /\[([^\]]*attached)\]\n*/;
+
+/** Parse attachment markers out of user message text, returning chips + clean text */
+function parseAttachments(content: string): {
+  files: string[];
+  mediaLabel: string | null;
+  cleanText: string;
+} {
+  const files: string[] = [];
+  let text = content;
+
+  // Extract file attachments
+  let match: RegExpExecArray | null;
+  ATTACHED_FILE_RE.lastIndex = 0;
+  while ((match = ATTACHED_FILE_RE.exec(content)) !== null) {
+    files.push(match[1]);
+  }
+  text = text.replace(ATTACHED_FILE_RE, "");
+
+  // Extract media indicator (images/PDFs)
+  let mediaLabel: string | null = null;
+  const mediaMatch = MEDIA_INDICATOR_RE.exec(text);
+  if (mediaMatch) {
+    mediaLabel = mediaMatch[1];
+    text = text.replace(MEDIA_INDICATOR_RE, "");
+  }
+
+  return { files, mediaLabel, cleanText: text.trim() };
+}
+
+/** Renders attachment chips above user message text */
+function UserAttachments({
+  files,
+  mediaLabel,
+  onOpenFile,
+}: {
+  files: string[];
+  mediaLabel: string | null;
+  onOpenFile?: (path: string, line?: number) => void;
+}) {
+  if (files.length === 0 && !mediaLabel) return null;
+
+  return (
+    <div class="user-attachments">
+      {files.map((filePath) => {
+        const name = filePath.split("/").pop() ?? filePath;
+        return (
+          <span
+            key={filePath}
+            class="user-attachment-chip"
+            title={filePath}
+            onClick={
+              onOpenFile
+                ? (e: MouseEvent) => {
+                    e.preventDefault();
+                    onOpenFile(filePath);
+                  }
+                : undefined
+            }
+            style={onOpenFile ? { cursor: "pointer" } : undefined}
+          >
+            <i class="codicon codicon-file" />
+            <span class="user-attachment-chip-name">{name}</span>
+          </span>
+        );
+      })}
+      {mediaLabel && (
+        <span class="user-attachment-chip user-attachment-media">
+          <i class="codicon codicon-file-media" />
+          <span class="user-attachment-chip-name">{mediaLabel}</span>
+        </span>
       )}
     </div>
   );

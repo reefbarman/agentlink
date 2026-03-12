@@ -161,6 +161,14 @@ export function parseSearchReplaceBlocks(diff: string): ParseResult {
           continue;
         }
 
+        // A second divider inside the replace section means the block is
+        // malformed — the LLM likely included marker syntax as content.
+        // Reject the block rather than silently writing markers to the file.
+        if (isDivider && inReplace) {
+          inReplace = false;
+          break;
+        }
+
         if (trimmed === REPLACE_MARKER) {
           blocks.push({
             search: searchLines.join("\n"),
@@ -513,6 +521,28 @@ export async function handleApplyDiff(
       originalContent,
       blocks,
     );
+
+    // Safety check: reject if the diff would introduce marker syntax into
+    // the file. This prevents cascading corruption where a misparsed block
+    // writes "======= DIVIDER =======" or other markers as literal content.
+    const markers = [SEARCH_MARKER, DIVIDER_MARKER, REPLACE_MARKER];
+    for (const marker of markers) {
+      if (newContent.includes(marker) && !originalContent.includes(marker)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error:
+                  "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
+                hint: "The replacement content contains SEARCH/REPLACE markers that would corrupt the file. Use write_file instead.",
+                path: params.path,
+              }),
+            },
+          ],
+        };
+      }
+    }
 
     // If all blocks failed, return error without opening diff
     if (failedBlocks.length === blocks.length) {

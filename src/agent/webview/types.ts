@@ -422,6 +422,15 @@ export type ContentBlock =
       questions: string[];
       /** The foreground agent's answer */
       answer: string;
+    }
+  | {
+      type: "question_answer";
+      /** Array of Q&A pairs from the ask_user tool */
+      items: Array<{
+        question: string;
+        answer: string | string[] | number | boolean | null;
+        note?: string;
+      }>;
     };
 
 /** A chat message in the webview state */

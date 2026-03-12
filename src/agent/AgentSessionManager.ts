@@ -283,6 +283,10 @@ export class AgentSessionManager {
       session.autoTitle();
     }
 
+    // Persist immediately so the session appears in history even if the
+    // API call fails (e.g. network error, auth failure on the first message).
+    this.store?.save(session);
+
     this.onSessionsChanged?.();
 
     const MAX_AUTO_CONTINUE = 5;
@@ -579,6 +583,38 @@ export class AgentSessionManager {
 
     this.onSessionsChanged?.();
     return true;
+  }
+
+  /**
+   * Get the diff from the shadow repo at a given checkpoint.
+   * @param scope "turn" = diff since the previous checkpoint (or base), "all" = diff since session start
+   */
+  async getCheckpointDiff(
+    sessionId: string,
+    checkpointId: string,
+    scope: "turn" | "all",
+  ): Promise<string> {
+    const checkpoint = this.findCheckpoint(sessionId, checkpointId);
+    if (!checkpoint || !this.checkpointManager) return "";
+
+    const baseHash = this.checkpointManager.baseCommit;
+    if (!baseHash) return "";
+
+    if (scope === "all") {
+      return this.checkpointManager.getDiffBetween(
+        baseHash,
+        checkpoint.commitHash,
+      );
+    }
+
+    // "turn" scope: diff from the previous checkpoint to this one
+    const all = this.checkpoints.get(sessionId) ?? [];
+    const idx = all.findIndex((c) => c.id === checkpointId);
+    const fromHash = idx > 0 ? all[idx - 1].commitHash : baseHash;
+    return this.checkpointManager.getDiffBetween(
+      fromHash,
+      checkpoint.commitHash,
+    );
   }
 
   private findCheckpoint(

@@ -4,6 +4,11 @@ interface CheckpointRowProps {
   checkpointId: string;
   sessionId: string | null;
   onRevert: (sessionId: string, checkpointId: string) => void;
+  onViewDiff?: (
+    sessionId: string,
+    checkpointId: string,
+    scope: "turn" | "all",
+  ) => void;
 }
 
 /**
@@ -15,6 +20,7 @@ export function CheckpointRow({
   checkpointId,
   sessionId,
   onRevert,
+  onViewDiff,
 }: CheckpointRowProps) {
   const [isHovering, setIsHovering] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -69,6 +75,16 @@ export function CheckpointRow({
     handleMenuClose();
   }, [sessionId, checkpointId, onRevert, handleMenuClose]);
 
+  const handleViewTurnDiff = useCallback(() => {
+    if (!sessionId || !onViewDiff) return;
+    onViewDiff(sessionId, checkpointId, "turn");
+  }, [sessionId, checkpointId, onViewDiff]);
+
+  const handleViewAllDiff = useCallback(() => {
+    if (!sessionId || !onViewDiff) return;
+    onViewDiff(sessionId, checkpointId, "all");
+  }, [sessionId, checkpointId, onViewDiff]);
+
   return (
     <div
       class="checkpoint-row"
@@ -89,6 +105,29 @@ export function CheckpointRow({
         class={`checkpoint-row-actions${actionsVisible ? " visible" : ""}`}
         ref={menuRef}
       >
+        {/* View turn diff */}
+        {onViewDiff && (
+          <button
+            class="checkpoint-action-btn"
+            title="View changes since last checkpoint"
+            onClick={handleViewTurnDiff}
+          >
+            <i class="codicon codicon-diff" />
+          </button>
+        )}
+
+        {/* View all diff */}
+        {onViewDiff && (
+          <button
+            class="checkpoint-action-btn"
+            title="View all changes since session start"
+            onClick={handleViewAllDiff}
+          >
+            <i class="codicon codicon-diff-multiple" />
+          </button>
+        )}
+
+        {/* Restore button */}
         <button
           class="checkpoint-action-btn"
           title="Restore to this checkpoint"

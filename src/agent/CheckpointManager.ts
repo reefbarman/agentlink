@@ -65,6 +65,8 @@ const EXCLUDE_PATTERNS = [
 export class CheckpointManager {
   private readonly workspaceDir: string;
   private readonly shadowDir: string;
+  /** Absolute path to the shadow repo's .git directory */
+  private readonly gitDir: string;
   private readonly taskId: string;
   private git: SimpleGit | null = null;
   private baseCommitHash: string | null = null;
@@ -92,6 +94,7 @@ export class CheckpointManager {
       "checkpoints",
       hash,
     );
+    this.gitDir = path.join(this.shadowDir, ".git");
   }
 
   // ---------------------------------------------------------------------------
@@ -128,43 +131,35 @@ export class CheckpointManager {
       );
       fs.mkdirSync(this.shadowDir, { recursive: true });
 
-      // Sanitize git env to prevent interference with any outer git repo
-      const env: Record<string, string> = { ...process.env } as Record<
-        string,
-        string
-      >;
-      delete env.GIT_DIR;
-      delete env.GIT_WORK_TREE;
-      delete env.GIT_INDEX_FILE;
-      delete env.GIT_OBJECT_DIRECTORY;
-      delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
-
+      // Create simpleGit pointed at the shadow directory.
+      // We use getGitEnv() which sets GIT_DIR explicitly to prevent git
+      // from walking up and discovering the main project's .git.
       this.git = simpleGit({
         baseDir: this.shadowDir,
         binary: "git",
         maxConcurrentProcesses: 1,
         trimmed: true,
-      }).env(env);
+      });
 
-      // Check if already initialized
-      const isRepo = await this.isGitRepo();
+      // Check if the shadow repo's own .git exists (not a parent repo)
+      const isRepo = this.isShadowGitRepo();
 
       if (!isRepo) {
-        await this.git.init(["--template="]); // empty template, no hooks
+        // git init needs to run WITHOUT GIT_DIR set (the dir doesn't exist yet)
+        const initEnv = this.getSanitizedBaseEnv();
+        await this.git.env(initEnv).init(["--template="]); // empty template, no hooks
 
-        // Configure the shadow repo
-        await this.git.addConfig("core.worktree", this.workspaceDir);
-        await this.git.addConfig("commit.gpgSign", "false");
-        await this.git.addConfig("user.name", "AgentLink");
-        await this.git.addConfig("user.email", "agent@agentlink.local");
+        // Now .git exists — configure it
+        const env = this.getGitEnv();
+        await this.git.env(env).addConfig("core.worktree", this.workspaceDir);
+        await this.git.env(env).addConfig("commit.gpgSign", "false");
+        await this.git.env(env).addConfig("user.name", "AgentLink");
+        await this.git
+          .env(env)
+          .addConfig("user.email", "agent@agentlink.local");
 
         // Write .git/info/exclude to ignore large/unneeded directories
-        const excludeFile = path.join(
-          this.shadowDir,
-          ".git",
-          "info",
-          "exclude",
-        );
+        const excludeFile = path.join(this.gitDir, "info", "exclude");
         fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
         fs.writeFileSync(
           excludeFile,
@@ -172,14 +167,14 @@ export class CheckpointManager {
           "utf-8",
         );
 
-        // Create initial empty commit as base
+        // Create initial commit as base
         await this.git
-          .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
+          .env(env)
           .add(".")
           .catch(() => undefined); // ignore errors from unreadable files
 
         const result = await this.git
-          .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
+          .env(env)
           .commit("initial", { "--allow-empty": null });
 
         this.baseCommitHash = result.commit;
@@ -188,9 +183,8 @@ export class CheckpointManager {
         );
       } else {
         // Already exists — read the base commit (first commit in history)
-        const log = await this.git
-          .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
-          .log(["--oneline", "--reverse"]);
+        const env = this.getGitEnv();
+        const log = await this.git.env(env).log(["--oneline", "--reverse"]);
         this.baseCommitHash = log.all[0]?.hash ?? null;
         this.log(
           `[checkpoint] Reusing existing shadow repo, base commit: ${this.baseCommitHash}`,
@@ -221,12 +215,12 @@ export class CheckpointManager {
     }
     if (!this.initialized || !this.git) return null;
 
-    const env = this.getEnv();
+    const env = this.getGitEnv();
     try {
       const start = Date.now();
 
       await this.git
-        .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
+        .env(env)
         .add(".")
         .catch(() => undefined); // ignore errors (unreadable files, etc.)
 
@@ -235,14 +229,12 @@ export class CheckpointManager {
 
       try {
         const result = await this.git
-          .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
+          .env(env)
           .commit(message, { "--allow-empty": null });
         commitHash = result.commit;
       } catch {
         // Nothing changed — get HEAD
-        const head = await this.git
-          .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
-          .revparse(["HEAD"]);
+        const head = await this.git.env(env).revparse(["HEAD"]);
         commitHash = head.trim();
       }
 
@@ -273,11 +265,11 @@ export class CheckpointManager {
   async previewRevert(checkpoint: Checkpoint): Promise<RevertPreview | null> {
     if (!this.initialized || !this.git) return null;
 
-    const env = this.getEnv();
+    const env = this.getGitEnv();
     try {
       // Files changed since the checkpoint commit
       const diffOutput = await this.git
-        .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
+        .env(env)
         .diff([`${checkpoint.commitHash}`, "--name-status"]);
 
       const modified: string[] = [];
@@ -308,7 +300,7 @@ export class CheckpointManager {
   async revertToCheckpoint(checkpoint: Checkpoint): Promise<boolean> {
     if (!this.initialized || !this.git) return false;
 
-    const env = this.getEnv();
+    const env = this.getGitEnv();
     try {
       this.log(
         `[checkpoint] Reverting to ${checkpoint.commitHash.slice(0, 8)}`,
@@ -316,13 +308,13 @@ export class CheckpointManager {
 
       // Stash current state as safety net
       await this.git
-        .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
+        .env(env)
         .add(".")
         .catch(() => undefined);
 
       try {
         await this.git
-          .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
+          .env(env)
           .stash(["push", "--include-untracked", "-m", "pre-revert-stash"]);
       } catch {
         // Nothing to stash — that's fine
@@ -330,14 +322,12 @@ export class CheckpointManager {
 
       // Remove untracked files (clean -f -d -f is double-force for nested dirs)
       await this.git
-        .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
+        .env(env)
         .clean(["-f", "-d", "-f"])
         .catch(() => undefined);
 
       // Hard reset to the checkpoint commit
-      await this.git
-        .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
-        .reset(["--hard", checkpoint.commitHash]);
+      await this.git.env(env).reset(["--hard", checkpoint.commitHash]);
 
       this.log(`[checkpoint] Reverted successfully`);
       return true;
@@ -358,13 +348,26 @@ export class CheckpointManager {
    */
   async getDiffSince(commitHash: string): Promise<string> {
     if (!this.initialized || !this.git) return "";
-    const env = this.getEnv();
+    const env = this.getGitEnv();
     try {
-      return await this.git
-        .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
-        .diff([commitHash, "--unified=3"]);
+      return await this.git.env(env).diff([commitHash, "--unified=3"]);
     } catch (err) {
       this.log(`[checkpoint] getDiffSince failed: ${err}`);
+      return "";
+    }
+  }
+
+  /**
+   * Get a unified diff between two commits in the shadow repo.
+   * Returns empty string if checkpoints are not initialized or the diff fails.
+   */
+  async getDiffBetween(fromHash: string, toHash: string): Promise<string> {
+    if (!this.initialized || !this.git) return "";
+    const env = this.getGitEnv();
+    try {
+      return await this.git.env(env).diff([fromHash, toHash, "--unified=3"]);
+    } catch (err) {
+      this.log(`[checkpoint] getDiffBetween failed: ${err}`);
       return "";
     }
   }
@@ -375,11 +378,9 @@ export class CheckpointManager {
    */
   async getHeadCommit(): Promise<string | null> {
     if (!this.initialized || !this.git) return null;
-    const env = this.getEnv();
+    const env = this.getGitEnv();
     try {
-      const head = await this.git
-        .env({ ...env, GIT_WORK_TREE: this.workspaceDir })
-        .revparse(["HEAD"]);
+      const head = await this.git.env(env).revparse(["HEAD"]);
       return head.trim() || null;
     } catch {
       return null;
@@ -390,16 +391,24 @@ export class CheckpointManager {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  private async isGitRepo(): Promise<boolean> {
+  /**
+   * Check whether the shadow repo's own .git directory exists.
+   * Uses a filesystem check instead of `git status` to avoid git's
+   * parent-directory traversal which could find the main project's repo.
+   */
+  private isShadowGitRepo(): boolean {
     try {
-      await this.git!.status();
-      return true;
+      return fs.existsSync(path.join(this.gitDir, "HEAD"));
     } catch {
       return false;
     }
   }
 
-  private getEnv(): Record<string, string> {
+  /**
+   * Return a sanitized base env (no git env vars that could leak to parent repos).
+   * Used for `git init` before the shadow .git directory exists.
+   */
+  private getSanitizedBaseEnv(): Record<string, string> {
     const env: Record<string, string> = { ...process.env } as Record<
       string,
       string
@@ -407,7 +416,25 @@ export class CheckpointManager {
     delete env.GIT_DIR;
     delete env.GIT_WORK_TREE;
     delete env.GIT_INDEX_FILE;
+    delete env.GIT_OBJECT_DIRECTORY;
+    delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
     return env;
+  }
+
+  /**
+   * Return a git env that explicitly points at the shadow repo.
+   * Sets GIT_DIR and GIT_WORK_TREE so git never walks up to a parent repo.
+   */
+  private getGitEnv(): Record<string, string> {
+    const env = this.getSanitizedBaseEnv();
+    env.GIT_DIR = this.gitDir;
+    env.GIT_WORK_TREE = this.workspaceDir;
+    return env;
+  }
+
+  /** The commit hash of the initial (base) commit in the shadow repo. */
+  get baseCommit(): string | null {
+    return this.baseCommitHash;
   }
 
   get isReady(): boolean {

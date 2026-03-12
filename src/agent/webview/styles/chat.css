@@ -392,6 +392,55 @@ body {
   font-size: 13px;
 }
 
+/* ── User Message Attachment Chips ── */
+
+.user-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.user-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+  border-radius: 4px;
+  padding: 2px 8px 2px 5px;
+  font-size: 11px;
+  max-width: 100%;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+
+.user-attachment-chip:hover {
+  background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+}
+
+.user-attachment-chip .codicon {
+  font-size: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.user-attachment-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+}
+
+.user-attachment-media {
+  cursor: default;
+}
+
+.user-attachment-media .codicon {
+  color: var(--vscode-terminal-ansiYellow, #e5c07b);
+}
+
 .annotation-follow-up,
 .annotation-rejection {
   position: relative;
@@ -903,6 +952,96 @@ body {
 .json-null {
   color: var(--vscode-debugTokenExpression-boolean, #569cd6);
   opacity: 0.7;
+}
+
+/* ── Inline Diff View (write tools) ── */
+
+.inline-diff-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inline-diff-block {
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.inline-diff-block-header {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--vscode-descriptionForeground);
+  font-weight: 600;
+  opacity: 0.7;
+  margin-bottom: 2px;
+}
+
+.inline-diff-code {
+  margin: 0;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 400px;
+  overflow-y: auto;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background);
+}
+
+.inline-diff-line {
+  display: flex;
+  padding: 0 6px;
+  min-height: 1.5em;
+}
+
+.inline-diff-marker {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  user-select: none;
+  opacity: 0.6;
+}
+
+.inline-diff-text {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding-left: 4px;
+}
+
+.inline-diff-removed {
+  background: color-mix(
+    in srgb,
+    var(--vscode-diffEditor-removedLineBackground, rgba(255, 0, 0, 0.2)) 60%,
+    transparent
+  );
+  color: var(--vscode-diffEditor-removedTextForeground, inherit);
+}
+
+.inline-diff-removed .inline-diff-marker {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.inline-diff-added {
+  background: color-mix(
+    in srgb,
+    var(--vscode-diffEditor-insertedLineBackground, rgba(0, 255, 0, 0.2)) 60%,
+    transparent
+  );
+  color: var(--vscode-diffEditor-insertedTextForeground, inherit);
+}
+
+.inline-diff-added .inline-diff-marker {
+  color: var(--vscode-terminal-ansiGreen, #4ec9b0);
+}
+
+.inline-diff-context {
+  opacity: 0.7;
+}
+
+.inline-diff-truncated {
+  font-style: italic;
+  opacity: 0.6;
 }
 
 .tool-exit-badge {
@@ -3682,4 +3821,73 @@ body {
   color: var(--vscode-descriptionForeground);
   font-size: 12px;
   text-align: center;
+}
+
+/* ── Question Answer Summary Block ── */
+
+.qa-summary-block {
+  margin: 4px 0;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, #4ec9b0 30%, transparent);
+  overflow: hidden;
+  font-size: 12px;
+  background: color-mix(in srgb, #4ec9b0 5%, transparent);
+}
+
+.qa-summary-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: color-mix(in srgb, #4ec9b0 10%, transparent);
+  color: #4ec9b0;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.qa-summary-header .codicon {
+  font-size: 13px;
+}
+
+.qa-summary-items {
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qa-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qa-summary-question {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.8;
+}
+
+.qa-summary-answer {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--vscode-foreground);
+  word-break: break-word;
+}
+
+.qa-summary-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.7;
+  font-style: italic;
+  margin-top: 1px;
+}
+
+.qa-summary-note .codicon {
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-top: 1px;
 }

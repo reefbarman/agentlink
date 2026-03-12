@@ -134,7 +134,10 @@ export class McpClientHub {
 
     // Get or create OAuth provider for HTTP servers
     let oauthProvider: McpOAuthProvider | undefined;
-    const isHttpServer = cfg.type === "sse" || cfg.type === "streamable-http";
+    const isHttpServer =
+      cfg.type === "sse" ||
+      cfg.type === "streamable-http" ||
+      cfg.type === "http";
     if (isHttpServer && cfg.url && this.globalState) {
       oauthProvider = this.oauthProviders.get(cfg.name);
       if (!oauthProvider) {
@@ -366,7 +369,7 @@ export class McpClientHub {
       });
     }
 
-    if (type === "streamable-http") {
+    if (type === "streamable-http" || type === "http") {
       if (!cfg.url)
         throw new Error(
           `Server '${cfg.name}' is streamable-http but missing 'url'`,
@@ -438,7 +441,10 @@ export class McpClientHub {
 
     await this.disconnectServer(name);
 
-    const isHttpServer = cfg.type === "sse" || cfg.type === "streamable-http";
+    const isHttpServer =
+      cfg.type === "sse" ||
+      cfg.type === "streamable-http" ||
+      cfg.type === "http";
     if (isHttpServer && cfg.url && this.globalState) {
       // Create a fresh provider with a clean slate, run the full browser flow
       const provider = new McpOAuthProvider(

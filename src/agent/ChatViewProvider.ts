@@ -17,6 +17,8 @@ import type {
   DecisionMessage,
 } from "../approvals/webview/types.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ToolCallTracker } from "../server/ToolCallTracker.js";
+import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 
 /**
  * Webview protocol types — messages between extension and chat webview.
@@ -373,6 +375,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private streamDropLogTimer: ReturnType<typeof setTimeout> | null = null;
   private approvalManager: ApprovalManager | undefined;
   private approvalManagerListener: vscode.Disposable | undefined;
+  private toolCallTracker: ToolCallTracker | undefined;
   private mermaidPanel: vscode.WebviewPanel | undefined;
 
   constructor(
@@ -472,6 +475,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.approvalManagerListener?.dispose();
     this.approvalManagerListener = manager.onDidChange(() => {
       this.sendInitialState();
+    });
+  }
+
+  setToolCallTracker(tracker: ToolCallTracker): void {
+    this.toolCallTracker = tracker;
+    // Listen for cancel/complete actions on agent tool calls from the sidebar
+    tracker.on("agentCancel", (sessionId: string) => {
+      this.log(`[agent] agentCancel from sidebar, session=${sessionId}`);
+      if (this.sessionManager) {
+        const session = this.sessionManager.getSession(sessionId);
+        this.sessionManager.stopSession(sessionId);
+        this.toolCallTracker?.clearAgentCalls(sessionId);
+        this.postMessage({
+          type: "agentDone",
+          sessionId,
+          totalInputTokens: session?.totalInputTokens ?? 0,
+          totalOutputTokens: session?.totalOutputTokens ?? 0,
+          totalCacheReadTokens: session?.totalCacheReadTokens ?? 0,
+          totalCacheCreationTokens: session?.totalCacheCreationTokens ?? 0,
+        });
+        if (session?.background) {
+          this.sendBgSessionsUpdate();
+        }
+      }
     });
   }
 
@@ -1139,6 +1166,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (sessionId) {
           const session = this.sessionManager.getSession(sessionId);
           this.sessionManager.stopSession(sessionId);
+          // Clear any active agent tool calls from the sidebar tracker
+          this.toolCallTracker?.clearAgentCalls(sessionId);
           // Resolve only the pending questions belonging to this session so their
           // promises unblock without cancelling unrelated sessions' question flows.
           const questionIds = this.questionSessionIndex.get(sessionId);
@@ -1593,6 +1622,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentViewCheckpointDiff": {
+        const sessionId = msg.sessionId as string;
+        const checkpointId = msg.checkpointId as string;
+        const scope = (msg.scope as "turn" | "all") ?? "turn";
+        if (!sessionId || !checkpointId || !this.sessionManager) break;
+        await this.openCheckpointDiff(sessionId, checkpointId, scope);
+        break;
+      }
+
       case "agentQueueMessage": {
         const sessionId = msg.sessionId as string;
         const text = msg.text as string;
@@ -1717,6 +1755,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
         });
+        // Register with the sidebar's tool call tracker
+        this.toolCallTracker?.registerAgentCall(
+          event.toolCallId,
+          event.toolName,
+          "", // displayArgs populated by tool_input_delta
+          sessionId,
+        );
         // Keep bg strip in sync when a bg session starts a new tool
         if (isBackground) {
           this.sendBgSessionsUpdate();
@@ -1773,6 +1818,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           result: resultText,
           durationMs: event.durationMs,
         });
+        // Mark completed in the sidebar's tool call tracker
+        this.toolCallTracker?.completeAgentCall(event.toolCallId);
         // Emit user-visible annotation for follow-ups and user rejections
         try {
           const parsed = JSON.parse(resultText);
@@ -1914,6 +1961,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "done":
         this.flushDeltaBuffersNow();
+        // Clean up any lingering agent tool calls from the sidebar tracker
+        this.toolCallTracker?.clearAgentCalls(sessionId);
         this.log(
           `[agent] done totalIn=${event.totalInputTokens} totalOut=${event.totalOutputTokens} ` +
             `cacheRead=${event.totalCacheReadTokens} cacheCreate=${event.totalCacheCreationTokens}`,
@@ -2243,6 +2292,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         "Failed to revert checkpoint. Check the AgentLink Agent output channel for details.",
       );
     }
+  }
+
+  private async openCheckpointDiff(
+    sessionId: string,
+    checkpointId: string,
+    scope: "turn" | "all",
+  ): Promise<void> {
+    if (!this.sessionManager) return;
+
+    const diff = await this.sessionManager.getCheckpointDiff(
+      sessionId,
+      checkpointId,
+      scope,
+    );
+
+    if (!diff) {
+      vscode.window.showInformationMessage("No changes in this checkpoint.");
+      return;
+    }
+
+    const label =
+      scope === "all" ? "Checkpoint Diff (All)" : "Checkpoint Diff (Turn)";
+    const uri = vscode.Uri.parse(`${DIFF_VIEW_URI_SCHEME}:${label}.diff`).with({
+      query: Buffer.from(diff).toString("base64"),
+    });
+
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, {
+      preview: true,
+      preserveFocus: false,
+    });
   }
 
   private async sendDebugInfo(): Promise<void> {

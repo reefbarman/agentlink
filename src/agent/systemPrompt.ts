@@ -109,7 +109,17 @@ Background agents run independently with no time or token limits — they use au
  * get no additional section — forward-compatible with new providers.
  */
 const PROVIDER_PROMPTS: Record<string, string> = {
-  anthropic: "", // Claude's defaults are well-suited — no additional guidance needed.
+  anthropic: `
+## Provider-Specific Behavior
+
+### Be concise
+
+- Favor short, dense responses. Explain *what* you did and *why* in 1–3 sentences per step — not a paragraph.
+- When making edits: state the change and rationale, then show the tool call. Don't narrate code line-by-line or restate what the diff already shows.
+- After tool calls, summarize findings briefly. Only elaborate if the result was surprising or requires a decision from the user.
+- Skip preamble and recaps. Don't restate the user's request, don't summarize what you're "about to do" before doing it, and don't provide a conclusion paragraph restating what you already did.
+- When listing multiple items (files found, changes made, errors fixed), use terse bullet points — not full sentences for each.
+- Thinking out loud is fine for complex reasoning, but keep it proportional to the complexity. Simple tasks don't need visible deliberation.`,
 
   codex: `
 ## Provider-Specific Behavior

@@ -589,6 +589,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   chatViewProvider.setApprovalManager(approvalManager);
+  chatViewProvider.setToolCallTracker(toolCallTracker);
   chatViewProvider.setSessionManager(agentSessionManager);
 
   context.subscriptions.push(

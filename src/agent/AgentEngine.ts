@@ -31,6 +31,7 @@ import type {
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_API_RETRIES = 3;
+const _MAX_EMPTY_RESPONSE_RETRIES = 1;
 
 /** Walk the error cause chain and join unique messages into one string. */
 // (No equivalent exists elsewhere in the codebase.)
