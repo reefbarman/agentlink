@@ -18,15 +18,6 @@ export function WriteApproval({ state, postCommand }: Props) {
     hasWorkspace,
   } = state;
 
-  const label =
-    writeApproval === "global"
-      ? "Always auto-accept"
-      : writeApproval === "project"
-        ? "Project auto-accept"
-        : writeApproval === "session"
-          ? "Session auto-accept"
-          : "Prompt each time";
-
   const badge =
     writeApproval === "global" ? (
       <span class="badge badge-warn">Global</span>
@@ -63,7 +54,9 @@ export function WriteApproval({ state, postCommand }: Props) {
         >
           <option value="prompt">Prompt each time</option>
           <option value="session">Session auto-accept</option>
-          <option value="project" disabled={!hasWorkspace}>Project auto-accept</option>
+          <option value="project" disabled={!hasWorkspace}>
+            Project auto-accept
+          </option>
           <option value="global">Always auto-accept</option>
         </select>
         {badge}

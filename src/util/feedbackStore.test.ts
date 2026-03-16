@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -9,17 +9,10 @@ import {
 } from "./feedbackStore.js";
 import type { FeedbackEntry } from "./feedbackStore.js";
 
-// Override the feedback path for testing by mocking the module-level constant.
-// feedbackStore uses a hardcoded path, so we mock the fs module to redirect.
-let tmpDir: string;
+let tmpHome: string;
 let feedbackPath: string;
-const originalExistsSync = fs.existsSync;
-const originalReadFileSync = fs.readFileSync;
-const originalWriteFileSync = fs.writeFileSync;
-const originalAppendFileSync = fs.appendFileSync;
-const originalMkdirSync = fs.mkdirSync;
-const originalUnlinkSync = fs.unlinkSync;
-const originalRenameSync = fs.renameSync;
+let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 
 function makeEntry(overrides: Partial<FeedbackEntry> = {}): FeedbackEntry {
   return {
@@ -31,41 +24,19 @@ function makeEntry(overrides: Partial<FeedbackEntry> = {}): FeedbackEntry {
   };
 }
 
-// Since feedbackStore uses a hardcoded FEEDBACK_PATH, we test its logic
-// by calling it against the real path. To keep tests isolated, we save/restore.
-let savedContent: string | null = null;
-
 beforeEach(() => {
-  feedbackPath = path.join(
-    os.homedir(),
-    ".agentlink",
-    "agentlink-feedback.jsonl",
-  );
-  // Save existing file if present
-  try {
-    savedContent = fs.readFileSync(feedbackPath, "utf-8");
-  } catch {
-    savedContent = null;
-  }
-  // Clear it
-  try {
-    fs.writeFileSync(feedbackPath, "", "utf-8");
-  } catch {
-    // Directory might not exist — appendFeedback creates it
-  }
+  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-feedback-home-"));
+  originalHome = process.env.HOME;
+  originalUserProfile = process.env.USERPROFILE;
+  process.env.HOME = tmpHome;
+  process.env.USERPROFILE = tmpHome;
+  feedbackPath = path.join(tmpHome, ".agentlink", "agentlink-feedback.jsonl");
 });
 
 afterEach(() => {
-  // Restore original content
-  if (savedContent !== null) {
-    fs.writeFileSync(feedbackPath, savedContent, "utf-8");
-  } else {
-    try {
-      fs.unlinkSync(feedbackPath);
-    } catch {
-      // ignore
-    }
-  }
+  process.env.HOME = originalHome;
+  process.env.USERPROFILE = originalUserProfile;
+  fs.rmSync(tmpHome, { recursive: true, force: true });
 });
 
 describe("feedbackStore", () => {
@@ -148,6 +119,7 @@ describe("feedbackStore", () => {
   });
 
   it("skips malformed JSON lines", () => {
+    fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
     fs.writeFileSync(
       feedbackPath,
       '{"timestamp":"t","tool_name":"x","feedback":"good","extension_version":"1"}\nnot json\n{"timestamp":"t","tool_name":"y","feedback":"also good","extension_version":"1"}\n',

@@ -34,8 +34,12 @@ export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
   const isSkipped = scope === "skip";
 
   const handleAccept = useCallback(() => {
-    submit({ id: request.id, decision: "accept" });
-  }, [request.id, submit]);
+    submit({
+      id: request.id,
+      decision: "accept",
+      followUp: followUpRef.current?.trim() || undefined,
+    });
+  }, [request.id, submit, followUpRef]);
 
   const handleSaveAndAccept = useCallback(() => {
     const decision =
@@ -56,8 +60,18 @@ export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
         rulePattern: filePath,
         ruleMode: "exact",
       }),
+      followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [request.id, scope, trustScope, pattern, mode, filePath, submit]);
+  }, [
+    request.id,
+    scope,
+    trustScope,
+    pattern,
+    mode,
+    filePath,
+    submit,
+    followUpRef,
+  ]);
 
   const handleReject = useCallback(
     (reason?: string) => {

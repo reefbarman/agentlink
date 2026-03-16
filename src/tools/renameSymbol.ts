@@ -6,13 +6,14 @@ import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.j
 import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
 import { decisionToScope, applyInlineTrustScope } from "./writeApprovalUI.js";
 
-import { type ToolResult } from "../shared/types.js";
+import { type ToolResult, type OnApprovalRequest } from "../shared/types.js";
 
 export async function handleRenameSymbol(
   params: { path: string; line: number; column: number; new_name: string },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  onApprovalRequest?: OnApprovalRequest,
 ): Promise<ToolResult> {
   try {
     const { uri, document, relPath } = await resolveAndOpenDocument(
@@ -94,46 +95,81 @@ export async function handleRenameSymbol(
       .get<boolean>("masterBypass", false);
 
     const canAutoApprove =
-      masterBypass || approvalManager.isWriteApproved(sessionId);
+      masterBypass || approvalManager.isAgentWriteApproved(sessionId);
     let renameFollowUp: string | undefined;
 
     if (!canAutoApprove) {
-      const { promise } = approvalPanel.enqueueRenameApproval(
-        oldName,
-        params.new_name,
-        filesPreview,
-        totalChanges,
-      );
+      let decision: string;
 
-      const response = await promise;
-      renameFollowUp = response.followUp;
-
-      if (response.decision === "reject") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "rejected",
-                old_name: oldName,
-                new_name: params.new_name,
-                reason: response.rejectionReason,
-              }),
-            },
+      if (onApprovalRequest) {
+        const filesDetail = filesPreview
+          .map(
+            (f) =>
+              `${f.path} (${f.changes} change${f.changes !== 1 ? "s" : ""})`,
+          )
+          .join("\n");
+        const result = await onApprovalRequest({
+          kind: "rename",
+          title: `Rename \`${oldName}\` → \`${params.new_name}\`?`,
+          detail: `${totalChanges} change${totalChanges !== 1 ? "s" : ""} across ${filesPreview.length} file${filesPreview.length !== 1 ? "s" : ""}:\n${filesDetail}`,
+          choices: [
+            { label: "Accept", value: "accept", isPrimary: true },
+            { label: "Reject", value: "reject", isDanger: true },
           ],
-        };
-      }
-
-      // Save trust rules for session/project/always decisions
-      const scope = decisionToScope(response.decision);
-      if (scope && response.trustScope) {
-        applyInlineTrustScope(
-          response,
-          approvalManager,
-          sessionId,
-          scope,
-          relPath,
+        });
+        decision = typeof result === "string" ? result : result.decision;
+        if (decision === "reject") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "rejected_by_user",
+                  old_name: oldName,
+                  new_name: params.new_name,
+                }),
+              },
+            ],
+          };
+        }
+      } else {
+        const { promise } = approvalPanel.enqueueRenameApproval(
+          oldName,
+          params.new_name,
+          filesPreview,
+          totalChanges,
         );
+
+        const response = await promise;
+        renameFollowUp = response.followUp;
+
+        if (response.decision === "reject") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "rejected_by_user",
+                  old_name: oldName,
+                  new_name: params.new_name,
+                  reason: response.rejectionReason,
+                }),
+              },
+            ],
+          };
+        }
+
+        // Save trust rules for session/project/always decisions
+        const scope = decisionToScope(response.decision);
+        if (scope && response.trustScope) {
+          applyInlineTrustScope(
+            response,
+            approvalManager,
+            sessionId,
+            scope,
+            relPath,
+          );
+        }
       }
     }
 

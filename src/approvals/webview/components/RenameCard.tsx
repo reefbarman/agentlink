@@ -35,8 +35,12 @@ export function RenameCard({ request, submit, followUpRef }: RenameCardProps) {
   const isSkipped = scope === "skip";
 
   const handleAccept = useCallback(() => {
-    submit({ id: request.id, decision: "accept" });
-  }, [request.id, submit]);
+    submit({
+      id: request.id,
+      decision: "accept",
+      followUp: followUpRef.current?.trim() || undefined,
+    });
+  }, [request.id, submit, followUpRef]);
 
   const handleSaveAndAccept = useCallback(() => {
     const decision =
@@ -58,8 +62,18 @@ export function RenameCard({ request, submit, followUpRef }: RenameCardProps) {
           rulePattern: affectedFiles[0].path,
           ruleMode: "exact",
         }),
+      followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [request.id, scope, trustScope, pattern, mode, affectedFiles, submit]);
+  }, [
+    request.id,
+    scope,
+    trustScope,
+    pattern,
+    mode,
+    affectedFiles,
+    submit,
+    followUpRef,
+  ]);
 
   const handleReject = useCallback(
     (reason?: string) => {
@@ -98,9 +112,7 @@ export function RenameCard({ request, submit, followUpRef }: RenameCardProps) {
             type="text"
             class="text-input rule-pattern-input"
             value={pattern}
-            onInput={(e) =>
-              setPattern((e.target as HTMLInputElement).value)
-            }
+            onInput={(e) => setPattern((e.target as HTMLInputElement).value)}
           />
           <div class="rule-row-toggles">
             <div class="toggle-group">

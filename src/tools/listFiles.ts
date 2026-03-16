@@ -51,6 +51,23 @@ export async function handleListFiles(
       }
     }
 
+    // Detect when a file path is passed instead of a directory
+    const stat = await fs.stat(dirPath);
+    if (!stat.isDirectory()) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error:
+                "Path is a file, not a directory — use read_file to read its contents",
+              path: params.path,
+            }),
+          },
+        ],
+      };
+    }
+
     // Semantic file search: query the index and return files ranked by relevance
     if (params.query) {
       const result = await semanticFileList(dirPath, params.query);

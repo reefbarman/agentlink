@@ -10,7 +10,7 @@ import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
 import { createHash } from "crypto";
-import type { IndexCache, CachedFileEntry } from "./types.js";
+import type { IndexCache } from "./types.js";
 
 // --- Constants ---
 
@@ -144,16 +144,6 @@ export interface DiffResult {
   staleRelPaths: string[];
   /** Non-fatal errors encountered during file reading */
   errors: string[];
-}
-
-/** Yield the event loop to avoid CPU saturation */
-function yieldEvent(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-/** Yield with a longer delay to throttle CPU usage */
-function yieldThrottle(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 1));
 }
 
 /** Simple concurrency limiter (like p-limit) */

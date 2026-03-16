@@ -15,6 +15,19 @@ function formatElapsed(ms: number): string {
   return `${mins}m ${rem}s`;
 }
 
+function SourceBadge({ source }: { source: "mcp" | "agent" }) {
+  return (
+    <span
+      class={`tool-call-source tool-call-source-${source}`}
+      title={
+        source === "agent" ? "Built-in AgentLink Agent" : "External MCP agent"
+      }
+    >
+      {source === "agent" ? "agent" : "mcp"}
+    </span>
+  );
+}
+
 export function ActiveToolCalls({ calls, postCommand }: Props) {
   const [, setTick] = useState(0);
 
@@ -41,20 +54,21 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
         ) : undefined
       }
     >
-      {calls.length === 0 && (
-        <p class="help-text">No active tool calls.</p>
-      )}
+      {calls.length === 0 && <p class="help-text">No active tool calls.</p>}
       {activeCalls.map((c) => (
         <div key={c.id} class="tool-call-row">
           <div class="tool-call-header">
             <code class="tool-call-name">{c.toolName}</code>
+            <SourceBadge source={c.source} />
             <span class="tool-call-elapsed">
               {formatElapsed(Date.now() - c.startedAt)}
             </span>
           </div>
-          <div class="tool-call-args" title={c.displayArgs}>
-            {c.displayArgs}
-          </div>
+          {c.displayArgs && (
+            <div class="tool-call-args" title={c.displayArgs}>
+              {c.displayArgs}
+            </div>
+          )}
           {c.params && (
             <details class="tool-call-params">
               <summary>params</summary>
@@ -62,7 +76,10 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
             </details>
           )}
           {c.lastHeartbeatAt && (
-            <div class="tool-call-heartbeat" title="Time since last successful SSE heartbeat">
+            <div
+              class="tool-call-heartbeat"
+              title="Time since last successful SSE heartbeat"
+            >
               heartbeat {formatElapsed(Date.now() - c.lastHeartbeatAt)} ago
             </div>
           )}
@@ -86,6 +103,7 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
         <div key={c.id} class="tool-call-row tool-call-rejected">
           <div class="tool-call-header">
             <code class="tool-call-name">{c.toolName}</code>
+            <SourceBadge source={c.source} />
             <span class="tool-call-elapsed tool-call-rejected-label">
               rejected
             </span>
@@ -99,13 +117,16 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
         <div key={c.id} class="tool-call-row tool-call-completed">
           <div class="tool-call-header">
             <code class="tool-call-name">{c.toolName}</code>
+            <SourceBadge source={c.source} />
             <span class="tool-call-elapsed tool-call-done">
               {formatElapsed((c.completedAt ?? Date.now()) - c.startedAt)}
             </span>
           </div>
-          <div class="tool-call-args" title={c.displayArgs}>
-            {c.displayArgs}
-          </div>
+          {c.displayArgs && (
+            <div class="tool-call-args" title={c.displayArgs}>
+              {c.displayArgs}
+            </div>
+          )}
           {c.params && (
             <details class="tool-call-params">
               <summary>params</summary>

@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 
 import {
@@ -54,6 +55,51 @@ export function needsMultiline(sanitizedRegex: string): boolean {
  */
 export function needsPcre2(regex: string): boolean {
   return /\(\?[=!]|\(\?<[=!]/.test(regex);
+}
+
+/** Glob metacharacters that indicate a true glob pattern (not a literal file path). */
+const GLOB_META = /[*?[\]{}]/;
+
+/**
+ * Detect if `file_pattern` looks like a literal file path rather than a glob.
+ * Returns the resolved absolute path if the file exists, otherwise undefined.
+ *
+ * A pattern is treated as a literal file path when it contains a path separator
+ * (`/` or `\`) and does NOT contain any glob metacharacters (`*`, `?`, `[`, `{`).
+ */
+export function resolveFilePatternAsPath(
+  filePattern: string,
+  searchDir: string,
+): string | undefined {
+  if (!filePattern.includes("/") && !filePattern.includes("\\")) {
+    return undefined; // bare filename — valid glob usage
+  }
+  if (GLOB_META.test(filePattern)) {
+    return undefined; // contains glob characters — valid glob usage
+  }
+  // Looks like a literal file path — try to resolve it
+  const candidate = path.isAbsolute(filePattern)
+    ? filePattern
+    : path.resolve(searchDir, filePattern);
+  // Ensure the resolved path stays within the search directory
+  // to prevent path traversal (e.g. ../../etc/passwd)
+  const normalizedCandidate = path.normalize(candidate);
+  const normalizedDir = path.normalize(searchDir) + path.sep;
+  if (
+    !normalizedCandidate.startsWith(normalizedDir) &&
+    normalizedCandidate !== path.normalize(searchDir)
+  ) {
+    return undefined;
+  }
+  try {
+    const stat = fs.statSync(candidate);
+    if (stat.isFile()) {
+      return candidate;
+    }
+  } catch {
+    // file doesn't exist
+  }
+  return undefined;
 }
 
 export function getEscapingHint(regex: string): string | undefined {
@@ -164,13 +210,22 @@ export async function handleSearchFiles(
       args.push("--pcre2");
     }
 
-    // Only add --glob if a specific file pattern is provided
-    // Using --glob "*" overrides .gitignore behavior
+    // Handle file_pattern: if it looks like a literal file path that exists,
+    // use it as the search target instead of --glob to avoid glob matching issues
+    let searchTarget = dirPath;
     if (params.file_pattern) {
-      args.push("--glob", params.file_pattern);
+      const resolvedFile = resolveFilePatternAsPath(
+        params.file_pattern,
+        dirPath,
+      );
+      if (resolvedFile) {
+        searchTarget = resolvedFile;
+      } else {
+        args.push("--glob", params.file_pattern);
+      }
     }
 
-    args.push(dirPath);
+    args.push(searchTarget);
 
     let output: string;
     try {
@@ -305,8 +360,16 @@ async function searchFilesOnly(
   if (params.multiline || needsMultiline(sanitized))
     args.push("--multiline", "--multiline-dotall");
   if (needsPcre2(sanitized)) args.push("--pcre2");
-  if (params.file_pattern) args.push("--glob", params.file_pattern);
-  args.push(dirPath);
+  let searchTarget = dirPath;
+  if (params.file_pattern) {
+    const resolvedFile = resolveFilePatternAsPath(params.file_pattern, dirPath);
+    if (resolvedFile) {
+      searchTarget = resolvedFile;
+    } else {
+      args.push("--glob", params.file_pattern);
+    }
+  }
+  args.push(searchTarget);
 
   let output: string;
   try {
@@ -374,8 +437,16 @@ async function searchCount(
   if (params.multiline || needsMultiline(sanitized))
     args.push("--multiline", "--multiline-dotall");
   if (needsPcre2(sanitized)) args.push("--pcre2");
-  if (params.file_pattern) args.push("--glob", params.file_pattern);
-  args.push(dirPath);
+  let searchTarget = dirPath;
+  if (params.file_pattern) {
+    const resolvedFile = resolveFilePatternAsPath(params.file_pattern, dirPath);
+    if (resolvedFile) {
+      searchTarget = resolvedFile;
+    } else {
+      args.push("--glob", params.file_pattern);
+    }
+  }
+  args.push(searchTarget);
 
   let output: string;
   try {

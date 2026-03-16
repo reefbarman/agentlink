@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
+import { resolveAndOpenDocument } from "./languageFeatures.js";
 
 import { type ToolResult } from "../shared/types.js";
 

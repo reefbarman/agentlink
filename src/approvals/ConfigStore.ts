@@ -8,6 +8,7 @@ import type { CommandRule, PathRule } from "./ApprovalManager.js";
 export interface AgentLinkConfig {
   version: number;
   writeApproved?: boolean;
+  agentWriteApproved?: boolean;
   commandRules?: CommandRule[];
   pathRules?: PathRule[];
   writeRules?: PathRule[];
@@ -186,6 +187,10 @@ export class ConfigStore {
 
     if (typeof obj.writeApproved === "boolean") {
       config.writeApproved = obj.writeApproved;
+    }
+
+    if (typeof obj.agentWriteApproved === "boolean") {
+      config.agentWriteApproved = obj.agentWriteApproved;
     }
 
     if (Array.isArray(obj.commandRules)) {

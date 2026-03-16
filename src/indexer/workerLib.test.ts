@@ -10,7 +10,6 @@ import {
   hashContent,
   diffFiles,
   MAX_FILE_SIZE,
-  INDEXABLE_EXTENSIONS,
 } from "./workerLib.js";
 import type { IndexCache } from "./types.js";
 
@@ -280,11 +279,7 @@ describe("diffFiles", () => {
     const f5 = writeFile("notes.log", "some log output");
     const emptyCache: IndexCache = { version: 1, files: {} };
 
-    const result = diffFiles(
-      [f1, f2, f3, f4, f5],
-      workspaceRoot,
-      emptyCache,
-    );
+    const result = diffFiles([f1, f2, f3, f4, f5], workspaceRoot, emptyCache);
 
     const indexed = result.toIndex.map((f) => f.relPath);
     expect(indexed).toContain("package-lock.json");

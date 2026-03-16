@@ -2,13 +2,11 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-const FEEDBACK_PATH = path.join(
-  os.homedir(),
-  ".agentlink",
-  "agentlink-feedback.jsonl",
-);
-
 const MAX_FIELD_LENGTH = 500;
+
+function getFeedbackPath(): string {
+  return path.join(os.homedir(), ".agentlink", "agentlink-feedback.jsonl");
+}
 
 export interface FeedbackEntry {
   timestamp: string;
@@ -27,6 +25,8 @@ function truncate(value: string, max = MAX_FIELD_LENGTH): string {
 }
 
 export function appendFeedback(entry: FeedbackEntry): void {
+  const feedbackPath = getFeedbackPath();
+
   // Truncate potentially large fields
   const safe: FeedbackEntry = {
     ...entry,
@@ -40,17 +40,18 @@ export function appendFeedback(entry: FeedbackEntry): void {
   const line = JSON.stringify(safe) + "\n";
 
   // Ensure directory exists
-  fs.mkdirSync(path.dirname(FEEDBACK_PATH), { recursive: true });
+  fs.mkdirSync(path.dirname(feedbackPath), { recursive: true });
 
   // O_APPEND writes are atomic on POSIX for data <= PIPE_BUF (4096 bytes).
   // Each truncated entry is well under this limit.
-  fs.appendFileSync(FEEDBACK_PATH, line, "utf-8");
+  fs.appendFileSync(feedbackPath, line, "utf-8");
 }
 
 export function readFeedback(toolName?: string): FeedbackEntry[] {
-  if (!fs.existsSync(FEEDBACK_PATH)) return [];
+  const feedbackPath = getFeedbackPath();
+  if (!fs.existsSync(feedbackPath)) return [];
 
-  const raw = fs.readFileSync(FEEDBACK_PATH, "utf-8");
+  const raw = fs.readFileSync(feedbackPath, "utf-8");
   const entries: FeedbackEntry[] = [];
 
   for (const line of raw.split("\n")) {
@@ -68,9 +69,10 @@ export function readFeedback(toolName?: string): FeedbackEntry[] {
 }
 
 export function deleteFeedback(indices: number[]): number {
-  if (!fs.existsSync(FEEDBACK_PATH)) return 0;
+  const feedbackPath = getFeedbackPath();
+  if (!fs.existsSync(feedbackPath)) return 0;
 
-  const raw = fs.readFileSync(FEEDBACK_PATH, "utf-8");
+  const raw = fs.readFileSync(feedbackPath, "utf-8");
   const lines = raw.split("\n").filter((l) => l.trim());
   const toRemove = new Set(indices);
 
@@ -78,11 +80,11 @@ export function deleteFeedback(indices: number[]): number {
   const removed = lines.length - remaining.length;
 
   // Atomic write: temp file + rename
-  const tmpPath = FEEDBACK_PATH + `.tmp.${process.pid}`;
+  const tmpPath = feedbackPath + `.tmp.${process.pid}`;
   try {
     const content = remaining.length > 0 ? remaining.join("\n") + "\n" : "";
     fs.writeFileSync(tmpPath, content, "utf-8");
-    fs.renameSync(tmpPath, FEEDBACK_PATH);
+    fs.renameSync(tmpPath, feedbackPath);
   } catch (err) {
     try {
       fs.unlinkSync(tmpPath);

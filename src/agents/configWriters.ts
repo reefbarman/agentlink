@@ -445,7 +445,7 @@ function removeCodexSection(content: string): string {
       continue;
     }
     // Stop skipping at next section header
-    if (skipping && /^\[/.test(line.trim())) {
+    if (skipping && line.trim().startsWith("[")) {
       skipping = false;
     }
     if (!skipping) {
@@ -553,8 +553,11 @@ export function createConfigWriter(
           return a || b;
         },
         writeForFolder(folderPath, port, authToken) {
-          const a = claudeWriter.writeForFolder?.(folderPath, port, authToken) ?? false;
-          const b = mcpJsonWriter.writeForFolder?.(folderPath, port, authToken) ?? false;
+          const a =
+            claudeWriter.writeForFolder?.(folderPath, port, authToken) ?? false;
+          const b =
+            mcpJsonWriter.writeForFolder?.(folderPath, port, authToken) ??
+            false;
           return a || b;
         },
         cleanup() {

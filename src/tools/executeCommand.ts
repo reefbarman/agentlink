@@ -38,6 +38,7 @@ export async function handleExecuteCommand(
     output_grep_context?: number;
     force?: boolean;
     force_reason?: string;
+    reason?: string;
   },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
@@ -138,6 +139,7 @@ export async function handleExecuteCommand(
           approvalManager,
           approvalPanel,
           sessionId,
+          params.reason,
         );
 
         if (!approvalResult.approved) {
@@ -146,7 +148,7 @@ export async function handleExecuteCommand(
               {
                 type: "text",
                 text: JSON.stringify({
-                  status: "rejected",
+                  status: "rejected_by_user",
                   command: params.command,
                   ...(approvalResult.reason && {
                     reason: approvalResult.reason,
@@ -199,10 +201,15 @@ export async function handleExecuteCommand(
         const outputFile = saveOutputTempFile(result.output);
         if (outputFile) {
           result.output_file = outputFile;
+          result.output_warning =
+            "⚠️ Output was truncated. Full output saved to output_file — use read_file(output_file) to access it. Do NOT re-run this command.";
         }
       }
 
       result.output = filtered;
+    } else if (!result.output_captured && !result.output) {
+      result.output =
+        "Command execution was sent to the terminal, but no output was captured.";
     }
 
     // If the user edited the command, include modification info
@@ -246,6 +253,7 @@ async function approveSubCommands(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  reason?: string,
 ): Promise<{
   approved: boolean;
   reason?: string;
@@ -284,7 +292,7 @@ async function approveSubCommands(
   const { promise } = approvalPanel.enqueueCommandApproval(
     fullCommand,
     fullCommand,
-    { subCommands: entries },
+    { subCommands: entries, reason },
   );
   const response = await promise;
 

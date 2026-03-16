@@ -12,6 +12,14 @@
 
 set -euo pipefail
 
+# Skip AgentLink enforcement for Claude Code CLI sessions.
+# Treat missing/unknown entrypoints as CLI to avoid over-enforcing outside IDE flows.
+entrypoint="${CLAUDE_CODE_ENTRYPOINT:-}"
+entrypoint_lower=$(printf '%s' "$entrypoint" | tr '[:upper:]' '[:lower:]')
+if [ -z "$entrypoint_lower" ] || [ "$entrypoint_lower" = "cli" ]; then
+  exit 0
+fi
+
 # Read hook input from stdin
 input=$(cat)
 tool_name=$(echo "$input" | jq -r '.tool_name')
@@ -24,7 +32,7 @@ hook_event=$(echo "$input" | jq -r '.hookEventName // ""')
 file_tools_re="^(Read|Write|Edit|readFile|editFiles|createFile)$"
 if [[ "$tool_name" =~ $file_tools_re ]]; then
   file_path=$(echo "$input" | jq -r '.tool_input.file_path // .tool_input.filePath // .tool_input.path // ""')
-  if echo "$file_path" | grep -qiE '/plans/[^/]*\.md$'; then
+  if echo "$file_path" | grep -qiE '(^|[\\/])plans[\\/][^\\/]*\.md$'; then
     exit 0
   fi
 fi

@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { decisionToScope } from "./writeApprovalUI.js";
-import type { DiffDecision } from "../integrations/DiffViewProvider.js";
 
 describe("decisionToScope", () => {
   it("maps accept-session to session", () => {

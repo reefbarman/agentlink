@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.3.2",
+  "version": "1.5.0",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -44,6 +44,12 @@
           "type": "webview",
           "id": "agentLink.statusView",
           "name": "Status"
+        },
+        {
+          "icon": "media/agentlink.svg",
+          "type": "webview",
+          "id": "agentLink.chatView",
+          "name": "Agent"
         }
       ],
       "agentLinkPanel": [
@@ -114,6 +120,30 @@
       {
         "command": "agentlink.cancelIndex",
         "title": "AgentLink: Cancel Indexing"
+      },
+      {
+        "command": "agentlink.addFileToChat",
+        "title": "AgentLink: Add File to Chat"
+      },
+      {
+        "command": "agentlink.addSelectionToChat",
+        "title": "AgentLink: Add Selection to Chat"
+      },
+      {
+        "command": "agentlink.fixWithAgent",
+        "title": "Fix with AgentLink"
+      },
+      {
+        "command": "agentlink.explainWithAgent",
+        "title": "Explain with AgentLink"
+      },
+      {
+        "command": "agentlink.codexSignIn",
+        "title": "AgentLink: Sign In to OpenAI/Codex"
+      },
+      {
+        "command": "agentlink.codexSignOut",
+        "title": "AgentLink: Manage OpenAI/Codex Authentication"
       }
     ],
     "menus": {
@@ -132,6 +162,28 @@
           "command": "agentlink.rejectDiff",
           "group": "navigation@3",
           "when": "agentLink.diffPending"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "agentlink.addFileToChat",
+          "group": "agentlink@1"
+        },
+        {
+          "command": "agentlink.addSelectionToChat",
+          "group": "agentlink@2",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "agentlink.explainWithAgent",
+          "group": "agentlink@3",
+          "when": "editorHasSelection"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "agentlink.addFileToChat",
+          "group": "agentlink@1"
         }
       ]
     },
@@ -194,7 +246,7 @@
         "agentlink.semanticSearchEnabled": {
           "type": "boolean",
           "default": false,
-          "description": "Enable semantic codebase search via Qdrant vector index. Requires Qdrant running and an OpenAI API key."
+          "description": "Enable semantic codebase search via Qdrant vector index. Requires Qdrant running and an OpenAI API key for embeddings."
         },
         "agentlink.qdrantUrl": {
           "type": "string",
@@ -235,6 +287,10 @@
             "**/target/**",
             "**/.venv/**",
             "**/vendor/**",
+            "**/.claude/**",
+            "**/.codex/**",
+            "**/.agentlink/**",
+            "**/.agents/**",
             "**/*.min.js",
             "**/*.map"
           ],
@@ -259,6 +315,51 @@
           "minimum": 0,
           "description": "Seconds to remember a single-use command approval (run-once / accept). Repeat identical commands within this window are auto-approved. Set to 0 to disable."
         },
+        "agentlink.agentModel": {
+          "type": "string",
+          "default": "claude-sonnet-4-6",
+          "description": "Model to use for the built-in agent chat. Use /model in the chat to see available models."
+        },
+        "agentlink.agentMaxTokens": {
+          "type": "number",
+          "default": 8192,
+          "description": "Maximum output tokens per agent response."
+        },
+        "agentlink.thinkingBudget": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 1024,
+          "maximum": 32768,
+          "description": "Token budget for extended thinking (only used with thinking-capable models like claude-opus-4-6)."
+        },
+        "agentlink.showThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show thinking blocks in the agent chat UI."
+        },
+        "agentlink.autoCondense": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically condense the conversation context when the context window fills up."
+        },
+        "agentlink.autoCondenseThreshold": {
+          "type": "number",
+          "default": 0.9,
+          "minimum": 0.1,
+          "maximum": 1,
+          "deprecationMessage": "Use agentlink.modelCondenseThresholds instead.",
+          "description": "Legacy global auto-condense threshold used for migration. New per-model thresholds are stored in agentlink.modelCondenseThresholds."
+        },
+        "agentlink.modelCondenseThresholds": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 1
+          },
+          "description": "Per-model auto-condense thresholds keyed by model ID. Anthropic Sonnet/Opus default to 0.6; other models default to 0.9 when no override is stored."
+        },
         "agentlink.writeRules": {
           "type": "array",
           "default": [],
@@ -266,6 +367,18 @@
             "type": "string"
           },
           "description": "Glob patterns for files that are always auto-approved for writes without showing a diff view. Supports workspace-relative paths (e.g. \"**/*.test.ts\") and absolute paths (e.g. \"/tmp/**\")."
+        },
+        "agentlink.defaultMode": {
+          "type": "string",
+          "default": "code",
+          "enum": [
+            "code",
+            "architect",
+            "ask",
+            "debug",
+            "review"
+          ],
+          "description": "Default mode for new agent chat sessions."
         }
       }
     }
@@ -275,25 +388,39 @@
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package",
     "release": "bash scripts/release.sh",
+    "lint": "bash -c 'e=0; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; oxlint src/ --deny-warnings || e=1; exit $e'",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "@tanstack/virtual-core": "^3.13.20",
     "@vscode/codicons": "^0.0.44",
     "@vscode/tree-sitter-wasm": "^0.3.0",
     "diff": "^8.0.3",
+    "dompurify": "^3.3.2",
+    "gray-matter": "^4.0.3",
+    "marked": "^17.0.4",
+    "mermaid": "^11.12.3",
     "picomatch": "^4.0.3",
     "preact": "^10.28.4",
+    "simple-git": "^3.32.3",
+    "vega": "^6.2.0",
+    "vega-embed": "^7.1.0",
+    "vega-lite": "^6.4.2",
     "web-tree-sitter": "^0.26.6",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "zod-to-json-schema": "^3.25.1"
   },
   "devDependencies": {
+    "@types/dompurify": "^3.0.5",
     "@types/node": "^25.3.2",
     "@types/picomatch": "^4.0.2",
     "@types/vscode": "^1.109.0",
     "@vitest/coverage-v8": "^4.0.18",
     "esbuild": "^0.27.3",
+    "oxlint": "^1.53.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }

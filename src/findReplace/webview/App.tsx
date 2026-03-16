@@ -113,13 +113,12 @@ export function App({ vscodeApi }: AppProps) {
         </button>
       </div>
       <div class="fr-body">
-        {data.fileGroups.map((fg, fi) => {
+        {data.fileGroups.map((fg) => {
           const fileAccepted = fg.matches.every((m) => accepted.get(m.id));
           return (
             <FileSection
               key={fg.path}
               group={fg}
-              fileIndex={fi}
               accepted={accepted}
               allAccepted={fileAccepted}
               onToggleMatch={toggleMatch}

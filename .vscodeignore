@@ -9,6 +9,8 @@
 !dist/approval.css
 !dist/fr-preview.js
 !dist/fr-preview.css
+!dist/chat.js
+!dist/chat.css
 !dist/codicon.css
 !dist/codicon.ttf
 !package.json

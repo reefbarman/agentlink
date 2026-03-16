@@ -12,7 +12,7 @@ export interface SubCommandEntry {
 }
 
 export interface ApprovalRequest {
-  kind: "command" | "path" | "write" | "rename";
+  kind: "command" | "path" | "write" | "rename" | "mcp" | "mode-switch";
   id: string;
   /** For commands: the full compound command */
   command?: string;
@@ -35,6 +35,17 @@ export interface ApprovalRequest {
   /** Queue position info */
   queuePosition?: number;
   queueTotal?: number;
+  /** For commands: agent-provided reason for running this command */
+  reason?: string;
+  /** For MCP: detail text (input preview) */
+  mcpDetail?: string;
+  /** For MCP: approval choices */
+  mcpChoices?: Array<{
+    label: string;
+    value: string;
+    isPrimary?: boolean;
+    isDanger?: boolean;
+  }>;
 }
 
 export interface RuleEntry {

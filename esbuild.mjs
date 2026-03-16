@@ -37,6 +37,7 @@ const webviewBase = {
   platform: "browser",
   target: "es2022",
   sourcemap: true,
+  keepNames: true,
   minify: true,
   jsx: "automatic",
   jsxImportSource: "preact",
@@ -67,6 +68,13 @@ const frPreviewOptions = {
 };
 
 /** @type {esbuild.BuildOptions} */
+const chatOptions = {
+  ...webviewBase,
+  entryPoints: ["src/agent/webview/index.tsx"],
+  entryNames: "chat",
+};
+
+/** @type {esbuild.BuildOptions} */
 const indexerOptions = {
   entryPoints: ["src/indexer/worker.ts"],
   bundle: true,
@@ -90,11 +98,12 @@ const indexerOptions = {
 };
 
 if (watch) {
-  const [extCtx, sideCtx, appCtx, frCtx, idxCtx] = await Promise.all([
+  const [extCtx, sideCtx, appCtx, frCtx, chatCtx, idxCtx] = await Promise.all([
     esbuild.context(extensionOptions),
     esbuild.context(sidebarOptions),
     esbuild.context(approvalOptions),
     esbuild.context(frPreviewOptions),
+    esbuild.context(chatOptions),
     esbuild.context(indexerOptions),
   ]);
   await Promise.all([
@@ -102,6 +111,7 @@ if (watch) {
     sideCtx.watch(),
     appCtx.watch(),
     frCtx.watch(),
+    chatCtx.watch(),
     idxCtx.watch(),
   ]);
   console.log("Watching for changes...");
@@ -111,6 +121,7 @@ if (watch) {
     esbuild.build(sidebarOptions),
     esbuild.build(approvalOptions),
     esbuild.build(frPreviewOptions),
+    esbuild.build(chatOptions),
     esbuild.build(indexerOptions),
   ]);
   // Copy codicon assets to dist

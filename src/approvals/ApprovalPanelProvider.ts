@@ -1,6 +1,10 @@
 import * as vscode from "vscode";
 import { randomUUID } from "crypto";
-import type { SubCommandEntry, ApprovalRequest } from "./webview/types.js";
+import type {
+  SubCommandEntry,
+  ApprovalRequest,
+  DecisionMessage,
+} from "./webview/types.js";
 import type { StatusBarManager } from "../util/StatusBarManager.js";
 
 // ── Response types ──────────────────────────────────────────────────────────
@@ -75,6 +79,8 @@ interface InternalRequest {
   fullCommand?: string;
   filePath?: string;
   subCommands?: SubCommandEntry[];
+  /** Agent-provided reason for running a command */
+  reason?: string;
   writeOperation?: "create" | "modify";
   outsideWorkspace?: boolean;
   oldName?: string;
@@ -119,6 +125,15 @@ export class ApprovalPanelProvider
   // Track whether the Preact app has signalled it's ready
   private webviewReady = false;
 
+  /** When set, route approvals to this callback instead of showing the approval webview. */
+  public onForwardApproval?: (
+    request: ApprovalRequest,
+    respond: (msg: DecisionMessage) => void,
+  ) => void;
+
+  /** Called when the approval queue empties, if onForwardApproval is set. */
+  public onForwardApprovalIdle?: () => void;
+
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly statusBarManager: StatusBarManager,
@@ -146,7 +161,7 @@ export class ApprovalPanelProvider
   enqueueCommandApproval(
     command: string,
     fullCommand: string,
-    options?: { subCommands?: SubCommandEntry[] },
+    options?: { subCommands?: SubCommandEntry[]; reason?: string },
   ): { promise: Promise<CommandApprovalResponse>; id: string } {
     const id = randomUUID();
     const promise = this.enqueue({
@@ -155,6 +170,7 @@ export class ApprovalPanelProvider
       command,
       fullCommand,
       subCommands: options?.subCommands,
+      reason: options?.reason,
     }) as Promise<CommandApprovalResponse>;
     return { promise, id };
   }
@@ -281,6 +297,30 @@ export class ApprovalPanelProvider
 
     const { request } = this.currentEntry;
 
+    // If a forwarding hook is set, delegate rendering to the caller (e.g. chat webview)
+    if (this.onForwardApproval) {
+      const queuePosition = 1;
+      const queueTotal = 1 + this.queue.length;
+      const msg: ApprovalRequest = {
+        kind: request.kind,
+        id: request.id,
+        command: request.command,
+        subCommands: request.subCommands,
+        reason: request.reason,
+        filePath: request.filePath,
+        writeOperation: request.writeOperation,
+        outsideWorkspace: request.outsideWorkspace,
+        oldName: request.oldName,
+        newName: request.newName,
+        affectedFiles: request.affectedFiles,
+        totalChanges: request.totalChanges,
+        queuePosition,
+        queueTotal,
+      };
+      this.onForwardApproval(msg, (decision) => this.handleMessage(decision));
+      return;
+    }
+
     // Always show alert and focus window, even if webview isn't ready yet
     this.alertDisposable?.dispose();
     this.alertDisposable = this.showAlert(
@@ -325,6 +365,7 @@ export class ApprovalPanelProvider
       id: request.id,
       command: request.command,
       subCommands: request.subCommands,
+      reason: request.reason,
       filePath: request.filePath,
       writeOperation: request.writeOperation,
       outsideWorkspace: request.outsideWorkspace,
@@ -460,6 +501,11 @@ export class ApprovalPanelProvider
     this.alertDisposable?.dispose();
     this.alertDisposable = undefined;
     this.statusBarManager.setPendingCount(0);
+
+    if (this.onForwardApproval) {
+      this.onForwardApprovalIdle?.();
+      return;
+    }
 
     const position = this.getPosition();
     if (position === "beside") {

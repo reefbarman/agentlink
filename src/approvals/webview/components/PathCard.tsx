@@ -30,8 +30,12 @@ export function PathCard({ request, submit, followUpRef }: PathCardProps) {
   const isSkipped = scope === "skip";
 
   const handleAllowOnce = useCallback(() => {
-    submit({ id: request.id, decision: "allow-once" });
-  }, [request.id, submit]);
+    submit({
+      id: request.id,
+      decision: "allow-once",
+      followUp: followUpRef.current?.trim() || undefined,
+    });
+  }, [request.id, submit, followUpRef]);
 
   const handleSaveAndAllow = useCallback(() => {
     const decision =
@@ -45,8 +49,9 @@ export function PathCard({ request, submit, followUpRef }: PathCardProps) {
       decision,
       rulePattern: pattern,
       ruleMode: mode,
+      followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [request.id, scope, pattern, mode, submit]);
+  }, [request.id, scope, pattern, mode, submit, followUpRef]);
 
   const handleReject = useCallback(
     (reason?: string) => {

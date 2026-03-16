@@ -12,13 +12,20 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
-import { type ToolResult } from "../shared/types.js";
+import {
+  type ToolResult,
+  type OnApprovalRequest,
+  errorResult,
+} from "../shared/types.js";
+import { handlePendingEditLockError } from "./pendingEditLock.js";
 
 export async function handleWriteFile(
   params: { path: string; content: string },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  onApprovalRequest?: OnApprovalRequest,
+  mode?: string,
 ): Promise<ToolResult> {
   try {
     const { absolutePath: filePath, inWorkspace } = resolveAndValidatePath(
@@ -38,11 +45,22 @@ export async function handleWriteFile(
       .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
 
+    // In architect mode, auto-approve the first write to a plans/ file (new file only).
+    const isNewPlanFile =
+      mode === "architect" &&
+      inWorkspace &&
+      relPath.startsWith("plans/") &&
+      !(await fs
+        .access(filePath)
+        .then(() => true)
+        .catch(() => false));
+
     // Auto-approve check (includes recent single-use approvals within TTL)
     const canAutoApprove =
       masterBypass ||
+      isNewPlanFile ||
       (inWorkspace
-        ? approvalManager.isWriteApproved(sessionId, filePath)
+        ? approvalManager.isAgentWriteApproved(sessionId, filePath)
         : approvalManager.isFileWriteApproved(sessionId, filePath));
 
     if (canAutoApprove) {
@@ -115,7 +133,10 @@ export async function handleWriteFile(
       await diffView.open(filePath, relPath, params.content, {
         outsideWorkspace: !inWorkspace,
       });
-      const decision = await diffView.waitForUserDecision(approvalPanel);
+      const decision = await diffView.waitForUserDecision(
+        approvalPanel,
+        onApprovalRequest,
+      );
 
       if (decision === "reject") {
         return await diffView.revertChanges(
@@ -139,19 +160,16 @@ export async function handleWriteFile(
       return await diffView.saveChanges();
     });
 
-    const { finalContent, ...response } = result;
+    const { finalContent: _finalContent, ...response } = result;
     return {
       content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ error: message, path: params.path }),
-        },
-      ],
-    };
+    return (
+      handlePendingEditLockError(err, params.path) ??
+      errorResult(err instanceof Error ? err.message : String(err), {
+        path: params.path,
+      })
+    );
   }
 }

@@ -31,8 +31,16 @@ export async function getRipgrepBinPath(): Promise<string> {
   const candidates = [
     path.join(appRoot, "node_modules/@vscode/ripgrep/bin/", binName),
     path.join(appRoot, "node_modules/vscode-ripgrep/bin/", binName),
-    path.join(appRoot, "node_modules.asar.unpacked/vscode-ripgrep/bin/", binName),
-    path.join(appRoot, "node_modules.asar.unpacked/@vscode/ripgrep/bin/", binName),
+    path.join(
+      appRoot,
+      "node_modules.asar.unpacked/vscode-ripgrep/bin/",
+      binName,
+    ),
+    path.join(
+      appRoot,
+      "node_modules.asar.unpacked/@vscode/ripgrep/bin/",
+      binName,
+    ),
   ];
 
   for (const candidate of candidates) {
@@ -97,14 +105,22 @@ export interface SearchFileResult {
 
 // --- Execution helpers ---
 
-export function truncateLine(line: string, maxLength: number = MAX_LINE_LENGTH): string {
-  return line.length > maxLength ? line.substring(0, maxLength) + " [truncated...]" : line;
+export function truncateLine(
+  line: string,
+  maxLength: number = MAX_LINE_LENGTH,
+): string {
+  return line.length > maxLength
+    ? line.substring(0, maxLength) + " [truncated...]"
+    : line;
 }
 
 /**
  * Execute ripgrep with --json output and parse results into structured data.
  */
-export async function execRipgrepSearch(rgPath: string, args: string[]): Promise<string> {
+export async function execRipgrepSearch(
+  rgPath: string,
+  args: string[],
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const rgProcess = childProcess.spawn(rgPath, args);
     const rl = readline.createInterface({
@@ -148,7 +164,11 @@ export async function execRipgrepSearch(rgPath: string, args: string[]): Promise
 /**
  * Execute ripgrep in --files mode, collecting up to `limit` file paths.
  */
-export async function execRipgrepFiles(rgPath: string, args: string[], limit: number): Promise<string[]> {
+export async function execRipgrepFiles(
+  rgPath: string,
+  args: string[],
+  limit: number,
+): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const rgProcess = childProcess.spawn(rgPath, args);
     const rl = readline.createInterface({
@@ -189,7 +209,10 @@ export async function execRipgrepFiles(rgPath: string, args: string[], limit: nu
 /**
  * Parse ripgrep --json output into structured search results.
  */
-export function parseRipgrepOutput(output: string, cwd: string): { results: SearchFileResult[]; totalMatches: number } {
+export function parseRipgrepOutput(
+  output: string,
+  _cwd: string,
+): { results: SearchFileResult[]; totalMatches: number } {
   const results: SearchFileResult[] = [];
   let currentFile: SearchFileResult | null = null;
   let totalMatches = 0;
@@ -210,7 +233,10 @@ export function parseRipgrepOutput(output: string, cwd: string): { results: Sear
           results.push(currentFile);
           currentFile = null;
         }
-      } else if ((parsed.type === "match" || parsed.type === "context") && currentFile) {
+      } else if (
+        (parsed.type === "match" || parsed.type === "context") &&
+        currentFile
+      ) {
         if (parsed.type === "match") {
           totalMatches++;
         }
@@ -221,7 +247,8 @@ export function parseRipgrepOutput(output: string, cwd: string): { results: Sear
           isMatch: parsed.type === "match",
         };
 
-        const lastResult = currentFile.searchResults[currentFile.searchResults.length - 1];
+        const lastResult =
+          currentFile.searchResults[currentFile.searchResults.length - 1];
         if (lastResult?.lines.length > 0) {
           const lastLine = lastResult.lines[lastResult.lines.length - 1];
           // If contiguous with last result, add to it

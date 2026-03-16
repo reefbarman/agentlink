@@ -8,6 +8,7 @@ import type {
   ApprovalPanelProvider,
   WriteApprovalResponse,
 } from "../approvals/ApprovalPanelProvider.js";
+import type { OnApprovalRequest } from "../shared/types.js";
 
 export type DiffDecision =
   | "accept"
@@ -16,15 +17,43 @@ export type DiffDecision =
   | "accept-always"
   | "reject";
 
-// Module-level pending decision resolver — allows editor title bar commands to resolve the diff
-let pendingDecisionResolve: ((decision: DiffDecision) => void) | null = null;
+// Map of file path → pending decision resolver.
+// Allows multiple diff views to be open simultaneously (e.g. agent + MCP)
+// without overwriting each other's resolve callbacks.
+const pendingDecisionResolvers = new Map<
+  string,
+  (decision: DiffDecision) => void
+>();
 
+/**
+ * Resolve the diff for the currently active editor tab.
+ * Falls back to resolving the single pending diff if only one exists.
+ */
 export function resolveCurrentDiff(decision: DiffDecision): boolean {
-  if (pendingDecisionResolve) {
-    pendingDecisionResolve(decision);
-    pendingDecisionResolve = null;
+  if (pendingDecisionResolvers.size === 0) return false;
+
+  // Determine which diff to resolve based on the active editor
+  const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (activeTab?.input instanceof vscode.TabInputTextDiff) {
+    const filePath = activeTab.input.modified.fsPath;
+    const resolve = pendingDecisionResolvers.get(filePath);
+    if (resolve) {
+      pendingDecisionResolvers.delete(filePath);
+      resolve(decision);
+      return true;
+    }
+  }
+
+  // Fallback: if only one diff is pending, resolve it
+  if (pendingDecisionResolvers.size === 1) {
+    const [filePath, resolve] = pendingDecisionResolvers
+      .entries()
+      .next().value!;
+    pendingDecisionResolvers.delete(filePath);
+    resolve(decision);
     return true;
   }
+
   return false;
 }
 
@@ -33,7 +62,7 @@ export function resolveCurrentDiff(decision: DiffDecision): boolean {
  * Called from the "more options" toolbar button command.
  */
 export async function showDiffMoreOptions(): Promise<void> {
-  if (!pendingDecisionResolve) return;
+  if (pendingDecisionResolvers.size === 0) return;
 
   const items: Array<vscode.QuickPickItem & { decision: DiffDecision }> = [
     {
@@ -70,6 +99,15 @@ export async function showDiffMoreOptions(): Promise<void> {
 const pathLocks = new Map<string, Promise<void>>();
 const LOCK_TIMEOUT = 60_000; // 60 seconds
 
+export class FileLockTimeoutError extends Error {
+  readonly code = "pending_edit_lock";
+
+  constructor(filePath: string) {
+    super(`Lock timeout: another edit to ${filePath} is pending`);
+    this.name = "FileLockTimeoutError";
+  }
+}
+
 export async function withFileLock<T>(
   filePath: string,
   fn: () => Promise<T>,
@@ -104,7 +142,7 @@ export async function withFileLock<T>(
       if (pathLocks.get(lockKey) === lockPromise) {
         pathLocks.delete(lockKey);
       }
-      throw new Error(`Lock timeout: another edit to ${filePath} is pending`);
+      throw new FileLockTimeoutError(filePath);
     }
   }
 
@@ -119,7 +157,7 @@ export async function withFileLock<T>(
 }
 
 export interface DiffResult {
-  status: "accepted" | "rejected";
+  status: "accepted" | "rejected" | "rejected_by_user";
   path: string;
   operation?: "created" | "modified";
   user_edits?: string;
@@ -277,18 +315,19 @@ export class DiffViewProvider {
 
   async waitForUserDecision(
     approvalPanel: ApprovalPanelProvider,
+    onApprovalRequest?: OnApprovalRequest,
   ): Promise<DiffDecision> {
-    // Show toolbar buttons via context key
+    // Track UI elements for cleanup — when the decision comes from outside
+    // the panel/QuickPick (title bar buttons, editor close), the UI
+    // must still be disposed to avoid orphaned state.
+    let disposeUI: (() => void) | undefined;
+
+    // Show toolbar buttons via context key (true if any diff is pending)
     await vscode.commands.executeCommand(
       "setContext",
       "agentLink.diffPending",
       true,
     );
-
-    // Track UI elements for cleanup — when the decision comes from outside
-    // the panel/QuickPick (title bar buttons, editor close), the UI
-    // must still be disposed to avoid orphaned state.
-    let disposeUI: (() => void) | undefined;
 
     try {
       return await new Promise<DiffDecision>((resolve) => {
@@ -297,7 +336,7 @@ export class DiffViewProvider {
         const finish = (decision: DiffDecision) => {
           if (resolved) return;
           resolved = true;
-          pendingDecisionResolve = null;
+          pendingDecisionResolvers.delete(this.absolutePath!);
           editorCloseDisposable.dispose();
           try {
             disposeUI?.();
@@ -308,7 +347,7 @@ export class DiffViewProvider {
         };
 
         // Allow editor title bar commands to resolve this decision
-        pendingDecisionResolve = finish;
+        pendingDecisionResolvers.set(this.absolutePath!, finish);
 
         // Listen for diff tab being closed (treat as rejection).
         const editorCloseDisposable = vscode.window.tabGroups.onDidChangeTabs(
@@ -329,39 +368,78 @@ export class DiffViewProvider {
           },
         );
 
-        // Enqueue write approval in the panel
-        const { promise: panelPromise, id: approvalId } =
-          approvalPanel.enqueueWriteApproval(this.relPath!, {
-            operation: this.editType!,
-            outsideWorkspace: this.outsideWorkspace,
+        if (onApprovalRequest) {
+          // Inline chat approval — show rich WriteCard in the webview
+          const operation = this.editType === "create" ? "Create" : "Modify";
+          onApprovalRequest({
+            kind: "write",
+            title: `${operation} \`${this.relPath}\`?`,
+            choices: [],
+          }).then((raw) => {
+            if (resolved) return;
+            // Extract decision from the rich response
+            const decision = typeof raw === "string" ? raw : raw.decision;
+            const followUp = typeof raw === "string" ? undefined : raw.followUp;
+            const rejectionReason =
+              typeof raw === "string" ? undefined : raw.rejectionReason;
+            // Store rich response for saveChanges() / revertChanges()
+            this.writeApprovalResponse = {
+              decision: decision as WriteApprovalResponse["decision"],
+              followUp,
+              rejectionReason,
+              // Map trust scopes from the WriteCard decision
+              ...(typeof raw !== "string" && {
+                trustScope: (raw as Record<string, unknown>)
+                  .trustScope as WriteApprovalResponse["trustScope"],
+                rulePattern: (raw as Record<string, unknown>).rulePattern as
+                  | string
+                  | undefined,
+                ruleMode: (raw as Record<string, unknown>)
+                  .ruleMode as WriteApprovalResponse["ruleMode"],
+              }),
+            };
+            finish((decision as DiffDecision) ?? "reject");
           });
+          // disposeUI is a no-op since there's no panel entry to cancel
+          disposeUI = () => undefined;
+        } else {
+          // Enqueue write approval in the panel
+          const { promise: panelPromise, id: approvalId } =
+            approvalPanel.enqueueWriteApproval(this.relPath!, {
+              operation: this.editType!,
+              outsideWorkspace: this.outsideWorkspace,
+            });
 
-        // If title bar or editor close resolves first, cancel the panel entry
-        disposeUI = () => {
-          approvalPanel.cancelApproval(approvalId);
-        };
-
-        // When panel resolves, store the rich response and map to DiffDecision
-        panelPromise.then((response) => {
-          if (resolved) return; // title bar or editor close already resolved
-          this.writeApprovalResponse = response;
-          const decisionMap: Record<string, DiffDecision> = {
-            accept: "accept",
-            reject: "reject",
-            "accept-session": "accept-session",
-            "accept-project": "accept-project",
-            "accept-always": "accept-always",
+          // If title bar or editor close resolves first, cancel the panel entry
+          disposeUI = () => {
+            approvalPanel.cancelApproval(approvalId);
           };
-          finish(decisionMap[response.decision] ?? "reject");
-        });
+
+          // When panel resolves, store the rich response and map to DiffDecision
+          panelPromise.then((response) => {
+            if (resolved) return; // title bar or editor close already resolved
+            this.writeApprovalResponse = response;
+            const decisionMap: Record<string, DiffDecision> = {
+              accept: "accept",
+              reject: "reject",
+              "accept-session": "accept-session",
+              "accept-project": "accept-project",
+              "accept-always": "accept-always",
+            };
+            finish(decisionMap[response.decision] ?? "reject");
+          });
+        }
       });
     } finally {
       disposeUI?.();
-      await vscode.commands.executeCommand(
-        "setContext",
-        "agentLink.diffPending",
-        false,
-      );
+      // Only clear context key if no other diffs are still pending
+      if (pendingDecisionResolvers.size === 0) {
+        await vscode.commands.executeCommand(
+          "setContext",
+          "agentLink.diffPending",
+          false,
+        );
+      }
     }
   }
 
@@ -493,7 +571,7 @@ export class DiffViewProvider {
     }
 
     return {
-      status: "rejected",
+      status: "rejected_by_user",
       path: this.relPath,
       ...(reason && { reason }),
     };
@@ -559,11 +637,8 @@ export class DiffViewProvider {
       .flatMap((tg) => tg.tabs)
       .filter((tab) => {
         if (tab.input instanceof vscode.TabInputTextDiff) {
-          const diffInput = tab.input;
-          return (
-            diffInput.original.scheme === DIFF_VIEW_URI_SCHEME ||
-            diffInput.modified.fsPath === this.absolutePath
-          );
+          // Only close diff tabs for THIS file, not all agentlink diffs
+          return tab.input.modified.fsPath === this.absolutePath;
         }
         return false;
       });

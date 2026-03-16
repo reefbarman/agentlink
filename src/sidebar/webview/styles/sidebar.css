@@ -308,10 +308,28 @@ h3 {
   padding: 1px 4px;
   border-radius: 3px;
 }
+.tool-call-source {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.tool-call-source-mcp {
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+}
+.tool-call-source-agent {
+  color: #4ec9b0;
+  background: rgba(78, 201, 176, 0.12);
+}
 .tool-call-elapsed {
   font-size: 11px;
   color: var(--vscode-descriptionForeground);
   flex-shrink: 0;
+  margin-left: auto;
 }
 .tool-call-args {
   font-size: 11px;

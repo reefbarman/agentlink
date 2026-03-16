@@ -37,7 +37,7 @@ export async function handleGetCodeActions(
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { uri, document } = await resolveAndOpenDocument(
+    const { uri } = await resolveAndOpenDocument(
       params.path,
       approvalManager,
       approvalPanel,
@@ -49,18 +49,6 @@ export async function handleGetCodeActions(
       ? toPosition(params.end_line, params.end_column ?? params.column)
       : startPos;
     const range = new vscode.Range(startPos, endPos);
-
-    // Build context with diagnostics at the range
-    const diagnostics = vscode.languages
-      .getDiagnostics(uri)
-      .filter((d) => range.intersection(d.range) !== undefined);
-    const context: vscode.CodeActionContext = {
-      diagnostics,
-      triggerKind: vscode.CodeActionTriggerKind.Invoke,
-      only: params.kind
-        ? vscode.CodeActionKind.Empty.append(params.kind)
-        : undefined,
-    };
 
     let actions = await vscode.commands.executeCommand<vscode.CodeAction[]>(
       "vscode.executeCodeActionProvider",
@@ -177,7 +165,7 @@ export async function handleApplyCodeAction(
       };
     }
 
-    const { actions, path: actionPath } = cachedActions;
+    const { actions } = cachedActions;
 
     if (params.index < 0 || params.index >= actions.length) {
       return {

@@ -1,5 +1,5 @@
-import { z } from "zod";
 import { handleHandshake } from "../../tools/handshake.js";
+import { handshakeSchema } from "../../shared/toolSchemas.js";
 import type { ToolRegistrationContext } from "./types.js";
 import type { TrustGate } from "../registerTools.js";
 
@@ -14,25 +14,14 @@ export function registerSessionTools(
     "handshake",
     {
       description: desc("handshake"),
-      inputSchema: {
-        working_directories: z
-          .array(z.string())
-          .describe(
-            "All working directories known to the agent (primary + additional)",
-          ),
-      },
+      inputSchema: handshakeSchema,
     },
     tracker.wrapHandler(
       "handshake",
       (params) => {
         touch();
         const shortId = sid().substring(0, 12);
-        return handleHandshake(
-          params,
-          trust.markSessionTrusted,
-          log,
-          shortId,
-        );
+        return handleHandshake(params, trust.markSessionTrusted, log, shortId);
       },
       (p) =>
         Array.isArray(p.working_directories)

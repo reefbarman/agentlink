@@ -91,6 +91,8 @@ export interface TrackedCallInfo {
   status: "active" | "completed" | "rejected";
   completedAt?: number;
   lastHeartbeatAt?: number;
+  /** Where this tool call originated — "mcp" for external agents, "agent" for the built-in agent. */
+  source: "mcp" | "agent";
 }
 
 export interface FeedbackEntry {

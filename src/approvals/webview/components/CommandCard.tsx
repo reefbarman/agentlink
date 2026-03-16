@@ -76,21 +76,40 @@ export function CommandCard({
     );
   });
 
+  // Auto-size on command change
   useEffect(() => {
     const el = textareaRef.current;
-    if (el) {
+    if (el && el.clientWidth > 0) {
       el.style.height = "auto";
       el.style.height = el.scrollHeight + "px";
     }
   }, [command]);
+
+  // Re-run sizing when the panel becomes visible (clientWidth goes from 0 to real value)
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    let lastWidth = el.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      if (w !== lastWidth && w > 0) {
+        lastWidth = w;
+        el.style.height = "auto";
+        el.style.height = el.scrollHeight + "px";
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const handleRun = useCallback(() => {
     submit({
       id: request.id,
       decision: isEdited ? "edit" : "run-once",
       ...(isEdited && { editedCommand: command }),
+      followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [request.id, isEdited, command, submit]);
+  }, [request.id, isEdited, command, submit, followUpRef]);
 
   const handleSaveAndRun = useCallback(() => {
     const activeRules = rules.filter((r) => r.scope !== "skip");
@@ -99,8 +118,9 @@ export function CommandCard({
       decision: "run-once",
       rules: activeRules.length > 0 ? rules : undefined,
       ...(isEdited && { editedCommand: command }),
+      followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [request.id, rules, isEdited, command, submit]);
+  }, [request.id, rules, isEdited, command, submit, followUpRef]);
 
   const handleReject = useCallback(
     (reason?: string) => {
@@ -131,6 +151,8 @@ export function CommandCard({
       </>
     ) : undefined;
 
+  const reason = request.reason;
+
   return (
     <ApprovalLayout
       queuePosition={request.queuePosition}
@@ -144,6 +166,12 @@ export function CommandCard({
       onReject={handleReject}
       followUpRef={followUpRef}
     >
+      {reason && (
+        <div class="command-reason">
+          <span class="codicon codicon-info" />
+          <span>{reason}</span>
+        </div>
+      )}
       <div class="terminal-box">
         <div class="terminal-header">
           <span class="codicon codicon-terminal" />

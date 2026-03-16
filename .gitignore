@@ -3,6 +3,7 @@ dist/
 *.vsix
 .claude/
 .vscode/
+.agentlink/
 releases/
 .env.local
 plans/
