@@ -3207,9 +3207,73 @@ body {
 /* ── Approval Panel (rich card components) ── */
 
 .approval-panel-embed {
+  position: relative;
   margin: 0 8px 8px;
-  border-top: 1px solid var(--vscode-panel-border);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 8px;
+  background: var(--vscode-editor-background);
+  overflow-y: auto;
+  min-height: 220px;
   padding: 16px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.approval-panel-embed-handle {
+  position: sticky;
+  top: -16px;
+  left: 0;
+  right: 0;
+  height: 8px;
+  margin: -16px -16px 8px;
+  cursor: ns-resize;
+  z-index: 2;
+  border-top: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-editor-background);
+}
+
+.approval-panel-embed-handle::after {
+  content: "";
+  display: block;
+  width: 36px;
+  height: 2px;
+  margin: 2px auto 0;
+  border-radius: 2px;
+  background: var(--vscode-descriptionForeground);
+  opacity: 0.5;
+}
+
+.approval-panel-embed-resizing,
+body.approval-resizing {
+  user-select: none;
+}
+
+.approval-panel-embed .approval-card-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  resize: none;
+  overflow: visible;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  min-width: 0;
+}
+
+.approval-panel-embed .approval-card-scroll {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+  padding: 0;
+}
+
+.approval-panel-embed .approval-card-footer {
+  flex-shrink: 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--vscode-panel-border);
+  background: transparent;
 }
 
 .approval-panel-embed .header {
@@ -3379,7 +3443,6 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 8px;
 }
 .approval-panel-embed .btn {
   display: inline-flex;
@@ -3719,6 +3782,7 @@ body {
 .approval-panel-embed .follow-up-section {
   margin-top: 16px;
   padding-top: 12px;
+  padding-bottom: 16px;
   border-top: 1px solid var(--vscode-panel-border);
 }
 .approval-panel-embed .follow-up-label {

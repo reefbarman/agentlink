@@ -19,6 +19,25 @@ import {
 } from "../shared/types.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
 
+function getWriteRiskWarnings(
+  relPath: string,
+  content: string,
+): string[] | undefined {
+  const warnings: string[] = [];
+
+  const isTestFile = /(?:^|\/).+\.(test|spec)\.[^.]+$/i.test(relPath);
+  const hasVitestMock = /\bvi\.mock\s*\(/.test(content);
+  const hasHoistedHelper = /\bvi\.hoisted\s*\(/.test(content);
+
+  if (isTestFile && hasVitestMock && !hasHoistedHelper) {
+    warnings.push(
+      "This full-file rewrite targets a test file containing vi.mock(...). Vitest mock factories are hoisted, so references to later top-level variables can break at runtime. Review the diff carefully; apply_diff is often safer for small test edits.",
+    );
+  }
+
+  return warnings.length > 0 ? warnings : undefined;
+}
+
 export async function handleWriteFile(
   params: { path: string; content: string },
   approvalManager: ApprovalManager,
@@ -115,6 +134,10 @@ export async function handleWriteFile(
           path: relPath,
           operation: "auto-approved",
         };
+        const warnings = getWriteRiskWarnings(relPath, params.content);
+        if (warnings) {
+          response.warnings = warnings;
+        }
         if (newDiagnostics) {
           response.new_diagnostics = newDiagnostics;
         }
@@ -157,7 +180,12 @@ export async function handleWriteFile(
         });
       }
 
-      return await diffView.saveChanges();
+      const saved = await diffView.saveChanges();
+      const warnings = getWriteRiskWarnings(relPath, params.content);
+      if (warnings) {
+        return { ...saved, warnings };
+      }
+      return saved;
     });
 
     const { finalContent: _finalContent, ...response } = result;

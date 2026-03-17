@@ -1264,6 +1264,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [showHistory, setShowHistory] = useState(false);
   const [forwardedApproval, setForwardedApproval] =
     useState<ApprovalRequest | null>(null);
+  const [approvalPanelHeight, setApprovalPanelHeight] = useState(360);
+  const [approvalResizing, setApprovalResizing] = useState(false);
+  const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
   const forwardedFollowUpRef = useRef("");
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
   const [editingQueueText, setEditingQueueText] = useState("");
@@ -2057,6 +2060,68 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
+  const clampApprovalPanelHeight = useCallback((height: number) => {
+    const min = 220;
+    const max = Math.max(min, window.innerHeight - 180);
+    return Math.min(max, Math.max(min, height));
+  }, []);
+
+  const stopApprovalResize = useCallback(() => {
+    approvalResizeCleanupRef.current?.();
+    approvalResizeCleanupRef.current = null;
+    document.body.classList.remove("approval-resizing");
+    setApprovalResizing(false);
+  }, []);
+
+  useEffect(() => {
+    return () => stopApprovalResize();
+  }, [stopApprovalResize]);
+
+  useEffect(() => {
+    const onWindowResize = () => {
+      setApprovalPanelHeight((prev) => clampApprovalPanelHeight(prev));
+    };
+    window.addEventListener("resize", onWindowResize);
+    return () => window.removeEventListener("resize", onWindowResize);
+  }, [clampApprovalPanelHeight]);
+
+  const handleApprovalResizeStart = useCallback(
+    (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const handle = e.currentTarget as HTMLElement | null;
+      const panel = handle?.parentElement as HTMLDivElement | null;
+      if (!panel) return;
+
+      e.preventDefault();
+      stopApprovalResize();
+
+      const startY = e.clientY;
+      const startHeight = panel.getBoundingClientRect().height;
+      setApprovalPanelHeight(clampApprovalPanelHeight(startHeight));
+      setApprovalResizing(true);
+      document.body.classList.add("approval-resizing");
+
+      const onMouseMove = (moveEvent: MouseEvent) => {
+        const nextHeight = clampApprovalPanelHeight(
+          startHeight + (startY - moveEvent.clientY),
+        );
+        setApprovalPanelHeight(nextHeight);
+      };
+
+      const onMouseUp = () => {
+        stopApprovalResize();
+      };
+
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+      approvalResizeCleanupRef.current = () => {
+        window.removeEventListener("mousemove", onMouseMove);
+        window.removeEventListener("mouseup", onMouseUp);
+      };
+    },
+    [clampApprovalPanelHeight, stopApprovalResize],
+  );
+
   const handleToggleThinking = useCallback(() => {
     dispatch({ type: "TOGGLE_THINKING" });
   }, []);
@@ -2580,7 +2645,17 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           />
         )}
         {forwardedApproval && (
-          <div class="approval-panel-embed">
+          <div
+            class={`approval-panel-embed${approvalResizing ? " approval-panel-embed-resizing" : ""}`}
+            style={{ height: `${approvalPanelHeight}px` }}
+          >
+            <div
+              class="approval-panel-embed-handle"
+              onMouseDown={(e) =>
+                handleApprovalResizeStart(e as unknown as MouseEvent)
+              }
+              title="Drag to resize approval card"
+            />
             {forwardedApproval.kind === "command" ? (
               <CommandCard
                 request={forwardedApproval}

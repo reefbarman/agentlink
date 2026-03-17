@@ -61,6 +61,57 @@ export function needsPcre2(regex: string): boolean {
 const GLOB_META = /[*?[\]{}]/;
 
 /**
+ * Expand a simple single brace group in a glob pattern, e.g. `*.{ts,tsx}`.
+ * Falls back to the original pattern when the input is malformed or too complex.
+ */
+export function expandSimpleBraceGlob(filePattern: string): string[] {
+  const firstOpen = filePattern.indexOf("{");
+  const firstClose = filePattern.indexOf("}", firstOpen + 1);
+  if (firstOpen === -1 || firstClose === -1) {
+    return [filePattern];
+  }
+
+  if (filePattern.indexOf("{", firstOpen + 1) !== -1) {
+    return [filePattern];
+  }
+
+  const prefix = filePattern.slice(0, firstOpen);
+  const suffix = filePattern.slice(firstClose + 1);
+  const body = filePattern.slice(firstOpen + 1, firstClose);
+  const options = body
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (options.length <= 1) {
+    return [filePattern];
+  }
+
+  return options.map((option) => `${prefix}${option}${suffix}`);
+}
+
+function addFilePatternArgs(
+  args: string[],
+  dirPath: string,
+  filePattern?: string,
+): string {
+  let searchTarget = dirPath;
+  if (!filePattern) {
+    return searchTarget;
+  }
+
+  const resolvedFile = resolveFilePatternAsPath(filePattern, dirPath);
+  if (resolvedFile) {
+    return resolvedFile;
+  }
+
+  for (const glob of expandSimpleBraceGlob(filePattern)) {
+    args.push("--glob", glob);
+  }
+  return searchTarget;
+}
+
+/**
  * Detect if `file_pattern` looks like a literal file path rather than a glob.
  * Returns the resolved absolute path if the file exists, otherwise undefined.
  *
@@ -211,19 +262,9 @@ export async function handleSearchFiles(
     }
 
     // Handle file_pattern: if it looks like a literal file path that exists,
-    // use it as the search target instead of --glob to avoid glob matching issues
-    let searchTarget = dirPath;
-    if (params.file_pattern) {
-      const resolvedFile = resolveFilePatternAsPath(
-        params.file_pattern,
-        dirPath,
-      );
-      if (resolvedFile) {
-        searchTarget = resolvedFile;
-      } else {
-        args.push("--glob", params.file_pattern);
-      }
-    }
+    // use it as the search target instead of --glob to avoid glob matching issues.
+    // Normalize simple brace globs like src/**/*.{ts,tsx} into multiple --glob args.
+    const searchTarget = addFilePatternArgs(args, dirPath, params.file_pattern);
 
     args.push(searchTarget);
 
@@ -360,15 +401,7 @@ async function searchFilesOnly(
   if (params.multiline || needsMultiline(sanitized))
     args.push("--multiline", "--multiline-dotall");
   if (needsPcre2(sanitized)) args.push("--pcre2");
-  let searchTarget = dirPath;
-  if (params.file_pattern) {
-    const resolvedFile = resolveFilePatternAsPath(params.file_pattern, dirPath);
-    if (resolvedFile) {
-      searchTarget = resolvedFile;
-    } else {
-      args.push("--glob", params.file_pattern);
-    }
-  }
+  const searchTarget = addFilePatternArgs(args, dirPath, params.file_pattern);
   args.push(searchTarget);
 
   let output: string;
@@ -437,15 +470,7 @@ async function searchCount(
   if (params.multiline || needsMultiline(sanitized))
     args.push("--multiline", "--multiline-dotall");
   if (needsPcre2(sanitized)) args.push("--pcre2");
-  let searchTarget = dirPath;
-  if (params.file_pattern) {
-    const resolvedFile = resolveFilePatternAsPath(params.file_pattern, dirPath);
-    if (resolvedFile) {
-      searchTarget = resolvedFile;
-    } else {
-      args.push("--glob", params.file_pattern);
-    }
-  }
+  const searchTarget = addFilePatternArgs(args, dirPath, params.file_pattern);
   args.push(searchTarget);
 
   let output: string;

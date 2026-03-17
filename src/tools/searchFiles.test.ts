@@ -5,6 +5,7 @@ import {
   getEscapingHint,
   needsMultiline,
   resolveFilePatternAsPath,
+  expandSimpleBraceGlob,
 } from "./searchFiles.js";
 
 describe("sanitizeRegex", () => {
@@ -134,6 +135,26 @@ describe("needsMultiline", () => {
     // After sanitizeRegex, double-escaped \\n becomes \n
     const sanitized = sanitizeRegex("servers:\\\\s*\\\\n\\\\s*-\\\\s*url:");
     expect(needsMultiline(sanitized)).toBe(true);
+  });
+});
+
+describe("expandSimpleBraceGlob", () => {
+  it("expands a common extension brace glob", () => {
+    expect(expandSimpleBraceGlob("src/**/*.{ts,tsx}")).toEqual([
+      "src/**/*.ts",
+      "src/**/*.tsx",
+    ]);
+  });
+
+  it("leaves non-brace patterns unchanged", () => {
+    expect(expandSimpleBraceGlob("src/**/*.ts")).toEqual(["src/**/*.ts"]);
+  });
+
+  it("leaves malformed or nested brace patterns unchanged", () => {
+    expect(expandSimpleBraceGlob("src/**/*.{ts")).toEqual(["src/**/*.{ts"]);
+    expect(expandSimpleBraceGlob("src/{foo,{bar,baz}}.ts")).toEqual([
+      "src/{foo,{bar,baz}}.ts",
+    ]);
   });
 });
 

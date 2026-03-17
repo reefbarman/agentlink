@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as syncFs from "fs";
 
 import {
   resolveAndValidatePath,
@@ -291,19 +292,79 @@ async function getSymbolOutline(
 
 // --- Friendly errors ---
 
-function friendlyError(err: unknown, inputPath: string): string {
-  if (!(err instanceof Error)) return String(err);
+function findLikelyPathSuggestions(inputPath: string, limit = 5): string[] {
+  const workspaceRoot = tryGetFirstWorkspaceRoot();
+  if (!workspaceRoot) return [];
+
+  const normalizedInput = inputPath.replace(/\\/g, "/");
+  const basename = path.posix.basename(normalizedInput);
+  const suffix = normalizedInput.startsWith("./")
+    ? normalizedInput.slice(2)
+    : normalizedInput;
+  const suggestions = new Set<string>();
+  const stack = [workspaceRoot];
+
+  while (stack.length > 0 && suggestions.size < limit) {
+    const current = stack.pop()!;
+    let entries: syncFs.Dirent[];
+    try {
+      entries = syncFs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (suggestions.size >= limit) break;
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      const relPath = path
+        .relative(workspaceRoot, fullPath)
+        .replace(/\\/g, "/");
+      if (
+        relPath === suffix ||
+        relPath.endsWith(`/${suffix}`) ||
+        entry.name === basename
+      ) {
+        suggestions.add(relPath);
+      }
+    }
+  }
+
+  return [...suggestions];
+}
+
+function buildReadFileError(
+  err: unknown,
+  inputPath: string,
+): Record<string, unknown> {
+  if (!(err instanceof Error)) {
+    return { error: String(err), path: inputPath };
+  }
 
   const code = (err as NodeJS.ErrnoException).code;
   switch (code) {
-    case "ENOENT":
-      return `File not found: ${inputPath}. Working directory: ${tryGetFirstWorkspaceRoot() ?? "(no workspace)"}`;
+    case "ENOENT": {
+      const workspaceRoot = tryGetFirstWorkspaceRoot();
+      const suggestions = findLikelyPathSuggestions(inputPath);
+      return {
+        error: `File not found: ${inputPath}. Working directory: ${workspaceRoot ?? "(no workspace)"}`,
+        path: inputPath,
+        ...(suggestions.length > 0 && { suggestions }),
+      };
+    }
     case "EACCES":
-      return `Permission denied: ${inputPath}`;
+      return { error: `Permission denied: ${inputPath}`, path: inputPath };
     case "EISDIR":
-      return `${inputPath} is a directory. Use list_files instead.`;
+      return {
+        error: `${inputPath} is a directory. Use list_files instead.`,
+        path: inputPath,
+      };
     default:
-      return err.message;
+      return { error: err.message, path: inputPath };
   }
 }
 
@@ -533,10 +594,7 @@ export async function handleReadFile(
       content: [
         {
           type: "text",
-          text: JSON.stringify({
-            error: friendlyError(err, params.path),
-            path: params.path,
-          }),
+          text: JSON.stringify(buildReadFileError(err, params.path)),
         },
       ],
     };

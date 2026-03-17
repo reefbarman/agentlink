@@ -213,39 +213,65 @@ function transformMessagesForCondensing(
 
 /**
  * If condense is triggered mid-turn (assistant emitted tool_use but no tool_result yet),
- * inject a synthetic tool_result so the API doesn't reject the conversation.
+ * ensure each assistant tool_use block has a matching tool_result in the immediate
+ * next message. This satisfies strict provider adjacency requirements.
  */
 export function injectSyntheticToolResults(
   messages: AgentMessage[],
 ): AgentMessage[] {
-  const toolCallIds = new Set<string>();
-  const toolResultIds = new Set<string>();
+  const repaired = [...messages];
 
-  for (const msg of messages) {
-    if (msg.role === "assistant" && Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === "tool_use")
-          toolCallIds.add((block as ToolUseBlock).id);
-      }
+  for (let i = 0; i < repaired.length; i++) {
+    const msg = repaired[i];
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+
+    const toolUseIds = msg.content
+      .filter((block): block is ToolUseBlock => block.type === "tool_use")
+      .map((block) => block.id);
+    if (toolUseIds.length === 0) continue;
+
+    const next = repaired[i + 1];
+    const nextToolResultIds =
+      next?.role === "user" && Array.isArray(next.content)
+        ? new Set(
+            next.content
+              .filter(
+                (block): block is ToolResultBlock =>
+                  block.type === "tool_result",
+              )
+              .map((block) => block.tool_use_id),
+          )
+        : new Set<string>();
+
+    const missingIds = toolUseIds.filter((id) => !nextToolResultIds.has(id));
+    if (missingIds.length === 0) continue;
+
+    const syntheticResults: ToolResultBlock[] = missingIds.map((id) => ({
+      type: "tool_result" as const,
+      tool_use_id: id,
+      content: "Context condensation triggered. Tool execution deferred.",
+      is_error: false,
+    }));
+
+    if (next?.role === "user") {
+      const nextBlocks = Array.isArray(next.content)
+        ? next.content
+        : [{ type: "text" as const, text: next.content }];
+      repaired[i + 1] = {
+        ...next,
+        content: [...syntheticResults, ...nextBlocks],
+      };
+      continue;
     }
-    if (msg.role === "user" && Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === "tool_result")
-          toolResultIds.add((block as ToolResultBlock).tool_use_id);
-      }
-    }
+
+    repaired.splice(i + 1, 0, {
+      role: "user",
+      content: syntheticResults,
+    });
+    i++;
   }
 
-  const orphans = [...toolCallIds].filter((id) => !toolResultIds.has(id));
-  if (orphans.length === 0) return messages;
-
-  const syntheticResults: ToolResultBlock[] = orphans.map((id) => ({
-    type: "tool_result" as const,
-    tool_use_id: id,
-    content: "Context condensation triggered. Tool execution deferred.",
-  }));
-
-  return [...messages, { role: "user", content: syntheticResults }];
+  return repaired;
 }
 
 // ---------------------------------------------------------------------------
@@ -683,12 +709,6 @@ function validateSummary(options: {
   const warnings: string[] = [];
   const lower = summaryText.toLowerCase();
 
-  if (!/all user messages/i.test(summaryText)) {
-    warnings.push(
-      "Summary missing an explicit 'All User Messages' section header.",
-    );
-  }
-
   const unsupportedQuant =
     /(\d+\s*\/\s*\d+\s+tests?\s+pass|all\s+tests\s+pass(ed)?|\b\d+\s+tests\s+pass(ed)?)/i;
   if (unsupportedQuant.test(summaryText)) {
@@ -726,15 +746,6 @@ function validateSummary(options: {
   if (canonicalUserMessages.length > 0 && !latestUserMessagePreserved) {
     errors.push(
       "Summary's 'All User Messages' section does not preserve the latest canonical user message verbatim.",
-    );
-  }
-
-  if (
-    canonicalUserMessages.length > 1 &&
-    preservedCanonicalMessages < Math.min(2, canonicalUserMessages.length)
-  ) {
-    warnings.push(
-      `Summary preserved only ${preservedCanonicalMessages}/${canonicalUserMessages.length} canonical user messages verbatim in the 'All User Messages' section.`,
     );
   }
 

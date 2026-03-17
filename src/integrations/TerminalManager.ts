@@ -772,6 +772,38 @@ export class TerminalManager {
     managed: ManagedTerminal,
     command: string,
   ): CommandResult {
+    // Without shell integration we cannot tell when a foreground command ends,
+    // so treat the terminal as background-running to prevent immediate reuse by
+    // another execute_command call on the same managed terminal.
+    for (const d of managed.backgroundDisposables) d.dispose();
+    managed.backgroundDisposables = [];
+    managed.outputBuffer = "";
+    managed.backgroundRunning = true;
+    managed.backgroundOutputCaptured = false;
+    managed.backgroundExitCode = null;
+
+    const finalize = () => {
+      if (!managed.backgroundRunning) return;
+      managed.backgroundRunning = false;
+      managed.lastCommandEndedAt = Date.now();
+      for (const d of managed.backgroundDisposables) d.dispose();
+      managed.backgroundDisposables = [];
+    };
+
+    const exitDisposable = vscode.window.onDidEndTerminalShellExecution((e) => {
+      if (e.terminal === managed.terminal) {
+        managed.backgroundExitCode = e.exitCode ?? null;
+        finalize();
+      }
+    });
+
+    const closeDisposable = vscode.window.onDidCloseTerminal((t) => {
+      if (t === managed.terminal) {
+        finalize();
+      }
+    });
+
+    managed.backgroundDisposables.push(exitDisposable, closeDisposable);
     managed.terminal.sendText(command, true);
 
     return {
@@ -784,7 +816,7 @@ export class TerminalManager {
       command_sent: true,
       verification_hint:
         `The command may still be running or may have already finished in terminal_id "${managed.id}". ` +
-        "Do not re-run it just to verify. Inspect the visible terminal, or use get_terminal_output with this terminal_id if shell integration later becomes available.",
+        "Do not re-run it just to verify. Inspect the visible terminal, or use get_terminal_output/kill with this terminal_id. The terminal stays reserved until it is explicitly interrupted, shell integration later reports completion, or the terminal is closed.",
     };
   }
 
@@ -1111,6 +1143,12 @@ export class TerminalManager {
     const managed = this.terminals.find((t) => t.id === terminalId);
     if (!managed) return false;
     managed.terminal.sendText("\x03", false);
+    if (managed.backgroundRunning && !managed.backgroundOutputCaptured) {
+      managed.backgroundRunning = false;
+      managed.lastCommandEndedAt = Date.now();
+      for (const d of managed.backgroundDisposables) d.dispose();
+      managed.backgroundDisposables = [];
+    }
     return true;
   }
 

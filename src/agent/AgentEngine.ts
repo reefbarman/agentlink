@@ -35,7 +35,7 @@ import { toSupportedImageMediaType } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_API_RETRIES = 3;
-const _MAX_EMPTY_RESPONSE_RETRIES = 1;
+const MAX_EMPTY_RESPONSE_RETRIES = 1;
 
 /** Walk the error cause chain and join unique messages into one string. */
 // (No equivalent exists elsewhere in the codebase.)
@@ -348,6 +348,7 @@ export class AgentEngine {
 
     try {
       let retryCount = 0;
+      let emptyResponseRetryCount = 0;
       let credentialRefreshCount = 0;
       const MAX_CREDENTIAL_REFRESHES = 3;
       while (true) {
@@ -676,7 +677,7 @@ export class AgentEngine {
           throw streamErr;
         }
 
-        // Successful API response — reset retry counter.
+        // Successful API response — reset transient retry counter.
         retryCount = 0;
         apiTurnCount++;
 
@@ -748,6 +749,32 @@ export class AgentEngine {
             continue;
           }
         }
+
+        if (contentBlocks.length === 0) {
+          if (emptyResponseRetryCount < MAX_EMPTY_RESPONSE_RETRIES) {
+            emptyResponseRetryCount++;
+            yield {
+              type: "warning",
+              message:
+                "Provider returned an empty response — asking it to continue…",
+            };
+            // Intentionally do not append an empty assistant turn to history.
+            session.addUserMessage(
+              "Your previous response was empty. Continue from where you left off and provide the full response.",
+            );
+            session.status = "streaming";
+            continue;
+          }
+
+          yield {
+            type: "error",
+            error: `Provider returned empty responses ${MAX_EMPTY_RESPONSE_RETRIES + 1} times in a row. Please retry.`,
+            retryable: true,
+          };
+          return;
+        }
+
+        emptyResponseRetryCount = 0;
 
         // Extract tool_use blocks
         const toolUseBlocks = contentBlocks.filter(
@@ -843,15 +870,86 @@ export class AgentEngine {
           }
         }
 
-        const dispatchResults =
-          dispatchBlocks.length > 0
-            ? await this.executeToolCalls(
-                dispatchBlocks,
-                signal,
-                sessionCtx,
-                session,
-              )
-            : [];
+        let dispatchResults: ToolCallResult[] = [];
+        if (dispatchBlocks.length > 0) {
+          const dispatchEvents: AgentEvent[] = [];
+          let wakeDispatchEvents: (() => void) | undefined;
+          const waitForDispatchEvent = () =>
+            new Promise<void>((resolve) => {
+              wakeDispatchEvents = resolve;
+            });
+          const pushDispatchEvent = (event: AgentEvent) => {
+            dispatchEvents.push(event);
+            const wake = wakeDispatchEvents;
+            wakeDispatchEvents = undefined;
+            wake?.();
+          };
+
+          const dispatchPromise = this.executeToolCalls(
+            dispatchBlocks,
+            signal,
+            sessionCtx,
+            session,
+            (tr) => {
+              const toolUseBlock = toolUseBlocks.find(
+                (b) => b.id === tr.tool_use_id,
+              );
+              pushDispatchEvent({
+                type: "tool_result" as const,
+                toolCallId: tr.tool_use_id,
+                toolName: tr.toolName,
+                result: tr.result.content,
+                durationMs: tr.durationMs,
+                input: toolUseBlock?.input,
+              });
+            },
+          );
+
+          const dispatchDonePromise = dispatchPromise.then((results) => ({
+            done: true as const,
+            aborted: false,
+            results,
+          }));
+          const abortPromise = new Promise<{
+            done: true;
+            aborted: true;
+            results: ToolCallResult[];
+          }>((resolve) => {
+            if (signal.aborted) {
+              resolve({ done: true, aborted: true, results: [] });
+              return;
+            }
+            signal.addEventListener(
+              "abort",
+              () => resolve({ done: true, aborted: true, results: [] }),
+              { once: true },
+            );
+          });
+          let dispatchDone = false;
+
+          while (!dispatchDone || dispatchEvents.length > 0) {
+            if (dispatchEvents.length === 0 && !dispatchDone) {
+              const raced = await Promise.race([
+                dispatchDonePromise,
+                abortPromise,
+                waitForDispatchEvent().then(() => ({
+                  done: false as const,
+                  aborted: false,
+                })),
+              ]);
+              if (raced.done) {
+                if (!raced.aborted) {
+                  dispatchResults = raced.results;
+                }
+                dispatchDone = true;
+              }
+            }
+
+            while (dispatchEvents.length > 0) {
+              yield dispatchEvents.shift()!;
+            }
+          }
+        }
 
         // Merge results back in original order
         const toolResults = toolUseBlocks.map((block) => {
@@ -877,8 +975,10 @@ export class AgentEngine {
           })),
         );
 
-        // Yield tool_result events (after history is updated)
-        for (const tr of toolResults) {
+        // Internal tools (todo_write) don't flow through executeToolCalls, so emit
+        // their completion events now. Dispatch-tool completion events are emitted
+        // by executeToolCalls as each call finishes.
+        for (const tr of internalResults) {
           const toolUseBlock = toolUseBlocks.find(
             (b) => b.id === tr.tool_use_id,
           );
@@ -996,6 +1096,7 @@ export class AgentEngine {
     signal: AbortSignal,
     ctx: ToolDispatchContext,
     session: AgentSession,
+    onToolComplete?: (result: ToolCallResult) => void,
   ): Promise<Array<ToolCallResult>> {
     const resultSlots = Array.from<ToolCallResult | null>({
       length: calls.length,
@@ -1082,40 +1183,32 @@ export class AgentEngine {
       }
     }
 
-    // Execute read-only tools in parallel
-    await Promise.all(
-      readOnlyIndices.map(async (i) => {
-        if (signal.aborted) return;
-        const call = calls[i];
-        const start = Date.now();
-        try {
-          resultSlots[i] = await runTrackedToolCall(call, start);
-        } catch (err) {
-          resultSlots[i] = {
-            tool_use_id: call.id,
-            toolName: call.name,
-            result: handleToolError(err),
-            durationMs: Date.now() - start,
-          };
-        }
-      }),
-    );
-
-    // Execute write tools sequentially
-    for (const i of writeIndices) {
-      if (signal.aborted) break;
+    const executeAtIndex = async (i: number): Promise<void> => {
+      if (signal.aborted) return;
       const call = calls[i];
       const start = Date.now();
+      let callResult: ToolCallResult;
       try {
-        resultSlots[i] = await runTrackedToolCall(call, start);
+        callResult = await runTrackedToolCall(call, start);
       } catch (err) {
-        resultSlots[i] = {
+        callResult = {
           tool_use_id: call.id,
           toolName: call.name,
           result: handleToolError(err),
           durationMs: Date.now() - start,
         };
       }
+      resultSlots[i] = callResult;
+      onToolComplete?.(callResult);
+    };
+
+    // Execute read-only tools in parallel
+    await Promise.all(readOnlyIndices.map((i) => executeAtIndex(i)));
+
+    // Execute write tools sequentially
+    for (const i of writeIndices) {
+      if (signal.aborted) break;
+      await executeAtIndex(i);
     }
 
     // Return results in original order, filling any gaps (from abort) with errors

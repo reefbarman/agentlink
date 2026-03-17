@@ -249,4 +249,72 @@ describe("TerminalManager terminal selection", () => {
     expect(result.command_sent).toBe(true);
     expect(result.verification_hint).toContain("Do not re-run");
   });
+
+  it("does not reuse a send_text fallback terminal while the prior command may still be running", async () => {
+    const manager = new TerminalManager();
+
+    vi.spyOn(
+      manager as unknown as {
+        waitForShellIntegration: (terminal: unknown) => Promise<boolean>;
+      },
+      "waitForShellIntegration",
+    ).mockResolvedValue(false);
+
+    const first = await manager.executeCommand({
+      command: "long-running-command",
+      cwd: "/workspace",
+    });
+
+    const second = await manager.executeCommand({
+      command: "another-command",
+      cwd: "/workspace",
+    });
+
+    expect(first.execution_mode).toBe("send_text");
+    expect(second.execution_mode).toBe("send_text");
+    expect(first.terminal_id).not.toBe(second.terminal_id);
+
+    const firstState = manager.getBackgroundState(first.terminal_id);
+    expect(firstState).toMatchObject({
+      is_running: true,
+      output_captured: false,
+      exit_code: null,
+    });
+  });
+
+  it("releases a send_text fallback reservation when interrupted", async () => {
+    const manager = new TerminalManager();
+
+    vi.spyOn(
+      manager as unknown as {
+        waitForShellIntegration: (terminal: unknown) => Promise<boolean>;
+      },
+      "waitForShellIntegration",
+    ).mockResolvedValue(false);
+
+    const first = await manager.executeCommand({
+      command: "long-running-command",
+      cwd: "/workspace",
+    });
+
+    const firstState = manager.getBackgroundState(first.terminal_id);
+    expect(firstState?.is_running).toBe(true);
+
+    expect(manager.interruptTerminal(first.terminal_id)).toBe(true);
+
+    const releasedState = manager.getBackgroundState(first.terminal_id);
+    expect(releasedState).toMatchObject({
+      is_running: false,
+      output_captured: false,
+      exit_code: null,
+    });
+
+    const second = await manager.executeCommand({
+      command: "after-interrupt",
+      cwd: "/workspace",
+      terminal_id: first.terminal_id,
+    });
+
+    expect(second.terminal_id).toBe(first.terminal_id);
+  });
 });

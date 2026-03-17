@@ -124,7 +124,7 @@ export class IndexerManager implements vscode.Disposable {
         this.updateStatus({
           state: "error",
           error:
-            "OpenAI authentication not configured. Run 'AgentLink: Sign In to OpenAI/Codex' to choose ChatGPT/Codex OAuth or an OpenAI API key, or set OPENAI_API_KEY in the environment. Either method enables semantic search and indexing.",
+            "OpenAI API key not configured for embeddings. Semantic search and indexing require an API key (set OPENAI_API_KEY or run 'AgentLink: Set OpenAI API Key for Embeddings'). Model chat can still use OpenAI/Codex OAuth.",
         });
         return;
       }
@@ -359,11 +359,7 @@ export class IndexerManager implements vscode.Disposable {
     if (!worker) return;
 
     try {
-      const oauthMethod = await openAiCodexAuthManager.getPreferredAuthMethod();
-      const auth =
-        oauthMethod === "oauth"
-          ? await openAiCodexAuthManager.forceRefreshModelAuth("oauth")
-          : await openAiCodexAuthManager.resolveEmbeddingAuth();
+      const auth = await openAiCodexAuthManager.resolveEmbeddingAuth();
       worker.send({
         type: "embeddingAuthRefreshResponse",
         requestId: msg.requestId,

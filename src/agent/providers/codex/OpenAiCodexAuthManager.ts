@@ -6,12 +6,16 @@ import {
 } from "./CodexOAuthManager.js";
 
 const OPENAI_API_KEY_SECRET = "openaiApiKey";
+const OPENAI_API_KEY_SCOPE = "openaiApiKeyScope";
+
+export type OpenAiApiKeyScope = "models+embeddings" | "embeddings-only";
 
 export type OpenAiCodexAuthMethod = "oauth" | "apiKey";
 
 export interface OpenAiApiKeyCredential {
   apiKey: string;
   source: "secret" | "env";
+  scope: OpenAiApiKeyScope;
 }
 
 export interface OpenAiCodexResolvedAuth {
@@ -47,20 +51,21 @@ export class OpenAiCodexAuthManager {
     return this.oauthManager.isAuthenticated();
   }
 
-  async hasApiKey(): Promise<boolean> {
+  async hasApiKey(scope: "any" | OpenAiApiKeyScope = "any"): Promise<boolean> {
     const key = await this.getApiKeyCredential();
-    return Boolean(key?.apiKey);
+    if (!key?.apiKey) return false;
+    if (scope === "any") return true;
+    return key.scope === scope || key.scope === "models+embeddings";
   }
 
   async getPreferredAuthMethod(): Promise<OpenAiCodexAuthMethod | null> {
     if (await this.hasOAuth()) return "oauth";
-    if (await this.hasApiKey()) return "apiKey";
+    if (await this.hasApiKey("models+embeddings")) return "apiKey";
     return null;
   }
 
   async resolveModelAuth(): Promise<OpenAiCodexResolvedAuth | null> {
-    const preferredMethod = await this.getPreferredAuthMethod();
-    if (preferredMethod === "oauth") {
+    if (await this.hasOAuth()) {
       const accessToken = await this.oauthManager.getAccessToken();
       if (!accessToken) {
         return null;
@@ -75,7 +80,7 @@ export class OpenAiCodexAuthManager {
     }
 
     const apiKeyCred = await this.getApiKeyCredential();
-    if (apiKeyCred) {
+    if (apiKeyCred?.scope === "models+embeddings") {
       return {
         method: "apiKey",
         bearerToken: apiKeyCred.apiKey,
@@ -87,7 +92,15 @@ export class OpenAiCodexAuthManager {
   }
 
   async resolveEmbeddingAuth(): Promise<OpenAiCodexResolvedAuth | null> {
-    return this.resolveModelAuth();
+    const apiKeyCred = await this.getApiKeyCredential();
+    if (!apiKeyCred) {
+      return null;
+    }
+    return {
+      method: "apiKey",
+      bearerToken: apiKeyCred.apiKey,
+      canRefresh: false,
+    };
   }
 
   async forceRefreshModelAuth(
@@ -108,7 +121,7 @@ export class OpenAiCodexAuthManager {
     }
 
     const apiKeyCred = await this.getApiKeyCredential();
-    if (!apiKeyCred) {
+    if (apiKeyCred?.scope !== "models+embeddings") {
       return null;
     }
     return {
@@ -121,28 +134,59 @@ export class OpenAiCodexAuthManager {
   async getApiKeyCredential(): Promise<OpenAiApiKeyCredential | null> {
     const secretKey = await this.context?.secrets.get(OPENAI_API_KEY_SECRET);
     if (secretKey?.trim()) {
-      return { apiKey: secretKey.trim(), source: "secret" };
+      const storedScope =
+        this.context?.globalState.get<OpenAiApiKeyScope>(
+          OPENAI_API_KEY_SCOPE,
+        ) ?? "models+embeddings";
+      return {
+        apiKey: secretKey.trim(),
+        source: "secret",
+        scope: storedScope,
+      };
     }
 
     const envKey = process.env.OPENAI_API_KEY?.trim();
     if (envKey) {
-      return { apiKey: envKey, source: "env" };
+      return {
+        apiKey: envKey,
+        source: "env",
+        scope: "models+embeddings",
+      };
     }
 
     return null;
   }
 
-  async storeApiKey(apiKey: string): Promise<void> {
+  async storeApiKey(
+    apiKey: string,
+    scope: OpenAiApiKeyScope = "models+embeddings",
+  ): Promise<void> {
     if (!this.context) {
       throw new Error("OpenAiCodexAuthManager not initialized");
     }
-    await this.context.secrets.store(OPENAI_API_KEY_SECRET, apiKey.trim());
+
+    const normalizedApiKey = apiKey.trim();
+    const existingSecretKey = await this.context.secrets.get(
+      OPENAI_API_KEY_SECRET,
+    );
+    const existingScope =
+      this.context.globalState.get<OpenAiApiKeyScope>(OPENAI_API_KEY_SCOPE);
+
+    const sameStoredKey = existingSecretKey?.trim() === normalizedApiKey;
+    const resolvedScope: OpenAiApiKeyScope =
+      sameStoredKey && existingScope === "models+embeddings"
+        ? "models+embeddings"
+        : scope;
+
+    await this.context.secrets.store(OPENAI_API_KEY_SECRET, normalizedApiKey);
+    await this.context.globalState.update(OPENAI_API_KEY_SCOPE, resolvedScope);
     this.onAuthStateChanged?.();
   }
 
   async clearApiKey(): Promise<void> {
     if (!this.context) return;
     await this.context.secrets.delete(OPENAI_API_KEY_SECRET);
+    await this.context.globalState.update(OPENAI_API_KEY_SCOPE, undefined);
     this.onAuthStateChanged?.();
   }
 

@@ -3,8 +3,16 @@ import * as path from "path";
 import { createHash } from "crypto";
 import picomatch from "picomatch";
 
-import { openAiCodexAuthManager } from "../agent/providers/index.js";
+import {
+  openAiCodexAuthManager,
+  type OpenAiCodexResolvedAuth,
+} from "../agent/providers/index.js";
 import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
+import {
+  execRipgrepSearch,
+  getRipgrepBinPath,
+  parseRipgrepOutput,
+} from "../util/ripgrep.js";
 
 import { type ToolResult } from "../shared/types.js";
 
@@ -16,9 +24,18 @@ export function getQdrantUrl(): string {
     .get<string>("qdrantUrl", "http://localhost:6333");
 }
 
-export async function getEmbeddingAuthToken(): Promise<string> {
-  const auth = await openAiCodexAuthManager.resolveEmbeddingAuth();
-  return auth?.bearerToken || "";
+const EMBEDDING_MAX_RETRIES = 3;
+
+export async function getEmbeddingAuth(): Promise<OpenAiCodexResolvedAuth | null> {
+  return openAiCodexAuthManager.resolveEmbeddingAuth();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableEmbeddingStatus(status: number): boolean {
+  return status === 429 || status === 408 || status >= 500;
 }
 
 function isSemanticSearchEnabled(): boolean {
@@ -39,29 +56,56 @@ export function getAlCollectionName(workspacePath: string): string {
 
 async function generateEmbedding(
   text: string,
-  bearerToken: string,
+  auth: OpenAiCodexResolvedAuth,
 ): Promise<number[]> {
-  const response = await fetch("https://api.openai.com/v1/embeddings", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${bearerToken}`,
-    },
-    body: JSON.stringify({
-      model: "text-embedding-3-small",
-      input: text,
-    }),
-  });
+  for (let attempt = 0; attempt <= EMBEDDING_MAX_RETRIES; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.bearerToken}`,
+        },
+        body: JSON.stringify({
+          model: "text-embedding-3-small",
+          input: text,
+        }),
+      });
+    } catch (error) {
+      if (attempt < EMBEDDING_MAX_RETRIES) {
+        const delay = Math.min(500 * 2 ** attempt + Math.random() * 250, 5000);
+        await sleep(delay);
+        continue;
+      }
+      throw error;
+    }
 
-  if (!response.ok) {
+    if (response.ok) {
+      const data = (await response.json()) as {
+        data: Array<{ embedding: number[] }>;
+      };
+      const embedding = data.data?.[0]?.embedding;
+      if (!embedding) {
+        throw new Error("OpenAI API returned no embedding data");
+      }
+      return embedding;
+    }
+
+    if (
+      attempt < EMBEDDING_MAX_RETRIES &&
+      isRetryableEmbeddingStatus(response.status)
+    ) {
+      const delay = Math.min(500 * 2 ** attempt + Math.random() * 250, 5000);
+      await sleep(delay);
+      continue;
+    }
+
     const error = await response.text();
     throw new Error(`OpenAI API error (${response.status}): ${error}`);
   }
 
-  const data = (await response.json()) as {
-    data: Array<{ embedding: number[] }>;
-  };
-  return data.data[0].embedding;
+  throw new Error("Unreachable");
 }
 
 // --- Qdrant REST API ---
@@ -649,6 +693,11 @@ interface FormattedResult {
   codeChunk: string;
 }
 
+interface BuildOutputOptions {
+  semantic?: boolean;
+  warning?: string;
+}
+
 function formatResults(results: QdrantSearchResult[]): FormattedResult[] {
   return results
     .filter(
@@ -665,19 +714,166 @@ function formatResults(results: QdrantSearchResult[]): FormattedResult[] {
     }));
 }
 
-function buildOutput(query: string, results: FormattedResult[]): ToolResult {
+function buildOutput(
+  query: string,
+  results: FormattedResult[],
+  options: BuildOutputOptions = {},
+): ToolResult {
   const sections = results.map((r) => {
     return `## ${r.file} (score: ${r.score.toFixed(4)}, lines ${r.startLine}-${r.endLine})\n${r.codeChunk}`;
   });
 
-  const output = {
+  const output: Record<string, unknown> = {
     query,
-    semantic: true,
+    semantic: options.semantic ?? true,
     total_results: results.length,
     results: sections.join("\n\n"),
   };
 
+  if (options.warning) {
+    output.warning = options.warning;
+  }
+
   return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
+}
+
+function escapeRegexLiteral(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function shouldFallbackToKeywordSearch(message: string): boolean {
+  return (
+    /OpenAI API error \((408|429|5\d\d)\):/i.test(message) ||
+    /\b(fetch failed|network|ECONN|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|timeout)\b/i.test(
+      message,
+    ) ||
+    /Qdrant is not reachable/i.test(message) ||
+    /Qdrant API error \((408|429|5\d\d)\):/i.test(message)
+  );
+}
+
+function summarizeSemanticFailure(message: string): string {
+  const openAiStatus = message.match(/OpenAI API error \((\d+)\):/i)?.[1];
+  if (openAiStatus) {
+    return `OpenAI embeddings failed with HTTP ${openAiStatus}`;
+  }
+  if (/Qdrant/i.test(message)) {
+    return "the Qdrant search backend failed";
+  }
+  if (
+    /\b(fetch failed|network|ECONN|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|timeout)\b/i.test(
+      message,
+    )
+  ) {
+    return "a network error interrupted semantic search";
+  }
+  return "semantic search failed";
+}
+
+function normalizeFallbackResultPath(
+  filePath: string,
+  workspacePath: string,
+  dirPath: string,
+): string {
+  const normalized = filePath.replace(/\\/g, "/");
+  if (!path.isAbsolute(filePath)) {
+    return normalized.startsWith("./") ? normalized.slice(2) : normalized;
+  }
+
+  const workspaceRelative = path.relative(workspacePath, filePath);
+  if (
+    !workspaceRelative.startsWith("..") &&
+    !path.isAbsolute(workspaceRelative)
+  ) {
+    return workspaceRelative.replace(/\\/g, "/");
+  }
+
+  const dirRelative = path.relative(dirPath, filePath);
+  if (!dirRelative.startsWith("..") && !path.isAbsolute(dirRelative)) {
+    return dirRelative.replace(/\\/g, "/");
+  }
+
+  return normalized;
+}
+
+async function keywordFallbackSearch(
+  dirPath: string,
+  query: string,
+  limit: number,
+  excludeGlobs?: string[],
+): Promise<FormattedResult[]> {
+  const rawTerms = extractKeywords(query);
+  const searchTerms = (rawTerms.length > 0 ? rawTerms : query.split(/\s+/))
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2)
+    .slice(0, 8);
+
+  if (searchTerms.length === 0) {
+    return [];
+  }
+
+  const rgPath = await getRipgrepBinPath();
+  const regex = searchTerms.map(escapeRegexLiteral).join("|");
+  const args = ["--json", "-n", "-i", "-C", "1", "-m", "3"];
+
+  for (const glob of excludeGlobs ?? []) {
+    args.push("--glob", `!${glob}`);
+  }
+
+  args.push(regex, dirPath);
+
+  const output = await execRipgrepSearch(rgPath, args);
+  const workspacePath = tryGetFirstWorkspaceRoot() ?? dirPath;
+  const parsed = parseRipgrepOutput(output, dirPath);
+
+  return parsed.results
+    .map((fileResult) => {
+      const lines = fileResult.searchResults.flatMap((result) => result.lines);
+      const matchLines = lines.filter((line) => line.isMatch);
+      if (matchLines.length === 0) {
+        return null;
+      }
+
+      const normalizedFile = normalizeFallbackResultPath(
+        fileResult.file,
+        workspacePath,
+        dirPath,
+      );
+      if (isExcludedSemanticResultPath(normalizedFile)) {
+        return null;
+      }
+
+      const pathLower = normalizedFile.toLowerCase();
+      const contentLower = lines
+        .map((line) => line.text)
+        .join("\n")
+        .toLowerCase();
+      const distinctPathTerms = searchTerms.filter((term) =>
+        pathLower.includes(term.toLowerCase()),
+      ).length;
+      const distinctContentTerms = searchTerms.filter((term) =>
+        contentLower.includes(term.toLowerCase()),
+      ).length;
+      const score =
+        distinctPathTerms * 100 + distinctContentTerms * 25 + matchLines.length;
+      const snippetLines = lines.slice(0, 8);
+      const startLine = Math.min(...snippetLines.map((line) => line.line));
+      const endLine = Math.max(...snippetLines.map((line) => line.line));
+      const codeChunk = snippetLines
+        .map((line) => `${line.line} | ${line.text.trimEnd()}`)
+        .join("\n");
+
+      return {
+        file: normalizedFile,
+        score,
+        startLine,
+        endLine,
+        codeChunk,
+      } satisfies FormattedResult;
+    })
+    .filter((result): result is FormattedResult => result != null)
+    .sort((a, b) => b.score - a.score || a.file.localeCompare(b.file))
+    .slice(0, limit);
 }
 
 // --- Semantic helpers for other tools ---
@@ -693,8 +889,8 @@ export async function semanticFileQuery(
 ): Promise<{ startLine: number; endLine: number } | null> {
   if (!isSemanticSearchEnabled()) return null;
 
-  const bearerToken = await getEmbeddingAuthToken();
-  if (!bearerToken) return null;
+  const auth = await getEmbeddingAuth();
+  if (!auth) return null;
 
   const qdrantUrl = getQdrantUrl();
   const workspacePath = tryGetFirstWorkspaceRoot();
@@ -705,27 +901,27 @@ export async function semanticFileQuery(
   // Normalize to forward slashes for Qdrant filePath matching
   const normalizedPath = relFilePath.replace(/\\/g, "/");
 
-  const expandedQuery = expandQuery(query);
-  const queryVector = await generateEmbedding(expandedQuery, bearerToken);
-
-  // Build filter: must match this exact file
-  const filter: Record<string, unknown> = {
-    must_not: [{ key: "type", match: { value: "metadata" } }],
-    must: [{ key: "filePath", match: { value: normalizedPath } }],
-  };
-
-  const body = {
-    query: queryVector,
-    filter,
-    score_threshold: 0.25,
-    limit: 3,
-    params: { hnsw_ef: 256, exact: false },
-    with_payload: { include: ["startLine", "endLine"] },
-  };
-
-  const url = `${qdrantUrl.replace(/\/+$/, "")}/collections/${collectionName}/points/query`;
-
   try {
+    const expandedQuery = expandQuery(query);
+    const queryVector = await generateEmbedding(expandedQuery, auth);
+
+    // Build filter: must match this exact file
+    const filter: Record<string, unknown> = {
+      must_not: [{ key: "type", match: { value: "metadata" } }],
+      must: [{ key: "filePath", match: { value: normalizedPath } }],
+    };
+
+    const body = {
+      query: queryVector,
+      filter,
+      score_threshold: 0.25,
+      limit: 3,
+      params: { hnsw_ef: 256, exact: false },
+      with_payload: { include: ["startLine", "endLine"] },
+    };
+
+    const url = `${qdrantUrl.replace(/\/+$/, "")}/collections/${collectionName}/points/query`;
+
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -771,12 +967,12 @@ export async function semanticFileList(
     };
   }
 
-  const bearerToken = await getEmbeddingAuthToken();
-  if (!bearerToken) {
+  const auth = await getEmbeddingAuth();
+  if (!auth) {
     return {
       files: [],
       error:
-        "OpenAI authentication not configured. Run 'AgentLink: Sign In to OpenAI/Codex' to choose ChatGPT/Codex OAuth or an OpenAI API key, or set OPENAI_API_KEY in the environment. Either method enables semantic search and indexing.",
+        "OpenAI API key not configured for embeddings. Semantic search and indexing require an API key (set OPENAI_API_KEY or run 'AgentLink: Set OpenAI API Key for Embeddings'). Model chat can still use OpenAI/Codex OAuth.",
     };
   }
 
@@ -790,13 +986,13 @@ export async function semanticFileList(
   const relativeDir = path.relative(workspacePath, dirPath);
   const directoryPrefix = relativeDir === "" ? undefined : relativeDir;
 
-  const expandedQuery = expandQuery(query);
-  const queryVector = await generateEmbedding(expandedQuery, bearerToken);
-
-  // Fetch more chunks than limit since multiple chunks map to the same file
-  const fetchLimit = limit * 5;
-
   try {
+    const expandedQuery = expandQuery(query);
+    const queryVector = await generateEmbedding(expandedQuery, auth);
+
+    // Fetch more chunks than limit since multiple chunks map to the same file
+    const fetchLimit = limit * 5;
+
     const results = await queryQdrant(
       qdrantUrl,
       collectionName,
@@ -852,15 +1048,15 @@ export async function semanticSearch(
     };
   }
 
-  const bearerToken = await getEmbeddingAuthToken();
-  if (!bearerToken) {
+  const auth = await getEmbeddingAuth();
+  if (!auth) {
     return {
       content: [
         {
           type: "text",
           text: JSON.stringify({
             error:
-              "OpenAI authentication not configured. Run 'AgentLink: Sign In to OpenAI/Codex' to choose ChatGPT/Codex OAuth or an OpenAI API key, or set OPENAI_API_KEY in the environment. Either method enables semantic search and indexing.",
+              "OpenAI API key not configured for embeddings. Semantic search and indexing require an API key (set OPENAI_API_KEY or run 'AgentLink: Set OpenAI API Key for Embeddings'). Model chat can still use OpenAI/Codex OAuth.",
           }),
         },
       ],
@@ -888,12 +1084,12 @@ export async function semanticSearch(
   const relativeDir = path.relative(workspacePath, dirPath);
   const directoryPrefix = relativeDir === "" ? undefined : relativeDir;
 
-  // Expand query for better embedding recall, then embed
-  const expandedQuery = expandQuery(query);
-  const queryVector = await generateEmbedding(expandedQuery, bearerToken);
-  const effectiveLimit = limit ?? 10;
-
   try {
+    // Expand query for better embedding recall, then embed
+    const expandedQuery = expandQuery(query);
+    const queryVector = await generateEmbedding(expandedQuery, auth);
+    const effectiveLimit = limit ?? 10;
+
     const results = await queryQdrant(
       qdrantUrl,
       collectionName,
@@ -906,6 +1102,39 @@ export async function semanticSearch(
     return buildOutput(query, formatResults(results));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const effectiveLimit = limit ?? 10;
+
+    if (shouldFallbackToKeywordSearch(msg)) {
+      try {
+        const fallbackResults = await keywordFallbackSearch(
+          dirPath,
+          query,
+          effectiveLimit,
+          excludeGlobs,
+        );
+        return buildOutput(query, fallbackResults, {
+          semantic: false,
+          warning: `Semantic search is temporarily unavailable (${summarizeSemanticFailure(msg)}); showing keyword-based fallback results instead.`,
+        });
+      } catch (fallbackError) {
+        const fallbackMessage =
+          fallbackError instanceof Error
+            ? fallbackError.message
+            : String(fallbackError);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: msg,
+                fallback_error: fallbackMessage,
+              }),
+            },
+          ],
+        };
+      }
+    }
+
     return {
       content: [{ type: "text", text: JSON.stringify({ error: msg }) }],
     };

@@ -13,9 +13,16 @@ vi.mock("vscode", () => ({
   },
 }));
 
-const { resolveEmbeddingAuth, fetchMock } = vi.hoisted(() => ({
+const {
+  resolveEmbeddingAuth,
+  fetchMock,
+  execRipgrepSearch,
+  getRipgrepBinPath,
+} = vi.hoisted(() => ({
   resolveEmbeddingAuth: vi.fn(),
   fetchMock: vi.fn(),
+  execRipgrepSearch: vi.fn(),
+  getRipgrepBinPath: vi.fn(),
 }));
 
 vi.mock("../agent/providers/index.js", () => ({
@@ -23,6 +30,18 @@ vi.mock("../agent/providers/index.js", () => ({
     resolveEmbeddingAuth,
   },
 }));
+
+vi.mock("../util/ripgrep.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../util/ripgrep.js")>(
+      "../util/ripgrep.js",
+    );
+  return {
+    ...actual,
+    execRipgrepSearch,
+    getRipgrepBinPath,
+  };
+});
 
 global.fetch = fetchMock as typeof fetch;
 
@@ -355,8 +374,12 @@ describe("rerankResults", () => {
 
 describe("semantic search auth", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     resolveEmbeddingAuth.mockReset();
+
     fetchMock.mockReset();
+    execRipgrepSearch.mockReset();
+    getRipgrepBinPath.mockReset();
   });
 
   it("returns a helpful error when no OpenAI auth is configured", async () => {
@@ -367,7 +390,7 @@ describe("semantic search auth", () => {
     expect(result).toEqual({
       files: [],
       error:
-        "OpenAI authentication not configured. Run 'AgentLink: Sign In to OpenAI/Codex' to choose ChatGPT/Codex OAuth or an OpenAI API key, or set OPENAI_API_KEY in the environment. Either method enables semantic search and indexing.",
+        "OpenAI API key not configured for embeddings. Semantic search and indexing require an API key (set OPENAI_API_KEY or run 'AgentLink: Set OpenAI API Key for Embeddings'). Model chat can still use OpenAI/Codex OAuth.",
     });
   });
 
@@ -397,5 +420,234 @@ describe("semantic search auth", () => {
     expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
       Authorization: "Bearer oauth-token",
     });
+  });
+
+  it("retries transient 500 embedding failures", async () => {
+    vi.useFakeTimers();
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => "internal_error",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => "internal_error",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ result: [] }),
+      });
+
+    const searchPromise = semanticSearch("/workspace", "retry embeddings", 5);
+    await vi.runAllTimersAsync();
+    await searchPromise;
+
+    const embeddingCalls = fetchMock.mock.calls.filter(
+      ([url]) => url === "https://api.openai.com/v1/embeddings",
+    );
+    expect(embeddingCalls).toHaveLength(3);
+    expect(embeddingCalls[0]?.[1]?.headers).toMatchObject({
+      Authorization: "Bearer oauth-token",
+    });
+    expect(embeddingCalls[2]?.[1]?.headers).toMatchObject({
+      Authorization: "Bearer oauth-token",
+    });
+  });
+
+  it("does not retry 401 embedding failures", async () => {
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "api-key-token",
+      canRefresh: false,
+    });
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      text: async () => "unauthorized",
+    });
+
+    const result = await semanticSearch("/workspace", "refresh embeddings", 5);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
+      Authorization: "Bearer api-key-token",
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify({
+          error: "OpenAI API error (401): unauthorized",
+        }),
+      },
+    ]);
+  });
+
+  it("does not retry 401s when auth cannot be refreshed", async () => {
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "apiKey",
+      bearerToken: "api-key-token",
+      canRefresh: false,
+    });
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      text: async () => "unauthorized",
+    });
+
+    const result = await semanticSearch(
+      "/workspace",
+      "api key unauthorized",
+      5,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(getRipgrepBinPath).not.toHaveBeenCalled();
+    expect(execRipgrepSearch).not.toHaveBeenCalled();
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify({
+          error: "OpenAI API error (401): unauthorized",
+        }),
+      },
+    ]);
+  });
+
+  it("retries thrown fetch errors before succeeding", async () => {
+    vi.useFakeTimers();
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("network down"))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ result: [] }),
+      });
+
+    const searchPromise = semanticSearch("/workspace", "network retry", 5);
+    await vi.runAllTimersAsync();
+    await searchPromise;
+
+    const embeddingCalls = fetchMock.mock.calls.filter(
+      ([url]) => url === "https://api.openai.com/v1/embeddings",
+    );
+    expect(embeddingCalls).toHaveLength(2);
+  });
+
+  it("falls back to keyword search when embeddings keep returning 500s", async () => {
+    vi.useFakeTimers();
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+    getRipgrepBinPath.mockResolvedValue("rg");
+    execRipgrepSearch.mockResolvedValue(
+      [
+        JSON.stringify({
+          type: "begin",
+          data: { path: { text: "/workspace/src/searchFiles.ts" } },
+        }),
+        JSON.stringify({
+          type: "match",
+          data: {
+            path: { text: "/workspace/src/searchFiles.ts" },
+            lines: { text: "function searchFiles() {" },
+            line_number: 12,
+            absolute_offset: 0,
+          },
+        }),
+        JSON.stringify({
+          type: "context",
+          data: {
+            path: { text: "/workspace/src/searchFiles.ts" },
+            lines: { text: "  return keywordFallback;" },
+            line_number: 13,
+          },
+        }),
+        JSON.stringify({
+          type: "end",
+          data: { path: { text: "/workspace/src/searchFiles.ts" } },
+        }),
+      ].join("\n"),
+    );
+
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "internal_error",
+    });
+
+    const searchPromise = semanticSearch("/workspace", "search files", 5);
+    await vi.runAllTimersAsync();
+    const result = await searchPromise;
+
+    const firstBlock = result.content[0];
+    expect(firstBlock?.type).toBe("text");
+    if (!firstBlock || firstBlock.type !== "text") {
+      throw new Error("Expected text response");
+    }
+
+    const payload = JSON.parse(firstBlock.text);
+    expect(payload.semantic).toBe(false);
+    expect(payload.warning).toContain("temporarily unavailable");
+    expect(payload.warning).toContain("HTTP 500");
+    expect(payload.results).toContain("src/searchFiles.ts");
+    expect(payload.results).toContain("12 | function searchFiles() {");
+    expect(getRipgrepBinPath).toHaveBeenCalledTimes(1);
+    expect(execRipgrepSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the original error when fallback search also fails", async () => {
+    vi.useFakeTimers();
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+    getRipgrepBinPath.mockResolvedValue("rg");
+    execRipgrepSearch.mockRejectedValue(new Error("ripgrep unavailable"));
+
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "internal_error",
+    });
+
+    const searchPromise = semanticSearch("/workspace", "search files", 5);
+    await vi.runAllTimersAsync();
+    const result = await searchPromise;
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify({
+          error: "OpenAI API error (500): internal_error",
+          fallback_error: "ripgrep unavailable",
+        }),
+      },
+    ]);
   });
 });

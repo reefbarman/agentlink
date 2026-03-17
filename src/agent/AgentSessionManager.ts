@@ -362,6 +362,36 @@ export class AgentSessionManager {
             continue;
           }
           this.onEvent?.(session.id, event);
+
+          // After forwarding a user_interjection event, create a checkpoint so
+          // the user can revert to the state before the mid-run message.
+          // We create it AFTER forwarding so agentCheckpointCreated arrives at
+          // the webview after agentInterjection — the message must already exist
+          // in webview state before the checkpoint can be attached to it.
+          if (event.type === "user_interjection") {
+            const interjectionTurnIndex =
+              session
+                .getAllMessages()
+                .filter(
+                  (m) => m.role === "user" && typeof m.content === "string",
+                ).length - 1;
+            const interjectionCheckpoint =
+              interjectionTurnIndex >= 0
+                ? ((await this.checkpointManager?.createCheckpoint(
+                    interjectionTurnIndex,
+                  )) ?? null)
+                : null;
+            if (interjectionCheckpoint) {
+              const existing = this.checkpoints.get(session.id) ?? [];
+              existing.push(interjectionCheckpoint);
+              this.checkpoints.set(session.id, existing);
+              this.onEvent?.(session.id, {
+                type: "checkpoint_created",
+                checkpointId: interjectionCheckpoint.id,
+                turnIndex: interjectionTurnIndex,
+              });
+            }
+          }
         }
 
         // Aborted — let ChatViewProvider handle the done notification

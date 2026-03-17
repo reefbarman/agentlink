@@ -301,6 +301,104 @@ describe("AgentEngine", () => {
         timerSpy.mockRestore();
       }
     });
+
+    it("retries once when the provider finishes with empty content blocks", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts === 1) {
+          yield {
+            type: "usage",
+            inputTokens: 100,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+          };
+          yield { type: "content_blocks", blocks: [] };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "Recovered response" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+      const warnings = events.filter((e) => e.type === "warning");
+      const doneEvent = events.find((e) => e.type === "done");
+      const errorEvent = events.find((e) => e.type === "error");
+      const lastMessage =
+        session.getAllMessages()[session.getAllMessages().length - 1];
+
+      expect(attempts).toBe(2);
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          type: "warning",
+          message:
+            "Provider returned an empty response — asking it to continue…",
+        }),
+      ]);
+      expect(doneEvent).toBeDefined();
+      expect(errorEvent).toBeUndefined();
+      expect(lastMessage).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "Recovered response" }],
+      });
+      expect(session.getAllMessages()).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          content:
+            "Your previous response was empty. Continue from where you left off and provide the full response.",
+        }),
+      );
+    });
+
+    it("surfaces a retryable error after consecutive empty responses", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        yield {
+          type: "usage",
+          inputTokens: 100,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+        };
+        yield { type: "content_blocks", blocks: [] };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+      const warnings = events.filter((e) => e.type === "warning");
+      const doneEvent = events.find((e) => e.type === "done");
+      const errorEvent = events.find((e) => e.type === "error");
+
+      expect(attempts).toBe(2);
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          type: "warning",
+          message:
+            "Provider returned an empty response — asking it to continue…",
+        }),
+      ]);
+      expect(doneEvent).toBeUndefined();
+      expect(errorEvent).toEqual(
+        expect.objectContaining({
+          type: "error",
+          error:
+            "Provider returned empty responses 2 times in a row. Please retry.",
+          retryable: true,
+        }),
+      );
+    });
   });
 
   describe("condenseSession", () => {
