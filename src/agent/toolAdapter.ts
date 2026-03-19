@@ -475,6 +475,7 @@ export function getAgentTools(
     : undefined;
 
   const nativeTools = Object.entries(TOOL_SCHEMAS)
+    .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
     .filter(([name]) => (__DEV_BUILD__ ? true : !DEV_FEEDBACK_TOOLS.has(name)))
     .filter(

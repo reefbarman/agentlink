@@ -255,12 +255,133 @@ describe("AgentEngine", () => {
       if (!apiRequest || apiRequest.type !== "api_request") return;
 
       expect(apiRequest.inputTokens).toBe(10_050);
+      expect(apiRequest.uncachedInputTokens).toBe(50);
       expect(apiRequest.cacheReadTokens).toBe(9000);
       expect(apiRequest.cacheCreationTokens).toBe(1000);
       expect(session.lastInputTokens).toBe(10_050);
       expect(session.totalInputTokens).toBe(50);
       expect(session.totalCacheReadTokens).toBe(9000);
       expect(session.totalCacheCreationTokens).toBe(1000);
+    });
+
+    it("stores provider response id from usage events for future stateful codex turns", async () => {
+      const provider = makeMockProvider([
+        { type: "text_delta", text: "ok" },
+        {
+          type: "content_blocks",
+          blocks: [{ type: "text", text: "ok" }],
+        },
+        {
+          type: "usage",
+          inputTokens: 10,
+          outputTokens: 5,
+          providerResponseId: "resp_abc",
+        },
+        { type: "done" },
+      ]);
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+      const apiRequest = events.find((e) => e.type === "api_request");
+      expect(session.providerResponseId).toBe("resp_abc");
+      expect(apiRequest).toMatchObject({
+        type: "api_request",
+        providerResponseId: "resp_abc",
+        usedPreviousResponseId: false,
+        previousResponseIdFallback: false,
+      });
+    });
+
+    it("retries codex once without previous_response_id when the remote state cannot be resolved", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const provider: ModelProvider = {
+        id: "codex",
+        displayName: "Codex",
+        condenseModel: "gpt-5.4",
+        async isAuthenticated() {
+          return true;
+        },
+        getCapabilities() {
+          return TEST_CAPABILITIES;
+        },
+        listModels(): ModelInfo[] {
+          return [
+            {
+              id: TEST_MODEL,
+              displayName: "Codex",
+              provider: "codex",
+              capabilities: TEST_CAPABILITIES,
+            },
+          ];
+        },
+        async *stream(request: StreamRequest) {
+          streamCalls.push(request);
+          if (streamCalls.length === 1) {
+            throw new Error(
+              "previous_response_id could not be resolved: response not found",
+            );
+          }
+          yield { type: "text_delta", text: "ok" };
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "ok" }],
+          };
+          yield {
+            type: "usage",
+            inputTokens: 20,
+            outputTokens: 5,
+            providerResponseId: "resp_new",
+          };
+          yield { type: "done" };
+        },
+        async complete() {
+          return { text: "ok" };
+        },
+      };
+
+      const session = await makeSession({
+        ...testConfig,
+        model: TEST_MODEL,
+        codexStatefulResponses: true,
+      });
+      session.providerId = "codex";
+      session.addUserMessage("hello");
+      session.setProviderResponseId("resp_prev");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+      const warnings = events.filter((e) => e.type === "warning");
+      const apiRequest = events.find((e) => e.type === "api_request");
+
+      expect(streamCalls).toHaveLength(2);
+      expect(streamCalls[0]?.state).toEqual({
+        previousResponseId: "resp_prev",
+        store: false,
+      });
+      expect(streamCalls[1]?.state).toEqual({
+        previousResponseId: undefined,
+        store: false,
+      });
+      expect(warnings).toContainEqual(
+        expect.objectContaining({
+          type: "warning",
+          message:
+            "Codex could not resume the prior response state — retrying this turn with full local replay.",
+        }),
+      );
+      expect(apiRequest).toMatchObject({
+        type: "api_request",
+        usedPreviousResponseId: false,
+        previousResponseIdFallback: true,
+        promptCacheKey: expect.stringContaining("codex:"),
+        promptCacheRetention: "24h",
+        storeResponseState: false,
+        providerResponseId: "resp_new",
+      });
+      expect(session.providerResponseId).toBe("resp_new");
     });
 
     it("auto-retries Codex processing errors and still marks exhausted failures retryable", async () => {

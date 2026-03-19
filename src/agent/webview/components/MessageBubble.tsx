@@ -232,6 +232,9 @@ export function MessageBubble({
           requestId={message.apiRequest.requestId}
           model={message.apiRequest.model}
           inputTokens={message.apiRequest.inputTokens}
+          uncachedInputTokens={message.apiRequest.uncachedInputTokens}
+          cacheReadTokens={message.apiRequest.cacheReadTokens}
+          cacheCreationTokens={message.apiRequest.cacheCreationTokens}
           outputTokens={message.apiRequest.outputTokens}
           durationMs={message.apiRequest.durationMs}
           timeToFirstToken={message.apiRequest.timeToFirstToken}

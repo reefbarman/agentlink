@@ -162,6 +162,16 @@ export interface ModelProvider {
   complete(request: CompleteRequest): Promise<CompleteResult>;
 }
 
+export interface ProviderCacheOptions {
+  key?: string;
+  retention?: "in_memory" | "24h";
+}
+
+export interface ProviderStateOptions {
+  previousResponseId?: string;
+  store?: boolean;
+}
+
 export interface StreamRequest {
   model: string;
   systemPrompt: string;
@@ -169,6 +179,8 @@ export interface StreamRequest {
   tools?: ToolDefinition[];
   maxTokens: number;
   thinking?: { budgetTokens: number };
+  cache?: ProviderCacheOptions;
+  state?: ProviderStateOptions;
   signal?: AbortSignal;
 }
 
@@ -179,11 +191,14 @@ export interface CompleteRequest {
   maxTokens: number;
   /** Optional sampling temperature. Use 0 for deterministic tasks like condensing. */
   temperature?: number;
+  cache?: ProviderCacheOptions;
+  state?: ProviderStateOptions;
 }
 
 export interface CompleteResult {
   text: string;
   usage?: { inputTokens: number; outputTokens: number };
+  providerResponseId?: string;
 }
 
 export type ProviderStreamEvent =
@@ -206,6 +221,7 @@ export type ProviderStreamEvent =
       outputTokens: number;
       cacheReadTokens?: number;
       cacheCreationTokens?: number;
+      providerResponseId?: string;
     }
   | { type: "done" };
 

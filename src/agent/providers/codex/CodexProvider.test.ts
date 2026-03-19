@@ -1,21 +1,37 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { CodexProvider } from "./CodexProvider.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-function makeSseResponse(events: Array<Record<string, unknown>>): Response {
-  const encoder = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const event of events) {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
-        );
+const { createMock, openAiConstructorMock } = vi.hoisted(() => {
+  const createMock = vi.fn();
+  const openAiConstructorMock = vi.fn();
+
+  return { createMock, openAiConstructorMock };
+});
+
+vi.mock("openai", () => {
+  class MockOpenAI {
+    responses = {
+      create: createMock,
+    };
+
+    constructor(options: unknown) {
+      openAiConstructorMock(options);
+    }
+  }
+
+  return {
+    default: MockOpenAI,
+    APIError: class APIError extends Error {
+      status?: number;
+
+      constructor(status: number | undefined, message: string) {
+        super(message);
+        this.status = status;
       }
-      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-      controller.close();
     },
-  });
-  return new Response(body, { status: 200 });
-}
+  };
+});
+
+import { CodexProvider } from "./CodexProvider.js";
 
 function makeAuthManager(overrides?: Partial<Record<string, unknown>>) {
   return {
@@ -37,32 +53,37 @@ function makeAuthManager(overrides?: Partial<Record<string, unknown>>) {
 }
 
 describe("CodexProvider.complete", () => {
+  beforeEach(() => {
+    createMock.mockReset();
+    openAiConstructorMock.mockClear();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("uses streaming mode and omits unsupported temperature", async () => {
     let requestBody: Record<string, unknown> | undefined;
-    let requestUrl = "";
-    let requestHeaders: HeadersInit | undefined;
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      requestUrl = url;
-      requestHeaders = init?.headers;
-      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      return makeSseResponse([
-        { type: "response.output_text.delta", delta: "hello" },
-        {
-          type: "response.done",
-          response: {
-            usage: {
-              input_tokens: 12,
-              output_tokens: 3,
+    createMock.mockImplementationOnce(
+      async (
+        body: Record<string, unknown>,
+        _options?: Record<string, unknown>,
+      ) => {
+        requestBody = body;
+        return (async function* () {
+          yield { type: "response.output_text.delta", delta: "hello" };
+          yield {
+            type: "response.done",
+            response: {
+              usage: {
+                input_tokens: 12,
+                output_tokens: 3,
+              },
             },
-          },
-        },
-      ]);
-    });
-    vi.stubGlobal("fetch", fetchMock);
+          };
+        })();
+      },
+    );
 
     const authManager = makeAuthManager();
 
@@ -75,8 +96,19 @@ describe("CodexProvider.complete", () => {
       temperature: 0,
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(requestUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(createMock).toHaveBeenCalledTimes(1);
+    expect(openAiConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "token",
+        baseURL: "https://chatgpt.com/backend-api/codex",
+        defaultHeaders: expect.objectContaining({
+          originator: "agentlink",
+          session_id: expect.any(String),
+          "ChatGPT-Account-Id": "acct",
+        }),
+        maxRetries: 0,
+      }),
+    );
     expect(requestBody).toMatchObject({
       model: "gpt-5.2-codex",
       instructions: "system",
@@ -84,12 +116,6 @@ describe("CodexProvider.complete", () => {
       store: false,
     });
     expect(requestBody).not.toHaveProperty("temperature");
-    expect(requestHeaders).toMatchObject({
-      Authorization: "Bearer token",
-      originator: "agentlink",
-      session_id: expect.any(String),
-      "ChatGPT-Account-Id": "acct",
-    });
     expect(result).toEqual({
       text: "hello",
       usage: { inputTokens: 12, outputTokens: 3 },
@@ -97,20 +123,12 @@ describe("CodexProvider.complete", () => {
   });
 
   it("retries once on oauth auth failure", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            error: { message: "401 unauthorized" },
-          }),
-          { status: 401 },
-        ),
-      )
-      .mockResolvedValueOnce(
-        makeSseResponse([
-          { type: "response.output_text.delta", delta: "ok" },
-          {
+    createMock
+      .mockRejectedValueOnce(new Error("401 unauthorized"))
+      .mockImplementationOnce(async () => {
+        return (async function* () {
+          yield { type: "response.output_text.delta", delta: "ok" };
+          yield {
             type: "response.done",
             response: {
               usage: {
@@ -118,10 +136,9 @@ describe("CodexProvider.complete", () => {
                 output_tokens: 1,
               },
             },
-          },
-        ]),
-      );
-    vi.stubGlobal("fetch", fetchMock);
+          };
+        })();
+      });
 
     const authManager = makeAuthManager();
 
@@ -134,19 +151,15 @@ describe("CodexProvider.complete", () => {
     });
 
     expect(authManager.forceRefreshModelAuth).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(createMock).toHaveBeenCalledTimes(2);
     expect(result.text).toBe("ok");
   });
 
   it("uses the OpenAI Responses endpoint for API-key auth", async () => {
-    let requestUrl = "";
-    let requestHeaders: HeadersInit | undefined;
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      requestUrl = url;
-      requestHeaders = init?.headers;
-      return makeSseResponse([
-        { type: "response.output_text.delta", delta: "api" },
-        {
+    createMock.mockImplementationOnce(async () => {
+      return (async function* () {
+        yield { type: "response.output_text.delta", delta: "api" };
+        yield {
           type: "response.done",
           response: {
             usage: {
@@ -154,10 +167,9 @@ describe("CodexProvider.complete", () => {
               output_tokens: 2,
             },
           },
-        },
-      ]);
+        };
+      })();
     });
-    vi.stubGlobal("fetch", fetchMock);
 
     const authManager = makeAuthManager({
       resolveModelAuth: vi.fn().mockResolvedValue({
@@ -176,26 +188,264 @@ describe("CodexProvider.complete", () => {
       maxTokens: 64,
     });
 
-    expect(requestUrl).toBe("https://api.openai.com/v1/responses");
-    expect(requestHeaders).toMatchObject({
-      Authorization: "Bearer sk-test",
-    });
-    expect(
-      (requestHeaders as Record<string, string>).originator,
-    ).toBeUndefined();
+    expect(openAiConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "sk-test",
+        baseURL: "https://api.openai.com/v1",
+        defaultHeaders: expect.not.objectContaining({
+          originator: expect.anything(),
+        }),
+        maxRetries: 0,
+      }),
+    );
     expect(result.text).toBe("api");
   });
 
-  it("throws when oauth refresh returns null", async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          error: { message: "401 unauthorized" },
-        }),
-        { status: 401 },
+  it("subtracts prompt_tokens_details.cached_tokens from OpenAI input_tokens", async () => {
+    createMock.mockImplementationOnce(async () => {
+      return (async function* () {
+        yield { type: "response.output_text.delta", delta: "api" };
+        yield {
+          type: "response.done",
+          response: {
+            id: "resp_123",
+            usage: {
+              input_tokens: 1200,
+              output_tokens: 40,
+              prompt_tokens_details: {
+                cached_tokens: 1024,
+              },
+            },
+          },
+        };
+      })();
+    });
+
+    const authManager = makeAuthManager({
+      resolveModelAuth: vi.fn().mockResolvedValue({
+        method: "apiKey",
+        bearerToken: "sk-test",
+        canRefresh: false,
+      }),
+      forceRefreshModelAuth: vi.fn().mockResolvedValue(null),
+    });
+
+    const provider = new CodexProvider(authManager as never);
+    const result = await provider.complete({
+      model: "gpt-5.4",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    });
+
+    expect(result).toEqual({
+      text: "api",
+      usage: { inputTokens: 176, outputTokens: 40 },
+      providerResponseId: "resp_123",
+    });
+  });
+
+  it("clamps uncached input tokens at zero when cached_tokens exceeds reported input", async () => {
+    createMock.mockImplementationOnce(async () => {
+      return (async function* () {
+        yield { type: "response.output_text.delta", delta: "api" };
+        yield {
+          type: "response.done",
+          response: {
+            usage: {
+              input_tokens: 100,
+              output_tokens: 5,
+              input_tokens_details: {
+                cached_tokens: 150,
+              },
+            },
+          },
+        };
+      })();
+    });
+
+    const authManager = makeAuthManager({
+      resolveModelAuth: vi.fn().mockResolvedValue({
+        method: "apiKey",
+        bearerToken: "sk-test",
+        canRefresh: false,
+      }),
+      forceRefreshModelAuth: vi.fn().mockResolvedValue(null),
+    });
+
+    const provider = new CodexProvider(authManager as never);
+    const result = await provider.complete({
+      model: "gpt-5.4",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    });
+
+    expect(result).toEqual({
+      text: "api",
+      usage: { inputTokens: 0, outputTokens: 5 },
+    });
+  });
+
+  it("passes prompt cache and state fields through when provided", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
+      requestBody = body;
+      return (async function* () {
+        yield { type: "response.output_text.delta", delta: "ok" };
+        yield {
+          type: "response.done",
+          response: {
+            usage: { input_tokens: 10, output_tokens: 2 },
+          },
+        };
+      })();
+    });
+
+    const authManager = makeAuthManager({
+      resolveModelAuth: vi.fn().mockResolvedValue({
+        method: "apiKey",
+        bearerToken: "sk-test",
+        canRefresh: false,
+      }),
+      forceRefreshModelAuth: vi.fn().mockResolvedValue(null),
+    });
+
+    const provider = new CodexProvider(authManager as never);
+    await provider.complete({
+      model: "gpt-5.4",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+      cache: { key: "codex:test:thread", retention: "24h" },
+      state: { previousResponseId: "resp_prev", store: true },
+    });
+
+    // API-key path → public OpenAI Responses surface: all cache/state params supported
+    expect(requestBody).toMatchObject({
+      prompt_cache_key: "codex:test:thread",
+      prompt_cache_retention: "24h",
+      previous_response_id: "resp_prev",
+      store: true,
+    });
+  });
+
+  it("OAuth path omits cache/state params unsupported by ChatGPT backend", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
+      requestBody = body;
+      return (async function* () {
+        yield { type: "response.output_text.delta", delta: "ok" };
+        yield {
+          type: "response.done",
+          response: { usage: { input_tokens: 10, output_tokens: 2 } },
+        };
+      })();
+    });
+
+    const provider = new CodexProvider(makeAuthManager() as never); // oauth by default
+    await provider.complete({
+      model: "gpt-5.3-codex",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+      cache: { key: "codex:test:thread", retention: "24h" },
+      state: { previousResponseId: "resp_prev", store: true },
+    });
+
+    expect(requestBody).not.toHaveProperty("prompt_cache_key");
+    expect(requestBody).not.toHaveProperty("prompt_cache_retention");
+    expect(requestBody).not.toHaveProperty("previous_response_id");
+  });
+
+  it("canonicalizes top-level and nested tool schema key ordering", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
+      requestBody = body;
+      return (async function* () {
+        yield { type: "response.output_text.delta", delta: "ok" };
+        yield {
+          type: "response.done",
+          response: {
+            usage: { input_tokens: 10, output_tokens: 2 },
+          },
+        };
+      })();
+    });
+
+    const authManager = makeAuthManager();
+    const provider = new CodexProvider(authManager as never);
+    for await (const _event of provider.stream({
+      model: "gpt-5.2-codex",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+      tools: [
+        {
+          name: "demo_tool",
+          description: "demo",
+          input_schema: {
+            type: "object",
+            required: ["zeta", "alpha"],
+            properties: {
+              zeta: {
+                type: "string",
+                description: "z",
+                format: "uri",
+              },
+              alpha: {
+                type: "object",
+                properties: {
+                  beta: { type: "number" },
+                  alpha: { type: "string" },
+                },
+              },
+            },
+            additionalProperties: false,
+            description: "demo schema",
+          },
+        },
+      ],
+    })) {
+      // Drain the stream to completion so the request is issued.
+    }
+
+    const tools = requestBody?.tools as
+      | Array<Record<string, unknown>>
+      | undefined;
+    expect(tools).toBeDefined();
+    const parameters = tools?.[0]?.parameters as
+      | Record<string, unknown>
+      | undefined;
+    expect(parameters).toBeDefined();
+    expect(Object.keys(parameters ?? {})).toEqual([
+      "additionalProperties",
+      "description",
+      "properties",
+      "required",
+      "type",
+    ]);
+    expect(
+      Object.keys((parameters?.properties as Record<string, unknown>) ?? {}),
+    ).toEqual(["alpha", "zeta"]);
+    expect(
+      Object.keys(
+        ((
+          (parameters?.properties as Record<string, unknown>)?.alpha as Record<
+            string,
+            unknown
+          >
+        )?.properties as Record<string, unknown>) ?? {},
       ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    ).toEqual(["alpha", "beta"]);
+    const zetaProperty = (
+      (parameters?.properties ?? {}) as Record<string, unknown>
+    ).zeta as Record<string, unknown> | undefined;
+    expect(zetaProperty?.format).toBeUndefined();
+  });
+
+  it("throws when oauth refresh returns null", async () => {
+    createMock.mockRejectedValueOnce(new Error("401 unauthorized"));
 
     const authManager = makeAuthManager({
       forceRefreshModelAuth: vi.fn().mockResolvedValue(null),
@@ -214,15 +464,7 @@ describe("CodexProvider.complete", () => {
   });
 
   it("does not retry api-key auth failures", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          error: { message: "401 unauthorized" },
-        }),
-        { status: 401 },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    createMock.mockRejectedValueOnce(new Error("401 unauthorized"));
 
     const authManager = makeAuthManager({
       resolveModelAuth: vi.fn().mockResolvedValue({
@@ -242,7 +484,293 @@ describe("CodexProvider.complete", () => {
         maxTokens: 64,
       }),
     ).rejects.toThrow(/401 unauthorized/i);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(authManager.forceRefreshModelAuth).not.toHaveBeenCalled();
+  });
+});
+
+describe("CodexProvider.stream", () => {
+  beforeEach(() => {
+    createMock.mockReset();
+    openAiConstructorMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("emits tool call lifecycle events and final content blocks", async () => {
+    createMock.mockImplementationOnce(async () => {
+      return (async function* () {
+        yield {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            call_id: "call_123",
+            name: "demo_tool",
+          },
+        };
+        yield {
+          type: "response.function_call_arguments.delta",
+          call_id: "call_123",
+          delta: '{"foo":',
+        };
+        yield {
+          type: "response.function_call_arguments.delta",
+          call_id: "call_123",
+          delta: '"bar"}',
+        };
+        yield {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            call_id: "call_123",
+            name: "demo_tool",
+            arguments: '{"foo":"bar"}',
+          },
+        };
+        yield {
+          type: "response.done",
+          response: {
+            id: "resp_tool",
+            usage: {
+              input_tokens: 11,
+              output_tokens: 4,
+            },
+          },
+        };
+      })();
+    });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    const events = [] as Array<Record<string, unknown>>;
+    for await (const event of provider.stream({
+      model: "gpt-5.2-codex",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    })) {
+      events.push(event as Record<string, unknown>);
+    }
+
+    expect(events).toEqual([
+      {
+        type: "tool_start",
+        toolCallId: "call_123",
+        toolName: "demo_tool",
+      },
+      {
+        type: "tool_input_delta",
+        toolCallId: "call_123",
+        partialJson: '{"foo":',
+      },
+      {
+        type: "tool_input_delta",
+        toolCallId: "call_123",
+        partialJson: '"bar"}',
+      },
+      {
+        type: "tool_done",
+        toolCallId: "call_123",
+        toolName: "demo_tool",
+        input: { foo: "bar" },
+      },
+      {
+        type: "usage",
+        inputTokens: 11,
+        outputTokens: 4,
+        cacheReadTokens: undefined,
+        providerResponseId: "resp_tool",
+      },
+      {
+        type: "content_blocks",
+        blocks: [
+          {
+            type: "tool_use",
+            id: "call_123",
+            name: "demo_tool",
+            input: { foo: "bar" },
+          },
+        ],
+      },
+      { type: "done" },
+    ]);
+  });
+
+  it("emits thinking and refusal deltas and final text/thinking blocks", async () => {
+    createMock.mockImplementationOnce(async () => {
+      return (async function* () {
+        yield { type: "response.reasoning.delta", delta: "plan" };
+        yield { type: "response.refusal.delta", delta: " cannot do that" };
+        yield { type: "response.output_text.delta", delta: "final" };
+        yield {
+          type: "response.done",
+          response: {
+            id: "resp_reasoning",
+            usage: {
+              input_tokens: 8,
+              output_tokens: 3,
+            },
+          },
+        };
+      })();
+    });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    const events = [] as Array<Record<string, unknown>>;
+    for await (const event of provider.stream({
+      model: "gpt-5.2-codex",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    })) {
+      events.push(event as Record<string, unknown>);
+    }
+
+    const thinkingStart = events.find(
+      (event) => event.type === "thinking_start",
+    );
+    expect(thinkingStart).toBeDefined();
+    expect(events).toEqual([
+      {
+        type: "thinking_start",
+        thinkingId: thinkingStart?.thinkingId,
+      },
+      {
+        type: "thinking_delta",
+        thinkingId: thinkingStart?.thinkingId,
+        text: "plan",
+      },
+      {
+        type: "text_delta",
+        text: "[Refusal]  cannot do that",
+      },
+      {
+        type: "text_delta",
+        text: "final",
+      },
+      {
+        type: "thinking_end",
+        thinkingId: thinkingStart?.thinkingId,
+      },
+      {
+        type: "usage",
+        inputTokens: 8,
+        outputTokens: 3,
+        cacheReadTokens: undefined,
+        providerResponseId: "resp_reasoning",
+      },
+      {
+        type: "content_blocks",
+        blocks: [
+          {
+            type: "thinking",
+            thinking: "plan",
+            signature: "",
+          },
+          {
+            type: "text",
+            text: "[Refusal]  cannot do thatfinal",
+          },
+        ],
+      },
+      { type: "done" },
+    ]);
+  });
+
+  it("emits plain text-only streams in order", async () => {
+    createMock.mockImplementationOnce(async () => {
+      return (async function* () {
+        yield { type: "response.text.delta", delta: "hello" };
+        yield { type: "response.output_text.delta", delta: " world" };
+        yield {
+          type: "response.completed",
+          response: {
+            id: "resp_text",
+            usage: {
+              input_tokens: 6,
+              output_tokens: 2,
+            },
+          },
+        };
+      })();
+    });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    const events = [] as Array<Record<string, unknown>>;
+    for await (const event of provider.stream({
+      model: "gpt-5.2-codex",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    })) {
+      events.push(event as Record<string, unknown>);
+    }
+
+    expect(events).toEqual([
+      { type: "text_delta", text: "hello" },
+      { type: "text_delta", text: " world" },
+      {
+        type: "usage",
+        inputTokens: 6,
+        outputTokens: 2,
+        cacheReadTokens: undefined,
+        providerResponseId: "resp_text",
+      },
+      {
+        type: "content_blocks",
+        blocks: [{ type: "text", text: "hello world" }],
+      },
+      { type: "done" },
+    ]);
+  });
+
+  it("propagates response.error events as stream errors", async () => {
+    createMock.mockImplementationOnce(async () => {
+      return (async function* () {
+        yield {
+          type: "response.error",
+          error: { message: "boom" },
+        };
+      })();
+    });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    await expect(
+      (async () => {
+        for await (const _event of provider.stream({
+          model: "gpt-5.2-codex",
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "ping" }],
+          maxTokens: 64,
+        })) {
+          // drain
+        }
+      })(),
+    ).rejects.toThrow(/Codex API error: boom/);
+  });
+
+  it("propagates response.failed events as request failures", async () => {
+    createMock.mockImplementationOnce(async () => {
+      return (async function* () {
+        yield {
+          type: "response.failed",
+          error: { message: "request blew up" },
+        };
+      })();
+    });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    await expect(
+      (async () => {
+        for await (const _event of provider.stream({
+          model: "gpt-5.2-codex",
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "ping" }],
+          maxTokens: 64,
+        })) {
+          // drain
+        }
+      })(),
+    ).rejects.toThrow(/Codex request failed: request blew up/);
   });
 });

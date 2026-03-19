@@ -22,6 +22,8 @@ export class AgentSession {
   thinkingBudget: number;
   autoCondense: boolean;
   autoCondenseThreshold: number;
+  codexStatefulResponses: boolean;
+  codexStoreResponses: boolean;
   private _status: SessionStatus = "idle";
   private _statusListeners = new Set<() => void>();
   title: string = "New Chat";
@@ -29,6 +31,9 @@ export class AgentSession {
   /** Name of the most recently started tool call (updated by AgentEngine). */
   currentTool: string | undefined;
 
+  /** Cumulative uncached input tokens across the session.
+   * This is intentionally uncached-only for cost/usage accounting; use lastInputTokens
+   * for most-recent total context-window usage including cache reads/writes. */
   totalInputTokens: number = 0;
   totalOutputTokens: number = 0;
   totalCacheReadTokens: number = 0;
@@ -55,6 +60,8 @@ export class AgentSession {
 
   /** Provider ID (e.g. "anthropic", "codex") — used for provider-specific system prompt tuning. */
   providerId: string | undefined;
+  /** Last OpenAI/Codex Responses API response ID used for optional stateful chaining. */
+  providerResponseId: string | undefined;
 
   get status(): SessionStatus {
     return this._status;
@@ -140,6 +147,8 @@ export class AgentSession {
     this.thinkingBudget = opts.config.thinkingBudget;
     this.autoCondense = opts.config.autoCondense ?? true;
     this.autoCondenseThreshold = opts.config.autoCondenseThreshold ?? 0.9;
+    this.codexStatefulResponses = opts.config.codexStatefulResponses ?? true;
+    this.codexStoreResponses = opts.config.codexStoreResponses ?? false;
     this.background = opts.background ?? false;
     this.createdAt = Date.now();
     this.lastActiveAt = this.createdAt;
@@ -200,6 +209,7 @@ export class AgentSession {
     });
     this.systemPrompt = artifacts.systemPrompt;
     this.setAdvertisedSkills(artifacts.skills);
+    this.resetProviderResponseState();
   }
 
   /**
@@ -223,6 +233,7 @@ export class AgentSession {
     this.agentMode = agentMode;
     this.systemPrompt = artifacts.systemPrompt;
     this.setAdvertisedSkills(artifacts.skills);
+    this.resetProviderResponseState();
     this.lastActiveAt = Date.now();
   }
 
@@ -271,6 +282,14 @@ export class AgentSession {
     this.lastActiveAt = Date.now();
   }
 
+  setProviderResponseId(responseId: string | undefined): void {
+    this.providerResponseId = responseId?.trim() || undefined;
+  }
+
+  resetProviderResponseState(): void {
+    this.providerResponseId = undefined;
+  }
+
   appendToolResults(
     results: Array<{
       type: "tool_result";
@@ -285,6 +304,7 @@ export class AgentSession {
   /** Replace full message history after condensing */
   replaceMessages(messages: AgentMessage[]): void {
     this.messages = messages;
+    this.resetProviderResponseState();
     this.lastActiveAt = Date.now();
   }
 
@@ -317,6 +337,7 @@ export class AgentSession {
     this.lastInputTokens = data.lastInputTokens ?? 0;
     this.lastCacheReadTokens = data.lastCacheReadTokens ?? 0;
     this.messages = data.messages;
+    this.resetProviderResponseState();
     this.loadedSkills.clear();
     for (const skill of data.loadedSkills ?? []) {
       if (skill.trim()) this.loadedSkills.add(skill.trim());

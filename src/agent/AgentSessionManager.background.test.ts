@@ -143,6 +143,7 @@ describe("AgentSessionManager background agents", () => {
           requestId: "r1",
           model: "claude-sonnet-4-6",
           inputTokens: 5000,
+          uncachedInputTokens: 5000,
           outputTokens: 1000,
           cacheReadTokens: 0,
           cacheCreationTokens: 0,

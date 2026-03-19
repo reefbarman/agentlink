@@ -97,11 +97,18 @@ export type ExtensionMessage =
       requestId: string;
       model: string;
       inputTokens: number;
+      uncachedInputTokens: number;
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
       durationMs: number;
       timeToFirstToken: number;
+      usedPreviousResponseId?: boolean;
+      previousResponseIdFallback?: boolean;
+      promptCacheKey?: string;
+      promptCacheRetention?: "in_memory" | "24h";
+      storeResponseState?: boolean;
+      providerResponseId?: string;
     }
   | {
       type: "agentError";
@@ -301,11 +308,18 @@ export type ExtensionMessage =
       requestId: string;
       model: string;
       inputTokens: number;
+      uncachedInputTokens: number;
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
       durationMs: number;
       timeToFirstToken: number;
+      usedPreviousResponseId?: boolean;
+      previousResponseIdFallback?: boolean;
+      promptCacheKey?: string;
+      promptCacheRetention?: "in_memory" | "24h";
+      storeResponseState?: boolean;
+      providerResponseId?: string;
     }
   | {
       type: "agentBgError";
@@ -481,9 +495,18 @@ export interface ChatMessage {
     requestId: string;
     model: string;
     inputTokens: number;
+    uncachedInputTokens?: number;
+    cacheReadTokens?: number;
+    cacheCreationTokens?: number;
     outputTokens: number;
     durationMs: number;
     timeToFirstToken: number;
+    usedPreviousResponseId?: boolean;
+    previousResponseIdFallback?: boolean;
+    promptCacheKey?: string;
+    promptCacheRetention?: "in_memory" | "24h";
+    storeResponseState?: boolean;
+    providerResponseId?: string;
   };
   /** Set when role === "condense" */
   condenseInfo?: {

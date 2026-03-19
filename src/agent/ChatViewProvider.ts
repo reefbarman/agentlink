@@ -74,11 +74,18 @@ export type ExtensionToWebview =
       requestId: string;
       model: string;
       inputTokens: number;
+      uncachedInputTokens: number;
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
       durationMs: number;
       timeToFirstToken: number;
+      usedPreviousResponseId?: boolean;
+      previousResponseIdFallback?: boolean;
+      promptCacheKey?: string;
+      promptCacheRetention?: "in_memory" | "24h";
+      storeResponseState?: boolean;
+      providerResponseId?: string;
     }
   | {
       type: "agentError";
@@ -284,11 +291,18 @@ export type ExtensionToWebview =
       requestId: string;
       model: string;
       inputTokens: number;
+      uncachedInputTokens: number;
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
       durationMs: number;
       timeToFirstToken: number;
+      usedPreviousResponseId?: boolean;
+      previousResponseIdFallback?: boolean;
+      promptCacheKey?: string;
+      promptCacheRetention?: "in_memory" | "24h";
+      storeResponseState?: boolean;
+      providerResponseId?: string;
     }
   | {
       type: "agentBgError";
@@ -2028,9 +2042,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "api_request":
         this.log(
-          `[agent] api_request model=${event.model} in=${event.inputTokens} out=${event.outputTokens} ` +
+          `[agent] api_request model=${event.model} in=${event.inputTokens} uncachedIn=${event.uncachedInputTokens} out=${event.outputTokens} ` +
             `cacheRead=${event.cacheReadTokens} cacheCreate=${event.cacheCreationTokens} ` +
-            `duration=${event.durationMs}ms ttft=${event.timeToFirstToken}ms`,
+            `duration=${event.durationMs}ms ttft=${event.timeToFirstToken}ms ` +
+            `prevResp=${event.usedPreviousResponseId ? "yes" : "no"} ` +
+            `fallback=${event.previousResponseIdFallback ? "yes" : "no"} ` +
+            `cacheKey=${event.promptCacheKey ? "set" : "unset"}`,
         );
         this.postMessage({
           type: isBackground ? "agentBgApiRequest" : "agentApiRequest",
@@ -2038,11 +2055,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           requestId: event.requestId,
           model: event.model,
           inputTokens: event.inputTokens,
+          uncachedInputTokens: event.uncachedInputTokens,
           outputTokens: event.outputTokens,
           cacheReadTokens: event.cacheReadTokens,
           cacheCreationTokens: event.cacheCreationTokens,
           durationMs: event.durationMs,
           timeToFirstToken: event.timeToFirstToken,
+          usedPreviousResponseId: event.usedPreviousResponseId,
+          previousResponseIdFallback: event.previousResponseIdFallback,
+          promptCacheKey: event.promptCacheKey,
+          promptCacheRetention: event.promptCacheRetention,
+          storeResponseState: event.storeResponseState,
+          providerResponseId: event.providerResponseId,
         });
         break;
 

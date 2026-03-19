@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.6.0",
+  "version": "1.7.5",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -379,6 +379,16 @@
             "review"
           ],
           "description": "Default mode for new agent chat sessions."
+        },
+        "agentlink.codexStatefulResponses": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable OpenAI Responses chaining for Codex/API-key sessions using previous_response_id when available. When a prior response cannot be resumed, AgentLink falls back to full local replay for that turn."
+        },
+        "agentlink.codexStoreResponses": {
+          "type": "boolean",
+          "default": false,
+          "description": "When Codex stateful responses are enabled, also set store=true on OpenAI Responses requests so server-side response state can be retained. Disabled by default to preserve existing retention behavior."
         }
       }
     }
@@ -403,6 +413,7 @@
     "gray-matter": "^4.0.3",
     "marked": "^17.0.4",
     "mermaid": "^11.12.3",
+    "openai": "^6.32.0",
     "picomatch": "^4.0.3",
     "preact": "^10.28.4",
     "simple-git": "^3.32.3",

@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import * as fs from "fs/promises";
 import { readFileSync } from "fs";
 import * as path from "path";
@@ -102,6 +102,14 @@ function extractAgentDisplayArgs(
     default:
       return "";
   }
+}
+
+function buildProviderCacheKey(session: AgentSession): string {
+  const workspaceHash = createHash("sha1")
+    .update(session.cwd)
+    .digest("hex")
+    .slice(0, 12);
+  return `codex:${workspaceHash}:${session.id}:${session.model}`;
 }
 
 /** Custom error for auth failures, so the outer catch can mark them specially. */
@@ -350,6 +358,10 @@ export class AgentEngine {
       let retryCount = 0;
       let emptyResponseRetryCount = 0;
       let credentialRefreshCount = 0;
+      // Sticky for the whole user turn: once we fall back from remote response
+      // state to full local replay, keep reporting that on the eventual
+      // successful api_request for this turn.
+      let previousResponseIdFallback = false;
       const MAX_CREDENTIAL_REFRESHES = 3;
       while (true) {
         if (signal.aborted) break;
@@ -477,7 +489,12 @@ export class AgentEngine {
         let outputTokens = 0;
         let cacheReadTokens = 0;
         let cacheCreationTokens = 0;
+        let providerResponseId: string | undefined;
         let firstTokenReceived = false;
+        let usedPreviousResponseId = false;
+        let promptCacheKey: string | undefined;
+        let promptCacheRetention: "in_memory" | "24h" | undefined;
+        let storeResponseState = false;
 
         try {
           // Build a copy of messages for the API call, injecting any pending
@@ -526,6 +543,27 @@ export class AgentEngine {
               return { role, content };
             });
 
+          const isCodex = provider.id === "codex";
+          const useStatefulCodex =
+            isCodex &&
+            session.codexStatefulResponses &&
+            session.providerId === "codex";
+          const currentState = useStatefulCodex
+            ? {
+                previousResponseId: session.providerResponseId,
+                store: session.codexStoreResponses,
+              }
+            : undefined;
+          const currentCache = isCodex
+            ? {
+                key: buildProviderCacheKey(session),
+                retention: "24h" as const,
+              }
+            : undefined;
+          usedPreviousResponseId = Boolean(currentState?.previousResponseId);
+          promptCacheKey = currentCache?.key;
+          promptCacheRetention = currentCache?.retention;
+          storeResponseState = currentState?.store ?? false;
           const streamGen = provider.stream({
             model: session.model,
             systemPrompt: session.systemPrompt,
@@ -535,6 +573,8 @@ export class AgentEngine {
             thinking: useThinking
               ? { budgetTokens: session.thinkingBudget }
               : undefined,
+            cache: currentCache,
+            state: currentState,
             signal: ac.signal,
           });
 
@@ -589,6 +629,7 @@ export class AgentEngine {
                 outputTokens = event.outputTokens;
                 cacheReadTokens = event.cacheReadTokens ?? 0;
                 cacheCreationTokens = event.cacheCreationTokens ?? 0;
+                providerResponseId = event.providerResponseId;
                 break;
               case "done":
                 break;
@@ -609,6 +650,29 @@ export class AgentEngine {
             yield {
               type: "warning",
               message: `Repaired orphaned tool calls, retrying. Error: ${streamErrMsg}`,
+            };
+            continue;
+          }
+
+          // previous_response_id can fail if the remote chain is unavailable
+          // (e.g. non-stored state expired or couldn't be resolved). Clear the
+          // local link and retry this turn with full replay.
+          if (
+            provider.id === "codex" &&
+            session.codexStatefulResponses &&
+            session.providerId === "codex" &&
+            session.providerResponseId &&
+            !previousResponseIdFallback &&
+            /(previous_response_id|previous response|cannot be resolved|not found|invalid.*response)/i.test(
+              streamErrMsg,
+            )
+          ) {
+            previousResponseIdFallback = true;
+            session.resetProviderResponseState();
+            yield {
+              type: "warning",
+              message:
+                "Codex could not resume the prior response state — retrying this turn with full local replay.",
             };
             continue;
           }
@@ -695,8 +759,9 @@ export class AgentEngine {
           cacheReadTokens,
           cacheCreationTokens,
         );
+        session.setProviderResponseId(providerResponseId);
 
-        // The API's input_tokens only counts tokens after the last cache breakpoint.
+        // Provider inputTokens is normalized to the uncached prompt portion.
         // For context window tracking, report the total: uncached + cache reads + cache writes.
         const totalInputTokens =
           inputTokens + cacheReadTokens + cacheCreationTokens;
@@ -706,11 +771,18 @@ export class AgentEngine {
           requestId,
           model: session.model,
           inputTokens: totalInputTokens,
+          uncachedInputTokens: inputTokens,
           outputTokens,
           cacheReadTokens,
           cacheCreationTokens,
           durationMs,
           timeToFirstToken,
+          usedPreviousResponseId,
+          previousResponseIdFallback,
+          promptCacheKey,
+          promptCacheRetention,
+          storeResponseState,
+          providerResponseId,
         };
 
         // Enforce maxApiTurns: when the limit is reached and the model wants

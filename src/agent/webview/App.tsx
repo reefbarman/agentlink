@@ -120,10 +120,18 @@ type AppAction =
       requestId: string;
       model: string;
       inputTokens: number;
+      uncachedInputTokens: number;
       outputTokens: number;
       cacheReadTokens: number;
+      cacheCreationTokens?: number;
       durationMs: number;
       timeToFirstToken: number;
+      usedPreviousResponseId?: boolean;
+      previousResponseIdFallback?: boolean;
+      promptCacheKey?: string;
+      promptCacheRetention?: "in_memory" | "24h";
+      storeResponseState?: boolean;
+      providerResponseId?: string;
     }
   | { type: "TOOL_START"; toolCallId: string; toolName: string }
   | { type: "TOOL_INPUT_DELTA"; toolCallId: string; partialJson: string }
@@ -749,9 +757,18 @@ export function reducer(state: AppState, action: AppAction): AppState {
         requestId: action.requestId,
         model: action.model,
         inputTokens: action.inputTokens,
+        uncachedInputTokens: action.uncachedInputTokens,
+        cacheReadTokens: action.cacheReadTokens,
+        cacheCreationTokens: action.cacheCreationTokens,
         outputTokens: action.outputTokens,
         durationMs: action.durationMs,
         timeToFirstToken: action.timeToFirstToken,
+        usedPreviousResponseId: action.usedPreviousResponseId,
+        previousResponseIdFallback: action.previousResponseIdFallback,
+        promptCacheKey: action.promptCacheKey,
+        promptCacheRetention: action.promptCacheRetention,
+        storeResponseState: action.storeResponseState,
+        providerResponseId: action.providerResponseId,
       };
       return {
         ...state,
@@ -1457,10 +1474,18 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             requestId: msg.requestId,
             model: msg.model,
             inputTokens: msg.inputTokens,
+            uncachedInputTokens: msg.uncachedInputTokens,
             outputTokens: msg.outputTokens,
             cacheReadTokens: msg.cacheReadTokens,
+            cacheCreationTokens: msg.cacheCreationTokens,
             durationMs: msg.durationMs,
             timeToFirstToken: msg.timeToFirstToken,
+            usedPreviousResponseId: msg.usedPreviousResponseId,
+            previousResponseIdFallback: msg.previousResponseIdFallback,
+            promptCacheKey: msg.promptCacheKey,
+            promptCacheRetention: msg.promptCacheRetention,
+            storeResponseState: msg.storeResponseState,
+            providerResponseId: msg.providerResponseId,
           });
           break;
         case "agentError":
@@ -2232,6 +2257,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi, handleNewSession],
   );
 
+  const resetDropOverlay = useCallback(() => {
+    dragCounterRef.current = 0;
+    setShiftDragOver(false);
+  }, []);
+
   const handleContainerDragEnter = useCallback((e: DragEvent) => {
     e.preventDefault();
     dragCounterRef.current++;
@@ -2249,20 +2279,47 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     setShiftDragOver(e.shiftKey);
   }, []);
 
-  const handleContainerDragLeave = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    dragCounterRef.current--;
-    if (dragCounterRef.current <= 0) {
-      dragCounterRef.current = 0;
-      setShiftDragOver(false);
-    }
-  }, []);
+  const handleContainerDragLeave = useCallback(
+    (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current--;
+      if (dragCounterRef.current <= 0) {
+        resetDropOverlay();
+      }
+    },
+    [resetDropOverlay],
+  );
+
+  useEffect(() => {
+    const handleGlobalDropCleanup = (e: globalThis.DragEvent) => {
+      e.preventDefault();
+      resetDropOverlay();
+    };
+    const handleGlobalDragEndCleanup = () => resetDropOverlay();
+    const handleWindowBlur = () => resetDropOverlay();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        resetDropOverlay();
+      }
+    };
+
+    window.addEventListener("drop", handleGlobalDropCleanup, true);
+    window.addEventListener("dragend", handleGlobalDragEndCleanup, true);
+    window.addEventListener("blur", handleWindowBlur);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("drop", handleGlobalDropCleanup, true);
+      window.removeEventListener("dragend", handleGlobalDragEndCleanup, true);
+      window.removeEventListener("blur", handleWindowBlur);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [resetDropOverlay]);
 
   const handleContainerDrop = useCallback(
     (e: DragEvent) => {
       e.preventDefault();
-      dragCounterRef.current = 0;
-      setShiftDragOver(false);
+      resetDropOverlay();
 
       if (!e.shiftKey || !e.dataTransfer) return;
 
@@ -2302,7 +2359,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         });
       }
     },
-    [vscodeApi],
+    [resetDropOverlay, vscodeApi],
   );
 
   return (

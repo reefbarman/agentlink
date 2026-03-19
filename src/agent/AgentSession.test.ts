@@ -127,6 +127,23 @@ describe("AgentSession", () => {
       });
       expect(session.autoCondenseThreshold).toBe(0.9);
     });
+
+    it("defaults codexStatefulResponses to true when not provided", async () => {
+      const session = await makeSession();
+      expect(session.codexStatefulResponses).toBe(true);
+    });
+
+    it("defaults codexStoreResponses to false when not provided", async () => {
+      const session = await makeSession();
+      expect(session.codexStoreResponses).toBe(false);
+    });
+
+    it("stores codexStoreResponses when configured", async () => {
+      const session = await makeSession({
+        config: { ...testConfig, codexStoreResponses: true },
+      });
+      expect(session.codexStoreResponses).toBe(true);
+    });
   });
 
   describe("messages", () => {

@@ -314,9 +314,36 @@ export class ApprovalManager {
    * a placeholder ID (e.g. "agent").
    */
   migrateSessionState(fromId: string, toId: string): void {
+    if (fromId === toId) return;
+
     const source = this.sessions.get(fromId);
     if (!source) return;
-    this.sessions.set(toId, { ...source, lastActivity: Date.now() });
+
+    const destination = this.sessions.get(toId);
+    if (destination) {
+      destination.writeApproved ||= source.writeApproved;
+      destination.agentWriteApproved ||= source.agentWriteApproved;
+      destination.commandRules = deduplicateRules([
+        ...destination.commandRules,
+        ...source.commandRules,
+      ]);
+      destination.pathRules = deduplicateRules([
+        ...(destination.pathRules ?? []),
+        ...(source.pathRules ?? []),
+      ]);
+      destination.writeRules = deduplicateRules([
+        ...(destination.writeRules ?? []),
+        ...(source.writeRules ?? []),
+      ]);
+      destination.lastActivity = Math.max(
+        destination.lastActivity,
+        source.lastActivity,
+        Date.now(),
+      );
+    } else {
+      this.sessions.set(toId, { ...source, lastActivity: Date.now() });
+    }
+
     this.sessions.delete(fromId);
     this.persistSessions();
     this._onDidChange.fire();
@@ -881,17 +908,70 @@ export class ApprovalManager {
 
   private matchesPathRule(filePath: string, rule: PathRule): boolean {
     try {
+      const normalizedPath = this.normalizeRulePath(filePath);
+      const normalizedPattern = this.normalizeRulePath(rule.pattern);
+
       switch (rule.mode) {
         case "exact":
-          return filePath === rule.pattern;
+          return normalizedPath === normalizedPattern;
         case "prefix":
-          return filePath.startsWith(rule.pattern);
-        case "glob":
-          return picomatch.isMatch(filePath, rule.pattern);
+          return this.matchesPrefixPath(normalizedPath, normalizedPattern);
+        case "glob": {
+          if (picomatch.isMatch(normalizedPath, normalizedPattern)) {
+            return true;
+          }
+          const directoryGlob = this.toDirectoryGlob(normalizedPattern);
+          return (
+            directoryGlob !== undefined &&
+            picomatch.isMatch(normalizedPath, directoryGlob)
+          );
+        }
       }
     } catch {
       return false;
     }
+  }
+
+  private normalizeRulePath(value: string): string {
+    return value.replace(/\\/g, "/");
+  }
+
+  private toDirectoryPrefix(pattern: string): string | undefined {
+    if (!pattern || pattern.endsWith("/")) {
+      return undefined;
+    }
+    if (this.hasGlobSyntax(pattern)) {
+      return undefined;
+    }
+    return `${pattern}/`;
+  }
+
+  private toDirectoryGlob(pattern: string): string | undefined {
+    if (!pattern || pattern.endsWith("/")) {
+      return undefined;
+    }
+    if (pattern.endsWith("/**")) {
+      return undefined;
+    }
+    if (this.hasGlobSyntax(pattern)) {
+      return undefined;
+    }
+    return `${pattern}/**`;
+  }
+
+  private matchesPrefixPath(filePath: string, pattern: string): boolean {
+    return filePath === pattern || filePath.startsWith(`${pattern}/`);
+  }
+
+  private hasGlobSyntax(pattern: string): boolean {
+    return (
+      pattern.includes("*") ||
+      pattern.includes("?") ||
+      pattern.includes("[") ||
+      pattern.includes("{") ||
+      pattern.includes("(") ||
+      pattern.includes("!")
+    );
   }
 
   private matchesRule(command: string, rule: CommandRule): boolean {

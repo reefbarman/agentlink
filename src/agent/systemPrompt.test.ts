@@ -117,6 +117,7 @@ describe("buildSystemPrompt", () => {
   it("includes ask mode section for 'ask' mode", async () => {
     const result = await buildSystemPrompt("ask", tmpDir);
     expect(result).toContain("Ask mode");
+    expect(result).toContain("Do not assume the user is correct");
   });
 
   it("includes architect mode section for 'architect' mode", async () => {
@@ -139,6 +140,52 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Review mode");
     expect(result).toContain("Executive summary");
     expect(result).toContain("Findings");
+  });
+
+  it("includes global technical judgment guidance", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("Technical Judgment");
+    expect(result).toContain("Do not assume the user is correct");
+    expect(result).toContain(
+      "Do not manufacture disagreement. Push back only when it improves correctness, safety, or clarity.",
+    );
+    expect(result).toContain(
+      "Ask clarifying questions when the technical assessment is uncertain; push back directly when it is clear.",
+    );
+  });
+
+  it("includes code mode technical judgment guidance", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain(
+      "Validate the user's framing before committing to it",
+    );
+    expect(result).toContain(
+      "Do not blindly accept requested solutions or follow-up feedback",
+    );
+  });
+
+  it("includes debug mode diagnosis guidance", async () => {
+    const result = await buildSystemPrompt("debug", tmpDir);
+    expect(result).toContain("Do not assume the user's diagnosis is correct");
+    expect(result).toContain(
+      "Test hypotheses against evidence from code, logs, reproduction steps, and observed behavior.",
+    );
+    expect(result).toContain(
+      "If the reported cause is wrong, say so clearly and explain the actual root cause.",
+    );
+  });
+
+  it("includes review mode anti-speculation guidance", async () => {
+    const result = await buildSystemPrompt("review", tmpDir);
+    expect(result).toContain(
+      "Do not assume the proposed change or task framing is correct.",
+    );
+    expect(result).toContain(
+      "Prefer a small number of concrete, evidence-backed findings over speculative or cosmetic criticism.",
+    );
+    expect(result).toContain(
+      "If no meaningful issues are found, say that clearly instead of forcing criticism.",
+    );
   });
 
   it("shows plans folder does not exist when ./plans is absent", async () => {
@@ -275,6 +322,13 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Background Agent");
     expect(result).toContain("background review agent");
     expect(result).toContain("3-5 tool calls");
+    expect(result).toContain("Review stance:");
+    expect(result).toContain(
+      "Do not assume the foreground agent, the user, or the provided change is correct.",
+    );
+    expect(result).toContain(
+      "If the change is sound, say so clearly instead of forcing criticism.",
+    );
     // Should NOT include bloated sections
     expect(result).not.toContain("Communication Style");
     expect(result).not.toContain("Mermaid diagrams");
@@ -283,6 +337,7 @@ describe("buildSystemPrompt", () => {
     expect(result).not.toContain("project rules");
     expect(result).not.toContain("System Information");
     expect(result).not.toContain("Provider-Specific Behavior");
+    expect(result).not.toContain("Do not manufacture disagreement");
   });
 
   it("lightweight prompt is significantly shorter than full prompt", async () => {

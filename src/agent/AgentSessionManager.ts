@@ -1238,7 +1238,7 @@ export class AgentSessionManager {
               meta.toolCalls += 1;
             }
             if (event.type === "api_request") {
-              meta.tokenUsage += event.inputTokens + event.outputTokens;
+              meta.tokenUsage += event.uncachedInputTokens + event.outputTokens;
             }
           }
 

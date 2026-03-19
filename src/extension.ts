@@ -48,6 +48,7 @@ import {
   CodexProvider,
   openAiCodexAuthManager,
 } from "./agent/providers/index.js";
+import { CodexOAuthFlowError } from "./agent/providers/codex/CodexOAuthManager.js";
 
 export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 
@@ -548,6 +549,10 @@ export function activate(context: vscode.ExtensionContext): void {
     autoCondenseThreshold:
       migratedThresholds[startupModel] ??
       getConfiguredBaseThresholdForModel(agentConfiguration, startupModel),
+    codexStatefulResponses:
+      agentConfiguration.get<boolean>("codexStatefulResponses") ?? true,
+    codexStoreResponses:
+      agentConfiguration.get<boolean>("codexStoreResponses") ?? false,
   };
 
   const isDevMode = context.extensionMode === vscode.ExtensionMode.Development;
@@ -646,7 +651,9 @@ export function activate(context: vscode.ExtensionContext): void {
         e.affectsConfiguration("agentlink.showThinking") ||
         e.affectsConfiguration("agentlink.autoCondense") ||
         e.affectsConfiguration("agentlink.autoCondenseThreshold") ||
-        e.affectsConfiguration("agentlink.modelCondenseThresholds")
+        e.affectsConfiguration("agentlink.modelCondenseThresholds") ||
+        e.affectsConfiguration("agentlink.codexStatefulResponses") ||
+        e.affectsConfiguration("agentlink.codexStoreResponses")
       ) {
         const config = vscode.workspace.getConfiguration("agentlink");
         const model = config.get<string>("agentModel") ?? "claude-sonnet-4-6";
@@ -660,6 +667,10 @@ export function activate(context: vscode.ExtensionContext): void {
             config,
             model,
           ),
+          codexStatefulResponses:
+            config.get<boolean>("codexStatefulResponses") ?? true,
+          codexStoreResponses:
+            config.get<boolean>("codexStoreResponses") ?? false,
         });
       }
     }),
@@ -829,10 +840,22 @@ export function activate(context: vscode.ExtensionContext): void {
           `Signed in with ChatGPT/Codex${creds.email ? ` as ${creds.email}` : ""}. This OAuth session is preferred for model chat. Semantic search/indexing embeddings use your OpenAI API key.`,
         );
       } catch (err) {
-        log(`[codex] Sign-in failed: ${err}`);
-        vscode.window.showErrorMessage(
-          `Codex sign-in failed: ${err instanceof Error ? err.message : err}`,
-        );
+        const message = err instanceof Error ? err.message : String(err);
+        log(`[codex] Sign-in failed: ${message}`);
+        if (err instanceof CodexOAuthFlowError && err.code === "timeout") {
+          vscode.window.showWarningMessage(
+            "OpenAI/Codex sign-in timed out. If the browser flow is still open, close it and try again.",
+          );
+        } else if (
+          err instanceof CodexOAuthFlowError &&
+          err.code === "port_in_use"
+        ) {
+          vscode.window.showErrorMessage(
+            "OpenAI/Codex sign-in couldn't start because port 1455 is already in use. Close other Codex/Roo login flows and try again.",
+          );
+        } else {
+          vscode.window.showErrorMessage(`Codex sign-in failed: ${message}`);
+        }
       }
     }),
     vscode.commands.registerCommand("agentlink.codexSignOut", async () => {

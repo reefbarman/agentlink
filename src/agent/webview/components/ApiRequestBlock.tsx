@@ -4,6 +4,9 @@ interface ApiRequestBlockProps {
   requestId: string;
   model: string;
   inputTokens: number;
+  uncachedInputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
   outputTokens: number;
   durationMs: number;
   timeToFirstToken: number;
@@ -12,6 +15,9 @@ interface ApiRequestBlockProps {
 export function ApiRequestBlock({
   model,
   inputTokens,
+  uncachedInputTokens,
+  cacheReadTokens = 0,
+  cacheCreationTokens = 0,
   outputTokens,
   durationMs,
   timeToFirstToken,
@@ -39,6 +45,28 @@ export function ApiRequestBlock({
               <td class="api-key">Input tokens</td>
               <td class="api-value">{inputTokens.toLocaleString()}</td>
             </tr>
+            {uncachedInputTokens !== undefined && (
+              <tr>
+                <td class="api-key">Uncached input</td>
+                <td class="api-value">
+                  {uncachedInputTokens.toLocaleString()}
+                </td>
+              </tr>
+            )}
+            {cacheReadTokens > 0 && (
+              <tr>
+                <td class="api-key">Cached input</td>
+                <td class="api-value">{cacheReadTokens.toLocaleString()}</td>
+              </tr>
+            )}
+            {cacheCreationTokens > 0 && (
+              <tr>
+                <td class="api-key">Cache creation</td>
+                <td class="api-value">
+                  {cacheCreationTokens.toLocaleString()}
+                </td>
+              </tr>
+            )}
             <tr>
               <td class="api-key">Output tokens</td>
               <td class="api-value">{outputTokens.toLocaleString()}</td>

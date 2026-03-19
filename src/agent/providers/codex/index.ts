@@ -1,8 +1,8 @@
+export { CodexProvider } from "./CodexProvider.js";
 export {
-  CodexProvider,
   CODEX_CONDENSE_MODEL,
   CODEX_CONDENSE_MODEL_FALLBACKS,
-} from "./CodexProvider.js";
+} from "./models.js";
 export {
   CodexOAuthManager,
   codexOAuthManager,

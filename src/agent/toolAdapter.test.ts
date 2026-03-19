@@ -239,6 +239,20 @@ describe("getAgentTools", () => {
       expect(tool.input_schema.type).toBe("object");
     }
   });
+
+  it("returns the native tool segment in deterministic name order", () => {
+    const tools = getAgentTools(undefined, undefined, true);
+    const names = tools.map((t) => t.name);
+    const start = names.indexOf("apply_diff");
+    const end = names.indexOf("write_file");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    const nativeSegment = names.slice(start, end + 1);
+    expect(nativeSegment).toEqual(
+      [...nativeSegment].sort((a, b) => a.localeCompare(b)),
+    );
+  });
 });
 
 describe("spawn_background_agent tool", () => {

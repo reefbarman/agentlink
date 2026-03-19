@@ -205,6 +205,21 @@ function isTokenExpired(credentials: CodexCredentials): boolean {
 
 // ── OAuth Manager ──
 
+export class CodexOAuthFlowError extends Error {
+  constructor(
+    message: string,
+    readonly code:
+      | "oauth_error"
+      | "missing_code"
+      | "state_mismatch"
+      | "port_in_use"
+      | "timeout",
+  ) {
+    super(message);
+    this.name = "CodexOAuthFlowError";
+  }
+}
+
 export class CodexOAuthManager {
   private context: ExtensionContext | null = null;
   private credentials: CodexCredentials | null = null;
@@ -401,19 +416,39 @@ export class CodexOAuthManager {
       );
     }
 
-    // Close any leftover server
-    if (this.pendingAuth.server) {
-      try {
-        this.pendingAuth.server.close();
-      } catch {
-        /* ignore */
-      }
-      this.pendingAuth.server = undefined;
-    }
+    this.closePendingServer();
 
     return new Promise<CodexCredentials>((resolve, reject) => {
+      let settled = false;
+      let timeout: NodeJS.Timeout | undefined;
+      const finish = (result: {
+        credentials?: CodexCredentials;
+        error?: unknown;
+      }) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) {
+          clearTimeout(timeout);
+          timeout = undefined;
+        }
+        this.closePendingServer();
+        this.pendingAuth = null;
+        if (result.credentials) {
+          this.onAuthStateChanged?.();
+          resolve(result.credentials);
+          return;
+        }
+        reject(result.error);
+      };
+
       const server = http.createServer(async (req, res) => {
         try {
+          if (settled) {
+            res.writeHead(503);
+            res.end("Authentication flow is no longer active");
+            return;
+          }
+
           const url = new URL(
             req.url ?? "",
             `http://localhost:${OAUTH_CONFIG.callbackPort}`,
@@ -432,24 +467,36 @@ export class CodexOAuthManager {
           if (error) {
             res.writeHead(400);
             res.end(`Authentication failed: ${error}`);
-            reject(new Error(`OAuth error: ${error}`));
-            server.close();
+            finish({
+              error: new CodexOAuthFlowError(
+                `OAuth error: ${error}`,
+                "oauth_error",
+              ),
+            });
             return;
           }
 
           if (!code || !state) {
             res.writeHead(400);
             res.end("Missing code or state parameter");
-            reject(new Error("Missing code or state parameter"));
-            server.close();
+            finish({
+              error: new CodexOAuthFlowError(
+                "Missing code or state parameter",
+                "missing_code",
+              ),
+            });
             return;
           }
 
           if (state !== this.pendingAuth?.state) {
             res.writeHead(400);
             res.end("State mismatch — possible CSRF attack");
-            reject(new Error("State mismatch"));
-            server.close();
+            finish({
+              error: new CodexOAuthFlowError(
+                "State mismatch",
+                "state_mismatch",
+              ),
+            });
             return;
           }
 
@@ -464,64 +511,68 @@ export class CodexOAuthManager {
               "Content-Type": "text/html; charset=utf-8",
             });
             res.end(successHtml());
-
-            this.pendingAuth = null;
-            server.close();
-            this.onAuthStateChanged?.();
-            resolve(credentials);
+            finish({ credentials });
           } catch (exchangeErr) {
             res.writeHead(500);
-            res.end(`Token exchange failed: ${exchangeErr}`);
-            reject(exchangeErr);
-            server.close();
+            res.end("Token exchange failed");
+            finish({ error: exchangeErr });
           }
         } catch (err) {
           res.writeHead(500);
           res.end("Internal server error");
-          reject(err);
-          server.close();
+          finish({ error: err });
         }
       });
+
+      if (this.pendingAuth) {
+        this.pendingAuth.server = server;
+      }
 
       server.on("error", (err: NodeJS.ErrnoException) => {
-        this.pendingAuth = null;
         if (err.code === "EADDRINUSE") {
-          reject(
-            new Error(
-              `Port ${OAUTH_CONFIG.callbackPort} is already in use. ` +
-                `Please close any other applications using this port (e.g. Roo Code, Codex CLI) and try again.`,
+          finish({
+            error: new CodexOAuthFlowError(
+              `Port ${OAUTH_CONFIG.callbackPort} is already in use. Please close any other applications using this port (e.g. Roo Code, Codex CLI) and try again.`,
+              "port_in_use",
             ),
-          );
+          });
         } else {
-          reject(err);
+          finish({ error: err });
         }
       });
 
-      // 5-minute timeout for the user to complete the browser flow
-      const timeout = setTimeout(
+      timeout = setTimeout(
         () => {
-          server.close();
-          reject(new Error("Authentication timed out after 5 minutes"));
+          finish({
+            error: new CodexOAuthFlowError(
+              "Authentication timed out after 5 minutes",
+              "timeout",
+            ),
+          });
         },
         5 * 60 * 1000,
       );
 
-      server.listen(OAUTH_CONFIG.callbackPort, () => {
-        if (this.pendingAuth) {
-          this.pendingAuth.server = server;
-        }
-      });
-
-      server.on("close", () => clearTimeout(timeout));
+      server.listen(OAUTH_CONFIG.callbackPort);
     });
   }
 
   /** Cancel any in-progress authorization flow. */
   cancelAuthorizationFlow(): void {
-    if (this.pendingAuth?.server) {
-      this.pendingAuth.server.close();
-    }
+    this.closePendingServer();
     this.pendingAuth = null;
+  }
+
+  private closePendingServer(): void {
+    if (!this.pendingAuth?.server) {
+      return;
+    }
+    try {
+      this.pendingAuth.server.close();
+    } catch {
+      /* ignore */
+    }
+    this.pendingAuth.server = undefined;
   }
 }
 

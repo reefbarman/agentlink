@@ -5,12 +5,16 @@
  * - OAuth (ChatGPT/Codex subscription) via `chatgpt.com/backend-api/codex/responses`
  * - OpenAI API key via `api.openai.com/v1/responses`
  *
- * Uses raw `fetch()` + SSE parsing rather than adding an OpenAI SDK dependency.
+ * Uses the OpenAI SDK Responses API with endpoint-specific configuration for
+ * OAuth-backed Codex and API-key-backed OpenAI requests.
  */
 
-import * as os from "os";
 import * as crypto from "crypto";
 import { randomUUID } from "crypto";
+
+import OpenAI, { APIError } from "openai";
+import type * as OpenAIResponses from "openai/resources/responses/responses";
+import type { Reasoning } from "openai/resources/shared";
 import type {
   ModelProvider,
   StreamRequest,
@@ -29,93 +33,21 @@ import {
   type OpenAiCodexAuthManager,
   type OpenAiCodexResolvedAuth,
 } from "./OpenAiCodexAuthManager.js";
+import {
+  CODEX_CONDENSE_MODEL,
+  CODEX_MODEL_MAP,
+  getCodexModelCapabilities,
+  getEndpointCaps,
+  listCodexModels,
+} from "./models.js";
+import {
+  createOpenAiResponsesClient,
+  getCodexEndpointConfig,
+} from "./openaiClient.js";
 
 // ── Constants ──
 
-const CODEX_API_BASE_URL = "https://chatgpt.com/backend-api/codex";
-const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_CALL_ID_MAX_LENGTH = 64;
-
-/** The preferred cheap/fast model for condensing on Codex. */
-export const CODEX_CONDENSE_MODEL = "gpt-5.1-codex-mini";
-
-/** Ordered fallback chain for condensing when account entitlements vary. */
-export const CODEX_CONDENSE_MODEL_FALLBACKS = [
-  CODEX_CONDENSE_MODEL,
-  "gpt-5.2-codex",
-  "gpt-5.3-codex",
-] as const;
-
-// ── Model definitions ──
-
-interface CodexModelDef {
-  id: string;
-  displayName: string;
-  contextWindow: number;
-  maxOutputTokens: number;
-  supportsImages: boolean;
-  supportsThinking: boolean;
-  defaultReasoningEffort: string;
-}
-
-const CODEX_MODELS: CodexModelDef[] = [
-  {
-    id: "gpt-5.4",
-    displayName: "GPT-5.4",
-    contextWindow: 400_000,
-    maxOutputTokens: 128_000,
-    supportsImages: true,
-    supportsThinking: true,
-    defaultReasoningEffort: "medium",
-  },
-  {
-    id: "gpt-5.3-codex",
-    displayName: "GPT-5.3 Codex",
-    contextWindow: 400_000,
-    maxOutputTokens: 128_000,
-    supportsImages: true,
-    supportsThinking: true,
-    defaultReasoningEffort: "medium",
-  },
-  {
-    id: "gpt-5.2",
-    displayName: "GPT-5.2",
-    contextWindow: 400_000,
-    maxOutputTokens: 128_000,
-    supportsImages: true,
-    supportsThinking: true,
-    defaultReasoningEffort: "medium",
-  },
-  {
-    id: "gpt-5.2-codex",
-    displayName: "GPT-5.2 Codex",
-    contextWindow: 400_000,
-    maxOutputTokens: 128_000,
-    supportsImages: true,
-    supportsThinking: true,
-    defaultReasoningEffort: "medium",
-  },
-  {
-    id: "gpt-5.1-codex-mini",
-    displayName: "GPT-5.1 Codex Mini",
-    contextWindow: 128_000,
-    maxOutputTokens: 8_192,
-    supportsImages: false,
-    supportsThinking: true,
-    defaultReasoningEffort: "medium",
-  },
-  {
-    id: "gpt-5.1-codex-max",
-    displayName: "GPT-5.1 Codex Max",
-    contextWindow: 400_000,
-    maxOutputTokens: 128_000,
-    supportsImages: true,
-    supportsThinking: true,
-    defaultReasoningEffort: "xhigh",
-  },
-];
-
-const CODEX_MODEL_MAP = new Map(CODEX_MODELS.map((m) => [m.id, m]));
 
 // ── Tool call ID sanitization ──
 
@@ -138,11 +70,10 @@ function sanitizeCallId(id: string): string {
 
 // ── Message translation ──
 
-type CodexInputItem =
-  | { role: "user"; content: Array<Record<string, unknown>> }
-  | { role: "assistant"; content: Array<Record<string, unknown>> }
-  | { type: "function_call"; call_id: string; name: string; arguments: string }
-  | { type: "function_call_output"; call_id: string; output: string };
+type CodexRequestBody = OpenAIResponses.ResponseCreateParamsStreaming;
+type CodexInputItem = OpenAIResponses.ResponseInputItem;
+type UserInputContent = OpenAIResponses.ResponseInputMessageContentList[number];
+type PromptCacheRetention = "24h" | "in-memory";
 
 /**
  * Translate our provider-agnostic messages into Codex Responses API `input[]`.
@@ -158,18 +89,18 @@ function translateMessages(messages: MessageParam[]): CodexInputItem[] {
         input.push({
           role: "user",
           content: [{ type: "input_text", text: msg.content }],
-        });
+        } as CodexInputItem);
       } else {
         input.push({
           role: "assistant",
           content: [{ type: "output_text", text: msg.content }],
-        });
+        } as CodexInputItem);
       }
       continue;
     }
 
     // Array content — split into message content vs tool items
-    const userContent: Array<Record<string, unknown>> = [];
+    const userContent: UserInputContent[] = [];
     const assistantContent: Array<Record<string, unknown>> = [];
     const toolResults: CodexInputItem[] = [];
     const toolCalls: CodexInputItem[] = [];
@@ -190,6 +121,7 @@ function translateMessages(messages: MessageParam[]): CodexInputItem[] {
             userContent.push({
               type: "input_image",
               image_url: `data:${src.media_type};base64,${src.data}`,
+              detail: "auto",
             });
           }
           break;
@@ -246,7 +178,10 @@ function translateMessages(messages: MessageParam[]): CodexInputItem[] {
       input.push({ role: "user", content: userContent });
     }
     if (msg.role === "assistant" && assistantContent.length > 0) {
-      input.push({ role: "assistant", content: assistantContent });
+      input.push({
+        role: "assistant",
+        content: assistantContent,
+      } as unknown as CodexInputItem);
     }
     // Tool calls come from assistant messages
     input.push(...toolCalls);
@@ -261,13 +196,7 @@ function translateMessages(messages: MessageParam[]): CodexInputItem[] {
  * Translate our ToolDefinition[] into Codex Responses API tools.
  * Uses non-strict mode to support free-form object schemas (e.g. MCP tools).
  */
-function translateTools(tools: ToolDefinition[]): Array<{
-  type: "function";
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  strict: boolean;
-}> {
+function translateTools(tools: ToolDefinition[]): OpenAIResponses.Tool[] {
   return tools.map((t) => ({
     type: "function" as const,
     name: t.name,
@@ -276,78 +205,129 @@ function translateTools(tools: ToolDefinition[]): Array<{
       t.input_schema as Record<string, unknown>,
     ),
     strict: false,
-  }));
+  })) as OpenAIResponses.Tool[];
+}
+
+function buildReasoning(effort: string): Reasoning {
+  return {
+    effort: effort as Reasoning["effort"],
+    summary: "detailed",
+  };
+}
+
+function buildStreamRequestBody(args: {
+  model: string;
+  input: CodexInputItem[];
+  instructions: string;
+  store: boolean;
+  reasoning?: Reasoning;
+  previousResponseId?: string;
+  tools?: OpenAIResponses.Tool[];
+  promptCacheKey?: string;
+  promptCacheRetention?: PromptCacheRetention;
+}): CodexRequestBody {
+  return {
+    model: args.model,
+    input: args.input,
+    instructions: args.instructions,
+    stream: true,
+    store: args.store,
+    ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+    ...(args.previousResponseId
+      ? { previous_response_id: args.previousResponseId }
+      : {}),
+    ...(args.tools && args.tools.length > 0 ? { tools: args.tools } : {}),
+    ...(args.promptCacheKey ? { prompt_cache_key: args.promptCacheKey } : {}),
+    ...(args.promptCacheRetention
+      ? { prompt_cache_retention: args.promptCacheRetention }
+      : {}),
+  };
+}
+
+function sortObjectKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortObjectKeys);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, child]) => [key, sortObjectKeys(child)]),
+  );
 }
 
 /**
  * Recursively strip JSON Schema annotations unsupported by the Codex API
- * (e.g. `format: "uri"`). Does not enforce strict-mode constraints so that
- * free-form object schemas (MCP tools, open-ended params) remain valid.
+ * (e.g. `format: "uri"`) and canonicalize object key ordering so equivalent
+ * schemas serialize identically across requests.
+ * Does not enforce strict-mode constraints so that free-form object schemas
+ * (MCP tools, open-ended params) remain valid.
  */
 function sanitizeSchemaForCodex(
   schema: Record<string, unknown>,
 ): Record<string, unknown> {
   if (!schema || typeof schema !== "object") return schema;
 
-  // Strip unsupported format annotations at every level
-  const { format: _format, ...result } = schema;
+  const entries = Object.entries(schema)
+    .filter(([key]) => key !== "format")
+    .sort(([a], [b]) => a.localeCompare(b));
 
-  if (result.properties && typeof result.properties === "object") {
-    const newProps: Record<string, unknown> = {};
-    for (const [key, prop] of Object.entries(
-      result.properties as Record<string, Record<string, unknown>>,
-    )) {
-      newProps[key] = sanitizeSchemaForCodex(prop);
-    }
-    result.properties = newProps;
-  }
+  return Object.fromEntries(
+    entries.map(([key, value]) => {
+      if (key === "properties" && value && typeof value === "object") {
+        const sanitizedProps = Object.fromEntries(
+          Object.entries(value as Record<string, Record<string, unknown>>)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([propKey, propValue]) => [
+              propKey,
+              sanitizeSchemaForCodex(propValue),
+            ]),
+        );
+        return [key, sanitizedProps];
+      }
 
-  if (result.items && typeof result.items === "object") {
-    result.items = sanitizeSchemaForCodex(
-      result.items as Record<string, unknown>,
-    );
-  }
-
-  return result;
-}
-
-// ── SSE parsing ──
-
-async function* parseSSE(
-  body: ReadableStream<Uint8Array>,
-  signal?: AbortSignal,
-): AsyncGenerator<Record<string, unknown>> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  try {
-    while (true) {
-      if (signal?.aborted) break;
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const data = line.slice(6).trim();
-        if (data === "[DONE]") continue;
-        try {
-          yield JSON.parse(data) as Record<string, unknown>;
-        } catch {
-          // Skip malformed JSON
+      if (key === "items") {
+        if (Array.isArray(value)) {
+          return [
+            key,
+            value.map((item) =>
+              item && typeof item === "object"
+                ? sanitizeSchemaForCodex(item as Record<string, unknown>)
+                : item,
+            ),
+          ];
+        }
+        if (value && typeof value === "object") {
+          return [
+            key,
+            sanitizeSchemaForCodex(value as Record<string, unknown>),
+          ];
         }
       }
-    }
-  } finally {
-    reader.releaseLock();
-  }
+
+      return [key, sortObjectKeys(value)];
+    }),
+  ) as Record<string, unknown>;
 }
 
 // ── Provider ──
+
+type CodexSdkError = Error & { status?: number };
+
+function isAuthError(error: unknown): boolean {
+  if (error && typeof error === "object" && "status" in error) {
+    const status = (error as { status?: unknown }).status;
+    if (status === 401) {
+      return true;
+    }
+  }
+
+  const msg = error instanceof Error ? error.message : String(error);
+  return /unauthorized|invalid token|401|authentication/i.test(msg);
+}
 
 export class CodexProvider implements ModelProvider {
   readonly id = "codex";
@@ -357,6 +337,7 @@ export class CodexProvider implements ModelProvider {
   private authManager: OpenAiCodexAuthManager;
   private sessionId: string;
   private log: (msg: string) => void;
+  private clients = new Map<string, OpenAI>();
 
   constructor(
     authManager?: OpenAiCodexAuthManager,
@@ -372,24 +353,11 @@ export class CodexProvider implements ModelProvider {
   }
 
   getCapabilities(model: string): ModelCapabilities {
-    const def = CODEX_MODEL_MAP.get(model);
-    return {
-      supportsThinking: def?.supportsThinking ?? true,
-      supportsCaching: true, // Server-side automatic caching
-      supportsImages: def?.supportsImages ?? true,
-      supportsToolUse: true,
-      contextWindow: def?.contextWindow ?? 400_000,
-      maxOutputTokens: def?.maxOutputTokens ?? 128_000,
-    };
+    return getCodexModelCapabilities(model);
   }
 
   listModels(): ModelInfo[] {
-    return CODEX_MODELS.map((m) => ({
-      id: m.id,
-      displayName: m.displayName,
-      provider: this.id,
-      capabilities: this.getCapabilities(m.id),
-    }));
+    return listCodexModels(this.id);
   }
 
   async *stream(request: StreamRequest): AsyncGenerator<ProviderStreamEvent> {
@@ -400,6 +368,8 @@ export class CodexProvider implements ModelProvider {
       tools,
       maxTokens: _maxTokens,
       thinking,
+      cache,
+      state,
       signal,
     } = request;
 
@@ -410,19 +380,6 @@ export class CodexProvider implements ModelProvider {
     const reasoningEffort = thinking
       ? "high"
       : (modelDef?.defaultReasoningEffort ?? "medium");
-
-    const requestBody: Record<string, unknown> = {
-      model,
-      input: codexInput,
-      instructions: systemPrompt,
-      stream: true,
-      store: false,
-      reasoning: {
-        effort: reasoningEffort,
-        summary: "detailed",
-      },
-      ...(codexTools && codexTools.length > 0 ? { tools: codexTools } : {}),
-    };
 
     for (let attempt = 0; attempt < 2; attempt++) {
       const auth =
@@ -435,15 +392,29 @@ export class CodexProvider implements ModelProvider {
         );
       }
 
+      const caps = getEndpointCaps(auth);
+      const requestBody = buildStreamRequestBody({
+        model,
+        input: codexInput,
+        instructions: systemPrompt,
+        store: state?.store ?? false,
+        reasoning: buildReasoning(reasoningEffort),
+        previousResponseId: caps.supportsPreviousResponseId
+          ? state?.previousResponseId
+          : undefined,
+        tools: codexTools,
+        promptCacheKey: caps.supportsPromptCacheKey ? cache?.key : undefined,
+        promptCacheRetention:
+          cache?.retention === "24h" && caps.supportsPromptCacheRetention
+            ? "24h"
+            : undefined,
+      });
+
       try {
         yield* this.executeStream(requestBody, auth, model, signal);
         return;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const isAuth = /unauthorized|invalid token|401|authentication/i.test(
-          msg,
-        );
-        if (attempt === 0 && isAuth && auth.canRefresh) {
+        if (attempt === 0 && isAuthError(err) && auth.canRefresh) {
           this.log("[codex] Auth failure, attempting token refresh...");
           continue;
         }
@@ -461,16 +432,10 @@ export class CodexProvider implements ModelProvider {
       messages,
       maxTokens: _maxTokens,
       temperature: _temperature,
+      cache,
+      state,
     } = request;
     const codexInput = translateMessages(messages);
-
-    const requestBody: Record<string, unknown> = {
-      model,
-      input: codexInput,
-      instructions: systemPrompt,
-      stream: true,
-      store: false,
-    };
 
     // Keep complete() intentionally minimal. The OAuth-backed Codex endpoint
     // requires SSE even for non-interactive calls, and we aggregate the stream.
@@ -485,9 +450,26 @@ export class CodexProvider implements ModelProvider {
         );
       }
 
+      const caps = getEndpointCaps(auth);
+      const requestBody = buildStreamRequestBody({
+        model,
+        input: codexInput,
+        instructions: systemPrompt,
+        store: state?.store ?? false,
+        previousResponseId: caps.supportsPreviousResponseId
+          ? state?.previousResponseId
+          : undefined,
+        promptCacheKey: caps.supportsPromptCacheKey ? cache?.key : undefined,
+        promptCacheRetention:
+          cache?.retention === "24h" && caps.supportsPromptCacheRetention
+            ? "24h"
+            : undefined,
+      });
+
       let text = "";
       let inputTokens = 0;
       let outputTokens = 0;
+      let providerResponseId: string | undefined;
 
       try {
         for await (const event of this.executeStream(
@@ -500,19 +482,17 @@ export class CodexProvider implements ModelProvider {
           } else if (event.type === "usage") {
             inputTokens = event.inputTokens;
             outputTokens = event.outputTokens;
+            providerResponseId = event.providerResponseId;
           }
         }
 
         return {
           text,
           usage: { inputTokens, outputTokens },
+          providerResponseId,
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const isAuth = /unauthorized|invalid token|401|authentication/i.test(
-          msg,
-        );
-        if (attempt === 0 && isAuth && auth.canRefresh) {
+        if (attempt === 0 && isAuthError(err) && auth.canRefresh) {
           this.log(
             "[codex] complete() auth failure, attempting token refresh...",
           );
@@ -537,76 +517,39 @@ export class CodexProvider implements ModelProvider {
     return auth;
   }
 
-  private async makeRequest(
-    body: Record<string, unknown>,
-    auth: OpenAiCodexResolvedAuth,
-    stream: boolean,
-    signal?: AbortSignal,
-  ): Promise<Response> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${auth.bearerToken}`,
-      "User-Agent": `agentlink/1.0 (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`,
-    };
+  private getClient(auth: OpenAiCodexResolvedAuth): OpenAI {
+    const endpoint = getCodexEndpointConfig(auth, this.sessionId);
+    const key = `${auth.method}:${auth.accountId ?? ""}:${endpoint.baseURL}`;
 
-    let url = `${OPENAI_API_BASE_URL}/responses`;
-    if (auth.method === "oauth") {
-      url = `${CODEX_API_BASE_URL}/responses`;
-      headers.originator = "agentlink";
-      headers.session_id = this.sessionId;
-      if (auth.accountId) {
-        headers["ChatGPT-Account-Id"] = auth.accountId;
-      }
-    }
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      let detail = "";
-      try {
-        const errorJson = JSON.parse(errorText) as Record<string, unknown>;
-        const errObj = errorJson.error as Record<string, unknown> | undefined;
-        detail =
-          (errObj?.message as string) ??
-          (errorJson.message as string) ??
-          (errorJson.detail as string) ??
-          errorText;
-      } catch {
-        detail = errorText;
-      }
-      throw new Error(`Codex API error ${response.status}: ${detail}`);
-    }
-
-    if (stream && !response.body) {
-      throw new Error(
-        "Codex API returned no response body for streaming request",
-      );
-    }
-
-    return response;
+    const client = createOpenAiResponsesClient(auth, endpoint);
+    this.clients.set(key, client);
+    return client;
   }
 
-  private async *executeStream(
-    requestBody: Record<string, unknown>,
-    auth: OpenAiCodexResolvedAuth,
-    model: string,
-    signal?: AbortSignal,
-  ): AsyncGenerator<ProviderStreamEvent> {
-    const response = await this.makeRequest(requestBody, auth, true, signal);
+  private normalizeSdkError(error: unknown): CodexSdkError {
+    if (error instanceof APIError) {
+      const status = error.status;
+      const message = error.message || "Unknown OpenAI error";
+      const normalized = new Error(
+        `Codex API error ${status ?? "unknown"}: ${message}`,
+      ) as CodexSdkError;
+      normalized.status = status;
+      return normalized;
+    }
+    if (error instanceof Error) {
+      return error as CodexSdkError;
+    }
+    return new Error(String(error)) as CodexSdkError;
+  }
 
-    // Accumulators for content blocks
+  private async *processResponseStreamEvents(
+    events: AsyncIterable<Record<string, unknown>>,
+  ): AsyncGenerator<ProviderStreamEvent> {
     const contentBlocks: ContentBlock[] = [];
     let currentText = "";
     let currentThinking = "";
     let thinkingId: string | null = null;
 
-    // Track tool calls being assembled
     const pendingToolCalls = new Map<
       string,
       { name: string; arguments: string }
@@ -615,8 +558,9 @@ export class CodexProvider implements ModelProvider {
     let inputTokens = 0;
     let outputTokens = 0;
     let cacheReadTokens = 0;
+    let providerResponseId: string | undefined;
 
-    for await (const event of parseSSE(response.body!, signal)) {
+    for await (const event of events) {
       const eventType = event.type as string | undefined;
       if (!eventType) continue;
 
@@ -781,11 +725,15 @@ export class CodexProvider implements ModelProvider {
       // ── Response done — extract usage and finalize ──
       if (eventType === "response.done" || eventType === "response.completed") {
         const resp = event.response as Record<string, unknown> | undefined;
+        providerResponseId =
+          (resp?.id as string | undefined) ??
+          (event.response_id as string | undefined) ??
+          providerResponseId;
         const usage = (resp?.usage ?? event.usage) as
           | Record<string, unknown>
           | undefined;
         if (usage) {
-          inputTokens =
+          const totalInputTokens =
             (usage.input_tokens as number) ??
             (usage.prompt_tokens as number) ??
             0;
@@ -797,10 +745,20 @@ export class CodexProvider implements ModelProvider {
           const inputDetails = usage.input_tokens_details as
             | Record<string, unknown>
             | undefined;
+          const promptDetails = usage.prompt_tokens_details as
+            | Record<string, unknown>
+            | undefined;
           cacheReadTokens =
             (inputDetails?.cached_tokens as number) ??
+            (promptDetails?.cached_tokens as number) ??
             (usage.cache_read_input_tokens as number) ??
             0;
+
+          // OpenAI reports input/prompt tokens as the total prompt size, with
+          // cached tokens surfaced as a breakdown in input_tokens_details.
+          // Normalize to our internal convention where inputTokens is the
+          // uncached portion and cacheReadTokens is additive for total context.
+          inputTokens = Math.max(0, totalInputTokens - cacheReadTokens);
         }
 
         // Extract any text from done response that wasn't streamed
@@ -864,8 +822,31 @@ export class CodexProvider implements ModelProvider {
       inputTokens,
       outputTokens,
       cacheReadTokens: cacheReadTokens || undefined,
+      providerResponseId,
     };
     yield { type: "content_blocks", blocks: contentBlocks };
     yield { type: "done" };
+  }
+
+  private async *executeStream(
+    requestBody: CodexRequestBody,
+    auth: OpenAiCodexResolvedAuth,
+    _model: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<ProviderStreamEvent> {
+    try {
+      const client = this.getClient(auth);
+      const stream = await client.responses.create(requestBody, {
+        signal,
+        maxRetries: 0,
+      });
+
+      yield* this.processResponseStreamEvents(
+        stream as AsyncIterable<Record<string, unknown>>,
+      );
+      return;
+    } catch (error) {
+      throw this.normalizeSdkError(error);
+    }
   }
 }

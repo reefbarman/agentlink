@@ -94,11 +94,18 @@ export type AgentEvent =
       requestId: string;
       model: string;
       inputTokens: number;
+      uncachedInputTokens: number;
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
       durationMs: number;
       timeToFirstToken: number;
+      usedPreviousResponseId?: boolean;
+      previousResponseIdFallback?: boolean;
+      promptCacheKey?: string;
+      promptCacheRetention?: "in_memory" | "24h";
+      storeResponseState?: boolean;
+      providerResponseId?: string;
     }
   | { type: "warning"; message: string }
   | { type: "status_update"; message: string }
@@ -149,4 +156,6 @@ export interface AgentConfig {
   showThinking: boolean;
   autoCondense: boolean;
   autoCondenseThreshold: number; // 0–1, e.g. 0.9 = 90%
+  codexStatefulResponses?: boolean;
+  codexStoreResponses?: boolean;
 }
