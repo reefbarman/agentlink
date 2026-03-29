@@ -282,6 +282,7 @@ export class AgentSessionManager {
         totalCacheCreationTokens: session.totalCacheCreationTokens,
         lastInputTokens: session.lastInputTokens,
         lastCacheReadTokens: session.lastCacheReadTokens,
+        background: session.background,
         getLoadedSkills: () => session.getLoadedSkills(),
         getAllMessages: () => session.getAllMessages(),
         checkpoints: this.checkpoints.get(id) ?? [],

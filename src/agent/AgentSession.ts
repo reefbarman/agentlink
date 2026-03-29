@@ -11,6 +11,7 @@ import type { AgentMode } from "./modes.js";
 import type { SkillEntry } from "./skillLoader.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import { getEffectiveHistory, injectSyntheticToolResults } from "./condense.js";
+import { buildSessionTitleFromUserText } from "./sessionTitle.js";
 
 export class AgentSession {
   id: string;
@@ -466,7 +467,10 @@ export class AgentSession {
   autoTitle(): void {
     const first = this.messages[0];
     if (first?.role === "user" && typeof first.content === "string") {
-      this.title = first.content.slice(0, 80);
+      const title = buildSessionTitleFromUserText(first.content);
+      if (title) {
+        this.title = title;
+      }
     }
   }
 

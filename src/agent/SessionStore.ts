@@ -2,6 +2,10 @@ import * as fs from "fs";
 import * as path from "path";
 import type { AgentMessage, SessionInfo } from "./types.js";
 import type { Checkpoint } from "./CheckpointManager.js";
+import {
+  buildSessionTitleFromUserText,
+  DEFAULT_SESSION_TITLE,
+} from "./sessionTitle.js";
 
 /**
  * Persisted session index entry — lightweight metadata kept in sessions.json.
@@ -18,6 +22,11 @@ export interface SessionSummary {
   totalOutputTokens: number;
   createdAt: number;
   lastActiveAt: number;
+  /**
+   * True for background-agent sessions. Hidden from end-user session history.
+   * Optional for backward compatibility with old persisted entries.
+   */
+  background?: boolean;
 }
 
 interface MessagesFile {
@@ -77,7 +86,20 @@ export class SessionStore {
     try {
       const raw = fs.readFileSync(this.sessionsFile, "utf-8");
       const parsed = JSON.parse(raw) as SessionSummary[];
-      this.index = new Map(parsed.map((s) => [s.id, s]));
+      let didMigrateTitles = false;
+      const normalized = parsed.map((s) => {
+        const migratedTitle = buildSessionTitleFromUserText(s.title);
+        const nextTitle = migratedTitle ?? DEFAULT_SESSION_TITLE;
+        if (nextTitle !== s.title) {
+          didMigrateTitles = true;
+          return { ...s, title: nextTitle };
+        }
+        return s;
+      });
+      this.index = new Map(normalized.map((s) => [s.id, s]));
+      if (didMigrateTitles) {
+        this.flushIndex();
+      }
     } catch {
       // File doesn't exist yet or is corrupt — start fresh
       this.index = new Map();
@@ -113,6 +135,7 @@ export class SessionStore {
     totalCacheCreationTokens: number;
     lastInputTokens: number;
     lastCacheReadTokens: number;
+    background?: boolean;
     getLoadedSkills?(): string[];
     getAllMessages(): AgentMessage[];
     checkpoints?: Checkpoint[];
@@ -164,6 +187,7 @@ export class SessionStore {
       totalOutputTokens: session.totalOutputTokens,
       createdAt: session.createdAt,
       lastActiveAt: session.lastActiveAt,
+      background: session.background,
     };
     this.index.set(session.id, summary);
     this.flushIndex();
@@ -174,12 +198,13 @@ export class SessionStore {
   // ---------------------------------------------------------------------------
 
   /**
-   * List all sessions, sorted by lastActiveAt descending.
+   * List persisted foreground sessions, sorted by lastActiveAt descending.
+   * Background-agent sessions are intentionally excluded from session history UI.
    */
   list(): SessionSummary[] {
-    return Array.from(this.index.values()).sort(
-      (a, b) => b.lastActiveAt - a.lastActiveAt,
-    );
+    return Array.from(this.index.values())
+      .filter((s) => !s.background)
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
   }
 
   /**
@@ -316,6 +341,7 @@ export class SessionStore {
       totalOutputTokens: info.totalOutputTokens,
       createdAt: info.createdAt,
       lastActiveAt: info.lastActiveAt,
+      background: info.background,
     };
   }
 }

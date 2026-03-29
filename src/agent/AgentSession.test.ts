@@ -291,6 +291,33 @@ describe("AgentSession", () => {
       expect(session.title).toHaveLength(80);
     });
 
+    it("omits attachment markers from generated title", async () => {
+      const session = await makeSession();
+      session.addUserMessage(
+        "Fix this regression\n[Attached: src/app.ts]\n[Attached: README.md]",
+      );
+      session.autoTitle();
+      expect(session.title).toBe("Fix this regression");
+    });
+
+    it("omits injected file blocks and file contents from generated title", async () => {
+      const session = await makeSession();
+      session.addUserMessage(
+        `<file path="src/secret.ts">\n\`\`\`ts\nconst token = "abc123";\n\`\`\`\n</file>\n\nSummarize the bug and propose a fix`,
+      );
+      session.autoTitle();
+      expect(session.title).toBe("Summarize the bug and propose a fix");
+    });
+
+    it("keeps default title when sanitized text is empty", async () => {
+      const session = await makeSession();
+      session.addUserMessage(
+        `<file path="src/only.ts">\n\`\`\`ts\nexport const x = 1;\n\`\`\`\n</file>`,
+      );
+      session.autoTitle();
+      expect(session.title).toBe("New Chat");
+    });
+
     it("does nothing when there are no messages", async () => {
       const session = await makeSession();
       session.autoTitle();
