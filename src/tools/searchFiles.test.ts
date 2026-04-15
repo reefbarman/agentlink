@@ -121,6 +121,92 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(args).toContain("!**/node_modules/**");
     expect(args).toContain("templates/templates/**/*.ts");
   });
+
+  it("supports passing a file path in path by searching only that file", async () => {
+    const filePath = path.resolve("src/tools/searchFiles.ts");
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: filePath,
+      inWorkspace: true,
+    });
+
+    await handleSearchFiles(
+      {
+        path: "src/tools/searchFiles.ts",
+        regex: "handleSearchFiles",
+        semantic: false,
+      },
+      {
+        isPathTrusted: () => true,
+      } as never,
+      {} as never,
+      "session-file-path",
+    );
+
+    expect(execRipgrepSearch).toHaveBeenCalledTimes(1);
+    const args = execRipgrepSearch.mock.calls[0][1] as string[];
+    const options = execRipgrepSearch.mock.calls[0][2] as
+      | { cwd?: string }
+      | undefined;
+    expect(args[args.length - 1]).toBe(filePath);
+    expect(options?.cwd).toBe(path.dirname(filePath));
+  });
+
+  it("returns a clear error when file_pattern is provided with file path", async () => {
+    const filePath = path.resolve("src/tools/searchFiles.ts");
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: filePath,
+      inWorkspace: true,
+    });
+
+    const result = await handleSearchFiles(
+      {
+        path: "src/tools/searchFiles.ts",
+        regex: "handleSearchFiles",
+        file_pattern: "**/*.ts",
+        semantic: false,
+      },
+      {
+        isPathTrusted: () => true,
+      } as never,
+      {} as never,
+      "session-file-path-pattern",
+    );
+
+    expect(execRipgrepSearch).not.toHaveBeenCalled();
+    const firstContent = result.content?.[0];
+    expect(firstContent).toBeDefined();
+    const payload = JSON.parse((firstContent as { text: string }).text);
+    expect(payload.error).toContain("file_pattern must be omitted");
+  });
+
+  it("uses parent directory for semantic search when path is a file", async () => {
+    const filePath = path.resolve("src/tools/searchFiles.ts");
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: filePath,
+      inWorkspace: true,
+    });
+
+    await handleSearchFiles(
+      {
+        path: "src/tools/searchFiles.ts",
+        regex: "semantic query",
+        semantic: true,
+      },
+      {
+        isPathTrusted: () => true,
+      } as never,
+      {} as never,
+      "session-semantic-file-path",
+    );
+
+    expect(semanticSearch).toHaveBeenCalledTimes(1);
+    expect(semanticSearch).toHaveBeenCalledWith(
+      path.dirname(filePath),
+      "semantic query",
+      undefined,
+    );
+    expect(execRipgrepSearch).not.toHaveBeenCalled();
+  });
 });
 
 describe("sanitizeRegex", () => {

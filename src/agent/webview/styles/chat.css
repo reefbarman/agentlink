@@ -2676,6 +2676,103 @@ body {
 
 /* ── File Picker ── */
 
+/* ── Emoji Popup ── */
+
+.emoji-popup {
+  position: absolute;
+  z-index: 100;
+  width: calc(100% - 16px);
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid
+    var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 4px 0;
+}
+
+.emoji-popup-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px;
+  border-bottom: 1px solid
+    var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  margin-bottom: 2px;
+}
+
+.emoji-popup-prefix {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: #4ec9b0;
+  color: var(--vscode-editor-background, #1e1e1e);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.emoji-popup-label {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emoji-popup-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.emoji-popup-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 10px;
+  background: none;
+  border: none;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.emoji-popup-option.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.emoji-popup-option:hover:not(.selected) {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.emoji-popup-char {
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.emoji-popup-shortcode {
+  font-family: var(--vscode-editor-font-family, inherit);
+  color: var(--vscode-descriptionForeground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.emoji-popup-option.selected .emoji-popup-shortcode {
+  color: inherit;
+  opacity: 0.85;
+}
+
 /* ── Slash Command Popup ── */
 
 .slash-cmd-popup {

@@ -840,6 +840,62 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(state.dismissedDetectedQuestionIds).toContain("assistant-1");
   });
 
+  it("dismisses detected question when user sends a normal message", () => {
+    let state = reducer(initialState, {
+      type: "SET_DETECTED_QUESTION",
+      detectedQuestion: {
+        messageId: "assistant-3",
+        kind: "single_choice",
+        prompt: "Choose A or B.",
+        options: [
+          { label: "Option A", payload: "Option A" },
+          { label: "Option B", payload: "Option B" },
+        ],
+      },
+    });
+
+    state = reducer(state, {
+      type: "ADD_USER_MESSAGE",
+      text: "I want option C instead",
+    });
+
+    expect(state.detectedQuestion).toBeNull();
+    expect(state.dismissedDetectedQuestionIds).toContain("assistant-3");
+  });
+
+  it("keeps dismissed detected-question ids unchanged when no prompt is active", () => {
+    const state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "hello",
+    });
+
+    expect(state.dismissedDetectedQuestionIds).toEqual([]);
+  });
+
+  it("dismisses detected question when user queues a message while streaming", () => {
+    let state = reducer(initialState, {
+      type: "SET_DETECTED_QUESTION",
+      detectedQuestion: {
+        messageId: "assistant-4",
+        kind: "yes_no",
+        prompt: "Proceed?",
+        options: [
+          { label: "Yes", payload: "Yes" },
+          { label: "No", payload: "No" },
+        ],
+      },
+    });
+
+    state = reducer(state, {
+      type: "ENQUEUE_MESSAGE",
+      id: "queued-1",
+      text: "Actually do X",
+    });
+
+    expect(state.detectedQuestion).toBeNull();
+    expect(state.dismissedDetectedQuestionIds).toContain("assistant-4");
+  });
+
   it("resets detected question state on NEW_SESSION", () => {
     let state = reducer(initialState, {
       type: "SET_DETECTED_QUESTION",

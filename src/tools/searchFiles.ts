@@ -98,8 +98,9 @@ function addFilePatternArgs(
   args: string[],
   dirPath: string,
   filePattern?: string,
+  defaultSearchTarget: string = dirPath,
 ): string {
-  let searchTarget = dirPath;
+  let searchTarget = defaultSearchTarget;
   if (!filePattern) {
     return searchTarget;
   }
@@ -190,14 +191,17 @@ export async function handleSearchFiles(
   sessionId: string,
 ): Promise<ToolResult> {
   try {
-    const { absolutePath: dirPath, inWorkspace } = resolveAndValidatePath(
+    const { absolutePath: resolvedPath, inWorkspace } = resolveAndValidatePath(
       params.path,
     );
 
     // Outside-workspace gate
-    if (!inWorkspace && !approvalManager.isPathTrusted(sessionId, dirPath)) {
+    if (
+      !inWorkspace &&
+      !approvalManager.isPathTrusted(sessionId, resolvedPath)
+    ) {
       const { approved, reason } = await approveOutsideWorkspaceAccess(
-        dirPath,
+        resolvedPath,
         approvalManager,
         approvalPanel,
         sessionId,
@@ -218,10 +222,63 @@ export async function handleSearchFiles(
       }
     }
 
+    let searchDir = resolvedPath;
+    let defaultSearchTarget = resolvedPath;
+    let pathIsFile = false;
+
+    try {
+      const stat = fs.statSync(resolvedPath);
+      if (stat.isFile()) {
+        pathIsFile = true;
+        searchDir = path.dirname(resolvedPath);
+      } else if (!stat.isDirectory()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error:
+                  "path must point to either a file or directory for search_files",
+                path: params.path,
+              }),
+            },
+          ],
+        };
+      }
+    } catch {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: "path does not exist",
+              path: params.path,
+            }),
+          },
+        ],
+      };
+    }
+
     // Semantic search is handled separately
     if (params.semantic) {
       const { semanticSearch } = await import("../services/semanticSearch.js");
-      return semanticSearch(dirPath, params.regex, params.max_results);
+      return semanticSearch(searchDir, params.regex, params.max_results);
+    }
+
+    if (pathIsFile && params.file_pattern) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error:
+                "When path points to a file, file_pattern must be omitted (path already scopes to a single file)",
+              path: params.path,
+              file_pattern: params.file_pattern,
+            }),
+          },
+        ],
+      };
     }
 
     const maxResults = params.max_results ?? DEFAULT_MAX_RESULTS;
@@ -232,12 +289,17 @@ export async function handleSearchFiles(
 
     // --- files_with_matches mode ---
     if (outputMode === "files_with_matches") {
-      return await searchFilesOnly(rgPath, dirPath, params);
+      return await searchFilesOnly(
+        rgPath,
+        searchDir,
+        defaultSearchTarget,
+        params,
+      );
     }
 
     // --- count mode ---
     if (outputMode === "count") {
-      return await searchCount(rgPath, dirPath, params);
+      return await searchCount(rgPath, searchDir, defaultSearchTarget, params);
     }
 
     // --- content mode (default) ---
@@ -269,13 +331,18 @@ export async function handleSearchFiles(
     // Handle file_pattern: if it looks like a literal file path that exists,
     // use it as the search target instead of --glob to avoid glob matching issues.
     // Normalize simple brace globs like src/**/*.{ts,tsx} into multiple --glob args.
-    const searchTarget = addFilePatternArgs(args, dirPath, params.file_pattern);
+    const searchTarget = addFilePatternArgs(
+      args,
+      searchDir,
+      params.file_pattern,
+      defaultSearchTarget,
+    );
 
     args.push(searchTarget);
 
     let output: string;
     try {
-      output = await execRipgrepSearch(rgPath, args, { cwd: dirPath });
+      output = await execRipgrepSearch(rgPath, args, { cwd: searchDir });
     } catch (error) {
       // Ripgrep error — may be invalid regex syntax etc.
       const message = error instanceof Error ? error.message : String(error);
@@ -311,7 +378,7 @@ export async function handleSearchFiles(
 
     const { results: fileResults, totalMatches } = parseRipgrepOutput(
       output,
-      dirPath,
+      searchDir,
     );
 
     // Format output — keep ## file.ts + "> linenum | content" format
@@ -322,7 +389,7 @@ export async function handleSearchFiles(
     for (const file of fileResults) {
       if (matchCount >= maxResults) break;
 
-      const relPath = path.relative(dirPath, file.file);
+      const relPath = path.relative(searchDir, file.file);
       const fileLines: string[] = [];
       let fileMatchCount = 0;
 
@@ -389,7 +456,8 @@ export async function handleSearchFiles(
 
 async function searchFilesOnly(
   rgPath: string,
-  dirPath: string,
+  searchDir: string,
+  defaultSearchTarget: string,
   params: {
     regex: string;
     file_pattern?: string;
@@ -407,12 +475,17 @@ async function searchFilesOnly(
     args.push("--multiline", "--multiline-dotall");
   if (needsPcre2(sanitized)) args.push("--pcre2");
   addDefaultExcludeGlobs(args);
-  const searchTarget = addFilePatternArgs(args, dirPath, params.file_pattern);
+  const searchTarget = addFilePatternArgs(
+    args,
+    searchDir,
+    params.file_pattern,
+    defaultSearchTarget,
+  );
   args.push(searchTarget);
 
   let output: string;
   try {
-    output = await execRipgrepSearch(rgPath, args, { cwd: dirPath });
+    output = await execRipgrepSearch(rgPath, args, { cwd: searchDir });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const hint = getEscapingHint(params.regex);
@@ -434,7 +507,7 @@ async function searchFilesOnly(
   const maxResults = params.max_results ?? DEFAULT_MAX_RESULTS;
   const offsetVal = params.offset ?? 0;
   const sliced = files.slice(offsetVal, offsetVal + maxResults);
-  const limited = sliced.map((f) => path.relative(dirPath, f));
+  const limited = sliced.map((f) => path.relative(searchDir, f));
 
   return {
     content: [
@@ -459,7 +532,8 @@ async function searchFilesOnly(
 
 async function searchCount(
   rgPath: string,
-  dirPath: string,
+  searchDir: string,
+  defaultSearchTarget: string,
   params: {
     regex: string;
     file_pattern?: string;
@@ -477,12 +551,17 @@ async function searchCount(
     args.push("--multiline", "--multiline-dotall");
   if (needsPcre2(sanitized)) args.push("--pcre2");
   addDefaultExcludeGlobs(args);
-  const searchTarget = addFilePatternArgs(args, dirPath, params.file_pattern);
+  const searchTarget = addFilePatternArgs(
+    args,
+    searchDir,
+    params.file_pattern,
+    defaultSearchTarget,
+  );
   args.push(searchTarget);
 
   let output: string;
   try {
-    output = await execRipgrepSearch(rgPath, args, { cwd: dirPath });
+    output = await execRipgrepSearch(rgPath, args, { cwd: searchDir });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const hint = getEscapingHint(params.regex);
@@ -509,7 +588,7 @@ async function searchCount(
   for (const line of lines) {
     const sepIdx = line.lastIndexOf(":");
     if (sepIdx === -1) continue;
-    const file = path.relative(dirPath, line.substring(0, sepIdx));
+    const file = path.relative(searchDir, line.substring(0, sepIdx));
     const count = parseInt(line.substring(sepIdx + 1), 10);
     if (!isNaN(count)) {
       allCounts.push({ file, count });

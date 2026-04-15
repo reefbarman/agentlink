@@ -12,11 +12,18 @@ import {
   DocumentAttachmentChip,
 } from "./AttachmentChip";
 import { SlashCommandPopup } from "./SlashCommandPopup";
+import { EmojiPopup } from "./EmojiPopup";
 import { ModeSelector } from "./ModeSelector";
 import { ModelSelector } from "./ModelSelector";
 import { WriteApprovalSelector } from "./WriteApprovalSelector";
 import type { Injection } from "../App";
 import type { SlashCommandInfo, ModeInfo, WebviewModelInfo } from "../types";
+import {
+  findTrailingEmojiShortcode,
+  resolveEmojiShortcode,
+  searchEmojiShortcodes,
+  shouldOpenEmojiPopup,
+} from "../emojiShortcodes";
 import {
   getSlashCommandSelectionState,
   parseMatchedSlashCommand,
@@ -120,6 +127,10 @@ export function InputArea({
     "main" | "mode" | "model" | "mcp-config"
   >("main");
   const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [emojiQuery, setEmojiQuery] = useState("");
+  const [emojiStart, setEmojiStart] = useState(-1);
+  const [emojiSelectedIdx, setEmojiSelectedIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputWrapperRef = useRef<HTMLDivElement>(null);
 
@@ -305,6 +316,12 @@ export function InputArea({
     filteredSlashCommands.length > 0 &&
     (!matchedExecutableSlashCommand || hasSlashPrefixAlternatives);
 
+  const emojiSuggestions = useMemo(
+    () => searchEmojiShortcodes(emojiQuery, 12),
+    [emojiQuery],
+  );
+  const shouldShowEmojiPopup = emojiOpen && emojiSuggestions.length > 0;
+
   // Commands that execute immediately with no args needed
   const ZERO_ARG_BUILTINS = new Set([
     "new",
@@ -317,6 +334,41 @@ export function InputArea({
   ]);
   // Commands that open a sub-picker
   const SUB_PICKER_CMDS = new Set(["mode", "model", "mcp-config"]);
+
+  const closeEmoji = useCallback(() => {
+    setEmojiOpen(false);
+    setEmojiQuery("");
+    setEmojiStart(-1);
+    setEmojiSelectedIdx(0);
+  }, []);
+
+  const handleEmojiSelect = useCallback(
+    (suggestion: { emoji: string; shortcode: string }) => {
+      if (emojiStart < 0) {
+        return;
+      }
+
+      const liveCursor = textareaRef.current?.selectionStart ?? text.length;
+      const tokenEnd = Math.max(emojiStart + 1, liveCursor);
+      const before = text.slice(0, emojiStart);
+      const after = text.slice(tokenEnd);
+      const nextText = `${before}${suggestion.emoji}${after}`;
+      const nextCursor = (before + suggestion.emoji).length;
+      setText(nextText);
+      closeEmoji();
+      requestAnimationFrame(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          textareaRef.current.selectionStart = nextCursor;
+          textareaRef.current.selectionEnd = nextCursor;
+          textareaRef.current.style.height = "auto";
+          textareaRef.current.style.height =
+            textareaRef.current.scrollHeight + "px";
+        }
+      });
+    },
+    [text, emojiStart, closeEmoji],
+  );
 
   const handleSlashSelect = useCallback(
     (cmd: SlashCommandInfo) => {
@@ -412,6 +464,43 @@ export function InputArea({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      // Handle emoji popup navigation
+      if (shouldShowEmojiPopup) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setEmojiSelectedIdx((i) => (i + 1) % emojiSuggestions.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setEmojiSelectedIdx((i) =>
+            i <= 0 ? emojiSuggestions.length - 1 : i - 1,
+          );
+          return;
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          const selected = emojiSuggestions[emojiSelectedIdx];
+          if (selected) {
+            handleEmojiSelect(selected);
+          }
+          return;
+        }
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const selected = emojiSuggestions[emojiSelectedIdx];
+          if (selected) {
+            handleEmojiSelect(selected);
+          }
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeEmoji();
+          return;
+        }
+      }
+
       // Handle slash popup navigation
       if (shouldShowSlashPopup) {
         if (e.key === "ArrowDown") {
@@ -489,6 +578,11 @@ export function InputArea({
       handleSlashSelect,
       closeSlash,
       shouldShowSlashPopup,
+      shouldShowEmojiPopup,
+      emojiSuggestions,
+      emojiSelectedIdx,
+      handleEmojiSelect,
+      closeEmoji,
     ],
   );
 
@@ -628,6 +722,30 @@ export function InputArea({
       target.style.height = "auto";
       target.style.height = target.scrollHeight + "px";
 
+      // Auto-convert :shortcode: when trailing colon is typed.
+      const matchedShortcode = findTrailingEmojiShortcode(value, cursor);
+      if (matchedShortcode) {
+        const emoji = resolveEmojiShortcode(matchedShortcode.shortcode);
+        if (emoji) {
+          const before = value.slice(0, matchedShortcode.start);
+          const after = value.slice(matchedShortcode.end);
+          const nextValue = `${before}${emoji}${after}`;
+          const nextCursor = (before + emoji).length;
+          setText(nextValue);
+          closeEmoji();
+          requestAnimationFrame(() => {
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = nextCursor;
+              textareaRef.current.selectionEnd = nextCursor;
+              textareaRef.current.style.height = "auto";
+              textareaRef.current.style.height =
+                textareaRef.current.scrollHeight + "px";
+            }
+          });
+          return;
+        }
+      }
+
       // Detect @ trigger for file picker
       if (pickerOpen && atStart >= 0) {
         const query = value.slice(atStart + 1, cursor);
@@ -636,7 +754,9 @@ export function InputArea({
         } else {
           setPickerQuery(query);
         }
-      } else if (slashOpen && slashStart >= 0) {
+      }
+
+      if (slashOpen && slashStart >= 0) {
         // Update slash query while popup is open
         const query = value.slice(slashStart + 1, cursor);
         if (
@@ -654,7 +774,25 @@ export function InputArea({
           setSlashQuery(query);
           setSlashSelectedIdx(0);
         }
-      } else if (!pickerOpen && !slashOpen) {
+      }
+
+      if (emojiOpen && emojiStart >= 0) {
+        const query = value.slice(emojiStart + 1, cursor);
+        if (
+          query.length === 0 ||
+          query.includes(" ") ||
+          query.includes("\n") ||
+          cursor <= emojiStart ||
+          query.endsWith(":")
+        ) {
+          closeEmoji();
+        } else {
+          setEmojiQuery(query.toLowerCase());
+          setEmojiSelectedIdx(0);
+        }
+      }
+
+      if (!pickerOpen && !slashOpen && !emojiOpen) {
         // Check if user just typed @
         const charBefore = cursor >= 2 ? value[cursor - 2] : undefined;
         if (
@@ -680,8 +818,45 @@ export function InputArea({
           vscodeApi.postMessage({ command: "agentRefreshSlashCommands" });
         }
       }
+
+      if (!matchedShortcode && !pickerOpen && !slashOpen && !emojiOpen) {
+        if (
+          value[cursor - 1] === ":" &&
+          shouldOpenEmojiPopup(value, cursor - 1)
+        ) {
+          setEmojiStart(cursor - 1);
+          setEmojiQuery("");
+        }
+      }
+
+      if (emojiStart >= 0) {
+        const activeQuery = value.slice(emojiStart + 1, cursor);
+        if (
+          activeQuery.length >= 3 &&
+          !activeQuery.includes(" ") &&
+          !activeQuery.includes("\n") &&
+          !activeQuery.endsWith(":")
+        ) {
+          setEmojiOpen(true);
+          setEmojiQuery(activeQuery.toLowerCase());
+          setEmojiSelectedIdx(0);
+        } else if (activeQuery.length === 0) {
+          setEmojiOpen(false);
+        }
+      }
     },
-    [pickerOpen, atStart, closePicker, slashOpen, slashStart],
+    [
+      pickerOpen,
+      atStart,
+      closePicker,
+      slashOpen,
+      slashStart,
+      closeSlash,
+      emojiOpen,
+      emojiStart,
+      closeEmoji,
+      vscodeApi,
+    ],
   );
 
   // Handle injections from extension (code actions, context menus)
@@ -972,6 +1147,16 @@ export function InputArea({
           }}
         />
       )}
+      {shouldShowEmojiPopup && (
+        <EmojiPopup
+          suggestions={emojiSuggestions}
+          selectedIndex={emojiSelectedIdx}
+          query={emojiQuery}
+          anchor={getPickerAnchor()}
+          onSelect={handleEmojiSelect}
+          onHover={setEmojiSelectedIdx}
+        />
+      )}
       <div
         class={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
         ref={inputWrapperRef}
@@ -1019,7 +1204,7 @@ export function InputArea({
         <textarea
           ref={textareaRef}
           class="chat-input"
-          placeholder="Message... (/ for commands, @ to attach files)"
+          placeholder="Message... (/ for commands, @ to attach files, : for emoji)"
           value={text}
           onInput={handleInput}
           onKeyDown={handleKeyDown}

@@ -687,10 +687,17 @@ export function reducer(state: AppState, action: AppAction): AppState {
           action.loadedInstructions ?? state.loadedInstructions,
       };
 
-    case "ADD_USER_MESSAGE":
+    case "ADD_USER_MESSAGE": {
+      const dismissedMessageId = state.detectedQuestion?.messageId;
       return {
         ...state,
         streaming: true,
+        detectedQuestion: null,
+        dismissedDetectedQuestionIds:
+          dismissedMessageId &&
+          !state.dismissedDetectedQuestionIds.includes(dismissedMessageId)
+            ? [...state.dismissedDetectedQuestionIds, dismissedMessageId]
+            : state.dismissedDetectedQuestionIds,
         messages: [
           ...state.messages,
           {
@@ -711,6 +718,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           },
         ],
       };
+    }
 
     case "ADD_ANNOTATION":
       return {
@@ -1187,9 +1195,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
           : state.slashCommands,
       };
 
-    case "ENQUEUE_MESSAGE":
+    case "ENQUEUE_MESSAGE": {
+      const dismissedMessageId = state.detectedQuestion?.messageId;
       return {
         ...state,
+        detectedQuestion: null,
+        dismissedDetectedQuestionIds:
+          dismissedMessageId &&
+          !state.dismissedDetectedQuestionIds.includes(dismissedMessageId)
+            ? [...state.dismissedDetectedQuestionIds, dismissedMessageId]
+            : state.dismissedDetectedQuestionIds,
         messageQueue: [
           ...state.messageQueue,
           {
@@ -1206,6 +1221,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           },
         ],
       };
+    }
 
     case "EDIT_QUEUE_MESSAGE":
       return {
