@@ -30,7 +30,8 @@ export function QuestionCard({ id, questions, onSubmit }: QuestionCardProps) {
         (typeof currentAnswer === "string" && currentAnswer.trim() !== "") ||
         hasNote
       );
-    if (q.type === "confirmation") return currentAnswer === "confirmed";
+    if (q.type === "confirmation")
+      return currentAnswer === "confirmed" || currentAnswer === "rejected";
     if (q.type === "multiple_select")
       return (
         (Array.isArray(currentAnswer) && currentAnswer.length > 0) || hasNote
@@ -79,7 +80,28 @@ export function QuestionCard({ id, questions, onSubmit }: QuestionCardProps) {
     onSubmit(id, answers, notes);
   }, [id, answers, notes, isAnswered, onSubmit]);
 
-  const showNoteInput = q.type !== "confirmation";
+  const handleConfirmationPrimary = useCallback(() => {
+    if (q.type !== "confirmation") return;
+
+    if (currentAnswer === "confirmed") {
+      if (isLast) {
+        onSubmit(id, answers, notes);
+      } else {
+        setStep((s) => s + 1);
+      }
+      return;
+    }
+
+    const nextAnswers = { ...answers, [q.id]: "rejected" as const };
+    if (isLast) {
+      onSubmit(id, nextAnswers, notes);
+    } else {
+      setAnswers(nextAnswers);
+      setStep((s) => s + 1);
+    }
+  }, [q.type, q.id, currentAnswer, isLast, id, answers, notes, onSubmit]);
+
+  const showNoteInput = true;
 
   return (
     <div class="question-card">
@@ -119,7 +141,22 @@ export function QuestionCard({ id, questions, onSubmit }: QuestionCardProps) {
         >
           Back
         </button>
-        {isLast ? (
+        {q.type === "confirmation" ? (
+          <button
+            class={
+              isLast || currentAnswer !== "confirmed"
+                ? "question-submit"
+                : "question-nav-btn question-nav-next"
+            }
+            onClick={handleConfirmationPrimary}
+          >
+            {currentAnswer === "confirmed"
+              ? isLast
+                ? "Submit"
+                : "Next"
+              : "Reject"}
+          </button>
+        ) : isLast ? (
           <button
             class="question-submit"
             disabled={!isAnswered()}

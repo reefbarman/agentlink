@@ -980,6 +980,63 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           writeOperation: isCreate ? "create" : "modify",
         };
       }
+      case "rename": {
+        const renameMatch = request.title.match(
+          /`([^`]+)`\s*(?:→|->)\s*`([^`]+)`/,
+        );
+
+        let oldName = renameMatch?.[1];
+        let newName = renameMatch?.[2];
+
+        if (!oldName || !newName) {
+          const simplified = request.title
+            .replace(/^Rename\s+/i, "")
+            .replace(/\?$/, "");
+          const arrow = simplified.includes("→")
+            ? "→"
+            : simplified.includes("->")
+              ? "->"
+              : undefined;
+          if (arrow) {
+            const [left, right] = simplified.split(arrow, 2);
+            oldName = oldName ?? left.replace(/`/g, "").trim();
+            newName = newName ?? right.replace(/`/g, "").trim();
+          }
+        }
+
+        const affectedFiles: Array<{ path: string; changes: number }> = [];
+        const detail = request.detail ?? "";
+        const firstLine = detail.split("\n", 1)[0] ?? "";
+        const totalChangesMatch = firstLine.match(
+          /(\d+)\s+(?:change|changes|match|matches)/i,
+        );
+        const totalChanges = totalChangesMatch
+          ? Number.parseInt(totalChangesMatch[1], 10)
+          : undefined;
+
+        const lines = detail.split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          const fileMatch = trimmed.match(
+            /^(.+?)\s+\((\d+)\s+(?:change|changes|match|matches)\)$/i,
+          );
+          if (!fileMatch) continue;
+          affectedFiles.push({
+            path: fileMatch[1],
+            changes: Number.parseInt(fileMatch[2], 10),
+          });
+        }
+
+        return {
+          kind: "rename",
+          id,
+          oldName,
+          newName,
+          affectedFiles,
+          totalChanges,
+        };
+      }
       case "mcp":
         return {
           kind: "mcp",

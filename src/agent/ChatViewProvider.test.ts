@@ -173,4 +173,81 @@ describe("ChatViewProvider session state sync", () => {
       sessions: [],
     });
   });
+
+  it("maps inline rename approvals to rename card payload", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const buildApprovalRequest = (
+      provider as unknown as {
+        buildApprovalRequest: (
+          id: string,
+          request: {
+            kind: string;
+            title: string;
+            detail?: string;
+            choices: Array<{
+              label: string;
+              value: string;
+              isPrimary?: boolean;
+              isDanger?: boolean;
+            }>;
+          },
+        ) => {
+          kind: string;
+          id: string;
+          oldName?: string;
+          newName?: string;
+          affectedFiles?: Array<{ path: string; changes: number }>;
+          totalChanges?: number;
+        };
+      }
+    ).buildApprovalRequest;
+
+    const mapped = buildApprovalRequest("approval-1", {
+      kind: "rename",
+      title: "Rename `OldSymbol` → `NewSymbol`?",
+      detail:
+        "3 changes across 2 files:\nsrc/a.ts (2 changes)\nsrc/b.ts (1 change)",
+      choices: [
+        { label: "Accept", value: "accept", isPrimary: true },
+        { label: "Reject", value: "reject", isDanger: true },
+      ],
+    });
+
+    expect(mapped).toEqual({
+      kind: "rename",
+      id: "approval-1",
+      oldName: "OldSymbol",
+      newName: "NewSymbol",
+      affectedFiles: [
+        { path: "src/a.ts", changes: 2 },
+        { path: "src/b.ts", changes: 1 },
+      ],
+      totalChanges: 3,
+    });
+
+    const mappedAsciiArrow = buildApprovalRequest("approval-2", {
+      kind: "rename",
+      title: "Rename `fromName` -> `toName`?",
+      detail: "1 match across 1 file:\n src/file.ts (1 match)",
+      choices: [
+        { label: "Accept", value: "accept", isPrimary: true },
+        { label: "Reject", value: "reject", isDanger: true },
+      ],
+    });
+
+    expect(mappedAsciiArrow).toEqual({
+      kind: "rename",
+      id: "approval-2",
+      oldName: "fromName",
+      newName: "toName",
+      affectedFiles: [{ path: "src/file.ts", changes: 1 }],
+      totalChanges: 1,
+    });
+  });
 });
