@@ -47,11 +47,20 @@ export type OnApprovalRequest = (
  * Shared type for MCP tool handler results.
  * Used across all tool implementations.
  */
+export interface McpApprovalPromotionMeta {
+  serverName: string;
+  bareToolName: string;
+  scopes: Array<"session" | "project" | "global">;
+}
+
 export type ToolResult = {
   content: Array<
     | { type: "text"; text: string }
     | { type: "image"; data: string; mimeType: string }
   >;
+  uiMeta?: {
+    mcpApprovalPromotion?: McpApprovalPromotionMeta;
+  };
 };
 
 /** Create a successful ToolResult from a JSON-serializable payload. */

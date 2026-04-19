@@ -457,4 +457,41 @@ describe("dispatchToolCall", () => {
     );
     expect(handleGetTerminalOutput).toHaveBeenCalledWith({ terminal_id: "t1" });
   });
+
+  it("attaches MCP approval promotion metadata after allow-once approvals", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+    const approveMcpTool = vi.fn();
+    const mcpHub = {
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+
+    const ctx: ToolDispatchContext = {
+      approvalManager: {
+        isMcpApproved: vi.fn().mockReturnValue(false),
+        approveMcpTool,
+      } as any,
+      approvalPanel: {} as any,
+      sessionId: "test-session",
+      extensionUri: {} as any,
+      onApprovalRequest,
+      mcpHub: mcpHub as any,
+    };
+
+    const result = await dispatchToolCall(
+      "notion__search",
+      { query: "docs" },
+      ctx,
+    );
+
+    expect(onApprovalRequest).toHaveBeenCalled();
+    expect(approveMcpTool).not.toHaveBeenCalled();
+    expect(result.uiMeta?.mcpApprovalPromotion).toEqual({
+      serverName: "notion",
+      bareToolName: "search",
+      scopes: ["session", "project", "global"],
+    });
+  });
 });

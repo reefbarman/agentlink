@@ -348,6 +348,31 @@ describe("ApprovalManager session approval persistence", () => {
     configStore.dispose();
   });
 
+  it("treats trailing-slash prefix path rules as directory prefixes", async () => {
+    const memento = new MockMemento();
+    const sessionId = "session-8";
+
+    const { approvalManager, configStore } = await createManagers(memento);
+    approvalManager.addPathRule(
+      sessionId,
+      { pattern: "/home/trist/.gram/", mode: "prefix" },
+      "session",
+    );
+
+    expect(approvalManager.isPathTrusted(sessionId, "/home/trist/.gram")).toBe(
+      true,
+    );
+    expect(
+      approvalManager.isPathTrusted(sessionId, "/home/trist/.gram/file.txt"),
+    ).toBe(true);
+    expect(
+      approvalManager.isPathTrusted(sessionId, "/home/trist/.grammar/file.txt"),
+    ).toBe(false);
+
+    approvalManager.dispose();
+    configStore.dispose();
+  });
+
   it("merges placeholder approval state into an existing real session", async () => {
     const memento = new MockMemento();
 

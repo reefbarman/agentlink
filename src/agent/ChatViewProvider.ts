@@ -8,10 +8,15 @@ import { getModeModelPreferences } from "./modeModelPreferences.js";
 import type { AgentSessionManager } from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
 import type { AgentErrorActions, AgentEvent } from "./types.js";
+import type { McpApprovalPromotionMeta } from "../shared/types.js";
 import type { TodoItem } from "./todoTool.js";
 import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
 import { McpClientHub } from "./McpClientHub.js";
-import { loadMcpConfigs, getMcpConfigFilePaths } from "./mcpConfig.js";
+import {
+  loadMcpConfigs,
+  getMcpConfigFilePaths,
+  persistMcpToolApproval,
+} from "./mcpConfig.js";
 import { loadCustomModes, getAllModes } from "./modes.js";
 import { buildSystemPrompt } from "./systemPrompt.js";
 import { loadAllInstructionBlocks } from "./configLoader.js";
@@ -59,6 +64,7 @@ export type ExtensionToWebview =
       result: string;
       durationMs: number;
       input?: unknown;
+      mcpApprovalPromotion?: McpApprovalPromotionMeta;
     }
   | {
       type: "agentUserAnnotation";
@@ -1709,6 +1715,61 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentPromoteMcpToolApproval": {
+        const sessionId = String(msg.sessionId ?? "");
+        const serverName = String(msg.serverName ?? "");
+        const bareToolName = String(msg.bareToolName ?? "");
+        const rawScope = String(msg.scope ?? "");
+        const scope =
+          rawScope === "session" ||
+          rawScope === "project" ||
+          rawScope === "global"
+            ? rawScope
+            : undefined;
+        if (
+          !this.approvalManager ||
+          !sessionId ||
+          !serverName ||
+          !bareToolName ||
+          !scope
+        ) {
+          break;
+        }
+
+        const toolName = `${serverName}__${bareToolName}`;
+        this.approvalManager.approveMcpTool(sessionId, toolName);
+
+        if (scope === "project" || scope === "global") {
+          const cwd =
+            vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? this.cwd;
+          if (!cwd) {
+            vscode.window.showErrorMessage(
+              "Unable to persist MCP approval: no workspace or cwd available.",
+            );
+            break;
+          }
+          const configPaths = getMcpConfigFilePaths(cwd);
+          try {
+            await persistMcpToolApproval(
+              serverName,
+              bareToolName,
+              scope === "project" ? configPaths.project : configPaths.global,
+            );
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            vscode.window.showErrorMessage(
+              `Failed to save MCP approval: ${message}`,
+            );
+            break;
+          }
+        }
+
+        vscode.window.showInformationMessage(
+          `Allowed MCP tool "${bareToolName}" from "${serverName}" for ${scope}.`,
+        );
+        break;
+      }
+
       case "agentMcpAction": {
         const serverName = msg.serverName as string;
         const action = msg.action as "disable" | "reconnect" | "reauthenticate";
@@ -2328,6 +2389,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           result: resultText,
           durationMs: event.durationMs,
           input: event.input,
+          mcpApprovalPromotion: event.mcpApprovalPromotion,
         });
         // Send running token estimate so the context bar stays current
         // between API responses (tool results can add 10-100k+ tokens).

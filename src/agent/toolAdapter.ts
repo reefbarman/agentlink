@@ -614,6 +614,10 @@ export async function dispatchToolCall(
       serverConfig?.allowedTools?.includes(bareToolName) ||
       approvalManager.isMcpApproved(sessionId, toolName);
 
+    let promotionMeta:
+      | import("../shared/types.js").McpApprovalPromotionMeta
+      | undefined;
+
     if (!isAutoApproved) {
       const inputPreview = JSON.stringify(input, null, 2).slice(0, 600);
       let choice: string;
@@ -689,6 +693,13 @@ export async function dispatchToolCall(
       }
 
       switch (choice) {
+        case "allow-once":
+          promotionMeta = {
+            serverName,
+            bareToolName,
+            scopes: ["session", "project", "global"],
+          };
+          break;
         case "always-tool-session":
           approvalManager.approveMcpTool(sessionId, toolName);
           break;
@@ -725,6 +736,12 @@ export async function dispatchToolCall(
     }
 
     const result = await mcpHub.callTool(toolName, input);
+    if (promotionMeta) {
+      result.uiMeta = {
+        ...result.uiMeta,
+        mcpApprovalPromotion: promotionMeta,
+      };
+    }
     return result;
   }
 

@@ -962,7 +962,13 @@ export class ApprovalManager {
   }
 
   private matchesPrefixPath(filePath: string, pattern: string): boolean {
-    return filePath === pattern || filePath.startsWith(`${pattern}/`);
+    const normalizedPattern = pattern.endsWith("/")
+      ? pattern.slice(0, -1)
+      : pattern;
+    return (
+      filePath === normalizedPattern ||
+      filePath.startsWith(`${normalizedPattern}/`)
+    );
   }
 
   private hasGlobSyntax(pattern: string): boolean {

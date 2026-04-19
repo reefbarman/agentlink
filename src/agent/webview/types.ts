@@ -85,6 +85,7 @@ export type ExtensionMessage =
       result: string;
       durationMs: number;
       input?: unknown;
+      mcpApprovalPromotion?: McpApprovalPromotionMeta;
     }
   | {
       type: "agentUserAnnotation";
@@ -430,6 +431,8 @@ export type ShowBgTranscriptMessage = {
   messages: unknown[];
 };
 
+import type { McpApprovalPromotionMeta } from "../../shared/types.js";
+
 export interface ChatState {
   sessionId: string | null;
   mode: string;
@@ -485,6 +488,7 @@ export type ContentBlock =
       result: string;
       complete: boolean;
       durationMs?: number;
+      mcpApprovalPromotion?: McpApprovalPromotionMeta;
     }
   | {
       type: "skill_load";

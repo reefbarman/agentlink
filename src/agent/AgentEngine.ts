@@ -11,7 +11,7 @@ import {
   type ToolDispatchContext,
 } from "./toolAdapter.js";
 import { handleToolError } from "../shared/types.js";
-import type { ToolResult } from "../shared/types.js";
+import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
 import type { TrackerContext } from "../server/ToolCallTracker.js";
 import {
   TODO_TOOL_NAME,
@@ -247,6 +247,7 @@ interface ToolCallResult {
   toolName: string;
   result: ToolResult;
   durationMs: number;
+  mcpApprovalPromotion?: McpApprovalPromotionMeta;
 }
 
 function parseToolResultPayload(
@@ -1245,6 +1246,7 @@ export class AgentEngine {
                 result: tr.result.content,
                 durationMs: tr.durationMs,
                 input: toolUseBlock?.input,
+                mcpApprovalPromotion: tr.mcpApprovalPromotion,
               });
             },
           );
@@ -1336,6 +1338,7 @@ export class AgentEngine {
             result: tr.result.content,
             durationMs: tr.durationMs,
             input: toolUseBlock?.input,
+            mcpApprovalPromotion: tr.mcpApprovalPromotion,
           };
         }
 
@@ -1550,6 +1553,7 @@ export class AgentEngine {
           toolName: call.name,
           result,
           durationMs: Date.now() - start,
+          mcpApprovalPromotion: result.uiMeta?.mcpApprovalPromotion,
         };
       } catch (err) {
         return {

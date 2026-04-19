@@ -180,6 +180,7 @@ type AppAction =
       result: string;
       durationMs: number;
       input?: unknown;
+      mcpApprovalPromotion?: import("../../shared/types.js").McpApprovalPromotionMeta;
     }
   | { type: "TODO_UPDATE"; todos: TodoItem[] }
   | { type: "ADD_ANNOTATION"; text: string; badge: "follow-up" | "rejection" }
@@ -669,6 +670,33 @@ function applyCheckpoints(
   return msgs;
 }
 
+export function shouldAcceptSessionChunk(
+  chunkSessionId: string,
+  currentSessionId: string | null,
+  loadingSessionId: string | null,
+): boolean {
+  const targetSessionId = loadingSessionId ?? currentSessionId;
+  return chunkSessionId === targetSessionId;
+}
+
+export function shouldDropSessionScopedEvent(
+  eventType: string,
+  eventSessionId: string | undefined,
+  currentSessionId: string | null,
+  isBackgroundEvent: boolean,
+): boolean {
+  if (!eventSessionId) return false;
+  if (
+    eventType === "agentSessionLoaded" ||
+    eventType === "agentSessionChunk" ||
+    eventType === "showBgTranscript"
+  ) {
+    return false;
+  }
+  if (isBackgroundEvent) return false;
+  return eventSessionId !== currentSessionId;
+}
+
 export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "SET_STATE":
@@ -889,6 +917,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
             result: action.result,
             complete: true,
             durationMs: action.durationMs,
+            ...(b.type === "tool_call"
+              ? { mcpApprovalPromotion: action.mcpApprovalPromotion }
+              : {}),
           };
           if (b.type === "skill_load") {
             const parsed = parseLoadSkillResult(action.result);
@@ -1604,6 +1635,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   stateRef.current = state.chatState;
   const previousStreamingRef = useRef(state.streaming);
   const startupRestorePendingRef = useRef(true);
+  const loadingSessionIdRef = useRef<string | null>(null);
   const messageQueueRef = useRef(state.messageQueue);
   messageQueueRef.current = state.messageQueue;
   const thinkingEnabledRef = useRef(state.thinkingEnabled);
@@ -1734,11 +1766,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
       // showBgTranscript is excluded — it carries the bg session's ID but is a
       // response to a user-initiated action, not a stream event.
       if (
-        eventSessionId &&
-        msg.type !== "agentSessionLoaded" &&
-        msg.type !== "showBgTranscript" &&
-        !isBackgroundEvent &&
-        eventSessionId !== currentSessionId
+        shouldDropSessionScopedEvent(
+          msg.type,
+          eventSessionId,
+          currentSessionId,
+          isBackgroundEvent,
+        )
       ) {
         console.debug(
           `[agentlink-webview] dropping ${msg.type}: session mismatch (event=${eventSessionId}, current=${currentSessionId ?? "null"})`,
@@ -1820,6 +1853,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             result: msg.result,
             durationMs: msg.durationMs,
             input: msg.input,
+            mcpApprovalPromotion: msg.mcpApprovalPromotion,
           });
           break;
         case "agentTokenEstimate":
@@ -2045,11 +2079,15 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           setSessionHistory(msg.sessions);
           break;
 
-        case "agentSessionLoaded":
+        case "agentSessionLoaded": {
           if (msg.restored && !startupRestorePendingRef.current) {
             break;
           }
           startupRestorePendingRef.current = false;
+          loadingSessionIdRef.current = msg.sessionId;
+          if (msg.hasMoreBefore !== true) {
+            loadingSessionIdRef.current = null;
+          }
           dispatch({
             type: "LOAD_SESSION",
             sessionId: msg.sessionId,
@@ -2064,9 +2102,21 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           });
           setShowHistory(false);
           break;
+        }
 
-        case "agentSessionChunk":
-          if (msg.sessionId !== stateRef.current.sessionId) break;
+        case "agentSessionChunk": {
+          if (
+            !shouldAcceptSessionChunk(
+              msg.sessionId,
+              stateRef.current.sessionId,
+              loadingSessionIdRef.current,
+            )
+          ) {
+            break;
+          }
+          if (msg.hasMoreBefore !== true) {
+            loadingSessionIdRef.current = null;
+          }
           dispatch({
             type: "PREPEND_SESSION_CHUNK",
             messages: agentMessagesToChatMessages(msg.messages as unknown[]),
@@ -2075,6 +2125,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             checkpoints: msg.checkpoints,
           });
           break;
+        }
 
         case "agentCheckpointCreated":
           dispatch({
@@ -2663,6 +2714,23 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
+  const handlePromoteMcpToolApproval = useCallback(
+    (promotion: {
+      serverName: string;
+      bareToolName: string;
+      scope: "session" | "project" | "global";
+    }) => {
+      const sessionId = stateRef.current.sessionId;
+      if (!sessionId) return;
+      vscodeApi.postMessage({
+        command: "agentPromoteMcpToolApproval",
+        sessionId,
+        ...promotion,
+      });
+    },
+    [vscodeApi],
+  );
+
   const handleOpenSpecialBlockPanel = useCallback(
     (block: { kind: "mermaid" | "vega" | "vega-lite"; source: string }) => {
       vscodeApi.postMessage({
@@ -2962,6 +3030,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
           onDismissDetectedQuestion={handleDismissDetectedQuestion}
           onOpenFile={handleOpenFile}
+          onPromoteMcpToolApproval={handlePromoteMcpToolApproval}
           onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
           onRevertCheckpoint={handleRevertCheckpoint}
           onViewCheckpointDiff={handleViewCheckpointDiff}

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { initialState, reducer } from "./App";
+import {
+  initialState,
+  reducer,
+  shouldAcceptSessionChunk,
+  shouldDropSessionScopedEvent,
+} from "./App";
 
 describe("webview App reducer background agent launch blocks", () => {
   it("uses final tool input to populate the bg_agent message for spawn_background_agent", () => {
@@ -178,6 +183,49 @@ describe("webview App reducer background agent launch blocks", () => {
       result: JSON.stringify({ total_lines: 10 }),
       complete: true,
       durationMs: 6,
+    });
+  });
+
+  it("stores MCP approval promotion metadata on completed tool_call blocks", () => {
+    const toolCallId = "mcp-tool-1";
+
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "Run MCP tool",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId,
+      toolName: "notion__search",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId,
+      toolName: "notion__search",
+      result: JSON.stringify({ ok: true }),
+      durationMs: 9,
+      input: { query: "docs" },
+      mcpApprovalPromotion: {
+        serverName: "notion",
+        bareToolName: "search",
+        scopes: ["session", "project", "global"],
+      },
+    });
+
+    const assistant = state.messages[state.messages.length - 1];
+    const toolBlock = assistant?.blocks.find(
+      (b) => b.type === "tool_call" && b.id === toolCallId,
+    );
+
+    expect(toolBlock).toMatchObject({
+      type: "tool_call",
+      mcpApprovalPromotion: {
+        serverName: "notion",
+        bareToolName: "search",
+        scopes: ["session", "project", "global"],
+      },
     });
   });
 
@@ -359,6 +407,47 @@ describe("webview App reducer background agent launch blocks", () => {
       retryAttempt: 1,
       retryMaxAttempts: 3,
     });
+  });
+
+  it("does not drop session chunk events in the generic session guard", () => {
+    expect(
+      shouldDropSessionScopedEvent(
+        "agentSessionChunk",
+        "session-b",
+        "session-a",
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  it("drops unrelated foreground events for non-active sessions", () => {
+    expect(
+      shouldDropSessionScopedEvent(
+        "agentTextDelta",
+        "session-b",
+        "session-a",
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts backfill chunks for the session currently being restored", () => {
+    expect(
+      shouldAcceptSessionChunk("session-b", "session-a", "session-b"),
+    ).toBe(true);
+  });
+
+  it("rejects chunks for unrelated sessions during restore", () => {
+    expect(
+      shouldAcceptSessionChunk("session-c", "session-a", "session-b"),
+    ).toBe(false);
+  });
+
+  it("falls back to the active session when no restore is in progress", () => {
+    expect(shouldAcceptSessionChunk("session-a", "session-a", null)).toBe(true);
+    expect(shouldAcceptSessionChunk("session-b", "session-a", null)).toBe(
+      false,
+    );
   });
 
   it("maps checkpoint turn indices to the preceding user message", () => {

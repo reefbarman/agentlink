@@ -106,4 +106,56 @@ describe("MessageBubble slash-command rendering", () => {
     expect(onAnswer).toHaveBeenCalledWith("Yes, proceed with test updates.");
     expect(onDismiss).toHaveBeenCalledWith("assistant-1");
   });
+
+  it("renders MCP approval promotion actions for completed tool calls", () => {
+    const onPromote = vi.fn();
+    const message: ChatMessage = {
+      id: "assistant-2",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "tool_call",
+          id: "tool-1",
+          name: "notion__search",
+          inputJson: JSON.stringify({ query: "docs" }),
+          result: JSON.stringify({ ok: true }),
+          complete: true,
+          durationMs: 12,
+          mcpApprovalPromotion: {
+            serverName: "notion",
+            bareToolName: "search",
+            scopes: ["session", "project", "global"],
+          },
+        },
+      ],
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onPromoteMcpToolApproval={onPromote}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /notion__search/i }));
+    expect(
+      screen.getByText(/promote this one-time mcp approval/i),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /allow for global/i }));
+    expect(onPromote).toHaveBeenCalledWith({
+      serverName: "notion",
+      bareToolName: "search",
+      scope: "global",
+    });
+    expect(
+      screen.queryByRole("button", { name: /allow for global/i }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /allow for session/i }),
+    ).toBeTruthy();
+  });
 });

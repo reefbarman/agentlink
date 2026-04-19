@@ -7,6 +7,11 @@ type ToolCallData = ContentBlock & { type: "tool_call" };
 interface ToolCallBlockProps {
   toolCall: ToolCallData;
   onOpenFile?: (path: string, line?: number) => void;
+  onPromoteMcpToolApproval?: (promotion: {
+    serverName: string;
+    bareToolName: string;
+    scope: "session" | "project" | "global";
+  }) => void;
 }
 
 /** Format duration as human-readable string. */
@@ -432,8 +437,15 @@ export function getToolCallVisualState(toolCall: {
   return { statusClass, statusIconClass, cmdExitBadge };
 }
 
-export function ToolCallBlock({ toolCall, onOpenFile }: ToolCallBlockProps) {
+export function ToolCallBlock({
+  toolCall,
+  onOpenFile,
+  onPromoteMcpToolApproval,
+}: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const [promotedScopes, setPromotedScopes] = useState<
+    Set<"session" | "project" | "global">
+  >(new Set());
 
   const complete = toolCall.complete;
   const input = tryParseJson(toolCall.inputJson);
@@ -464,6 +476,11 @@ export function ToolCallBlock({ toolCall, onOpenFile }: ToolCallBlockProps) {
   const hasSummary = summaryParts.some(
     (p) => p.type === "file" || (p.type === "text" && p.text),
   );
+  const mcpApprovalPromotion = toolCall.mcpApprovalPromotion;
+  const availablePromotionScopes =
+    mcpApprovalPromotion?.scopes.filter(
+      (scope) => !promotedScopes.has(scope),
+    ) ?? [];
 
   return (
     <div class={`tool-call-block ${statusClass}`}>
@@ -530,6 +547,37 @@ export function ToolCallBlock({ toolCall, onOpenFile }: ToolCallBlockProps) {
               )}
             </div>
           )}
+          {complete &&
+            mcpApprovalPromotion &&
+            onPromoteMcpToolApproval &&
+            availablePromotionScopes.length > 0 && (
+              <div class="tool-call-section">
+                <div class="tool-call-section-label">Permissions</div>
+                <div class="tool-call-permission-actions">
+                  <span class="tool-call-permission-hint">
+                    Promote this one-time MCP approval:
+                  </span>
+                  {availablePromotionScopes.map((scope) => (
+                    <button
+                      key={scope}
+                      type="button"
+                      class="tool-call-permission-button"
+                      onClick={(e: MouseEvent) => {
+                        e.stopPropagation();
+                        onPromoteMcpToolApproval({
+                          serverName: mcpApprovalPromotion.serverName,
+                          bareToolName: mcpApprovalPromotion.bareToolName,
+                          scope,
+                        });
+                        setPromotedScopes((prev) => new Set(prev).add(scope));
+                      }}
+                    >
+                      Allow for {scope}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
         </div>
       )}
     </div>

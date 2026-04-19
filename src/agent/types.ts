@@ -1,4 +1,4 @@
-import type { ToolResult } from "../shared/types.js";
+import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
 import type { TodoItem } from "./todoTool.js";
 import type { MessageParam } from "./providers/types.js";
 
@@ -72,6 +72,7 @@ export type AgentEvent =
       result: ToolResult["content"];
       durationMs: number;
       input?: unknown;
+      mcpApprovalPromotion?: McpApprovalPromotionMeta;
     }
   | { type: "todo_update"; todos: TodoItem[] }
   | {

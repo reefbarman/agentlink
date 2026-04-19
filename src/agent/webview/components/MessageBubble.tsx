@@ -46,6 +46,11 @@ interface MessageBubbleProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onPromoteMcpToolApproval?: (promotion: {
+    serverName: string;
+    bareToolName: string;
+    scope: "session" | "project" | "global";
+  }) => void;
   onOpenSpecialBlockPanel?: (block: {
     kind: "mermaid" | "vega" | "vega-lite";
     source: string;
@@ -66,6 +71,7 @@ export function MessageBubble({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onPromoteMcpToolApproval,
   onOpenSpecialBlockPanel,
   onRetry,
   onSignIn,
@@ -169,6 +175,7 @@ export function MessageBubble({
                   key={block.id}
                   toolCall={block}
                   onOpenFile={onOpenFile}
+                  onPromoteMcpToolApproval={onPromoteMcpToolApproval}
                 />
               );
             case "skill_load":

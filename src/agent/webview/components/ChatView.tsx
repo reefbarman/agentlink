@@ -15,6 +15,11 @@ interface ChatViewProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onPromoteMcpToolApproval?: (promotion: {
+    serverName: string;
+    bareToolName: string;
+    scope: "session" | "project" | "global";
+  }) => void;
   onOpenSpecialBlockPanel?: (block: {
     kind: "mermaid" | "vega" | "vega-lite";
     source: string;
@@ -42,6 +47,7 @@ export function ChatView({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onPromoteMcpToolApproval,
   onOpenSpecialBlockPanel,
   onRevertCheckpoint,
   onViewCheckpointDiff,
@@ -203,6 +209,7 @@ export function ChatView({
                 onDetectedQuestionAnswer={onDetectedQuestionAnswer}
                 onDismissDetectedQuestion={onDismissDetectedQuestion}
                 onOpenFile={onOpenFile}
+                onPromoteMcpToolApproval={onPromoteMcpToolApproval}
                 onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
                 onRetry={
                   msg === messages[messages.length - 1] && msg.error
