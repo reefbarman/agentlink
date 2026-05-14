@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { ContentBlock } from "./providers/types.js";
-import { AgentSession } from "./AgentSession.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildPromptArtifacts, buildSystemPrompt } from "./systemPrompt.js";
+
 import type { AgentConfig } from "./types.js";
-import { buildSystemPrompt, buildPromptArtifacts } from "./systemPrompt.js";
+import { AgentSession } from "./AgentSession.js";
+import type { ContentBlock } from "./providers/types.js";
 
 // Mock prompt builders so create() doesn't hit the filesystem
 vi.mock("./systemPrompt.js", () => {
@@ -153,6 +154,22 @@ describe("AgentSession", () => {
       const messages = session.getMessages();
       expect(messages).toHaveLength(1);
       expect(messages[0]).toEqual({ role: "user", content: "hello" });
+    });
+
+    it("persists user-message origin metadata in uiHint", async () => {
+      const session = await makeSession();
+      session.addUserMessage("hello from phone", { origin: "browser" });
+      const messages = session.getMessages();
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toEqual({
+        role: "user",
+        content: "hello from phone",
+        uiHint: {
+          userMessage: {
+            origin: "browser",
+          },
+        },
+      });
     });
 
     it("appendAssistantTurn appends an assistant message", async () => {
@@ -357,6 +374,15 @@ describe("AgentSession", () => {
       // totalInputTokens accumulates just the raw API input_tokens (uncached)
       expect(session.totalInputTokens).toBe(50);
       expect(session.lastCacheReadTokens).toBe(9000);
+    });
+
+    it("tracks projected input separately from output-inclusive total usage", async () => {
+      const session = await makeSession();
+      session.addUsage(1000, 500, 200, 300);
+      session.addEstimatedTokens(400);
+
+      expect(session.estimatedInputUsed).toBe(1600);
+      expect(session.estimatedTotalUsed).toBe(2100);
     });
 
     it("restoreFromStore restores cache totals and last token snapshot", async () => {

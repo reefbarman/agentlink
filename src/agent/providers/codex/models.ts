@@ -1,15 +1,47 @@
-import type { ModelCapabilities, ModelInfo } from "../types.js";
+import type {
+  ModelCapabilities,
+  ModelInfo,
+  ReasoningEffort,
+} from "../types.js";
+
 import type { OpenAiCodexResolvedAuth } from "./OpenAiCodexAuthManager.js";
 
 export interface CodexModelDef {
   id: string;
   displayName: string;
   contextWindow: number;
+  maxInputTokens?: number;
   maxOutputTokens: number;
   supportsImages: boolean;
   supportsThinking: boolean;
-  defaultReasoningEffort: string;
+  defaultReasoningEffort: ReasoningEffort;
+  reasoningEfforts: ReasoningEffort[];
 }
+
+const GPT_5_4_REASONING_EFFORTS = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const satisfies readonly ReasoningEffort[];
+
+const GPT_5_REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+] as const satisfies readonly ReasoningEffort[];
+
+const GPT_5_CODEX_MAX_REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const satisfies readonly ReasoningEffort[];
 
 /**
  * Capabilities of a specific Responses API endpoint+auth surface.
@@ -38,7 +70,20 @@ export const CODEX_CONDENSE_MODEL_FALLBACKS = [
   "gpt-5.3-codex",
 ] as const;
 
+const CODEX_400K_INPUT_TOKENS = 272_000;
+
 export const CODEX_MODELS: CodexModelDef[] = [
+  {
+    id: "gpt-5.5",
+    displayName: "GPT-5.5",
+    contextWindow: 400_000,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_4_REASONING_EFFORTS],
+  },
   {
     id: "gpt-5.4",
     displayName: "GPT-5.4",
@@ -47,6 +92,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_4_REASONING_EFFORTS],
   },
   {
     id: "gpt-5.4-pro",
@@ -56,69 +102,84 @@ export const CODEX_MODELS: CodexModelDef[] = [
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "high",
+    reasoningEfforts: [...GPT_5_4_REASONING_EFFORTS],
   },
   {
     id: "gpt-5.4-mini",
     displayName: "GPT-5.4 Mini",
     contextWindow: 400_000,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_4_REASONING_EFFORTS],
   },
   {
     id: "gpt-5.4-nano",
     displayName: "GPT-5.4 Nano",
     contextWindow: 400_000,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_4_REASONING_EFFORTS],
   },
   {
     id: "gpt-5.3-codex",
     displayName: "GPT-5.3 Codex",
     contextWindow: 400_000,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_REASONING_EFFORTS],
   },
   {
     id: "gpt-5.2",
     displayName: "GPT-5.2",
     contextWindow: 400_000,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_REASONING_EFFORTS],
   },
   {
     id: "gpt-5.2-codex",
     displayName: "GPT-5.2 Codex",
     contextWindow: 400_000,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_REASONING_EFFORTS],
   },
   {
     id: "gpt-5.1-codex-mini",
     displayName: "GPT-5.1 Codex Mini",
     contextWindow: 400_000,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_REASONING_EFFORTS],
   },
   {
     id: "gpt-5.1-codex-max",
     displayName: "GPT-5.1 Codex Max",
     contextWindow: 400_000,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
     defaultReasoningEffort: "xhigh",
+    reasoningEfforts: [...GPT_5_CODEX_MAX_REASONING_EFFORTS],
   },
 ];
 
@@ -152,7 +213,10 @@ export function getCodexModelCapabilities(model: string): ModelCapabilities {
     supportsImages: def?.supportsImages ?? true,
     supportsToolUse: true,
     contextWindow: def?.contextWindow ?? 400_000,
+    maxInputTokens: def?.maxInputTokens ?? CODEX_400K_INPUT_TOKENS,
     maxOutputTokens: def?.maxOutputTokens ?? 128_000,
+    reasoningEfforts: def?.reasoningEfforts ?? [...GPT_5_REASONING_EFFORTS],
+    defaultReasoningEffort: def?.defaultReasoningEffort ?? "medium",
   };
 }
 

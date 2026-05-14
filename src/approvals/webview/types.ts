@@ -57,7 +57,13 @@ export interface RuleEntry {
 // Extension → Webview messages
 export type ExtensionMessage =
   | { type: "showApproval"; request: ApprovalRequest }
-  | { type: "idle" };
+  | { type: "idle" }
+  | {
+      type: "regexSuggestion";
+      requestId: string;
+      pattern?: string;
+      error?: string;
+    };
 
 // Webview → Extension messages
 export interface DecisionMessage {
@@ -72,4 +78,13 @@ export interface DecisionMessage {
   trustScope?: string;
   /** Optional follow-up message from the user after accepting */
   followUp?: string;
+}
+
+/** Webview → Extension: request a regex suggestion for a sub-command. */
+export interface SuggestRegexMessage {
+  type: "suggestRegex";
+  requestId: string;
+  approvalId: string;
+  subCommand: string;
+  fullCommand: string;
 }

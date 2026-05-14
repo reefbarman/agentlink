@@ -1,23 +1,19 @@
 import {
-  useState,
-  useRef,
-  useCallback,
-  useEffect,
-  useMemo,
-} from "preact/hooks";
-import { FilePicker } from "./FilePicker";
-import {
   AttachmentChip,
-  ImageAttachmentChip,
   DocumentAttachmentChip,
+  ImageAttachmentChip,
 } from "./AttachmentChip";
-import { SlashCommandPopup } from "./SlashCommandPopup";
-import { EmojiPopup } from "./EmojiPopup";
-import { ModeSelector } from "./ModeSelector";
-import { ModelSelector } from "./ModelSelector";
-import { WriteApprovalSelector } from "./WriteApprovalSelector";
-import type { Injection } from "../App";
-import type { SlashCommandInfo, ModeInfo, WebviewModelInfo } from "../types";
+import type {
+  ModeInfo,
+  ReasoningEffort,
+  SlashCommandInfo,
+  WebviewModelInfo,
+} from "../types";
+import {
+  autosizeTextarea,
+  canSubmitComposer,
+  focusAndAutosizeTextarea,
+} from "../../../shared/composerBehavior";
 import {
   findTrailingEmojiShortcode,
   resolveEmojiShortcode,
@@ -30,6 +26,23 @@ import {
   shouldOpenSlashPopup,
   wrapTextInBackticks,
 } from "../slashCommandInput";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "preact/hooks";
+
+import { ComposerBox } from "../../../shared/ui/ComposerBox";
+import { EmojiPopup } from "./EmojiPopup";
+import { FilePicker } from "./FilePicker";
+import type { Injection } from "../App";
+import { ModeSelector } from "./ModeSelector";
+import { ModelSelector } from "./ModelSelector";
+import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
+import { SlashCommandPopup } from "./SlashCommandPopup";
+import { WriteApprovalSelector } from "./WriteApprovalSelector";
 
 /** A pasted image or PDF held in webview state before sending. */
 export interface MediaAttachment {
@@ -65,8 +78,8 @@ interface InputAreaProps {
   ) => void;
   onStop: () => void;
   streaming: boolean;
-  thinkingEnabled: boolean;
-  onToggleThinking: () => void;
+  reasoningEffort: ReasoningEffort;
+  onSetReasoningEffort: (effort: ReasoningEffort) => void;
   onExportTranscript: () => void;
   hasMessages: boolean;
   vscodeApi: { postMessage: (msg: unknown) => void };
@@ -85,14 +98,19 @@ interface InputAreaProps {
   onSignIn?: (provider: string) => void;
   agentWriteApproval?: string;
   onSetAgentWriteApproval?: (mode: string) => void;
+  allowAttachments?: boolean;
+  allowMediaPaste?: boolean;
+  allowFileMentions?: boolean;
+  allowThinkingToggle?: boolean;
+  allowExportTranscript?: boolean;
 }
 
 export function InputArea({
   onSend,
   onStop,
   streaming,
-  thinkingEnabled,
-  onToggleThinking,
+  reasoningEffort,
+  onSetReasoningEffort,
   onExportTranscript,
   hasMessages,
   vscodeApi,
@@ -111,6 +129,11 @@ export function InputArea({
   onSignIn,
   agentWriteApproval = "prompt",
   onSetAgentWriteApproval,
+  allowAttachments = true,
+  allowMediaPaste = true,
+  allowFileMentions = true,
+  allowThinkingToggle = true,
+  allowExportTranscript = true,
 }: InputAreaProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -161,12 +184,19 @@ export function InputArea({
     }
     if (
       matchedSlashCommand.command.builtin &&
-      (attachments.length > 0 || mediaAttachments.length > 0)
+      ((allowAttachments && attachments.length > 0) ||
+        (allowMediaPaste && mediaAttachments.length > 0))
     ) {
       return null;
     }
     return matchedSlashCommand;
-  }, [matchedSlashCommand, attachments.length, mediaAttachments.length]);
+  }, [
+    matchedSlashCommand,
+    attachments.length,
+    mediaAttachments.length,
+    allowAttachments,
+    allowMediaPaste,
+  ]);
 
   const closeSlash = useCallback(() => {
     setSlashOpen(false);
@@ -178,8 +208,18 @@ export function InputArea({
 
   const handleSubmit = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed && attachments.length === 0 && mediaAttachments.length === 0)
+    if (
+      !canSubmitComposer({
+        text,
+        hasAttachments: allowAttachments && attachments.length > 0,
+        hasMedia: allowMediaPaste && mediaAttachments.length > 0,
+      })
+    ) {
       return;
+    }
+
+    const submitAttachments = allowAttachments ? attachments : [];
+    const submitMedia = allowMediaPaste ? pendingMedia : undefined;
 
     if (matchedExecutableSlashCommand) {
       setText("");
@@ -200,12 +240,18 @@ export function InputArea({
         const finalText = commandInput
           ? `${commandInput}\n\n${command.body}`
           : command.body;
-        onSend(finalText, attachments, userText, displayText, pendingMedia);
+        onSend(
+          finalText,
+          submitAttachments,
+          userText,
+          displayText,
+          submitMedia,
+        );
       }
       return;
     }
 
-    onSend(trimmed, attachments, undefined, undefined, pendingMedia);
+    onSend(trimmed, submitAttachments, undefined, undefined, submitMedia);
     setText("");
     setAttachments([]);
     setMediaAttachments([]);
@@ -216,6 +262,8 @@ export function InputArea({
     text,
     attachments,
     mediaAttachments,
+    allowAttachments,
+    allowMediaPaste,
     streaming,
     onSend,
     matchedExecutableSlashCommand,
@@ -296,6 +344,7 @@ export function InputArea({
         if (c.name === "checkpoint") return { ...c, icon: "git-commit" };
         if (c.name === "revert") return { ...c, icon: "history" };
         if (c.name === "btw") return { ...c, icon: "comment-discussion" };
+        if (c.name === "pair") return { ...c, icon: "device-mobile" };
         return c;
       });
   })();
@@ -331,6 +380,7 @@ export function InputArea({
     "help",
     "mcp",
     "mcp-refresh",
+    "pair",
   ]);
   // Commands that open a sub-picker
   const SUB_PICKER_CMDS = new Set(["mode", "model", "mcp-config"]);
@@ -417,8 +467,8 @@ export function InputArea({
         if (
           ZERO_ARG_BUILTINS.has(cmd.name) &&
           !selectionState.args &&
-          attachments.length === 0 &&
-          mediaAttachments.length === 0
+          (!allowAttachments || attachments.length === 0) &&
+          (!allowMediaPaste || mediaAttachments.length === 0)
         ) {
           setText(before);
           onExecuteBuiltinCommand?.(cmd.name, "");
@@ -459,6 +509,10 @@ export function InputArea({
       onExecuteBuiltinCommand,
       onSwitchMode,
       onSend,
+      allowAttachments,
+      allowMediaPaste,
+      attachments.length,
+      mediaAttachments.length,
     ],
   );
 
@@ -594,19 +648,25 @@ export function InputArea({
 
   const handleFileSelect = useCallback(
     (path: string) => {
-      // Replace @query with just @ (remove it) and add the file as attachment
+      if (!allowAttachments) {
+        closePicker();
+        return;
+      }
+
       if (atStart >= 0) {
         const before = text.slice(0, atStart);
-        const cursorPos = textareaRef.current?.selectionStart ?? text.length;
-        const after = text.slice(cursorPos);
-        setText(before + after);
-        // Restore cursor
+        const tokenEnd = atStart + 1 + pickerQuery.length;
+        const after = text.slice(tokenEnd);
+        const completedPath = `@${path}`;
+        const nextText = `${before}${completedPath}${after}`;
+        const nextCursor = (before + completedPath).length;
+        setText(nextText);
         requestAnimationFrame(() => {
           if (textareaRef.current) {
-            const pos = before.length;
-            textareaRef.current.selectionStart = pos;
-            textareaRef.current.selectionEnd = pos;
+            textareaRef.current.selectionStart = nextCursor;
+            textareaRef.current.selectionEnd = nextCursor;
             textareaRef.current.focus();
+            autosizeTextarea(textareaRef.current);
           }
         });
       }
@@ -615,7 +675,7 @@ export function InputArea({
       }
       closePicker();
     },
-    [text, atStart, attachments, closePicker],
+    [allowAttachments, text, atStart, pickerQuery, attachments, closePicker],
   );
 
   const handleRemoveAttachment = useCallback((path: string) => {
@@ -628,6 +688,9 @@ export function InputArea({
 
   const handlePaste = useCallback(
     (e: ClipboardEvent) => {
+      if (!allowMediaPaste) {
+        return;
+      }
       if (!e.clipboardData) return;
 
       const items = Array.from(e.clipboardData.items);
@@ -708,7 +771,7 @@ export function InputArea({
         reader.readAsDataURL(file);
       }
     },
-    [vscodeApi],
+    [allowMediaPaste, vscodeApi],
   );
 
   const handleInput = useCallback(
@@ -719,8 +782,7 @@ export function InputArea({
       setText(value);
 
       // Auto-resize textarea
-      target.style.height = "auto";
-      target.style.height = target.scrollHeight + "px";
+      autosizeTextarea(target);
 
       // Auto-convert :shortcode: when trailing colon is typed.
       const matchedShortcode = findTrailingEmojiShortcode(value, cursor);
@@ -737,9 +799,7 @@ export function InputArea({
             if (textareaRef.current) {
               textareaRef.current.selectionStart = nextCursor;
               textareaRef.current.selectionEnd = nextCursor;
-              textareaRef.current.style.height = "auto";
-              textareaRef.current.style.height =
-                textareaRef.current.scrollHeight + "px";
+              autosizeTextarea(textareaRef.current);
             }
           });
           return;
@@ -796,6 +856,8 @@ export function InputArea({
         // Check if user just typed @
         const charBefore = cursor >= 2 ? value[cursor - 2] : undefined;
         if (
+          allowFileMentions &&
+          allowAttachments &&
           value[cursor - 1] === "@" &&
           (charBefore === undefined ||
             charBefore === " " ||
@@ -856,6 +918,7 @@ export function InputArea({
       emojiStart,
       closeEmoji,
       vscodeApi,
+      allowFileMentions,
     ],
   );
 
@@ -865,12 +928,14 @@ export function InputArea({
     switch (injection.type) {
       case "prompt": {
         const promptText = injection.prompt ?? "";
-        const promptAttachments = injection.attachments ?? [];
+        const promptAttachments = allowAttachments
+          ? (injection.attachments ?? [])
+          : [];
         if (injection.autoSubmit && promptText.trim()) {
           onSend(promptText, promptAttachments);
         } else {
           setText(promptText);
-          if (promptAttachments.length) {
+          if (allowAttachments && promptAttachments.length) {
             setAttachments((prev) => {
               const next = [...prev];
               for (const p of promptAttachments) {
@@ -880,18 +945,17 @@ export function InputArea({
             });
           }
           requestAnimationFrame(() => {
-            if (textareaRef.current) {
-              textareaRef.current.focus();
-              textareaRef.current.style.height = "auto";
-              textareaRef.current.style.height =
-                textareaRef.current.scrollHeight + "px";
-            }
+            focusAndAutosizeTextarea(textareaRef.current);
           });
         }
         break;
       }
       case "attachment":
-        if (injection.path && !attachments.includes(injection.path)) {
+        if (
+          allowAttachments &&
+          injection.path &&
+          !attachments.includes(injection.path)
+        ) {
           setAttachments((prev) => [...prev, injection.path!]);
         }
         requestAnimationFrame(() => textareaRef.current?.focus());
@@ -903,37 +967,41 @@ export function InputArea({
             : (injection.context ?? ""),
         );
         requestAnimationFrame(() => {
-          if (textareaRef.current) {
-            textareaRef.current.focus();
-            textareaRef.current.style.height = "auto";
-            textareaRef.current.style.height =
-              textareaRef.current.scrollHeight + "px";
-          }
+          focusAndAutosizeTextarea(textareaRef.current);
         });
         break;
     }
     onInjectionConsumed();
-  }, [injection]);
+  }, [injection, allowAttachments, attachments, onInjectionConsumed, onSend]);
 
   // Drag & drop file handling
   const [dragOver, setDragOver] = useState(false);
 
-  const handleDragOver = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = "copy";
-      setDragOver(true);
-    }
-  }, []);
+  const handleDragOver = useCallback(
+    (e: DragEvent) => {
+      if (!allowAttachments) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "copy";
+        setDragOver(true);
+      }
+    },
+    [allowAttachments],
+  );
 
-  const handleDragLeave = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-  }, []);
+  const handleDragLeave = useCallback(
+    (e: DragEvent) => {
+      if (!allowAttachments) return;
+      e.preventDefault();
+      setDragOver(false);
+    },
+    [allowAttachments],
+  );
 
   const handleDrop = useCallback(
     (e: DragEvent) => {
+      if (!allowAttachments) return;
       e.preventDefault();
       e.stopPropagation();
       setDragOver(false);
@@ -957,9 +1025,57 @@ export function InputArea({
 
       // Also handle dropped File objects (e.g. from OS file manager)
       if (!uriList && e.dataTransfer.files.length > 0) {
-        // File objects in webviews don't have real paths, but have names
-        // We can't resolve these without the extension's help
-        const names = Array.from(e.dataTransfer.files).map((f) => f.name);
+        const droppedFiles = Array.from(e.dataTransfer.files);
+
+        if (allowMediaPaste) {
+          const acceptedFiles = droppedFiles.filter(
+            (file) =>
+              ACCEPTED_IMAGE_TYPES.has(file.type) ||
+              ACCEPTED_DOC_TYPES.has(file.type),
+          );
+
+          for (const file of acceptedFiles) {
+            const isImage = ACCEPTED_IMAGE_TYPES.has(file.type);
+            const maxBytes = isImage ? MAX_IMAGE_BYTES : MAX_DOC_BYTES;
+
+            if (file.size > maxBytes) {
+              const limitMB = Math.round(maxBytes / (1024 * 1024));
+              const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+              vscodeApi.postMessage({
+                command: "agentToast",
+                message: `File too large (${sizeMB}MB). Max ${limitMB}MB for ${isImage ? "images" : "PDFs"}.`,
+                level: "error",
+              });
+              continue;
+            }
+
+            const fileName =
+              file.name ||
+              (isImage ? "dropped-image.png" : "dropped-document.pdf");
+            const reader = new FileReader();
+            reader.onload = () => {
+              const dataUrl = reader.result as string;
+              const attachment: MediaAttachment = {
+                id: crypto.randomUUID(),
+                name: fileName,
+                mimeType:
+                  file.type || (isImage ? "image/png" : "application/pdf"),
+                dataUrl,
+                kind: isImage ? "image" : "document",
+              };
+              setMediaAttachments((prev) => [...prev, attachment]);
+            };
+            reader.readAsDataURL(file);
+          }
+
+          if (acceptedFiles.length > 0) {
+            textareaRef.current?.focus();
+            return;
+          }
+        }
+
+        // Fallback to extension-side dropped path resolver.
+        const names = droppedFiles.map((f) => f.name);
         vscodeApi.postMessage({
           command: "agentResolveDroppedFiles",
           paths: names,
@@ -993,13 +1109,25 @@ export function InputArea({
         paths,
       });
     },
-    [vscodeApi],
+    [allowAttachments, allowMediaPaste, vscodeApi],
   );
 
   // Listen for resolved dropped file paths
   useEffect(() => {
     const handler = (event: MessageEvent) => {
+      if (!allowAttachments) return;
       const msg = event.data;
+      if (msg.type === "agentOpenFilePicker") {
+        if (!allowFileMentions || !allowAttachments) {
+          return;
+        }
+        setAtStart(-1);
+        setPickerQuery("");
+        setPickerOpen(true);
+        textareaRef.current?.focus();
+        return;
+      }
+
       if (
         msg.type === "agentDroppedFilesResolved" &&
         Array.isArray(msg.files)
@@ -1016,7 +1144,7 @@ export function InputArea({
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, []);
+  }, [allowAttachments, allowFileMentions]);
 
   // Compute picker anchor position relative to input wrapper
   const getPickerAnchor = useCallback(() => {
@@ -1045,34 +1173,35 @@ export function InputArea({
             onSignIn={onSignIn}
           />
         )}
-        <button
-          class={`toolbar-control thinking-toggle ${thinkingEnabled ? "active" : ""}`}
-          onClick={onToggleThinking}
-          title={thinkingEnabled ? "Thinking enabled" : "Thinking disabled"}
-          type="button"
-        >
-          <i class="codicon codicon-lightbulb" />
-          <span class="thinking-toggle-label">
-            {thinkingEnabled ? "Thinking" : "No thinking"}
-          </span>
-        </button>
+        {allowThinkingToggle && (
+          <ReasoningEffortSelector
+            current={reasoningEffort}
+            currentModel={currentModel}
+            models={availableModels}
+            onSelect={onSetReasoningEffort}
+          />
+        )}
         {onSetAgentWriteApproval && (
           <WriteApprovalSelector
             current={agentWriteApproval}
             onSelect={onSetAgentWriteApproval}
           />
         )}
-        <button
-          class="icon-button"
-          onClick={() => vscodeApi.postMessage({ command: "agentAttachFile" })}
-          title="Attach file"
-          type="button"
-          disabled={streaming}
-        >
-          <i class="codicon codicon-attach" />
-        </button>
+        {allowAttachments && (
+          <button
+            class="icon-button"
+            onClick={() =>
+              vscodeApi.postMessage({ command: "agentAttachFile" })
+            }
+            title="Attach file"
+            type="button"
+            disabled={streaming}
+          >
+            <i class="codicon codicon-attach" />
+          </button>
+        )}
         <div class="input-toolbar-spacer" />
-        {hasMessages && (
+        {allowExportTranscript && hasMessages && (
           <button
             class="icon-button"
             onClick={onExportTranscript}
@@ -1083,39 +1212,43 @@ export function InputArea({
           </button>
         )}
       </div>
-      {(attachments.length > 0 || mediaAttachments.length > 0) && (
+      {((allowAttachments && attachments.length > 0) ||
+        (allowMediaPaste && mediaAttachments.length > 0)) && (
         <div class="attachment-chips">
-          {attachments.map((path) => (
-            <AttachmentChip
-              key={path}
-              path={path}
-              onRemove={handleRemoveAttachment}
-            />
-          ))}
-          {mediaAttachments
-            .filter((m) => m.kind === "image")
-            .map((img) => (
-              <ImageAttachmentChip
-                key={img.id}
-                id={img.id}
-                name={img.name}
-                dataUrl={img.dataUrl}
-                onRemove={handleRemoveMedia}
+          {allowAttachments &&
+            attachments.map((path) => (
+              <AttachmentChip
+                key={path}
+                path={path}
+                onRemove={handleRemoveAttachment}
               />
             ))}
-          {mediaAttachments
-            .filter((m) => m.kind === "document")
-            .map((doc) => (
-              <DocumentAttachmentChip
-                key={doc.id}
-                id={doc.id}
-                name={doc.name}
-                onRemove={handleRemoveMedia}
-              />
-            ))}
+          {allowMediaPaste &&
+            mediaAttachments
+              .filter((m) => m.kind === "image")
+              .map((img) => (
+                <ImageAttachmentChip
+                  key={img.id}
+                  id={img.id}
+                  name={img.name}
+                  dataUrl={img.dataUrl}
+                  onRemove={handleRemoveMedia}
+                />
+              ))}
+          {allowMediaPaste &&
+            mediaAttachments
+              .filter((m) => m.kind === "document")
+              .map((doc) => (
+                <DocumentAttachmentChip
+                  key={doc.id}
+                  id={doc.id}
+                  name={doc.name}
+                  onRemove={handleRemoveMedia}
+                />
+              ))}
         </div>
       )}
-      {pickerOpen && (
+      {allowFileMentions && allowAttachments && pickerOpen && (
         <FilePicker
           query={pickerQuery}
           anchor={getPickerAnchor()}
@@ -1157,59 +1290,65 @@ export function InputArea({
           onHover={setEmojiSelectedIdx}
         />
       )}
-      <div
-        class={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
-        ref={inputWrapperRef}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        {matchedExecutableSlashCommand && (
-          <div class="slash-match-pill-row">
-            <div
-              class="slash-match-pill"
-              title={matchedExecutableSlashCommand.command.description}
-            >
-              <i
-                class={`codicon codicon-${matchedExecutableSlashCommand.command.icon ?? (matchedExecutableSlashCommand.command.builtin ? "symbol-event" : "file")}`}
-              />
-              <span class="slash-match-pill-name">
-                /{matchedExecutableSlashCommand.command.name}
-              </span>
-              <span class="slash-match-pill-desc">
-                {matchedExecutableSlashCommand.command.description}
-              </span>
+      <ComposerBox
+        className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
+        mainAlign="center"
+        accessory={
+          matchedExecutableSlashCommand && (
+            <div class="slash-match-pill-row">
+              <div
+                class="slash-match-pill"
+                title={matchedExecutableSlashCommand.command.description}
+              >
+                <i
+                  class={`codicon codicon-${matchedExecutableSlashCommand.command.icon ?? (matchedExecutableSlashCommand.command.builtin ? "symbol-event" : "file")}`}
+                />
+                <span class="slash-match-pill-name">
+                  /{matchedExecutableSlashCommand.command.name}
+                </span>
+                <span class="slash-match-pill-desc">
+                  {matchedExecutableSlashCommand.command.description}
+                </span>
+              </div>
+              <button
+                class="slash-match-escape"
+                type="button"
+                title="Wrap in backticks to send this slash command as raw text"
+                onClick={() => {
+                  const escaped = wrapTextInBackticks(text);
+                  setText(escaped);
+                  closeSlash();
+                  requestAnimationFrame(() => {
+                    if (textareaRef.current) {
+                      textareaRef.current.focus();
+                      textareaRef.current.selectionStart = escaped.length;
+                      textareaRef.current.selectionEnd = escaped.length;
+                    }
+                  });
+                }}
+              >
+                <code>`raw`</code>
+              </button>
             </div>
-            <button
-              class="slash-match-escape"
-              type="button"
-              title="Wrap in backticks to send this slash command as raw text"
-              onClick={() => {
-                const escaped = wrapTextInBackticks(text);
-                setText(escaped);
-                closeSlash();
-                requestAnimationFrame(() => {
-                  if (textareaRef.current) {
-                    textareaRef.current.focus();
-                    textareaRef.current.selectionStart = escaped.length;
-                    textareaRef.current.selectionEnd = escaped.length;
-                  }
-                });
-              }}
-            >
-              <code>`raw`</code>
-            </button>
-          </div>
-        )}
+          )
+        }
+      >
         <textarea
           ref={textareaRef}
           class="chat-input"
-          placeholder="Message... (/ for commands, @ to attach files, : for emoji)"
+          placeholder={
+            allowFileMentions && allowAttachments
+              ? "Message... (/ for commands, @ to attach files, : for emoji)"
+              : "Message... (/ for commands, : for emoji)"
+          }
           value={text}
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           rows={1}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
         />
         {streaming ? (
           <button
@@ -1225,9 +1364,11 @@ export function InputArea({
             class="send-button"
             onClick={handleSubmit}
             disabled={
-              !text.trim() &&
-              attachments.length === 0 &&
-              mediaAttachments.length === 0
+              !canSubmitComposer({
+                text,
+                hasAttachments: allowAttachments && attachments.length > 0,
+                hasMedia: allowMediaPaste && mediaAttachments.length > 0,
+              })
             }
             title="Send message (Enter)"
             type="button"
@@ -1235,7 +1376,7 @@ export function InputArea({
             <i class="codicon codicon-send" />
           </button>
         )}
-      </div>
+      </ComposerBox>
     </div>
   );
 }

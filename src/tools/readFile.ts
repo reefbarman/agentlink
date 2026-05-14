@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
+import * as os from "os";
 import * as path from "path";
 import * as syncFs from "fs";
 
@@ -38,6 +39,35 @@ const READ_CONCURRENCY = 5;
 const SYMBOL_TIMEOUT_MS = 5_000; // 5 seconds
 
 const readSemaphore = new Semaphore(READ_CONCURRENCY);
+
+// Agentlink-written temp artifacts: AgentEngine stores full tool output at
+// /tmp/agentlink-results/<id>.txt, and outputFilter.saveOutputTempFile writes
+// <os.tmpdir()>/agentlink-output-<rand>/output.txt. Both literal and realpath
+// forms are tracked because resolveAndValidatePath follows symlinks
+// (e.g. /tmp → /private/tmp, /var/folders → /private/var/folders on macOS).
+const TMP_ARTIFACT_PREFIXES: readonly string[] = (() => {
+  const out = new Set<string>();
+  const add = (parent: string, childPrefix: string) => {
+    const literal = parent.replace(/[/\\]+$/, "") + path.sep + childPrefix;
+    out.add(literal);
+    try {
+      const real =
+        syncFs.realpathSync(parent).replace(/[/\\]+$/, "") +
+        path.sep +
+        childPrefix;
+      out.add(real);
+    } catch {
+      /* parent does not exist — literal is sufficient */
+    }
+  };
+  add("/tmp", "agentlink-results/");
+  add(os.tmpdir(), "agentlink-output-");
+  return [...out];
+})();
+
+function isAgentlinkTmpArtifact(filePath: string): boolean {
+  return TMP_ARTIFACT_PREFIXES.some((prefix) => filePath.startsWith(prefix));
+}
 
 // --- Language detection ---
 
@@ -416,10 +446,9 @@ export async function handleReadFile(
 
     // Outside-workspace gate — agentlink tmp artifacts (truncated tool results)
     // are always readable without approval since we wrote them ourselves.
-    const isTmpArtifact = filePath.startsWith("/tmp/agentlink-results/");
     if (
       !inWorkspace &&
-      !isTmpArtifact &&
+      !isAgentlinkTmpArtifact(filePath) &&
       !approvalManager.isPathTrusted(sessionId, filePath)
     ) {
       const { approved, reason } = await approveOutsideWorkspaceAccess(

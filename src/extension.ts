@@ -55,6 +55,12 @@ import {
 } from "./agent/providers/index.js";
 import type { CodexCredentials } from "./agent/providers/codex/CodexOAuthManager.js";
 import { CodexOAuthFlowError } from "./agent/providers/codex/CodexOAuthManager.js";
+import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
+import { BrowserGatewayServer } from "./browser-gateway/BrowserGatewayServer.js";
+import { diffSnapshotHub } from "./browser-gateway/DiffSnapshotHub.js";
+import { bootstrapBrowserGatewayHelper } from "./browser-gateway/helper/bootstrapHelper.js";
+import { BrowserGatewayHelperAdminClient } from "./browser-gateway/helper/BrowserGatewayHelperAdminClient.js";
+import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
 
 export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 
@@ -72,6 +78,39 @@ let activeAuthToken: string | undefined;
 let indexerManager: IndexerManager | null = null;
 let chatViewProvider: ChatViewProvider;
 let agentSessionManager: AgentSessionManager;
+let browserGatewayService: BrowserGatewayService | null = null;
+let browserGatewayServer: BrowserGatewayServer | null = null;
+let browserGatewayAuthToken: string | null = null;
+let browserGatewayHelperDiscovery:
+  | import("./browser-gateway/protocol.js").BrowserGatewayHelperDiscoveryRecord
+  | null = null;
+
+/**
+ * Preferred → fallback URL list for opening the browser gateway from VS Code.
+ * Order: mDNS (works on LAN), direct LAN IP, loopback (this machine only).
+ */
+function collectGatewayUrls(
+  discovery: import("./browser-gateway/protocol.js").BrowserGatewayHelperDiscoveryRecord,
+): string[] {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  const push = (url: string | undefined) => {
+    if (!url) return;
+    if (seen.has(url)) return;
+    seen.add(url);
+    urls.push(url);
+  };
+  if (discovery.lanAccess) {
+    push(discovery.mdnsUrl);
+    for (const url of discovery.lanUrls ?? []) push(url);
+  }
+  push(discovery.url);
+  return urls;
+}
+let browserGatewayHelperLeaseClient: BrowserGatewayHelperLeaseClient | null =
+  null;
+let browserGatewayHelperAdminClient: BrowserGatewayHelperAdminClient | null =
+  null;
 
 const SEMANTIC_SETUP_PROMPT_DISMISSED_KEY =
   "semanticSetupPromptDismissedGlobally";
@@ -816,6 +855,155 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionStore,
     log,
   );
+  browserGatewayService = new BrowserGatewayService(
+    chatViewProvider.getUiEventHub(),
+    agentSessionManager,
+    () => chatViewProvider.getBrowserGatewayThemeSnapshot(),
+    () => chatViewProvider.getBrowserAgentWriteApprovalState(),
+    () => chatViewProvider.getBrowserThinkingEnabledState(),
+    () => chatViewProvider.getBrowserReasoningEffortState(),
+    () => chatViewProvider.getBrowserProjectedForegroundState(),
+    () => chatViewProvider.getBrowserMcpStatusInfos(),
+  );
+  context.subscriptions.push(browserGatewayService);
+  browserGatewayAuthToken = randomUUID();
+  const browserGatewayInstanceId =
+    context.workspaceState.get<string>("browserGatewayInstanceId") ??
+    randomUUID();
+  void context.workspaceState.update(
+    "browserGatewayInstanceId",
+    browserGatewayInstanceId,
+  );
+  const firstWorkspace = vscode.workspace.workspaceFolders?.[0];
+  const browserWorkspaceName =
+    firstWorkspace?.name ?? path.basename(workspaceCwd);
+  const browserWorkspacePath = firstWorkspace?.uri.fsPath ?? workspaceCwd;
+  browserGatewayServer = new BrowserGatewayServer(
+    browserGatewayService,
+    chatViewProvider,
+    browserGatewayAuthToken,
+    browserGatewayInstanceId,
+    browserWorkspaceName,
+    browserWorkspacePath,
+    log,
+  );
+  context.subscriptions.push(browserGatewayServer);
+  browserGatewayServer.start(0).catch((err) => {
+    log(`[browser-gateway] failed to start: ${err}`);
+  });
+
+  const browserGatewayPort = getConfig<number>("browserGatewayPort") || 47137;
+  const helperVersion =
+    (context.extension.packageJSON as { version?: string })?.version ??
+    "unknown";
+  const helperClientId =
+    context.globalState.get<string>("browserGatewayHelperClientId") ??
+    randomUUID();
+  void context.globalState.update(
+    "browserGatewayHelperClientId",
+    helperClientId,
+  );
+
+  let browserGatewayActivationDisposed = false;
+  let browserGatewayHelperBootstrapPromise: Promise<string> | null = null;
+  context.subscriptions.push({
+    dispose: () => {
+      browserGatewayActivationDisposed = true;
+      browserGatewayHelperBootstrapPromise = null;
+    },
+  });
+
+  const formatBrowserGatewayHelperError = (err: unknown): string => {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === "helper_start_timeout") {
+      return "AgentLink browser gateway helper did not become ready in time.";
+    }
+    if (message.startsWith("helper_bundle_missing:")) {
+      return "AgentLink browser gateway helper bundle is missing. Reinstall or rebuild the extension.";
+    }
+    if (message === "browser_gateway_activation_disposed") {
+      return "AgentLink is shutting down; browser gateway helper startup was cancelled.";
+    }
+    return `AgentLink browser gateway helper failed to start: ${message}`;
+  };
+
+  const ensureBrowserGatewayHelperReady = async (): Promise<string> => {
+    if (browserGatewayHelperBootstrapPromise) {
+      return await browserGatewayHelperBootstrapPromise;
+    }
+
+    browserGatewayHelperBootstrapPromise = (async () => {
+      const lanAccess = getConfig<boolean>("browserGatewayLanAccess") === true;
+      const mdnsName =
+        getConfig<string>("browserGatewayMdnsName")?.trim() || "agentlink";
+      const result = await bootstrapBrowserGatewayHelper({
+        extensionRootPath: context.extensionUri.fsPath,
+        browserGatewayPort,
+        helperVersion,
+        lanAccess,
+        mdnsName,
+        log,
+      });
+
+      if (browserGatewayActivationDisposed) {
+        throw new Error("browser_gateway_activation_disposed");
+      }
+
+      browserGatewayHelperDiscovery = result.discovery;
+      const discovered = result.discovery;
+      const externalUrl =
+        discovered.mdnsUrl ??
+        discovered.lanUrls?.[0] ??
+        discovered.url;
+      log(
+        `[browser-gateway-helper] ready (${result.source}) loopback=${discovered.url} external=${externalUrl} mdns=${discovered.mdnsUrl ?? "off"}`,
+      );
+
+      browserGatewayHelperLeaseClient?.dispose();
+      browserGatewayHelperLeaseClient = new BrowserGatewayHelperLeaseClient({
+        helperUrl: result.discovery.url,
+        clientId: helperClientId,
+        clientSharedSecret: result.discovery.clientSharedSecret,
+        log,
+      });
+      context.subscriptions.push(browserGatewayHelperLeaseClient);
+      await browserGatewayHelperLeaseClient.start();
+
+      if (browserGatewayHelperAdminClient) {
+        browserGatewayHelperAdminClient.setHelperUrl(result.discovery.url);
+        browserGatewayHelperAdminClient.setSharedSecret(
+          result.discovery.clientSharedSecret,
+        );
+      } else {
+        browserGatewayHelperAdminClient = new BrowserGatewayHelperAdminClient({
+          helperUrl: result.discovery.url,
+          clientSharedSecret: result.discovery.clientSharedSecret,
+          log,
+        });
+      }
+      chatViewProvider.setBrowserGatewayAdminClient(
+        browserGatewayHelperAdminClient,
+      );
+
+      return result.discovery.url;
+    })()
+      .catch((err) => {
+        if (!browserGatewayActivationDisposed) {
+          browserGatewayHelperDiscovery = null;
+          log(`[browser-gateway-helper] bootstrap failed: ${err}`);
+        }
+        throw err;
+      })
+      .finally(() => {
+        browserGatewayHelperBootstrapPromise = null;
+      });
+
+    return await browserGatewayHelperBootstrapPromise;
+  };
+
+  void ensureBrowserGatewayHelperReady().catch(() => {
+    // logged above
+  });
 
   // Initialize modes, slash commands, MCP hub, and file watchers
   chatViewProvider.initialize(workspaceCwd).catch((err) => {
@@ -950,6 +1138,122 @@ export function activate(context: vscode.ExtensionContext): void {
       approvalManager.resetAgentWriteApproval();
       vscode.window.showInformationMessage("All session approvals cleared.");
     }),
+    vscode.commands.registerCommand(
+      "agentlink.openBrowserGateway",
+      async () => {
+        try {
+          await ensureBrowserGatewayHelperReady();
+        } catch (err) {
+          vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
+          return;
+        }
+        const discovery = browserGatewayHelperDiscovery;
+        if (!discovery) {
+          vscode.window.showErrorMessage(
+            "AgentLink browser gateway helper is not ready yet.",
+          );
+          return;
+        }
+
+        const urls = collectGatewayUrls(discovery);
+        // When LAN access is off we only have loopback — open it directly.
+        if (!discovery.lanAccess || urls.length <= 1) {
+          await vscode.env.openExternal(vscode.Uri.parse(urls[0]));
+          return;
+        }
+
+        type GatewayUrlPick = vscode.QuickPickItem & { url: string };
+        const items: GatewayUrlPick[] = urls.map((url, index) => ({
+          label: url,
+          description:
+            index === 0
+              ? url.includes(".local")
+                ? "mDNS — works on the same network"
+                : "LAN IP"
+              : url.startsWith("http://127.0.0.1")
+                ? "loopback (this machine only)"
+                : "LAN IP fallback",
+          url,
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+          title: "Open Browser Gateway",
+          placeHolder: "Pick the URL to open",
+          ignoreFocusOut: true,
+        });
+        if (!picked) return;
+        await vscode.env.openExternal(vscode.Uri.parse(picked.url));
+      },
+    ),
+    vscode.commands.registerCommand(
+      "agentlink.showBrowserGatewayStatus",
+      async () => {
+        try {
+          await ensureBrowserGatewayHelperReady();
+        } catch (err) {
+          vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
+          return;
+        }
+        const discovery = browserGatewayHelperDiscovery;
+        if (!discovery) {
+          vscode.window.showWarningMessage(
+            "AgentLink browser gateway helper is not ready yet.",
+          );
+          return;
+        }
+        const lines = [
+          `AgentLink browser gateway helper (pid ${discovery.pid}, helperVersion ${discovery.helperVersion})`,
+          `Loopback: ${discovery.url}`,
+          `LAN access: ${discovery.lanAccess ? "on" : "off"}`,
+        ];
+        if (discovery.mdnsUrl) {
+          lines.push(`mDNS URL: ${discovery.mdnsUrl}`);
+        } else if (discovery.lanAccess) {
+          lines.push(
+            `mDNS URL: (not advertised — check output log for mdns errors)`,
+          );
+        }
+        if (discovery.lanUrls && discovery.lanUrls.length > 0) {
+          lines.push(`LAN IP URLs: ${discovery.lanUrls.join(", ")}`);
+        }
+        const message = lines.join("\n");
+        log(`[browser-gateway-helper] status requested:\n${message}`);
+        const pick = await vscode.window.showInformationMessage(
+          message,
+          { modal: true },
+          "Copy mDNS URL",
+          "Copy loopback URL",
+        );
+        if (pick === "Copy mDNS URL" && discovery.mdnsUrl) {
+          await vscode.env.clipboard.writeText(discovery.mdnsUrl);
+        } else if (pick === "Copy loopback URL") {
+          await vscode.env.clipboard.writeText(discovery.url);
+        }
+      },
+    ),
+    vscode.commands.registerCommand(
+      "agentlink.pairBrowserDevice",
+      async () => {
+        try {
+          await ensureBrowserGatewayHelperReady();
+        } catch (err) {
+          vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
+          return;
+        }
+        await chatViewProvider.handlePairCommand();
+      },
+    ),
+    vscode.commands.registerCommand(
+      "agentlink.managePairedDevices",
+      async () => {
+        try {
+          await ensureBrowserGatewayHelperReady();
+        } catch (err) {
+          vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
+          return;
+        }
+        await chatViewProvider.showPairedDevicesList();
+      },
+    ),
     vscode.commands.registerCommand("agentlink.setOpenaiApiKey", async () => {
       const key = await vscode.window.showInputBox({
         title: "OpenAI API Key (Embeddings)",
@@ -1600,6 +1904,14 @@ export function activate(context: vscode.ExtensionContext): void {
       agentSessionManager.saveAllSessions();
       stopServer();
       disposeTerminalManager();
+      void browserGatewayServer?.stop();
+      browserGatewayServer = null;
+      browserGatewayService = null;
+      browserGatewayAuthToken = null;
+      browserGatewayHelperLeaseClient?.dispose();
+      browserGatewayHelperLeaseClient = null;
+      browserGatewayHelperDiscovery = null;
+      diffSnapshotHub.dispose();
     },
   });
 

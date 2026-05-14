@@ -1,6 +1,7 @@
 import * as esbuild from "esbuild";
 import * as path from "path";
-import { copyFileSync, mkdirSync, readdirSync, readFileSync } from "fs";
+
+import { copyFileSync, mkdirSync, readFileSync, readdirSync } from "fs";
 
 const watch = process.argv.includes("--watch");
 
@@ -75,6 +76,13 @@ const chatOptions = {
 };
 
 /** @type {esbuild.BuildOptions} */
+const browserGatewayOptions = {
+  ...webviewBase,
+  entryPoints: ["src/browser-gateway/webview/index.tsx"],
+  entryNames: "browser-gateway",
+};
+
+/** @type {esbuild.BuildOptions} */
 const indexerOptions = {
   entryPoints: ["src/indexer/worker.ts"],
   bundle: true,
@@ -97,14 +105,41 @@ const indexerOptions = {
   },
 };
 
+/** @type {esbuild.BuildOptions} */
+const browserGatewayHelperOptions = {
+  entryPoints: ["src/browser-gateway/helper/browserGatewayHelper.ts"],
+  bundle: true,
+  outfile: "dist/browser-gateway-helper.js",
+  external: ["vscode"],
+  format: "cjs",
+  platform: "node",
+  target: "node20",
+  sourcemap: true,
+  minify: false,
+  define: {
+    __DEV_BUILD__: JSON.stringify(devBuild),
+  },
+};
+
 if (watch) {
-  const [extCtx, sideCtx, appCtx, frCtx, chatCtx, idxCtx] = await Promise.all([
+  const [
+    extCtx,
+    sideCtx,
+    appCtx,
+    frCtx,
+    chatCtx,
+    browserGatewayCtx,
+    idxCtx,
+    helperCtx,
+  ] = await Promise.all([
     esbuild.context(extensionOptions),
     esbuild.context(sidebarOptions),
     esbuild.context(approvalOptions),
     esbuild.context(frPreviewOptions),
     esbuild.context(chatOptions),
+    esbuild.context(browserGatewayOptions),
     esbuild.context(indexerOptions),
+    esbuild.context(browserGatewayHelperOptions),
   ]);
   await Promise.all([
     extCtx.watch(),
@@ -112,7 +147,9 @@ if (watch) {
     appCtx.watch(),
     frCtx.watch(),
     chatCtx.watch(),
+    browserGatewayCtx.watch(),
     idxCtx.watch(),
+    helperCtx.watch(),
   ]);
   console.log("Watching for changes...");
 } else {
@@ -122,7 +159,9 @@ if (watch) {
     esbuild.build(approvalOptions),
     esbuild.build(frPreviewOptions),
     esbuild.build(chatOptions),
+    esbuild.build(browserGatewayOptions),
     esbuild.build(indexerOptions),
+    esbuild.build(browserGatewayHelperOptions),
   ]);
   // Copy codicon assets to dist
   copyFileSync(

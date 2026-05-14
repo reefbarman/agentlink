@@ -1,5 +1,12 @@
-import { useState, useCallback } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+
 import type { Question } from "../types";
+
+export interface QuestionProgress {
+  step: number;
+  answers: Record<string, string | string[] | number | boolean | undefined>;
+  notes: Record<string, string>;
+}
 
 interface QuestionCardProps {
   id: string;
@@ -9,41 +16,113 @@ interface QuestionCardProps {
     answers: Record<string, string | string[] | number | boolean | undefined>,
     notes: Record<string, string>,
   ) => void;
+  /** Remote-originated progress snapshot. Applied when its serialized shape differs from local. */
+  remoteProgress?: QuestionProgress | null;
+  /** Fires when the local user advances/edits state so the other surface can mirror. */
+  onProgressChange?: (progress: QuestionProgress) => void;
 }
 
-export function QuestionCard({ id, questions, onSubmit }: QuestionCardProps) {
+function serializeProgress(progress: QuestionProgress): string {
+  const orderedAnswers = Object.keys(progress.answers)
+    .sort()
+    .reduce<Record<string, unknown>>((acc, key) => {
+      acc[key] = progress.answers[key];
+      return acc;
+    }, {});
+  const orderedNotes = Object.keys(progress.notes)
+    .sort()
+    .reduce<Record<string, string>>((acc, key) => {
+      acc[key] = progress.notes[key];
+      return acc;
+    }, {});
+  return JSON.stringify({
+    step: progress.step,
+    answers: orderedAnswers,
+    notes: orderedNotes,
+  });
+}
+
+export function isQuestionAnswered(
+  question: Question,
+  answer: string | string[] | number | boolean | undefined,
+  note: string,
+): boolean {
+  const hasNote = note.trim() !== "";
+  if (question.type === "text") {
+    if (question.allowBlank) return true;
+    return (typeof answer === "string" && answer.trim() !== "") || hasNote;
+  }
+  if (question.type === "confirmation") {
+    return answer === "confirmed" || answer === "rejected";
+  }
+  if (question.type === "multiple_select") {
+    return (Array.isArray(answer) && answer.length > 0) || hasNote;
+  }
+  return (answer !== undefined && answer !== null && answer !== "") || hasNote;
+}
+
+export function normalizeQuestionAnswer(
+  question: Question,
+  answers: Record<string, string | string[] | number | boolean | undefined>,
+): Record<string, string | string[] | number | boolean | undefined> {
+  if (
+    question.type === "text" &&
+    question.allowBlank &&
+    !(question.id in answers)
+  ) {
+    return { ...answers, [question.id]: "" };
+  }
+  return answers;
+}
+
+export function QuestionCard({
+  id,
+  questions,
+  onSubmit,
+  remoteProgress,
+  onProgressChange,
+}: QuestionCardProps) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<
     Record<string, string | string[] | number | boolean | undefined>
   >({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const lastAppliedRemoteRef = useRef<string | null>(null);
+  const lastPublishedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!remoteProgress) return;
+    const serialized = serializeProgress(remoteProgress);
+    if (serialized === lastAppliedRemoteRef.current) return;
+    if (serialized === serializeProgress({ step, answers, notes })) {
+      lastAppliedRemoteRef.current = serialized;
+      return;
+    }
+    lastAppliedRemoteRef.current = serialized;
+    lastPublishedRef.current = serialized;
+    setStep(remoteProgress.step);
+    setAnswers({ ...remoteProgress.answers });
+    setNotes({ ...remoteProgress.notes });
+  }, [remoteProgress, step, answers, notes]);
+
+  useEffect(() => {
+    if (!onProgressChange) return;
+    const snapshot: QuestionProgress = { step, answers, notes };
+    const serialized = serializeProgress(snapshot);
+    if (serialized === lastPublishedRef.current) return;
+    lastPublishedRef.current = serialized;
+    onProgressChange(snapshot);
+  }, [step, answers, notes, onProgressChange]);
 
   const q = questions[step];
   const isLast = step === questions.length - 1;
   const currentAnswer = answers[q.id];
   const currentNote = notes[q.id] ?? "";
 
-  const isAnswered = useCallback(() => {
-    const hasNote = currentNote.trim() !== "";
-    if (q.type === "text")
-      return (
-        (typeof currentAnswer === "string" && currentAnswer.trim() !== "") ||
-        hasNote
-      );
-    if (q.type === "confirmation")
-      return currentAnswer === "confirmed" || currentAnswer === "rejected";
-    if (q.type === "multiple_select")
-      return (
-        (Array.isArray(currentAnswer) && currentAnswer.length > 0) || hasNote
-      );
-    // For choice/scale/yes_no: option selected OR note filled
-    return (
-      (currentAnswer !== undefined &&
-        currentAnswer !== null &&
-        currentAnswer !== "") ||
-      hasNote
-    );
-  }, [q.type, currentAnswer, currentNote]);
+  const isAnswered = useCallback(
+    () => isQuestionAnswered(q, currentAnswer, currentNote),
+    [q, currentAnswer, currentNote],
+  );
 
   const setAnswer = useCallback(
     (value: string | string[] | number | boolean | undefined) => {
@@ -68,8 +147,9 @@ export function QuestionCard({ id, questions, onSubmit }: QuestionCardProps) {
 
   const handleNext = useCallback(() => {
     if (!isAnswered()) return;
+    setAnswers((prev) => normalizeQuestionAnswer(q, prev));
     setStep((s) => s + 1);
-  }, [isAnswered]);
+  }, [isAnswered, q]);
 
   const handleBack = useCallback(() => {
     setStep((s) => Math.max(0, s - 1));
@@ -77,8 +157,8 @@ export function QuestionCard({ id, questions, onSubmit }: QuestionCardProps) {
 
   const handleSubmit = useCallback(() => {
     if (!isAnswered()) return;
-    onSubmit(id, answers, notes);
-  }, [id, answers, notes, isAnswered, onSubmit]);
+    onSubmit(id, normalizeQuestionAnswer(q, answers), notes);
+  }, [id, q, answers, notes, isAnswered, onSubmit]);
 
   const handleConfirmationPrimary = useCallback(() => {
     if (q.type !== "confirmation") return;

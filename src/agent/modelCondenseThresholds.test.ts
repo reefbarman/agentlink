@@ -1,11 +1,10 @@
-import { describe, expect, it } from "vitest";
-
 import {
   clampCondenseThreshold,
   getDefaultAutoCondenseThreshold,
   getEffectiveAutoCondenseThreshold,
   normalizeModelThresholdMap,
 } from "./modelCondenseThresholds.js";
+import { describe, expect, it } from "vitest";
 
 describe("modelCondenseThresholds", () => {
   it("defaults large-context frontier models to 0.6", () => {
@@ -19,6 +18,7 @@ describe("modelCondenseThresholds", () => {
     expect(getDefaultAutoCondenseThreshold("claude-haiku-4-5-20251001")).toBe(
       0.9,
     );
+    expect(getDefaultAutoCondenseThreshold("gpt-5.5")).toBe(0.9);
     expect(getDefaultAutoCondenseThreshold("gpt-5.4-mini")).toBe(0.9);
     expect(getDefaultAutoCondenseThreshold("gpt-5.3-codex")).toBe(0.9);
   });

@@ -1,5 +1,5 @@
-import { useState } from "preact/hooks";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
+import { useState } from "preact/hooks";
 
 interface BgAgentBlockProps {
   sessionId: string;
@@ -70,8 +70,9 @@ export function BgAgentBlock({
 }: BgAgentBlockProps) {
   const [expanded, setExpanded] = useState(false);
 
-  // Default to "pending" when bgSession info hasn't arrived yet
-  const status = bgSession?.status ?? "pending";
+  // If bg session metadata is missing, treat it as completed rather than
+  // indefinitely pending to avoid stuck spinners after session cleanup.
+  const status = bgSession?.status ?? "idle";
   const isRunning =
     status === "pending" ||
     status === "streaming" ||

@@ -1,6 +1,7 @@
-import { useState } from "preact/hooks";
-import { summarizeTextForPreview } from "../../../shared/textSummary";
+import { DetailBlock } from "../../../shared/ui/Meta";
 import { StreamingText } from "./StreamingText";
+import { summarizeTextForPreview } from "../../../shared/textSummary";
+import { useState } from "preact/hooks";
 
 interface BgAgentResultBlockProps {
   sessionId: string;
@@ -76,9 +77,9 @@ export function BgAgentResultBlock({
               <StreamingText text={resultText} streaming={false} />
             </div>
           ) : (
-            <div class="tool-call-section">
+            <DetailBlock label="Output" className="tool-call-section">
               <pre class="tool-call-code">No output available.</pre>
-            </div>
+            </DetailBlock>
           )}
           <button
             class="bg-agent-transcript-btn"

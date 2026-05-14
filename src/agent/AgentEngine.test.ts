@@ -1,17 +1,18 @@
+import type { AgentConfig, AgentEvent } from "./types.js";
+import type {
+  CompleteRequest,
+  CompleteResult,
+  ModelCapabilities,
+  ModelInfo,
+  ModelProvider,
+  ProviderStreamEvent,
+  StreamRequest,
+} from "./providers/types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AgentConfig } from "./types.js";
+
 import { AgentEngine } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
-import type {
-  ModelProvider,
-  ProviderStreamEvent,
-  ModelCapabilities,
-  ModelInfo,
-  StreamRequest,
-  CompleteRequest,
-  CompleteResult,
-} from "./providers/types.js";
 import type { ToolDispatchContext } from "./toolAdapter.js";
 
 const mocks = vi.hoisted(() => ({
@@ -160,13 +161,13 @@ describe("AgentEngine", () => {
     vi.clearAllMocks();
   });
 
-  // Soft threshold now applies to the full context window.
-  // Hard-fit budget still reserves a 5% safety buffer plus output reservation.
+  // Soft threshold applies to projected request input. For fixed-envelope models,
+  // usable input is contextWindow - maxOutputTokens.
   describe("auto-condense threshold behavior", () => {
-    it("triggers auto-condense at 90% usage by default", async () => {
+    it("triggers auto-condense at 90% of usable input by default", async () => {
       const session = await makeSession();
       session.addUserMessage("hello");
-      session.lastInputTokens = 181_000; // 90.5% of full 200k context window
+      session.lastInputTokens = 173_000; // >90% of 191,808 usable input tokens
       session.lastCacheReadTokens = 0;
 
       const engine = new AgentEngine(makeRegistry());
@@ -177,7 +178,7 @@ describe("AgentEngine", () => {
           yield {
             type: "condense",
             summary: "summary",
-            prevInputTokens: 181_000,
+            prevInputTokens: 173_000,
             newInputTokens: 20_000,
           };
         });
@@ -187,10 +188,10 @@ describe("AgentEngine", () => {
       expect(events.some((e) => e.type === "condense")).toBe(true);
     });
 
-    it("does not auto-condense below threshold", async () => {
+    it("does not auto-condense below the usable input threshold", async () => {
       const session = await makeSession();
       session.addUserMessage("hello");
-      session.lastInputTokens = 175_000; // 87.5% of full 200k context window, below 90% threshold
+      session.lastInputTokens = 170_000; // below 90% of 191,808 usable input tokens
       session.lastCacheReadTokens = 0;
 
       const engine = new AgentEngine(makeRegistry());
@@ -203,8 +204,8 @@ describe("AgentEngine", () => {
     it("still condenses when the hard-fit guardrail is exceeded even if cache raises the soft threshold", async () => {
       const session = await makeSession();
       session.addUserMessage("hello");
-      session.lastInputTokens = 186_000; // 93.0% of full 200k context window
-      session.lastCacheReadTokens = 93_000; // 50% cache-hit ratio => soft threshold rises to 95%
+      session.lastInputTokens = 183_000; // exceeds hard fit limit for 191,808 usable input tokens
+      session.lastCacheReadTokens = 91_500; // 50% cache-hit ratio => soft threshold rises to 95%
 
       const engine = new AgentEngine(makeRegistry());
       const condenseSpy = vi
@@ -214,7 +215,7 @@ describe("AgentEngine", () => {
           yield {
             type: "condense",
             summary: "summary",
-            prevInputTokens: 186_000,
+            prevInputTokens: 183_000,
             newInputTokens: 20_000,
           };
         });
@@ -226,8 +227,8 @@ describe("AgentEngine", () => {
     it("caps cache-aware threshold at 95%", async () => {
       const session = await makeSession();
       session.addUserMessage("hello");
-      session.lastInputTokens = 191_000; // 95.5% of full 200k context window, above 95% cap
-      session.lastCacheReadTokens = 191_000; // ratio=1 would push above 100%, but cap is 95%
+      session.lastInputTokens = 183_000; // above 95% of 191,808 usable input tokens
+      session.lastCacheReadTokens = 183_000; // ratio=1 would push above 100%, but cap is 95%
 
       const engine = new AgentEngine(makeRegistry());
       const condenseSpy = vi
@@ -237,13 +238,27 @@ describe("AgentEngine", () => {
           yield {
             type: "condense",
             summary: "summary",
-            prevInputTokens: 191_000,
+            prevInputTokens: 183_000,
             newInputTokens: 20_000,
           };
         });
 
       await collectEvents(engine.run(session));
       expect(condenseSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not count previous output tokens against input-cap condensing", async () => {
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      session.lastInputTokens = 170_000; // below 90% of usable input
+      session.lastOutputTokens = 40_000; // would exceed old total-window threshold
+      session.lastCacheReadTokens = 0;
+
+      const engine = new AgentEngine(makeRegistry());
+      const condenseSpy = vi.spyOn(engine, "condenseSession");
+
+      await collectEvents(engine.run(session));
+      expect(condenseSpy).not.toHaveBeenCalled();
     });
   });
 

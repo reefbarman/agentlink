@@ -40,3 +40,22 @@ When adding a new tool or changing tool parameters:
 2. Update `resources/claude-instructions.md` — add to the "Additional tools" list with a description
 3. Update `README.md` — add a full tool section with parameter table and response details
 4. Run `npm run release -- --install` to rebuild, reinstall, and re-inject the CLAUDE.md instructions. (Not when developing the agent, though)
+
+## Browser Remote Gateway
+
+AgentLink ships a browser-based remote control surface for the built-in agent. A shared helper process serves the browser UI on a stable port (`agentlink.browserGatewayPort`) and routes to per-VS-Code-window API/SSE bridge servers by instance ID, so one URL can switch between all open windows. Full architecture snapshot: [plans/browser-remote-session-status-handoff.md](plans/browser-remote-session-status-handoff.md).
+
+**Any change to chat state, session state, agent events, or UI surfaces must be considered against the browser remote view** — it is a first-class surface, not a debug page, and regressions there are easy to miss because the VS Code webview keeps working.
+
+When touching these areas, keep the browser in sync:
+
+- **Session/chat state** — the browser mirrors foreground session state through [src/browser-gateway/BrowserGatewayService.ts](src/browser-gateway/BrowserGatewayService.ts) (`BrowserGatewayWireSessionState`, `getSessionState()`). New fields on `ChatState` / `AppState` / foreground projection (mode, model, tokens, context budget, todos, debug info, queue, detected-question, restoring-session, etc.) typically need to flow through here too, or the browser will silently lag VS Code.
+- **Agent UI events** — approval/question/idle/progress events are published via [src/agent/AgentUiPublisher.ts](src/agent/AgentUiPublisher.ts) and consumed in `BrowserGatewayService.applyEvent`. A new event kind that the VS Code webview reacts to should be handled here and, if user-visible, surfaced in the browser app.
+- **Gateway endpoints** — browser-initiated actions (send, attach, `@`-mentions, thinking toggle, mode/model/write-approval changes, approval/question submit, `/mcp` open, debug refresh, media paste/drop) round-trip through [src/browser-gateway/BrowserGatewayServer.ts](src/browser-gateway/BrowserGatewayServer.ts) and extension runtime state on [src/agent/ChatViewProvider.ts](src/agent/ChatViewProvider.ts). New user-triggered actions that affect session state usually need a matching gateway endpoint rather than browser-local state.
+- **Shared rendering** — prefer the shared primitives used by both surfaces: [TranscriptMessageList.tsx](src/agent/webview/components/TranscriptMessageList.tsx), [src/shared/ui/](src/shared/ui/) (`Panes`, `Meta`, `Composer`, `ComposerBox`, `ToolbarSelector`), [src/shared/composerBehavior.ts](src/shared/composerBehavior.ts), [src/shared/terminalActivity.ts](src/shared/terminalActivity.ts), [src/shared/chatProjection.ts](src/shared/chatProjection.ts). Most historical parity regressions came from browser-only rendering diverging from VS Code.
+- **Read-only constraints** — the browser is intentionally read-only for diffs and terminal activity (no remote shell, no direct file edits). Do not add write/exec paths to the browser surface.
+- **Multi-window** — browser gateway instance IDs are persisted in `workspaceState` (not `globalState`) so multiple VS Code windows register distinctly in the helper registry. Preserve this when touching [src/extension.ts](src/extension.ts) activation/lifecycle.
+
+The browser webview (`src/browser-gateway/webview/`) has its own tsconfig and is **excluded from the root `tsc` program** — lint type-checks each webview tsconfig separately. Don't re-add it to root `tsconfig.json`.
+
+If a new feature genuinely cannot work over the browser gateway (e.g. requires a VS Code-only API with no snapshot equivalent), gate it explicitly rather than silently regressing the browser surface.

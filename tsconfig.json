@@ -23,6 +23,7 @@
     "Roo-Code",
     "src/agent/webview",
     "src/approvals/webview",
-    "src/sidebar/webview"
+    "src/sidebar/webview",
+    "src/browser-gateway/webview"
   ]
 }

@@ -172,6 +172,15 @@ export interface ProviderStateOptions {
   store?: boolean;
 }
 
+export type ReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
 export interface StreamRequest {
   model: string;
   systemPrompt: string;
@@ -179,6 +188,8 @@ export interface StreamRequest {
   tools?: ToolDefinition[];
   maxTokens: number;
   thinking?: { budgetTokens: number };
+  /** Override reasoning effort. "none" disables provider reasoning when supported. */
+  reasoningEffort?: ReasoningEffort;
   cache?: ProviderCacheOptions;
   state?: ProviderStateOptions;
   signal?: AbortSignal;
@@ -192,7 +203,7 @@ export interface CompleteRequest {
   /** Optional sampling temperature. Use 0 for deterministic tasks like condensing. */
   temperature?: number;
   /** Override reasoning effort. If omitted, the provider uses the model's default. */
-  reasoningEffort?: "low" | "medium" | "high" | "none";
+  reasoningEffort?: ReasoningEffort;
   cache?: ProviderCacheOptions;
   state?: ProviderStateOptions;
   signal?: AbortSignal;
@@ -238,8 +249,13 @@ export interface ModelCapabilities {
   supportsCaching: boolean;
   supportsImages: boolean;
   supportsToolUse: boolean;
+  /** Advertised total context envelope. Some providers split this into separate input/output caps. */
   contextWindow: number;
+  /** Provider-enforced request input cap. Defaults to contextWindow when omitted. */
+  maxInputTokens?: number;
   maxOutputTokens: number;
+  reasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
 }
 
 export interface ModelInfo {

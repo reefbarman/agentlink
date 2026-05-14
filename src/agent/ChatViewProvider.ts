@@ -3,15 +3,33 @@ import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { providerRegistry } from "./providers/index.js";
+import type { ModelProvider } from "./providers/types.js";
+import type {
+  ChatMessage,
+  ExtensionMessage,
+  SlashCommandInfo,
+  WebviewModelInfo,
+} from "./webview/types.js";
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import { getModeModelPreferences } from "./modeModelPreferences.js";
 import type { AgentSessionManager } from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
+import type { SessionSummary } from "./SessionStore.js";
 import type { AgentErrorActions, AgentEvent } from "./types.js";
-import type { McpApprovalPromotionMeta } from "../shared/types.js";
+import type {
+  BrowserGatewayThemeSnapshot,
+  McpApprovalPromotionMeta,
+} from "../shared/types.js";
 import type { TodoItem } from "./todoTool.js";
 import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
-import { McpClientHub } from "./McpClientHub.js";
+import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
+import {
+  type AgentUiPublisher,
+  FanoutAgentUiPublisher,
+  InMemoryAgentUiEventHub,
+  type ReadableAgentUiEventHub,
+  WebviewAgentUiPublisher,
+} from "./AgentUiPublisher.js";
 import {
   loadMcpConfigs,
   getMcpConfigFilePaths,
@@ -28,6 +46,20 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ToolCallTracker } from "../server/ToolCallTracker.js";
 import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 import { getRelativePath } from "../util/paths.js";
+import {
+  detectQuestion,
+  getQuestionDetectionMode,
+} from "./questionDetectionLlm.js";
+import { detectQuestionFromAssistantText } from "./webview/questionDetection.js";
+import type { DetectedQuestion } from "../shared/questionDetection.js";
+import {
+  agentMessagesToChatMessages,
+  initialState,
+  reducer,
+  shouldAcceptSessionChunk,
+  shouldDropSessionScopedEvent,
+  type AppState,
+} from "../shared/chatProjection.js";
 
 /**
  * Webview protocol types — messages between extension and chat webview.
@@ -122,6 +154,15 @@ export type ExtensionToWebview =
       files: Array<{ path: string; kind: "file" | "folder" }>;
     }
   | {
+      type: "agentDetectQuestionResult";
+      requestId: string;
+      messageId: string;
+      detected:
+        | import("../shared/questionDetection.js").DetectedQuestion
+        | null;
+      fallback: boolean;
+    }
+  | {
       type: "agentInjectPrompt";
       prompt: string;
       attachments: string[];
@@ -151,6 +192,8 @@ export type ExtensionToWebview =
         displayName: string;
         provider: string;
         contextWindow: number;
+        maxInputTokens?: number;
+        maxOutputTokens?: number;
         authenticated: boolean;
       }>;
     }
@@ -191,9 +234,24 @@ export type ExtensionToWebview =
   | { type: "showApproval"; request: ApprovalRequest }
   | { type: "idle" }
   | {
+      type: "regexSuggestion";
+      requestId: string;
+      pattern?: string;
+      error?: string;
+    }
+  | {
       type: "agentQuestionRequest";
       id: string;
       questions: import("./webview/types.js").Question[];
+    }
+  | { type: "agentQuestionCleared"; id: string }
+  | {
+      type: "agentQuestionProgress";
+      id: string;
+      step: number;
+      answers: Record<string, string | string[] | number | boolean | undefined>;
+      notes: Record<string, string>;
+      origin: string;
     }
   | {
       type: "agentCondense";
@@ -372,6 +430,15 @@ export type ExtensionToWebview =
       slashCommandLabel?: string;
     }
   | {
+      type: "agentCommittedUserMessage";
+      sessionId: string;
+      text: string;
+      displayText?: string;
+      isSlashCommand?: boolean;
+      slashCommandLabel?: string;
+      origin?: "vscode" | "browser";
+    }
+  | {
       type: "agentDebugInfo";
       info: Record<string, string | number>;
       systemPrompt?: string;
@@ -397,6 +464,20 @@ export type ExtensionToWebview =
       question: string;
       answer: string;
       error?: boolean;
+    }
+  | {
+      type: "agentPairingCode";
+      pairingId: string;
+      code: string;
+      expiresAt: number;
+      pairingUrls: string[];
+    }
+  | {
+      type: "agentPairingStatus";
+      pairingId: string;
+      status: "pending" | "consumed" | "expired" | "cancelled";
+      deviceId?: string;
+      deviceLabel?: string;
     };
 
 export interface ChatState {
@@ -404,12 +485,18 @@ export interface ChatState {
   mode: string;
   model: string;
   streaming: boolean;
+  thinkingEnabled?: boolean;
+  reasoningEffort?: import("./providers/types.js").ReasoningEffort;
   condenseThreshold?: number;
   contextBudget?: {
+    contextWindow: number;
+    maxInputTokens: number;
+    usedInputTokens: number;
     outputReservation: number;
     safetyBufferTokens: number;
     softThresholdBudget: number;
     hardBudget: number;
+    basis: "input" | "total";
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
 }
@@ -575,10 +662,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private approvalManager: ApprovalManager | undefined;
   private approvalManagerListener: vscode.Disposable | undefined;
   private toolCallTracker: ToolCallTracker | undefined;
+  private browserGatewayAdminClient:
+    | import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient
+    | undefined;
+  private pairingPollTimers = new Map<string, ReturnType<typeof setInterval>>();
   private specialBlockPanel: vscode.WebviewPanel | undefined;
   private lastMcpStatuses = new Map<
     string,
     { status: string; error?: string }
+  >();
+  private readonly uiEventHub: InMemoryAgentUiEventHub;
+  private readonly uiPublisher: AgentUiPublisher;
+  private browserGatewayThemeSnapshot: BrowserGatewayThemeSnapshot | null =
+    null;
+  private projectedForegroundState: AppState = {
+    ...initialState,
+  };
+  private projectedForegroundSessionId: string | null = null;
+  private projectedForegroundLoadingSessionId: string | null = null;
+  private projectedForegroundStreaming = false;
+  private projectedDetectRequest: {
+    requestId: string;
+    messageId: string;
+    assistantText: string;
+  } | null = null;
+  private projectedLastDetectKey: string | null = null;
+  private detectRequestInputs = new Map<
+    string,
+    { messageId: string; assistantText: string; detectKey: string }
   >();
 
   constructor(
@@ -586,6 +697,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly globalState: vscode.Memento,
   ) {
     this.outputChannel = vscode.window.createOutputChannel("AgentLink Agent");
+    this.uiEventHub = new InMemoryAgentUiEventHub();
+    this.uiPublisher = new FanoutAgentUiPublisher([
+      new WebviewAgentUiPublisher((message) => {
+        this.postMessage(message);
+      }),
+      this.uiEventHub,
+    ]);
     this.mcpHub = new McpClientHub(globalState);
     this.mcpHub.onSampling = async ({
       messages,
@@ -677,12 +795,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.elicitationSessionIndex.clear();
 
     this.outputChannel.dispose();
+    this.uiEventHub.dispose();
     this.specialBlockPanel?.dispose();
     this.specialBlockPanel = undefined;
     for (const w of this.fileWatchers) w.dispose();
     this.fileWatchers = [];
     this.approvalManagerListener?.dispose();
     this.mcpHub?.disconnectAll().catch(() => undefined);
+  }
+
+  getUiEventHub(): ReadableAgentUiEventHub {
+    return this.uiEventHub;
+  }
+
+  getBrowserGatewayThemeSnapshot(): BrowserGatewayThemeSnapshot {
+    if (this.view && this.webviewReady && this.browserGatewayThemeSnapshot) {
+      return this.browserGatewayThemeSnapshot;
+    }
+    return this.getFallbackThemeSnapshot();
+  }
+
+  getBrowserAgentWriteApprovalState():
+    | "prompt"
+    | "session"
+    | "project"
+    | "global" {
+    const fgSessionId =
+      this.sessionManager?.getForegroundSession()?.id ?? "agent";
+    return (
+      this.approvalManager?.getAgentWriteApprovalState(fgSessionId) ?? "prompt"
+    );
   }
 
   setApprovalManager(manager: ApprovalManager): void {
@@ -695,6 +837,164 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   setToolCallTracker(tracker: ToolCallTracker): void {
     this.toolCallTracker = tracker;
+  }
+
+  setBrowserGatewayAdminClient(
+    client: import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient,
+  ): void {
+    this.browserGatewayAdminClient = client;
+  }
+
+  getBrowserGatewayAdminClient():
+    | import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient
+    | undefined {
+    return this.browserGatewayAdminClient;
+  }
+
+  /**
+   * Create a pairing code on the helper and stream its status back to the
+   * webview via `agentPairingCode` + `agentPairingStatus` messages. Returns
+   * the create response so VS Code commands can show a modal with the code
+   * alongside the chat block.
+   */
+  async createBrowserPairing(): Promise<
+    | import("../browser-gateway/protocol.js").BrowserGatewayPairingCreateResponse
+    | null
+  > {
+    const admin = this.browserGatewayAdminClient;
+    if (!admin) return null;
+    const pairing = await admin.createPairing();
+    this.postMessage({
+      type: "agentPairingCode",
+      pairingId: pairing.pairingId,
+      code: pairing.code,
+      expiresAt: new Date(pairing.expiresAt).getTime(),
+      pairingUrls: pairing.pairingUrls,
+    });
+    this.startPairingPolling(pairing.pairingId, pairing.expiresAt);
+    return pairing;
+  }
+
+  private startPairingPolling(pairingId: string, expiresAtIso: string): void {
+    const existing = this.pairingPollTimers.get(pairingId);
+    if (existing) clearInterval(existing);
+    const expiresAtMs = new Date(expiresAtIso).getTime();
+    const timer = setInterval(() => {
+      void this.pollPairingStatus(pairingId, expiresAtMs);
+    }, 2_000);
+    this.pairingPollTimers.set(pairingId, timer);
+  }
+
+  private async pollPairingStatus(
+    pairingId: string,
+    expiresAtMs: number,
+  ): Promise<void> {
+    const admin = this.browserGatewayAdminClient;
+    if (!admin) {
+      this.stopPairingPolling(pairingId);
+      return;
+    }
+    try {
+      const status = await admin.getPairingStatus(pairingId);
+      if (status.status !== "pending") {
+        this.postMessage({
+          type: "agentPairingStatus",
+          pairingId,
+          status: status.status,
+          deviceId: status.deviceId,
+          deviceLabel: status.deviceLabel,
+        });
+        this.stopPairingPolling(pairingId);
+        return;
+      }
+      if (Date.now() > expiresAtMs + 1000) {
+        this.postMessage({
+          type: "agentPairingStatus",
+          pairingId,
+          status: "expired",
+        });
+        this.stopPairingPolling(pairingId);
+      }
+    } catch {
+      // Keep polling — transient helper restarts can cause brief failures.
+    }
+  }
+
+  private stopPairingPolling(pairingId: string): void {
+    const timer = this.pairingPollTimers.get(pairingId);
+    if (timer) {
+      clearInterval(timer);
+      this.pairingPollTimers.delete(pairingId);
+    }
+  }
+
+  async handlePairCommand(): Promise<void> {
+    const admin = this.browserGatewayAdminClient;
+    if (!admin) {
+      vscode.window.showErrorMessage(
+        "AgentLink browser gateway is still starting up — try again in a second.",
+      );
+      return;
+    }
+    try {
+      const pairing = await this.createBrowserPairing();
+      if (!pairing) return;
+      const primaryUrl = pairing.pairingUrls[0] ?? "";
+      vscode.window.showInformationMessage(
+        `Pairing code: ${pairing.code} — visit ${primaryUrl} on the new device within 2 minutes.`,
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Failed to create pairing code: ${String(err)}`,
+      );
+    }
+  }
+
+  async showPairedDevicesList(): Promise<void> {
+    const admin = this.browserGatewayAdminClient;
+    if (!admin) {
+      vscode.window.showErrorMessage(
+        "AgentLink browser gateway is still starting up — try again in a second.",
+      );
+      return;
+    }
+    try {
+      const { devices } = await admin.listDevices();
+      if (devices.length === 0) {
+        vscode.window.showInformationMessage(
+          "No paired browser devices. Run /pair to add one.",
+        );
+        return;
+      }
+
+      type DeviceQuickPickItem = vscode.QuickPickItem & { deviceId?: string };
+      const items: DeviceQuickPickItem[] = devices.map((device) => ({
+        label: device.label || "(unnamed device)",
+        description: `last seen ${new Date(device.lastSeenAt).toLocaleString()}`,
+        detail: `paired ${new Date(device.createdAt).toLocaleString()}`,
+        deviceId: device.id,
+      }));
+      const picked = await vscode.window.showQuickPick(items, {
+        title: "Paired Browser Devices",
+        placeHolder: "Select a device to revoke",
+        ignoreFocusOut: true,
+      });
+      if (!picked?.deviceId) return;
+
+      const confirm = await vscode.window.showWarningMessage(
+        `Revoke "${picked.label}"? The device will be signed out immediately.`,
+        { modal: true },
+        "Revoke",
+      );
+      if (confirm !== "Revoke") return;
+
+      await admin.revokeDevice(picked.deviceId);
+      vscode.window.showInformationMessage(`Revoked "${picked.label}".`);
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Failed to manage paired devices: ${String(err)}`,
+      );
+    }
   }
 
   /**
@@ -890,14 +1190,95 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     respond: (msg: DecisionMessage) => void,
   ): void {
     this.pendingForwardedApprovals.set(request.id, respond);
-    this.postMessage({ type: "showApproval", request } as ExtensionToWebview);
+    this.uiPublisher.publishApproval(request);
   }
 
   /**
    * Notify the chat webview that the approval queue is empty (clear any shown card).
    */
   public sendApprovalIdle(): void {
-    this.postMessage({ type: "idle" } as ExtensionToWebview);
+    this.uiPublisher.publishApprovalIdle();
+  }
+
+  /**
+   * Ask the current foreground model to suggest a regex pattern for a command
+   * approval rule. Runs in a fresh one-shot context (no tools, no session history).
+   */
+  public async suggestRegexForCommand(args: {
+    subCommand: string;
+    fullCommand: string;
+  }): Promise<string> {
+    const fg = this.sessionManager?.getForegroundSession();
+    const model =
+      fg?.model ?? this.sessionManager?.getConfig().model ?? "claude-sonnet-4-6";
+    const provider = providerRegistry.tryResolveProvider(model);
+    if (!provider) {
+      throw new Error(`No provider available for model "${model}"`);
+    }
+
+    const systemPrompt = [
+      "You generate regex patterns for approving shell commands.",
+      "Given a specific command, suggest a regex that matches that command and similar safe variants with different inputs (e.g. different file paths, flag values, query strings).",
+      "The regex MUST NOT match commands that could delete data, modify system files, exfiltrate data, execute arbitrary code, or otherwise be destructive.",
+      "Err on the side of being more restrictive.",
+      "Use JavaScript/ECMAScript regex syntax. Do NOT include delimiters (no leading/trailing `/`), do NOT include flags, do NOT explain your reasoning.",
+      "Respond with ONLY the regex pattern as a single line of plain text.",
+    ].join(" ");
+
+    const userPrompt = [
+      `Full command being approved: ${args.fullCommand}`,
+      `Sub-command to match: ${args.subCommand}`,
+      "",
+      "Suggest a regex that would safely approve this and similar variants.",
+    ].join("\n");
+
+    const result = await provider.complete({
+      model,
+      systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+      maxTokens: 512,
+      temperature: 0,
+      reasoningEffort: "none",
+    });
+
+    const pattern = extractRegexPattern(result.text);
+    if (!pattern) {
+      throw new Error("Model returned no usable regex");
+    }
+    try {
+      new RegExp(pattern);
+    } catch (err) {
+      throw new Error(
+        `Model returned an invalid regex: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return pattern;
+  }
+
+  private async handleSuggestRegex(args: {
+    requestId: string;
+    subCommand: string;
+    fullCommand: string;
+  }): Promise<void> {
+    try {
+      const pattern = await this.suggestRegexForCommand({
+        subCommand: args.subCommand,
+        fullCommand: args.fullCommand,
+      });
+      this.postMessage({
+        type: "regexSuggestion",
+        requestId: args.requestId,
+        pattern,
+      } as ExtensionToWebview);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(`[suggest-regex] failed: ${message}`);
+      this.postMessage({
+        type: "regexSuggestion",
+        requestId: args.requestId,
+        error: message,
+      } as ExtensionToWebview);
+    }
   }
 
   /**
@@ -950,10 +1331,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         resolve(result);
       });
-      this.postMessage({
-        type: "showApproval",
-        request: approvalRequest,
-      } as ExtensionToWebview);
+      this.uiPublisher.publishApproval(approvalRequest);
     });
   }
 
@@ -1091,8 +1469,608 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           notes: (raw.notes as Record<string, string>) ?? {},
         });
       });
-      this.postMessage({ type: "agentQuestionRequest", id, questions });
+      this.uiPublisher.publishQuestionRequest(id, questions);
     });
+  }
+
+  public submitBrowserApprovalDecision(msg: {
+    id: string;
+    decision?: string;
+    editedCommand?: string;
+    rejectionReason?: string;
+    rulePattern?: string;
+    ruleMode?: string;
+    rules?: Array<{ pattern: string; mode: string; scope: string }>;
+    trustScope?: string;
+    followUp?: string;
+  }): boolean {
+    const id = msg.id;
+    const resolveInline = this.pendingApprovals.get(id);
+    if (resolveInline) {
+      this.pendingApprovals.delete(id);
+      resolveInline({
+        decision: String(msg.decision ?? "reject"),
+        rejectionReason: msg.rejectionReason ?? undefined,
+        followUp: msg.followUp ?? undefined,
+        trustScope: msg.trustScope ?? undefined,
+        rulePattern: msg.rulePattern ?? undefined,
+        ruleMode: msg.ruleMode ?? undefined,
+      });
+      // Inline (built-in agent) approvals don't flow through ApprovalPanelProvider's
+      // queue, so no onQueueEmpty fires after resolve. Publish idle directly so both
+      // the extension webview and the browser gateway dismiss the card.
+      this.uiPublisher.publishApprovalIdle();
+      return true;
+    }
+
+    const respond = this.pendingForwardedApprovals.get(id);
+    if (!respond) return false;
+    this.pendingForwardedApprovals.delete(id);
+    const decision: DecisionMessage = {
+      type: "decision",
+      id,
+      decision: String(msg.decision ?? "reject"),
+      editedCommand: msg.editedCommand ?? undefined,
+      rejectionReason: msg.rejectionReason ?? undefined,
+      rulePattern: msg.rulePattern ?? undefined,
+      ruleMode: msg.ruleMode ?? undefined,
+      rules: msg.rules as DecisionMessage["rules"],
+      trustScope: msg.trustScope ?? undefined,
+      followUp: msg.followUp ?? undefined,
+    };
+    respond(decision);
+    return true;
+  }
+
+  public submitBrowserQuestionResponse(msg: {
+    id: string;
+    answers: Record<string, string | string[] | number | boolean | undefined>;
+    notes?: Record<string, string>;
+  }): boolean {
+    const resolve = this.pendingQuestions.get(msg.id);
+    if (!resolve) return false;
+    this.pendingQuestions.delete(msg.id);
+    resolve({
+      answers: msg.answers,
+      notes: msg.notes ?? {},
+    });
+    this.applyProjectedAction({ type: "CLEAR_QUESTION" });
+    this.uiPublisher.publishQuestionCleared(msg.id);
+    return true;
+  }
+
+  public publishBrowserQuestionProgress(progress: {
+    id: string;
+    step: number;
+    answers: Record<string, string | string[] | number | boolean | undefined>;
+    notes: Record<string, string>;
+    origin: string;
+  }): boolean {
+    if (!this.pendingQuestions.has(progress.id)) return false;
+    this.uiPublisher.publishQuestionProgress(progress);
+    return true;
+  }
+
+  public async submitBrowserSend(input: {
+    text: string;
+    mode?: string;
+    sessionId?: string;
+    thinkingEnabled?: boolean;
+    reasoningEffort?: import("./providers/types.js").ReasoningEffort;
+    attachments?: string[];
+    images?: Array<{ name: string; mimeType: string; base64: string }>;
+    documents?: Array<{ name: string; mimeType: string; base64: string }>;
+    displayText?: string;
+    slashCommandLabel?: string;
+    isSlashCommand?: boolean;
+  }): Promise<boolean> {
+    const text = input.text;
+    const mode = input.mode ?? "code";
+    const sessionId = input.sessionId;
+    const reasoningEffort =
+      input.reasoningEffort ??
+      (input.thinkingEnabled === false ? "none" : undefined);
+    const thinkingEnabled = reasoningEffort
+      ? reasoningEffort !== "none"
+      : input.thinkingEnabled !== false;
+    const attachments = input.attachments ?? [];
+    const images = input.images ?? [];
+    const documents = input.documents ?? [];
+    const displayText = input.displayText;
+    const isSlashCommand = input.isSlashCommand === true;
+    const slashCommandLabel = input.slashCommandLabel;
+
+    if (
+      !text?.trim() &&
+      attachments.length === 0 &&
+      images.length === 0 &&
+      documents.length === 0
+    ) {
+      return false;
+    }
+
+    const resolvedText = await this.resolveAttachments(text, attachments);
+    const mgr = this.sessionManager;
+    if (!mgr) return false;
+    let effectiveSessionId = sessionId;
+
+    if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
+      const newSession = await mgr.createSession(mode, {
+        activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+      });
+      effectiveSessionId = newSession.id;
+      this.approvalManager?.migrateSessionState("agent", effectiveSessionId);
+    }
+
+    this.postMessage({
+      type: "agentCommittedUserMessage",
+      sessionId: effectiveSessionId,
+      text: resolvedText,
+      displayText: displayText ?? text,
+      isSlashCommand,
+      slashCommandLabel,
+      origin: "browser",
+    });
+
+    mgr
+      .sendMessage(effectiveSessionId, resolvedText, mode, {
+        thinkingEnabled,
+        reasoningEffort,
+        activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+        displayText: displayText ?? text,
+        isSlashCommand,
+        slashCommandLabel,
+        origin: "browser",
+        images: images.length > 0 ? images : undefined,
+        documents: documents.length > 0 ? documents : undefined,
+      })
+      .catch((err) => {
+        this.log(`[error] browser send failed: ${err}`);
+      });
+
+    const fg = mgr.getForegroundSession();
+    if (fg) {
+      this.postMessage({
+        type: "stateUpdate",
+        state: {
+          sessionId: fg.id,
+          mode: fg.mode,
+          model: fg.model,
+          streaming: true,
+          condenseThreshold: getConfiguredBaseThresholdForModel(
+            vscode.workspace.getConfiguration("agentlink"),
+            fg.model,
+          ),
+          agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
+            fg.id,
+          ),
+        },
+      });
+    }
+
+    return true;
+  }
+
+  public async submitBrowserModeSwitch(mode: string): Promise<{
+    approved: boolean;
+    mode: string;
+  }> {
+    const fg = this.sessionManager?.getForegroundSession();
+    if (fg && fg.mode !== mode) {
+      try {
+        const session = await this.sessionManager?.switchForegroundMode(mode);
+        if (!session && this.sessionManager) {
+          await this.sessionManager.createSession(mode);
+        } else if (session) {
+          this.approvalManager?.resetSessionAgentWriteApproval(session.id);
+        }
+        this.sendInitialState();
+        this.log(`[mode] browser switched mode to ${mode}`);
+        return { approved: true, mode };
+      } catch (err) {
+        this.log(`[mode] browser failed to switch mode: ${err}`);
+        return { approved: false, mode };
+      }
+    }
+
+    if (!fg && this.sessionManager) {
+      await this.sessionManager.createSession(mode);
+      this.sendInitialState();
+      this.log(`[mode] browser created new session in mode ${mode}`);
+      return { approved: true, mode };
+    }
+
+    return { approved: true, mode };
+  }
+
+  public async submitBrowserSetModel(model: string): Promise<{ ok: boolean }> {
+    if (!model || !this.sessionManager) return { ok: false };
+    await this.sessionManager.setModel(model);
+
+    const config = vscode.workspace.getConfiguration("agentlink");
+    await config.update("agentModel", model, vscode.ConfigurationTarget.Global);
+
+    const fgMode = this.sessionManager.getForegroundSession()?.mode ?? "code";
+    const modePrefs = getModeModelPreferences(config);
+    await config.update(
+      "modeModelPreferences",
+      {
+        ...modePrefs,
+        [fgMode]: model,
+      },
+      vscode.ConfigurationTarget.Global,
+    );
+
+    this.sendInitialState();
+    this.log(`Model changed to: ${model} (saved for mode: ${fgMode})`);
+    return { ok: true };
+  }
+
+  public submitBrowserSetWriteApproval(mode: string): { ok: boolean } {
+    if (!mode || !this.approvalManager) return { ok: false };
+
+    const fgSession = this.sessionManager?.getForegroundSession();
+    const fgSessionId = fgSession?.id ?? "agent";
+    this.approvalManager.resetAgentWriteApproval();
+    if (mode !== "prompt") {
+      this.approvalManager.setAgentWriteApproval(
+        fgSessionId,
+        mode as "session" | "project" | "global",
+      );
+    }
+
+    this.sendInitialState();
+    this.log(`Agent write approval changed to: ${mode}`);
+    return { ok: true };
+  }
+
+  public getBrowserThinkingEnabledState(): boolean {
+    const fg = this.sessionManager?.getForegroundSession();
+    if (!fg) return true;
+    return fg.reasoningEffort !== "none";
+  }
+
+  public getBrowserReasoningEffortState(): import("./providers/types.js").ReasoningEffort {
+    const fg = this.sessionManager?.getForegroundSession();
+    return fg?.reasoningEffort ?? "high";
+  }
+
+  public submitBrowserSetThinkingEnabled(enabled: boolean): { ok: boolean } {
+    return this.submitBrowserSetReasoningEffort(enabled ? "high" : "none");
+  }
+
+  public submitBrowserSetReasoningEffort(
+    effort: import("./providers/types.js").ReasoningEffort,
+  ): { ok: boolean } {
+    const fg = this.sessionManager?.getForegroundSession();
+    if (!fg || !this.sessionManager) return { ok: false };
+    fg.reasoningEffort = effort;
+    if (effort === "none") {
+      fg.thinkingBudget = 0;
+    } else if (fg.thinkingBudget === 0) {
+      fg.thinkingBudget = this.sessionManager.getConfig().thinkingBudget;
+    }
+    this.sendInitialState();
+    this.log(`Reasoning effort changed: ${effort}`);
+    return { ok: true };
+  }
+
+  public async submitBrowserNewSession(
+    mode?: string,
+  ): Promise<{ ok: boolean }> {
+    if (!this.sessionManager) return { ok: false };
+    const nextMode = mode?.trim() || "code";
+    const session = await this.sessionManager.createSession(nextMode);
+    this.postSessionLoaded(session, {
+      checkpoints: this.getSessionCheckpoints(session.id),
+      tailTurns: 0,
+    });
+    this.sendInitialState();
+    this.log(`New session created from browser (${nextMode})`);
+    return { ok: true };
+  }
+
+  public submitBrowserListSessions(): {
+    ok: boolean;
+    sessions: SessionSummary[];
+  } {
+    if (!this.sessionManager) return { ok: false, sessions: [] };
+    return {
+      ok: true,
+      sessions: this.sessionManager.listPersistedSessions(),
+    };
+  }
+
+  public async submitBrowserLoadSession(
+    sessionId: string,
+  ): Promise<{ ok: boolean }> {
+    if (!sessionId || !this.sessionManager) return { ok: false };
+    const session = await this.sessionManager.loadPersistedSession(sessionId);
+    if (!session) {
+      this.log(`[history] session not found: ${sessionId}`);
+      return { ok: false };
+    }
+    this.postSessionLoaded(session, {
+      checkpoints: this.getSessionCheckpoints(session.id),
+    });
+    this.sendInitialState();
+    return { ok: true };
+  }
+
+  public submitBrowserDeleteSession(sessionId: string): { ok: boolean } {
+    if (!sessionId || !this.sessionManager) return { ok: false };
+    this.sessionManager.deletePersistedSession(sessionId);
+    this.approvalManager?.clearSession(sessionId);
+    this.sendSessionList();
+    return { ok: true };
+  }
+
+  public submitBrowserRenameSession(
+    sessionId: string,
+    title: string,
+  ): { ok: boolean } {
+    if (!sessionId || !title || !this.sessionManager) return { ok: false };
+    this.sessionManager.renamePersistedSession(sessionId, title);
+    this.sendSessionList();
+    return { ok: true };
+  }
+
+  public submitBrowserCopyFirstPrompt(sessionId: string): {
+    ok: boolean;
+    prompt?: string;
+  } {
+    if (!sessionId || !this.sessionManager) return { ok: false };
+    const prompt = this.sessionManager.loadFirstPrompt(sessionId);
+    if (!prompt) return { ok: false };
+    return { ok: true, prompt };
+  }
+
+  public async submitBrowserRefreshDebugInfo(): Promise<{
+    ok: boolean;
+    info?: Record<string, string | number>;
+    systemPrompt?: string;
+    loadedInstructions?: Array<{ source: string; chars: number }>;
+  }> {
+    const os = require("os");
+
+    const info: Record<string, string | number> = {
+      "vscode.sessionId": vscode.env.sessionId,
+      "vscode.machineId": vscode.env.machineId,
+      "vscode.appName": vscode.env.appName,
+      "vscode.appHost": vscode.env.appHost,
+      "vscode.language": vscode.env.language,
+      "vscode.uiKind":
+        vscode.env.uiKind === vscode.UIKind.Desktop ? "Desktop" : "Web",
+      "vscode.remoteName": vscode.env.remoteName ?? "none",
+      nodeVersion: process.version,
+      platform: os.platform(),
+      arch: os.arch(),
+      pid: process.pid,
+      uptime: `${Math.round(process.uptime())}s`,
+      workspaceFolders:
+        (vscode.workspace.workspaceFolders ?? [])
+          .map((f: vscode.WorkspaceFolder) => f.uri.fsPath)
+          .join(", ") || "none",
+    };
+
+    const sensitiveKeys = /key|token|secret|password|auth|credential/i;
+    const envEntries = Object.entries(process.env)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b));
+    for (const [key, value] of envEntries) {
+      const displayValue = sensitiveKeys.test(key)
+        ? `${value!.slice(0, 8)}...`
+        : value!;
+      info[`env.${key}`] = displayValue;
+    }
+
+    const fg = this.sessionManager?.getForegroundSession();
+    let systemPrompt = fg?.systemPrompt;
+    if (!systemPrompt && this.cwd) {
+      try {
+        const mode = fg?.mode ?? "code";
+        const model = fg?.model ?? this.sessionManager?.getConfig().model;
+        const providerId = model
+          ? providerRegistry.tryResolveProvider(model)?.id
+          : undefined;
+        systemPrompt = await buildSystemPrompt(mode, this.cwd, { providerId });
+      } catch (err) {
+        this.log(`[warn] Failed to build debug system prompt: ${err}`);
+      }
+    }
+
+    let loadedInstructions:
+      | Array<{ source: string; chars: number }>
+      | undefined;
+    if (this.cwd) {
+      try {
+        const activeFilePath =
+          vscode.window.activeTextEditor?.document.uri.fsPath;
+        const blocks = await loadAllInstructionBlocks(this.cwd, {
+          activeFilePath,
+        });
+        loadedInstructions = blocks.map((b) => ({
+          source: b.source,
+          chars: b.content.length,
+        }));
+      } catch (err) {
+        this.log(`[warn] Failed to load instruction blocks for debug: ${err}`);
+      }
+    }
+
+    const bgRouting = this.sessionManager?.getRecentBgRoutingSummaries(5) ?? [];
+    if (bgRouting.length > 0) {
+      bgRouting.forEach((line, idx) => {
+        info[`bg.route.${idx + 1}`] = line;
+      });
+    }
+
+    if (fg) {
+      this.ensureProjectedForegroundSession(fg);
+      this.projectedForegroundState = {
+        ...this.projectedForegroundState,
+        debugInfo: { ...info },
+        systemPrompt: systemPrompt ?? null,
+        loadedInstructions: loadedInstructions
+          ? loadedInstructions.map((item) => ({ ...item }))
+          : null,
+      };
+    }
+
+    return {
+      ok: true,
+      info,
+      systemPrompt: systemPrompt ?? undefined,
+      loadedInstructions,
+    };
+  }
+
+  public submitBrowserMcpAction(
+    serverName: string,
+    action: "disable" | "reconnect" | "reauthenticate",
+  ): {
+    ok: boolean;
+    infos?: ReturnType<McpClientHub["getServerInfos"]>;
+  } {
+    if (!serverName || !action) return { ok: false };
+    void (async () => {
+      if (action === "disable") {
+        await this.mcpHub.disableServer(serverName);
+      } else if (action === "reconnect") {
+        await this.mcpHub.reconnectServer(serverName);
+      } else if (action === "reauthenticate") {
+        await this.mcpHub.reauthenticateServer(serverName);
+      }
+      this.postMessage({
+        type: "agentMcpStatus",
+        infos: this.mcpHub.getServerInfos(),
+      } as ExtensionToWebview);
+    })();
+    return { ok: true, infos: this.mcpHub.getServerInfos() };
+  }
+
+  public async submitBrowserAttachFile(): Promise<{ files: string[] }> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+    const uris = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      canSelectFiles: true,
+      canSelectFolders: false,
+      defaultUri: workspaceRoot,
+      title: "Attach files to chat",
+    });
+    if (!uris?.length) {
+      return { files: [] };
+    }
+    return {
+      files: uris.map((u) => getRelativePath(u.fsPath)),
+    };
+  }
+
+  public submitBrowserStopBackground(sessionId: string): { ok: boolean } {
+    if (!sessionId || !this.sessionManager) return { ok: false };
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session || !session.background) return { ok: false };
+    this.sessionManager.killBackground(
+      sessionId,
+      "Stopped from browser gateway",
+    );
+    this.sendBgSessionsUpdate();
+    return { ok: true };
+  }
+
+  public getBrowserBgTranscript(sessionId: string): {
+    ok: boolean;
+    transcript?: {
+      sessionId: string;
+      task: string;
+      messages: unknown[];
+    };
+  } {
+    if (!sessionId || !this.sessionManager) return { ok: false };
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session || !session.background) return { ok: false };
+    return {
+      ok: true,
+      transcript: {
+        sessionId,
+        task: session.title ?? "Background Agent",
+        messages: session.getAllMessages(),
+      },
+    };
+  }
+
+  public async getBrowserSlashCommands(): Promise<SlashCommandInfo[]> {
+    await this.slashRegistry?.reload();
+    return this.slashRegistry?.getAll() ?? [];
+  }
+
+  public async searchBrowserFiles(
+    query: string,
+  ): Promise<Array<{ path: string; kind: "file" | "folder" }>> {
+    const workspaceRoot =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+    if (!workspaceRoot) {
+      return [];
+    }
+
+    try {
+      const pattern = query === "*" ? "**/*" : `**/*${query}*`;
+      const uris = await vscode.workspace.findFiles(
+        pattern,
+        "**/node_modules/**",
+        50,
+      );
+
+      const files = uris.map((uri) => ({
+        path: path.relative(workspaceRoot, uri.fsPath),
+        kind: "file" as const,
+      }));
+
+      const lowerQuery = query.toLowerCase();
+      files.sort((a, b) => {
+        const aBase = path.basename(a.path).toLowerCase();
+        const bBase = path.basename(b.path).toLowerCase();
+        const aStarts = aBase.startsWith(lowerQuery) ? 0 : 1;
+        const bStarts = bBase.startsWith(lowerQuery) ? 0 : 1;
+        if (aStarts !== bStarts) return aStarts - bStarts;
+        return a.path.length - b.path.length;
+      });
+
+      return files.slice(0, 20);
+    } catch (err) {
+      this.log(`[error] File search failed: ${err}`);
+      return [];
+    }
+  }
+
+  public async getBrowserModes(): Promise<
+    Array<{ slug: string; name: string; icon: string }>
+  > {
+    const customModes = this.cwd ? await loadCustomModes(this.cwd) : [];
+    const allModes = getAllModes(customModes);
+    return allModes.map((m) => ({
+      slug: m.slug,
+      name: m.name,
+      icon: m.icon,
+    }));
+  }
+
+  public async getBrowserModels(): Promise<WebviewModelInfo[]> {
+    const allModels = providerRegistry.listAllModels();
+    const authStatus = await providerRegistry.getAuthStatus();
+    const config = vscode.workspace.getConfiguration("agentlink");
+    return allModels.map((m) => ({
+      id: m.id,
+      displayName: m.displayName,
+      provider: m.provider,
+      contextWindow: m.capabilities.contextWindow,
+      maxInputTokens: m.capabilities.maxInputTokens,
+      maxOutputTokens: m.capabilities.maxOutputTokens,
+      reasoningEfforts: m.capabilities.reasoningEfforts,
+      defaultReasoningEffort: m.capabilities.defaultReasoningEffort,
+      authenticated: authStatus[m.provider] ?? false,
+      condenseThreshold: getConfiguredBaseThresholdForModel(config, m.id),
+    }));
   }
 
   private setupFileWatchers(cwd: string): void {
@@ -1161,7 +2139,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       displayName: m.displayName,
       provider: m.provider,
       contextWindow: m.capabilities.contextWindow,
+      maxInputTokens: m.capabilities.maxInputTokens,
       maxOutputTokens: m.capabilities.maxOutputTokens,
+      reasoningEfforts: m.capabilities.reasoningEfforts,
+      defaultReasoningEffort: m.capabilities.defaultReasoningEffort,
       authenticated: authStatus[m.provider] ?? false,
       condenseThreshold: getConfiguredBaseThresholdForModel(config, m.id),
     }));
@@ -1389,11 +2370,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         break;
 
+      case "themeSnapshot": {
+        const parsed = this.parseThemeSnapshot(msg);
+        if (parsed) {
+          this.browserGatewayThemeSnapshot = parsed;
+        }
+        break;
+      }
+
       case "agentSend": {
         const text = msg.text as string;
         const mode = (msg.mode as string) ?? "code";
+        this.applyProjectedAction({
+          type: "ADD_USER_MESSAGE",
+          text: (msg.displayText as string | undefined) ?? text,
+          isSlashCommand: msg.isSlashCommand === true,
+          slashCommandLabel: msg.slashCommandLabel as string | undefined,
+        });
         const sessionId = msg.sessionId as string | undefined;
-        const thinkingEnabled = msg.thinkingEnabled !== false;
+        const reasoningEffort =
+          (msg.reasoningEffort as
+            | import("./providers/types.js").ReasoningEffort
+            | undefined) ??
+          (msg.thinkingEnabled === false ? "none" : undefined);
+        const thinkingEnabled = reasoningEffort
+          ? reasoningEffort !== "none"
+          : msg.thinkingEnabled !== false;
         const displayText = msg.displayText as string | undefined;
         const isSlashCommand = msg.isSlashCommand === true;
         const slashCommandLabel = msg.slashCommandLabel as string | undefined;
@@ -1415,11 +2417,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         )
           return;
 
-        // Resolve attachments: read file contents and build context
         const resolvedText = await this.resolveAttachments(text, attachments);
 
         this.log(
-          `[send] session=${sessionId ?? "new"} mode=${mode} thinking=${thinkingEnabled} attachments=${attachments.length} images=${images.length} documents=${documents.length} text="${resolvedText.slice(0, 80)}${resolvedText.length > 80 ? "..." : ""}"`,
+          `[send] session=${sessionId ?? "new"} mode=${mode} reasoning=${reasoningEffort ?? (thinkingEnabled ? "default" : "none")} attachments=${attachments.length} images=${images.length} documents=${documents.length} text="${resolvedText.slice(0, 80)}${resolvedText.length > 80 ? "..." : ""}"`,
         );
         if (images.length > 0) {
           for (const img of images) {
@@ -1430,21 +2431,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         const mgr = this.sessionManager;
-
-        // For new sessions, create the session first so we can send stateUpdate
-        // with the correct sessionId BEFORE streaming events start arriving.
-        // If we fire sendMessage() unawaited with no sessionId, createSession()
-        // runs async inside it — getForegroundSession() below returns null and
-        // the stateUpdate is never sent, causing all events to be dropped as
-        // session_mismatch in the webview.
         let effectiveSessionId = sessionId;
         if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
           const newSession = await mgr.createSession(mode, {
             activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
           });
           effectiveSessionId = newSession.id;
-          // Migrate any approval state that was set before the session existed
-          // (stored under the "agent" fallback ID).
           this.approvalManager?.migrateSessionState(
             "agent",
             effectiveSessionId,
@@ -1454,10 +2446,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         mgr
           .sendMessage(effectiveSessionId, resolvedText, mode, {
             thinkingEnabled,
+            reasoningEffort,
             activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
             displayText,
             isSlashCommand,
             slashCommandLabel,
+            origin: "vscode",
             images: images.length > 0 ? images : undefined,
             documents: documents.length > 0 ? documents : undefined,
           })
@@ -1465,7 +2459,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.log(`[error] send failed: ${err}`);
           });
 
-        // Send updated state immediately so webview knows the session ID
         const fg = mgr.getForegroundSession();
         if (fg) {
           this.postMessage({
@@ -1555,6 +2548,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const sessionId = msg.sessionId as string;
         if (sessionId) {
           this.log(`[retry] retrying session ${sessionId}`);
+          this.applyProjectedAction({ type: "CLEAR_ERROR" });
           this.sessionManager.retrySession(sessionId).catch((err) => {
             this.log(`[error] retry failed: ${err}`);
           });
@@ -1584,6 +2578,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentNewSession": {
         const mode = (msg.mode as string) ?? "code";
         this.sessionManager.createSession(mode).then((session) => {
+          this.postSessionLoaded(session, {
+            checkpoints: this.getSessionCheckpoints(session.id),
+            tailTurns: 0,
+          });
           this.sendInitialState();
           this.log(`New session created: ${session.id}`);
         });
@@ -1626,6 +2624,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const fg = this.sessionManager.getForegroundSession();
         const mode = fg?.mode ?? "code";
         this.sessionManager.createSession(mode).then((session) => {
+          this.postSessionLoaded(session, {
+            checkpoints: this.getSessionCheckpoints(session.id),
+            tailTurns: 0,
+          });
           this.sendInitialState();
           this.log(`Session cleared, new session: ${session.id}`);
         });
@@ -1808,52 +2810,63 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "approvalDecision": {
         const id = msg.id as string;
 
-        const resolveInline = this.pendingApprovals.get(id);
-        if (resolveInline) {
-          this.pendingApprovals.delete(id);
-          resolveInline({
-            decision: String(msg.decision ?? "reject"),
-            rejectionReason:
-              (msg.rejectionReason as string | undefined) ?? undefined,
-            followUp: (msg.followUp as string | undefined) ?? undefined,
-            trustScope: (msg.trustScope as string | undefined) ?? undefined,
-            rulePattern: (msg.rulePattern as string | undefined) ?? undefined,
-            ruleMode: (msg.ruleMode as string | undefined) ?? undefined,
-          });
-          break;
-        }
-
-        const respond = this.pendingForwardedApprovals.get(id);
-        if (!respond) break;
-        this.pendingForwardedApprovals.delete(id);
-        // Build a DecisionMessage from the webview payload
-        const decision: DecisionMessage = {
-          type: "decision",
+        this.submitBrowserApprovalDecision({
           id,
-          decision: msg.decision as string,
+          decision: msg.decision as string | undefined,
           editedCommand: msg.editedCommand as string | undefined,
           rejectionReason: msg.rejectionReason as string | undefined,
           rulePattern: msg.rulePattern as string | undefined,
           ruleMode: msg.ruleMode as string | undefined,
-          rules: msg.rules as DecisionMessage["rules"],
+          rules: msg.rules as
+            | Array<{
+                pattern: string;
+                mode: string;
+                scope: string;
+              }>
+            | undefined,
           trustScope: msg.trustScope as string | undefined,
           followUp: msg.followUp as string | undefined,
-        };
-        respond(decision);
+        });
+        break;
+      }
+
+      case "agentSuggestRegex": {
+        const requestId = String(msg.requestId ?? "");
+        const subCommand = String(msg.subCommand ?? "");
+        const fullCommand = String(msg.fullCommand ?? "");
+        if (!requestId || !subCommand) break;
+        void this.handleSuggestRegex({
+          requestId,
+          subCommand,
+          fullCommand,
+        });
         break;
       }
 
       case "agentQuestionResponse": {
-        const id = msg.id as string;
-        const resolve = this.pendingQuestions.get(id);
-        if (!resolve) break;
-        this.pendingQuestions.delete(id);
-        resolve({
+        this.applyProjectedAction({ type: "CLEAR_QUESTION" });
+        this.submitBrowserQuestionResponse({
+          id: msg.id as string,
           answers: msg.answers as Record<
             string,
             string | string[] | number | boolean | undefined
           >,
           notes: (msg.notes as Record<string, string>) ?? {},
+        });
+        break;
+      }
+
+      case "agentQuestionProgress": {
+        this.publishBrowserQuestionProgress({
+          id: msg.id as string,
+          step: Number(msg.step ?? 0),
+          answers:
+            (msg.answers as Record<
+              string,
+              string | string[] | number | boolean | undefined
+            >) ?? {},
+          notes: (msg.notes as Record<string, string>) ?? {},
+          origin: String(msg.origin ?? "unknown"),
         });
         break;
       }
@@ -1941,6 +2954,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (question) {
             void this.handleBtwQuestion(question);
           }
+        } else if (name === "pair") {
+          const sub = String(msg.args ?? "")
+            .trim()
+            .toLowerCase();
+          if (sub === "list" || sub === "devices") {
+            await this.showPairedDevicesList();
+          } else {
+            await this.handlePairCommand();
+          }
         } else {
           this.log(`[slash] /${name} not yet implemented`);
           vscode.window.showInformationMessage(
@@ -2013,19 +3035,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentAttachFile": {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
-        const uris = await vscode.window.showOpenDialog({
-          canSelectMany: true,
-          canSelectFiles: true,
-          canSelectFolders: false,
-          defaultUri: workspaceRoot,
-          title: "Attach files to chat",
-        });
-        if (uris?.length) {
-          const resolved = uris.map((u) => getRelativePath(u.fsPath));
+        const result = await this.submitBrowserAttachFile();
+        if (result.files.length > 0) {
           this.postMessage({
             type: "agentDroppedFilesResolved",
-            files: resolved,
+            files: result.files,
           } as ExtensionToWebview);
         }
         break;
@@ -2036,6 +3050,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const requestId = msg.requestId as string;
         if (!query || !requestId) break;
         this.searchWorkspaceFiles(query, requestId);
+        break;
+      }
+
+      case "agentDetectQuestion": {
+        const requestId = msg.requestId as string;
+        const messageId = msg.messageId as string;
+        const text = msg.text as string;
+        if (!requestId || !messageId || typeof text !== "string") break;
+
+        if (this.projectedDetectRequest) {
+          this.detectRequestInputs.delete(
+            this.projectedDetectRequest.requestId,
+          );
+        }
+        this.projectedDetectRequest = {
+          requestId,
+          messageId,
+          assistantText: text,
+        };
+        this.detectRequestInputs.set(requestId, {
+          messageId,
+          assistantText: text,
+          detectKey: `${messageId}:${text}`,
+        });
+
+        this.detectQuestionForWebview(requestId, messageId, text);
         break;
       }
 
@@ -2135,6 +3175,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           (msg.documents as
             | Array<{ name: string; mimeType: string; base64: string }>
             | undefined) ?? [];
+        this.applyProjectedAction({
+          type: "ENQUEUE_MESSAGE",
+          id: queueId,
+          text: displayText ?? text,
+          fullText: displayText && displayText !== text ? text : undefined,
+          isSlashCommand,
+          slashCommandLabel,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          images: images.length > 0 ? images : undefined,
+          documents: documents.length > 0 ? documents : undefined,
+        });
         if (
           sessionId &&
           queueId &&
@@ -2175,6 +3226,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           (msg.documents as
             | Array<{ name: string; mimeType: string; base64: string }>
             | undefined) ?? [];
+        this.applyProjectedAction({
+          type: "EDIT_QUEUE_MESSAGE",
+          id: queueId,
+          text: displayText ?? text,
+        });
         if (
           sessionId &&
           queueId &&
@@ -2201,6 +3257,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentRemoveQueuedMessage": {
         const sessionId = msg.sessionId as string;
         const queueId = msg.queueId as string;
+        this.applyProjectedAction({ type: "REMOVE_FROM_QUEUE", id: queueId });
         if (sessionId && queueId && this.sessionManager) {
           const session = this.sessionManager.getSession(sessionId);
           session?.clearPendingInterjectionIf(queueId);
@@ -2244,6 +3301,691 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
     }
+  }
+
+  private applyProjectedAction(action: Parameters<typeof reducer>[1]): void {
+    this.projectedForegroundState = reducer(
+      this.projectedForegroundState,
+      action,
+    );
+    this.projectedForegroundStreaming = this.projectedForegroundState.streaming;
+  }
+
+  private maybeStartProjectedDetectedQuestionRequest(): void {
+    if (this.webviewReady) return;
+
+    const state = this.projectedForegroundState;
+    if (state.streaming || state.questionRequest) {
+      this.projectedDetectRequest = null;
+      return;
+    }
+
+    const lastMsg = state.messages[state.messages.length - 1];
+    if (!lastMsg || lastMsg.role !== "assistant") {
+      this.projectedDetectRequest = null;
+      this.projectedLastDetectKey = null;
+      this.applyProjectedAction({
+        type: "SET_DETECTED_QUESTION",
+        detectedQuestion: null,
+      });
+      return;
+    }
+
+    if (state.dismissedDetectedQuestionIds.includes(lastMsg.id)) {
+      this.projectedDetectRequest = null;
+      this.projectedLastDetectKey = null;
+      this.applyProjectedAction({
+        type: "SET_DETECTED_QUESTION",
+        detectedQuestion: null,
+      });
+      return;
+    }
+
+    const assistantText = (lastMsg.blocks ?? [])
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("\n")
+      .trim();
+
+    if (!assistantText) {
+      this.projectedDetectRequest = null;
+      this.projectedLastDetectKey = null;
+      this.applyProjectedAction({
+        type: "SET_DETECTED_QUESTION",
+        detectedQuestion: null,
+      });
+      return;
+    }
+
+    const detectKey = `${lastMsg.id}:${assistantText}`;
+    if (this.projectedLastDetectKey === detectKey) {
+      return;
+    }
+
+    const active = this.projectedDetectRequest;
+    if (
+      active &&
+      active.messageId === lastMsg.id &&
+      active.assistantText === assistantText
+    ) {
+      return;
+    }
+
+    if (this.projectedDetectRequest) {
+      this.detectRequestInputs.delete(this.projectedDetectRequest.requestId);
+    }
+
+    const requestId = `detect-question-${lastMsg.id}-${Date.now()}`;
+    this.projectedDetectRequest = {
+      requestId,
+      messageId: lastMsg.id,
+      assistantText,
+    };
+    this.detectRequestInputs.set(requestId, {
+      messageId: lastMsg.id,
+      assistantText,
+      detectKey,
+    });
+    this.detectQuestionForWebview(requestId, lastMsg.id, assistantText);
+  }
+
+  private applyProjectedDetectedQuestionResult(
+    requestId: string,
+    messageId: string,
+    detected: DetectedQuestion | null,
+    fallback: boolean,
+  ): void {
+    const active = this.projectedDetectRequest;
+    if (!active || active.requestId !== requestId) return;
+
+    this.projectedDetectRequest = null;
+    const input = this.detectRequestInputs.get(requestId);
+    this.detectRequestInputs.delete(requestId);
+    this.projectedLastDetectKey = input?.detectKey ?? null;
+
+    const state = this.projectedForegroundState;
+    const currentLast = state.messages[state.messages.length - 1];
+    if (!currentLast || currentLast.id !== messageId) return;
+    if (state.dismissedDetectedQuestionIds.includes(messageId)) return;
+
+    let nextDetected = detected;
+    if (fallback) {
+      nextDetected = input
+        ? detectQuestionFromAssistantText(input.assistantText)
+        : null;
+    }
+
+    this.applyProjectedAction({
+      type: "SET_DETECTED_QUESTION",
+      detectedQuestion: nextDetected
+        ? { ...nextDetected, messageId: currentLast.id }
+        : null,
+    });
+  }
+
+  private resetProjectedForegroundState(): void {
+    this.projectedForegroundState = {
+      ...initialState,
+    };
+    this.projectedForegroundSessionId = null;
+    this.projectedForegroundLoadingSessionId = null;
+    this.projectedForegroundStreaming = false;
+    this.projectedDetectRequest = null;
+    this.projectedLastDetectKey = null;
+    this.detectRequestInputs.clear();
+  }
+
+  private ensureProjectedForegroundSession(
+    session: AgentSession | undefined,
+  ): void {
+    if (!session) {
+      this.resetProjectedForegroundState();
+      return;
+    }
+
+    const shouldHydrate =
+      this.projectedForegroundSessionId !== session.id ||
+      this.projectedForegroundState.messages.length === 0;
+    if (!shouldHydrate) return;
+
+    const allMessages =
+      typeof (session as { getAllMessages?: unknown }).getAllMessages ===
+      "function"
+        ? session.getAllMessages()
+        : [];
+    this.projectedForegroundState = {
+      ...initialState,
+    };
+    this.projectedForegroundSessionId = session.id;
+    this.projectedForegroundLoadingSessionId = null;
+    this.projectedForegroundStreaming = false;
+    this.projectedDetectRequest = null;
+    this.projectedLastDetectKey = null;
+    this.detectRequestInputs.clear();
+    this.projectedForegroundState = reducer(this.projectedForegroundState, {
+      type: "LOAD_SESSION",
+      sessionId: session.id,
+      title: session.title,
+      mode: session.mode,
+      messages: agentMessagesToChatMessages(allMessages),
+      lastInputTokens: session.lastInputTokens,
+      lastOutputTokens: session.lastOutputTokens,
+      checkpoints: this.getSessionCheckpoints(session.id),
+      userTurnOffset: 0,
+      hasMoreBefore: false,
+    });
+    this.projectedForegroundState = reducer(this.projectedForegroundState, {
+      type: "TOKEN_ESTIMATE",
+      estimatedTotalUsed: session.estimatedTotalUsed,
+    });
+  }
+
+  private projectExtensionMessage(msg: ExtensionToWebview): void {
+    const fg = this.sessionManager?.getForegroundSession();
+    this.ensureProjectedForegroundSession(fg);
+
+    const extMsg = msg as unknown as ExtensionMessage;
+
+    if (extMsg.type === "stateUpdate") {
+      this.projectedForegroundSessionId = extMsg.state.sessionId;
+      if (!extMsg.state.sessionId) {
+        this.resetProjectedForegroundState();
+        return;
+      }
+      this.applyProjectedAction({ type: "SET_STATE", state: extMsg.state });
+      return;
+    }
+
+    if (extMsg.type === "agentRestoreSessionStart") {
+      this.applyProjectedAction({
+        type: "SET_RESTORING_SESSION",
+        restoring: true,
+      });
+      return;
+    }
+
+    if (extMsg.type === "agentRestoreSessionDone") {
+      this.applyProjectedAction({
+        type: "SET_RESTORING_SESSION",
+        restoring: false,
+      });
+      return;
+    }
+
+    const eventSessionId =
+      "sessionId" in extMsg
+        ? (extMsg.sessionId as string | undefined)
+        : undefined;
+    const isBackgroundEvent =
+      extMsg.type === "agentBgThinkingStart" ||
+      extMsg.type === "agentBgThinkingDelta" ||
+      extMsg.type === "agentBgThinkingEnd" ||
+      extMsg.type === "agentBgTextDelta" ||
+      extMsg.type === "agentBgToolStart" ||
+      extMsg.type === "agentBgToolComplete" ||
+      extMsg.type === "agentBgApiRequest" ||
+      extMsg.type === "agentBgError" ||
+      extMsg.type === "agentBgDone";
+
+    if (
+      shouldDropSessionScopedEvent(
+        extMsg.type,
+        eventSessionId,
+        this.projectedForegroundSessionId,
+        isBackgroundEvent,
+      )
+    ) {
+      return;
+    }
+
+    const dropIfNotStreaming = (): boolean => {
+      if (this.projectedForegroundStreaming) return false;
+      const liveFg = this.sessionManager?.getForegroundSession();
+      const liveStreaming = Boolean(
+        liveFg &&
+        (liveFg.status === "streaming" ||
+          liveFg.status === "tool_executing" ||
+          liveFg.status === "awaiting_approval"),
+      );
+      if (liveStreaming) {
+        this.projectedForegroundStreaming = true;
+        return false;
+      }
+      return true;
+    };
+
+    let shouldScheduleDetectedQuestion = true;
+
+    switch (extMsg.type) {
+      case "agentThinkingStart":
+        if (dropIfNotStreaming()) break;
+        this.applyProjectedAction({
+          type: "THINKING_START",
+          thinkingId: extMsg.thinkingId,
+        });
+        break;
+
+      case "agentThinkingDelta":
+        if (dropIfNotStreaming()) break;
+        this.applyProjectedAction({
+          type: "THINKING_DELTA",
+          thinkingId: extMsg.thinkingId,
+          text: extMsg.text,
+        });
+        break;
+
+      case "agentThinkingEnd":
+        this.applyProjectedAction({
+          type: "THINKING_END",
+          thinkingId: extMsg.thinkingId,
+        });
+        break;
+
+      case "agentToolStart":
+        if (dropIfNotStreaming()) break;
+        this.applyProjectedAction({
+          type: "TOOL_START",
+          toolCallId: extMsg.toolCallId,
+          toolName: extMsg.toolName,
+        });
+        break;
+
+      case "agentToolInputDelta":
+        if (dropIfNotStreaming()) break;
+        this.applyProjectedAction({
+          type: "TOOL_INPUT_DELTA",
+          toolCallId: extMsg.toolCallId,
+          partialJson: extMsg.partialJson,
+        });
+        break;
+
+      case "agentToolComplete":
+        this.applyProjectedAction({
+          type: "TOOL_COMPLETE",
+          toolCallId: extMsg.toolCallId,
+          toolName: extMsg.toolName,
+          result: extMsg.result,
+          durationMs: extMsg.durationMs,
+          input: extMsg.input,
+          mcpApprovalPromotion: extMsg.mcpApprovalPromotion,
+        });
+        break;
+
+      case "agentTokenEstimate":
+        this.applyProjectedAction({
+          type: "TOKEN_ESTIMATE",
+          estimatedTotalUsed: extMsg.estimatedTotalUsed,
+        });
+        break;
+
+      case "agentUserAnnotation":
+        if (dropIfNotStreaming()) break;
+        this.applyProjectedAction({
+          type: "ADD_ANNOTATION",
+          text: extMsg.text,
+          badge: extMsg.badge,
+        });
+        break;
+
+      case "agentTextDelta":
+        if (dropIfNotStreaming()) break;
+        this.applyProjectedAction({ type: "TEXT_DELTA", text: extMsg.text });
+        break;
+
+      case "agentApiRequest":
+        this.applyProjectedAction({
+          type: "API_REQUEST",
+          requestId: extMsg.requestId,
+          model: extMsg.model,
+          inputTokens: extMsg.inputTokens,
+          uncachedInputTokens: extMsg.uncachedInputTokens,
+          outputTokens: extMsg.outputTokens,
+          cacheReadTokens: extMsg.cacheReadTokens,
+          cacheCreationTokens: extMsg.cacheCreationTokens,
+          durationMs: extMsg.durationMs,
+          timeToFirstToken: extMsg.timeToFirstToken,
+          usedPreviousResponseId: extMsg.usedPreviousResponseId,
+          previousResponseIdFallback: extMsg.previousResponseIdFallback,
+          promptCacheKey: extMsg.promptCacheKey,
+          promptCacheRetention: extMsg.promptCacheRetention,
+          storeResponseState: extMsg.storeResponseState,
+          providerResponseId: extMsg.providerResponseId,
+        });
+        break;
+
+      case "agentError":
+        this.applyProjectedAction({
+          type: "ERROR",
+          error: extMsg.error,
+          retryable: extMsg.retryable,
+          code: extMsg.code,
+          actions: extMsg.actions,
+        });
+        break;
+
+      case "agentTodoUpdate":
+        this.applyProjectedAction({ type: "TODO_UPDATE", todos: extMsg.todos });
+        break;
+
+      case "agentDone":
+        this.applyProjectedAction({ type: "DONE" });
+        this.applyProjectedAction({ type: "CLEAR_QUESTION" });
+        break;
+
+      case "agentDebugInfo":
+        this.applyProjectedAction({
+          type: "SET_DEBUG_INFO",
+          info: extMsg.info,
+          systemPrompt: extMsg.systemPrompt,
+          loadedInstructions: extMsg.loadedInstructions,
+        });
+        break;
+
+      case "agentModesUpdate":
+        this.applyProjectedAction({ type: "SET_MODES", modes: extMsg.modes });
+        break;
+
+      case "agentModelsUpdate":
+        this.applyProjectedAction({
+          type: "SET_MODELS",
+          models: extMsg.models,
+        });
+        break;
+
+      case "agentSlashCommandsUpdate":
+        this.applyProjectedAction({
+          type: "SET_SLASH_COMMANDS",
+          commands: extMsg.commands,
+        });
+        break;
+
+      case "agentCondense":
+        this.applyProjectedAction({
+          type: "ADD_CONDENSE",
+          prevInputTokens: extMsg.prevInputTokens,
+          newInputTokens: extMsg.newInputTokens,
+          durationMs: extMsg.durationMs,
+          validationWarnings: extMsg.validationWarnings,
+        });
+        break;
+
+      case "agentCondenseStart":
+        this.applyProjectedAction({ type: "CONDENSE_START" });
+        break;
+
+      case "agentWarning":
+        this.applyProjectedAction({
+          type: "ADD_WARNING",
+          message: extMsg.message,
+          retryDelayMs: extMsg.retryDelayMs,
+          retryAt: extMsg.retryAt,
+          retryAttempt: extMsg.retryAttempt,
+          retryMaxAttempts: extMsg.retryMaxAttempts,
+        });
+        break;
+
+      case "agentStatusUpdate":
+        this.applyProjectedAction({
+          type: "SET_STATUS_OVERRIDE",
+          message: extMsg.message,
+        });
+        break;
+
+      case "agentCondenseError":
+        this.applyProjectedAction({
+          type: "ADD_CONDENSE_ERROR",
+          errorMessage: extMsg.error,
+          retryable: extMsg.retryable,
+          code: extMsg.code,
+          actions: extMsg.actions,
+        });
+        break;
+
+      case "agentQuestionRequest":
+        this.applyProjectedAction({
+          type: "SET_QUESTION",
+          id: extMsg.id,
+          questions: extMsg.questions,
+        });
+        break;
+
+      case "agentDetectQuestionResult": {
+        shouldScheduleDetectedQuestion = false;
+        const requestId = extMsg.requestId;
+        const messageId = extMsg.messageId;
+        const detected = extMsg.detected;
+        const fallback = extMsg.fallback;
+        this.applyProjectedDetectedQuestionResult(
+          requestId,
+          messageId,
+          detected,
+          fallback,
+        );
+        break;
+      }
+
+      case "agentSessionLoaded": {
+        this.projectedForegroundLoadingSessionId = extMsg.sessionId;
+        if (extMsg.hasMoreBefore !== true) {
+          this.projectedForegroundLoadingSessionId = null;
+        }
+        this.projectedForegroundSessionId = extMsg.sessionId;
+        this.applyProjectedAction({
+          type: "LOAD_SESSION",
+          sessionId: extMsg.sessionId,
+          title: extMsg.title,
+          mode: extMsg.mode,
+          messages: agentMessagesToChatMessages(extMsg.messages as unknown[]),
+          lastInputTokens: extMsg.lastInputTokens,
+          lastOutputTokens: extMsg.lastOutputTokens,
+          checkpoints: extMsg.checkpoints,
+          userTurnOffset: extMsg.userTurnOffset ?? 0,
+          hasMoreBefore: extMsg.hasMoreBefore,
+        });
+        break;
+      }
+
+      case "agentSessionChunk": {
+        if (
+          !shouldAcceptSessionChunk(
+            extMsg.sessionId,
+            this.projectedForegroundSessionId,
+            this.projectedForegroundLoadingSessionId,
+          )
+        ) {
+          break;
+        }
+        if (extMsg.hasMoreBefore !== true) {
+          this.projectedForegroundLoadingSessionId = null;
+        }
+        this.applyProjectedAction({
+          type: "PREPEND_SESSION_CHUNK",
+          messages: agentMessagesToChatMessages(extMsg.messages as unknown[]),
+          userTurnOffset: extMsg.userTurnOffset,
+          hasMoreBefore: extMsg.hasMoreBefore,
+          checkpoints: extMsg.checkpoints,
+        });
+        break;
+      }
+
+      case "agentCheckpointCreated":
+        this.applyProjectedAction({
+          type: "SET_CHECKPOINT",
+          checkpointId: extMsg.checkpointId,
+          turnIndex: extMsg.turnIndex,
+        });
+        break;
+
+      case "agentInterjection":
+        this.applyProjectedAction({
+          type: "ADD_INTERJECTION",
+          text: extMsg.displayText ?? extMsg.text,
+          isSlashCommand: extMsg.isSlashCommand ?? false,
+          slashCommandLabel:
+            extMsg.slashCommandLabel ??
+            (extMsg.isSlashCommand ? extMsg.displayText : undefined),
+        });
+        this.applyProjectedAction({
+          type: "REMOVE_FROM_QUEUE",
+          id: extMsg.queueId,
+        });
+        break;
+
+      case "agentCommittedUserMessage":
+        this.applyProjectedAction({
+          type: "ADD_COMMITTED_USER_MESSAGE",
+          text: extMsg.displayText ?? extMsg.text,
+          isSlashCommand: extMsg.isSlashCommand ?? false,
+          slashCommandLabel:
+            extMsg.slashCommandLabel ??
+            (extMsg.isSlashCommand ? extMsg.displayText : undefined),
+          origin: extMsg.origin,
+        });
+        break;
+
+      case "agentBgDone": {
+        let bgTask = "Background Agent";
+        for (const message of this.projectedForegroundState.messages) {
+          for (const block of message.blocks) {
+            if (
+              block.type === "bg_agent" &&
+              block.sessionId === extMsg.sessionId
+            ) {
+              bgTask = block.task;
+              break;
+            }
+          }
+        }
+        const bgInfo = this.sessionManager
+          ?.getBgSessionInfos()
+          .find((entry) => entry.id === extMsg.sessionId);
+        const bgStatus: "completed" | "error" | "cancelled" =
+          bgInfo?.status === "error"
+            ? "error"
+            : bgInfo?.status === "cancelled"
+              ? "cancelled"
+              : "completed";
+        this.applyProjectedAction({
+          type: "BG_AGENT_DONE",
+          sessionId: extMsg.sessionId,
+          task: bgTask,
+          status: bgStatus,
+          resultText: extMsg.resultText ?? bgInfo?.resultText,
+          summary: extMsg.resultSummary,
+        });
+        break;
+      }
+
+      case "agentBgQuestion":
+        this.applyProjectedAction({
+          type: "ADD_BG_QUESTION",
+          bgTask: extMsg.bgTask,
+          questions: extMsg.questions,
+          answer: extMsg.answer,
+        });
+        break;
+
+      default:
+        break;
+    }
+
+    if (shouldScheduleDetectedQuestion) {
+      this.maybeStartProjectedDetectedQuestionRequest();
+    }
+  }
+
+  public getBrowserProjectedForegroundState(): {
+    sessionId: string;
+    mode: string;
+    model: string;
+    streaming: boolean;
+    statusOverride: string | null;
+    projectedMessages: ChatMessage[];
+    lastInputTokens: number;
+    lastOutputTokens: number;
+    lastCacheReadTokens: number;
+    estimatedTotalUsed: number;
+    thinkingEnabled: boolean;
+    reasoningEffort: import("./providers/types.js").ReasoningEffort;
+    messageQueue: AppState["messageQueue"];
+    questionRequest: AppState["questionRequest"];
+    detectedQuestion: AppState["detectedQuestion"];
+    todos: AppState["todos"];
+    debugInfo: AppState["debugInfo"];
+    systemPrompt: AppState["systemPrompt"];
+    loadedInstructions: AppState["loadedInstructions"];
+    restoringSession: AppState["restoringSession"];
+    contextBudget?: AppState["chatState"]["contextBudget"];
+    condenseThreshold?: AppState["chatState"]["condenseThreshold"];
+  } | null {
+    const fg = this.sessionManager?.getForegroundSession();
+    if (!fg) return null;
+
+    this.ensureProjectedForegroundSession(fg);
+
+    return {
+      sessionId: fg.id,
+      mode: this.projectedForegroundState.chatState.mode,
+      model: this.projectedForegroundState.chatState.model,
+      streaming: this.projectedForegroundState.streaming,
+      statusOverride: this.projectedForegroundState.statusOverride,
+      projectedMessages: [...this.projectedForegroundState.messages],
+      lastInputTokens: this.projectedForegroundState.lastInputTokens,
+      lastOutputTokens: this.projectedForegroundState.lastOutputTokens,
+      lastCacheReadTokens: this.projectedForegroundState.lastCacheReadTokens,
+      estimatedTotalUsed: this.projectedForegroundState.estimatedTotalUsed,
+      thinkingEnabled: this.projectedForegroundState.thinkingEnabled,
+      reasoningEffort:
+        this.projectedForegroundState.chatState.reasoningEffort ??
+        (this.projectedForegroundState.thinkingEnabled ? "high" : "none"),
+      messageQueue: this.projectedForegroundState.messageQueue.map((entry) => ({
+        ...entry,
+        attachments: entry.attachments ? [...entry.attachments] : undefined,
+        images: entry.images
+          ? entry.images.map((image) => ({ ...image }))
+          : undefined,
+        documents: entry.documents
+          ? entry.documents.map((document) => ({ ...document }))
+          : undefined,
+      })),
+      questionRequest: this.projectedForegroundState.questionRequest
+        ? {
+            id: this.projectedForegroundState.questionRequest.id,
+            questions:
+              this.projectedForegroundState.questionRequest.questions.map(
+                (question) => ({ ...question }),
+              ),
+          }
+        : null,
+      detectedQuestion: this.projectedForegroundState.detectedQuestion
+        ? {
+            ...this.projectedForegroundState.detectedQuestion,
+            options: this.projectedForegroundState.detectedQuestion.options.map(
+              (option) => ({ ...option }),
+            ),
+          }
+        : null,
+      todos: this.projectedForegroundState.todos.map((todo) => ({ ...todo })),
+      debugInfo: this.projectedForegroundState.debugInfo
+        ? { ...this.projectedForegroundState.debugInfo }
+        : null,
+      systemPrompt: this.projectedForegroundState.systemPrompt,
+      loadedInstructions: this.projectedForegroundState.loadedInstructions
+        ? this.projectedForegroundState.loadedInstructions.map((item) => ({
+            ...item,
+          }))
+        : null,
+      restoringSession: this.projectedForegroundState.restoringSession,
+      contextBudget: this.projectedForegroundState.chatState.contextBudget
+        ? { ...this.projectedForegroundState.chatState.contextBudget }
+        : undefined,
+      condenseThreshold:
+        this.projectedForegroundState.chatState.condenseThreshold,
+    };
+  }
+
+  public getBrowserMcpStatusInfos(): McpServerInfo[] {
+    return this.mcpHub.getServerInfos();
   }
 
   private handleAgentEvent(sessionId: string, event: AgentEvent): void {
@@ -3284,6 +5026,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async detectQuestionForWebview(
+    requestId: string,
+    messageId: string,
+    text: string,
+  ): Promise<void> {
+    const mode = getQuestionDetectionMode();
+    let agentContext: { provider: ModelProvider; model: string } | undefined;
+    if (mode === "agent") {
+      const fg = this.sessionManager?.getForegroundSession();
+      const provider = fg
+        ? providerRegistry.tryResolveProvider(fg.model)
+        : undefined;
+      if (provider) {
+        agentContext = { provider, model: provider.condenseModel };
+      }
+    }
+    const outcome = await detectQuestion(text, {
+      mode,
+      agent: agentContext,
+    });
+    if (outcome.fallback && outcome.error && mode !== "heuristic") {
+      this.log(
+        `[question-detection] ${mode} failed: ${outcome.error} — falling back to heuristic`,
+      );
+    }
+    this.postMessage({
+      type: "agentDetectQuestionResult",
+      requestId,
+      messageId,
+      detected: outcome.detected,
+      fallback: outcome.fallback,
+    });
+  }
+
   private sendInitialState(): void {
     if (!this.sessionManager) return;
 
@@ -3297,31 +5073,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const provider = providerRegistry.tryResolveProvider(modelId);
     const caps = provider?.getCapabilities(modelId);
     const contextBudget = caps
-      ? {
-          outputReservation: Math.min(
+      ? (() => {
+          const maxInputTokens =
+            caps.maxInputTokens ??
+            Math.max(0, caps.contextWindow - caps.maxOutputTokens);
+          const outputReservation = Math.min(
             Math.max(
               fg?.maxTokens ?? config.maxTokens,
               (fg?.thinkingBudget ?? config.thinkingBudget ?? 0) + 4096,
             ),
             caps.maxOutputTokens,
-          ),
-          safetyBufferTokens: Math.floor(caps.contextWindow * 0.05),
-          softThresholdBudget: Math.floor(
-            caps.contextWindow * condenseThreshold,
-          ),
-          hardBudget: Math.max(
-            0,
-            caps.contextWindow -
-              Math.floor(caps.contextWindow * 0.05) -
-              Math.min(
-                Math.max(
-                  fg?.maxTokens ?? config.maxTokens,
-                  (fg?.thinkingBudget ?? config.thinkingBudget ?? 0) + 4096,
-                ),
-                caps.maxOutputTokens,
-              ),
-          ),
-        }
+          );
+          const safetyBufferTokens = Math.floor(maxInputTokens * 0.05);
+          return {
+            contextWindow: caps.contextWindow,
+            maxInputTokens,
+            usedInputTokens: fg?.estimatedInputUsed ?? 0,
+            outputReservation,
+            safetyBufferTokens,
+            softThresholdBudget: Math.floor(maxInputTokens * condenseThreshold),
+            hardBudget: Math.max(0, maxInputTokens - safetyBufferTokens),
+            basis: "input" as const,
+          };
+        })()
       : undefined;
     const state: ChatState = {
       sessionId: fg?.id ?? null,
@@ -3333,6 +5107,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         fg?.status === "awaiting_approval",
       condenseThreshold,
       contextBudget,
+      reasoningEffort: fg?.reasoningEffort ?? "high",
+      thinkingEnabled: (fg?.reasoningEffort ?? "high") !== "none",
       // Use the foreground session's ID so the write approval state reflects the
       // current session's trust level rather than a shared synthetic "agent" ID.
       agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
@@ -3414,7 +5190,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private getSessionCheckpoints(
     sessionId: string,
   ): Array<{ turnIndex: number; checkpointId: string }> | undefined {
-    const checkpoints = this.sessionManager?.getCheckpoints(sessionId);
+    const getCheckpoints = this.sessionManager?.getCheckpoints;
+    if (typeof getCheckpoints !== "function") return undefined;
+    const checkpoints = getCheckpoints.call(this.sessionManager, sessionId);
     if (!checkpoints || checkpoints.length === 0) return undefined;
     return checkpoints.map((c) => ({
       turnIndex: c.turnIndex,
@@ -3423,6 +5201,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private postMessage(msg: ExtensionToWebview): void {
+    this.projectExtensionMessage(msg);
     if (!this.webviewReady) {
       this.pendingMessages.push(msg);
       return;
@@ -3479,6 +5258,73 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         checkpoints,
       });
     }
+  }
+
+  private parseThemeSnapshot(
+    msg: Record<string, unknown>,
+  ): BrowserGatewayThemeSnapshot | null {
+    const raw = msg.cssVariables;
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+
+    const cssVariables: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (!key.startsWith("--vscode-")) continue;
+      if (typeof value !== "string") continue;
+      const trimmed = value.trim();
+      if (!trimmed) continue;
+      // Disallow URL-like constructs in forwarded CSS values.
+      if (/url\s*\(/i.test(trimmed)) continue;
+      cssVariables[key] = trimmed;
+    }
+
+    const colorSchemeRaw =
+      typeof msg.colorScheme === "string" ? msg.colorScheme : undefined;
+    const colorScheme =
+      colorSchemeRaw === "light" ||
+      colorSchemeRaw === "dark" ||
+      colorSchemeRaw === "hc" ||
+      colorSchemeRaw === "hc-light"
+        ? colorSchemeRaw
+        : undefined;
+
+    const themeLabel =
+      typeof msg.themeLabel === "string" ? msg.themeLabel : undefined;
+
+    return {
+      cssVariables,
+      colorScheme,
+      themeLabel,
+      source: "webview-dom",
+    };
+  }
+
+  private getFallbackThemeSnapshot(): BrowserGatewayThemeSnapshot {
+    const kind = vscode.window.activeColorTheme.kind;
+    const colorScheme: BrowserGatewayThemeSnapshot["colorScheme"] =
+      kind === vscode.ColorThemeKind.Light
+        ? "light"
+        : kind === vscode.ColorThemeKind.HighContrast
+          ? "hc"
+          : kind === vscode.ColorThemeKind.HighContrastLight
+            ? "hc-light"
+            : "dark";
+    const themeLabel =
+      kind === vscode.ColorThemeKind.Light
+        ? "Light"
+        : kind === vscode.ColorThemeKind.HighContrast
+          ? "High Contrast"
+          : kind === vscode.ColorThemeKind.HighContrastLight
+            ? "High Contrast Light"
+            : "Dark";
+
+    return {
+      cssVariables: {},
+      colorScheme,
+      themeLabel,
+      source: "vscode-theme-api",
+    };
   }
 
   private getHtml(): string {
@@ -3686,4 +5532,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+}
+
+/**
+ * Extract a regex pattern from a model response. Strips surrounding code
+ * fences/backticks and `/.../` delimiters if the model included them.
+ */
+function extractRegexPattern(raw: string): string | undefined {
+  let text = raw.trim();
+  if (!text) return undefined;
+
+  const fenceMatch = text.match(/^```(?:[a-zA-Z]+)?\s*\n?([\s\S]*?)\n?```$/);
+  if (fenceMatch) {
+    text = fenceMatch[1].trim();
+  }
+
+  text = text.replace(/^[`'"]+|[`'"]+$/g, "").trim();
+
+  const slashMatch = text.match(/^\/(.+)\/[a-z]*$/);
+  if (slashMatch) {
+    text = slashMatch[1];
+  }
+
+  const firstLine = text.split(/\r?\n/)[0]?.trim();
+  return firstLine || undefined;
 }

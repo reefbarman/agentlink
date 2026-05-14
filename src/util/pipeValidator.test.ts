@@ -120,6 +120,165 @@ describe("validateCommand", () => {
     });
   });
 
+  describe("inline Python file writers", () => {
+    it("rejects python heredoc that writes a file with pathlib", () => {
+      const result = validateCommand(
+        [
+          "python3 - <<'PY'",
+          "from pathlib import Path",
+          "Path('out.txt').write_text('hello')",
+          "PY",
+        ].join("\n"),
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline Python");
+      expect(result!.message).toContain("write_file");
+      expect(result!.message).toContain("apply_diff");
+    });
+
+    it("rejects python -c that writes a file with open(..., 'w')", () => {
+      const result = validateCommand(
+        `python3 -c "open('out.txt', 'w').write('hello')"`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline Python");
+      expect(result!.message).toContain("write_file");
+    });
+
+    it("allows inline python that only reads a file", () => {
+      expect(
+        validateCommand(
+          `python3 -c "from pathlib import Path; print(Path('out.txt').read_text())"`,
+        ),
+      ).toBeNull();
+    });
+  });
+
+  describe("inline Node/Bun/Deno file writers", () => {
+    it("rejects node heredoc that writes a file with fs.writeFileSync", () => {
+      const result = validateCommand(
+        [
+          "node - <<'NODE'",
+          "const fs = require('fs');",
+          "const path = 'src/foo.ts';",
+          "let s = fs.readFileSync(path, 'utf8');",
+          "fs.writeFileSync(path, s);",
+          "NODE",
+        ].join("\n"),
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline JavaScript/TypeScript");
+      expect(result!.message).toContain("write_file");
+      expect(result!.message).toContain("apply_diff");
+    });
+
+    it("rejects node -e that writes a file", () => {
+      const result = validateCommand(
+        `node -e "require('fs').writeFileSync('out.txt', 'hi')"`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline JavaScript/TypeScript");
+    });
+
+    it("rejects node --eval that calls appendFileSync", () => {
+      const result = validateCommand(
+        `node --eval "require('fs').appendFileSync('out.txt', 'hi')"`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline JavaScript/TypeScript");
+    });
+
+    it("rejects bun -e that calls Bun.write", () => {
+      const result = validateCommand(
+        `bun -e "await Bun.write('out.txt', 'hi')"`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline JavaScript/TypeScript");
+    });
+
+    it("rejects deno heredoc that calls Deno.writeTextFile", () => {
+      const result = validateCommand(
+        [
+          "deno eval - <<'TS'",
+          "await Deno.writeTextFile('out.txt', 'hi');",
+          "TS",
+        ].join("\n"),
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline JavaScript/TypeScript");
+    });
+
+    it("rejects tsx -e that writes a file", () => {
+      const result = validateCommand(
+        `tsx -e "import { writeFileSync } from 'fs'; writeFileSync('a', 'b')"`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline JavaScript/TypeScript");
+    });
+
+    it("rejects npx tsx -e that writes a file", () => {
+      const result = validateCommand(
+        `npx tsx -e "require('fs').writeFileSync('a', 'b')"`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline JavaScript/TypeScript");
+    });
+
+    it("allows inline node that only reads a file", () => {
+      expect(
+        validateCommand(
+          `node -e "console.log(require('fs').readFileSync('out.txt', 'utf8'))"`,
+        ),
+      ).toBeNull();
+    });
+  });
+
+  describe("inline Perl/Ruby/osascript file writers", () => {
+    it("rejects perl -e that opens a file for writing", () => {
+      const result = validateCommand(
+        `perl -e 'open(FH, ">out.txt"); print FH "hi"; close FH;'`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline Perl");
+    });
+
+    it("rejects perl -E that unlinks a file", () => {
+      const result = validateCommand(`perl -E 'unlink("out.txt")'`);
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline Perl");
+    });
+
+    it("rejects ruby -e that calls File.write", () => {
+      const result = validateCommand(
+        `ruby -e 'File.write("out.txt", "hi")'`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline Ruby");
+    });
+
+    it("rejects ruby -e that opens a file in write mode", () => {
+      const result = validateCommand(
+        `ruby -e 'File.open("out.txt", "w") { |f| f.puts "hi" }'`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline Ruby");
+    });
+
+    it("rejects osascript -e that writes to a file", () => {
+      const result = validateCommand(
+        `osascript -e 'write "hi" to file "out.txt"'`,
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("inline osascript");
+    });
+
+    it("allows inline ruby that only reads a file", () => {
+      expect(
+        validateCommand(`ruby -e 'puts File.read("out.txt")'`),
+      ).toBeNull();
+    });
+  });
+
   describe("head", () => {
     it("rejects head with a file argument", () => {
       const result = validateCommand("head -20 server.log");

@@ -6,12 +6,24 @@ export interface ModeInfo {
 }
 
 /** Model info sent from the extension via agentModelsUpdate. */
+export type ReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
 export interface WebviewModelInfo {
   id: string;
   displayName: string;
   provider: string;
   contextWindow: number;
+  maxInputTokens?: number;
   maxOutputTokens?: number;
+  reasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
   authenticated: boolean;
   condenseThreshold?: number;
 }
@@ -47,6 +59,8 @@ export interface Question {
   options?: string[];
   /** The option value the agent recommends (must match one of the options strings) */
   recommended?: string;
+  /** Allows submitting a blank text answer. Only applies to text questions. */
+  allowBlank?: boolean;
   scale_min?: number;
   scale_max?: number;
   scale_min_label?: string;
@@ -199,6 +213,15 @@ export type ExtensionMessage =
       files: Array<{ path: string; kind: "file" | "folder" }>;
     }
   | {
+      type: "agentDetectQuestionResult";
+      requestId: string;
+      messageId: string;
+      detected:
+        | import("../../shared/questionDetection").DetectedQuestion
+        | null;
+      fallback: boolean;
+    }
+  | {
       type: "agentInjectPrompt";
       prompt: string;
       attachments: string[];
@@ -248,7 +271,22 @@ export type ExtensionMessage =
       request: import("../../approvals/webview/types").ApprovalRequest;
     }
   | { type: "idle" }
+  | {
+      type: "regexSuggestion";
+      requestId: string;
+      pattern?: string;
+      error?: string;
+    }
   | { type: "agentQuestionRequest"; id: string; questions: Question[] }
+  | { type: "agentQuestionCleared"; id: string }
+  | {
+      type: "agentQuestionProgress";
+      id: string;
+      step: number;
+      answers: Record<string, string | string[] | number | boolean | undefined>;
+      notes: Record<string, string>;
+      origin: string;
+    }
   | { type: "agentDroppedFilesResolved"; files: string[] }
   | {
       type: "agentSessionList";
@@ -297,6 +335,15 @@ export type ExtensionMessage =
       isSlashCommand?: boolean;
       /** Slash command label rendered in the inline command chip */
       slashCommandLabel?: string;
+    }
+  | {
+      type: "agentCommittedUserMessage";
+      sessionId: string;
+      text: string;
+      displayText?: string;
+      isSlashCommand?: boolean;
+      slashCommandLabel?: string;
+      origin?: "vscode" | "browser";
     }
   | {
       type: "agentBgSessionsUpdate";
@@ -421,6 +468,20 @@ export type ExtensionMessage =
       question: string;
       answer: string;
       error?: boolean;
+    }
+  | {
+      type: "agentPairingCode";
+      pairingId: string;
+      code: string;
+      expiresAt: number;
+      pairingUrls: string[];
+    }
+  | {
+      type: "agentPairingStatus";
+      pairingId: string;
+      status: "pending" | "consumed" | "expired" | "cancelled";
+      deviceId?: string;
+      deviceLabel?: string;
     };
 
 export type ShowBgTranscriptMessage = {
@@ -438,12 +499,18 @@ export interface ChatState {
   mode: string;
   model: string;
   streaming: boolean;
+  thinkingEnabled?: boolean;
+  reasoningEffort?: ReasoningEffort;
   condenseThreshold?: number;
   contextBudget?: {
+    contextWindow: number;
+    maxInputTokens: number;
+    usedInputTokens: number;
     outputReservation: number;
     safetyBufferTokens: number;
     softThresholdBudget: number;
     hardBudget: number;
+    basis: "input" | "total";
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
 }
@@ -550,6 +617,18 @@ export type ContentBlock =
         answer: string | string[] | number | boolean | null;
         note?: string;
       }>;
+    }
+  | {
+      type: "pairing_code";
+      pairingId: string;
+      code: string;
+      /** Milliseconds-since-epoch expiry for the pending pairing. */
+      expiresAt: number;
+      /** Candidate URLs to hand to the new device (mDNS first, then LAN IPs). */
+      pairingUrls: string[];
+      status: "pending" | "consumed" | "expired" | "cancelled";
+      /** Populated when status === "consumed". */
+      deviceLabel?: string;
     };
 
 /** A chat message in the webview state */
@@ -567,6 +646,8 @@ export interface ChatMessage {
   isSlashCommand?: boolean;
   /** Slash command label shown in compact command chip rendering */
   slashCommandLabel?: string;
+  /** Set when the user message originated from a remote browser client */
+  origin?: "vscode" | "browser";
   /**
    * Checkpoint ID rendered on the user message immediately preceding that
    * checkpoint snapshot.

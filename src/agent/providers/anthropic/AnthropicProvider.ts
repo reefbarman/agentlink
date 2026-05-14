@@ -25,11 +25,20 @@ import type {
   ContentBlock,
   MessageParam,
   ToolDefinition,
+  ReasoningEffort,
 } from "../types.js";
 
 type AnthropicModelCapabilities = ModelCapabilities & {
   supportsThinking: boolean;
 };
+
+const CLAUDE_4_6_REASONING_EFFORTS = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "max",
+] as const satisfies readonly ReasoningEffort[];
 
 const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
   {
@@ -40,6 +49,8 @@ const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
       supportsToolUse: true,
       contextWindow: 1_000_000,
       maxOutputTokens: 128_000,
+      reasoningEfforts: [...CLAUDE_4_6_REASONING_EFFORTS],
+      defaultReasoningEffort: "high",
     },
     "claude-sonnet-4-6": {
       supportsThinking: true,
@@ -48,6 +59,8 @@ const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
       supportsToolUse: true,
       contextWindow: 1_000_000,
       maxOutputTokens: 128_000,
+      reasoningEfforts: [...CLAUDE_4_6_REASONING_EFFORTS],
+      defaultReasoningEffort: "high",
     },
     "claude-haiku-4-5-20251001": {
       supportsThinking: false,
@@ -136,6 +149,7 @@ export class AnthropicProvider implements ModelProvider {
       tools,
       maxTokens,
       thinking,
+      reasoningEffort,
       signal,
     } = request;
 
@@ -174,11 +188,18 @@ export class AnthropicProvider implements ModelProvider {
         : {}),
     };
 
-    if (thinking) {
-      (requestParams as unknown as Record<string, unknown>).thinking = {
-        type: "enabled",
-        budget_tokens: thinking.budgetTokens,
-      };
+    const requestedEffort = reasoningEffort ?? "high";
+    if (requestedEffort !== "none") {
+      const params = requestParams as unknown as Record<string, unknown>;
+      if (supportsAdaptiveThinking(model)) {
+        params.thinking = { type: "adaptive" };
+        params.output_config = { effort: requestedEffort };
+      } else if (thinking) {
+        params.thinking = {
+          type: "enabled",
+          budget_tokens: thinking.budgetTokens,
+        };
+      }
     }
 
     const contentBlocks: ContentBlock[] = [];
@@ -344,9 +365,16 @@ export class AnthropicProvider implements ModelProvider {
 
   async complete(request: CompleteRequest): Promise<CompleteResult> {
     const client = this.getClient();
-    const { model, systemPrompt, messages, maxTokens, temperature } = request;
+    const {
+      model,
+      systemPrompt,
+      messages,
+      maxTokens,
+      temperature,
+      reasoningEffort,
+    } = request;
 
-    const response = await client.messages.create({
+    const requestParams: Anthropic.MessageCreateParams = {
       model,
       max_tokens: maxTokens,
       ...(temperature !== undefined ? { temperature } : {}),
@@ -355,7 +383,16 @@ export class AnthropicProvider implements ModelProvider {
         role,
         content,
       })) as Anthropic.MessageParam[],
-    });
+    };
+
+    const requestedEffort = reasoningEffort ?? "high";
+    if (requestedEffort !== "none" && supportsAdaptiveThinking(model)) {
+      const params = requestParams as unknown as Record<string, unknown>;
+      params.thinking = { type: "adaptive" };
+      params.output_config = { effort: requestedEffort };
+    }
+
+    const response = await client.messages.create(requestParams);
 
     const text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
@@ -406,6 +443,10 @@ export class AnthropicProvider implements ModelProvider {
 }
 
 // ── Helpers (moved from AgentEngine.ts) ──
+
+function supportsAdaptiveThinking(model: string): boolean {
+  return model === "claude-opus-4-6" || model === "claude-sonnet-4-6";
+}
 
 function toAnthropicTool(tool: ToolDefinition): Anthropic.Tool {
   return {

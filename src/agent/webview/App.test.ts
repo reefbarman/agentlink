@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   initialState,
   reducer,
@@ -504,6 +503,81 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(restored.messages[2]).not.toHaveProperty("checkpointId");
   });
 
+  it("replays pending checkpoint once committed browser user message arrives", () => {
+    let state = reducer(initialState, {
+      type: "SET_CHECKPOINT",
+      checkpointId: "cp-browser",
+      turnIndex: 1,
+    });
+
+    expect(state.pendingCheckpoints).toEqual([
+      { checkpointId: "cp-browser", turnIndex: 1 },
+    ]);
+
+    state = reducer(state, {
+      type: "ADD_COMMITTED_USER_MESSAGE",
+      text: "hello from browser",
+      origin: "browser",
+    });
+
+    expect(state.pendingCheckpoints).toEqual([]);
+    expect(state.messages[0]).toMatchObject({
+      role: "user",
+      content: "hello from browser",
+      origin: "browser",
+      checkpointId: "cp-browser",
+    });
+  });
+
+  it("retains unresolved checkpoint until matching user row appears in later backfill chunk", () => {
+    let state = reducer(initialState, {
+      type: "LOAD_SESSION",
+      sessionId: "session-1",
+      title: "Chunked session",
+      mode: "code",
+      messages: [
+        {
+          id: "assistant-tail",
+          role: "assistant",
+          content: "",
+          timestamp: 2,
+          blocks: [{ type: "text", text: "tail" }],
+        },
+      ],
+      checkpoints: [{ turnIndex: 1, checkpointId: "cp-chunk" }],
+      userTurnOffset: 1,
+      hasMoreBefore: true,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+    });
+
+    expect(state.pendingCheckpoints).toEqual([
+      { checkpointId: "cp-chunk", turnIndex: 1 },
+    ]);
+
+    state = reducer(state, {
+      type: "PREPEND_SESSION_CHUNK",
+      messages: [
+        {
+          id: "user-head",
+          role: "user",
+          content: "first prompt",
+          timestamp: 1,
+          blocks: [],
+        },
+      ],
+      userTurnOffset: 0,
+      hasMoreBefore: false,
+    });
+
+    expect(state.pendingCheckpoints).toEqual([]);
+    expect(state.messages[0]).toMatchObject({
+      role: "user",
+      content: "first prompt",
+      checkpointId: "cp-chunk",
+    });
+  });
+
   it("restores persisted condense summaries even when they are stored as user messages", async () => {
     const { agentMessagesToChatMessages } = await import("./App");
 
@@ -532,6 +606,49 @@ describe("webview App reducer background agent launch blocks", () => {
         text: '## Resume Anchor (deterministic)\n- Continue from this task: "Investigate condense"## Conversation Summary\n\nSummary body',
       },
     ]);
+  });
+
+  it("strips system-reminder blocks from restored condense summary assistant text", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "Investigate condense" },
+      {
+        role: "user",
+        isSummary: true,
+        content: [
+          {
+            type: "text",
+            text: '<system-reminder>\n## Resume Anchor\n- Continue from this task: "Investigate condense"\n</system-reminder>\n\n## Conversation Summary\n\nSummary body',
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored).toHaveLength(3);
+    expect(restored[1]?.role).toBe("condense");
+    expect(restored[2]?.role).toBe("assistant");
+    const textBlock = restored[2]?.blocks[0];
+    expect(textBlock).toEqual({
+      type: "text",
+      text: "## Conversation Summary\n\nSummary body",
+    });
+  });
+
+  it("updates top-level thinkingEnabled from SET_STATE", () => {
+    const state = reducer(initialState, {
+      type: "SET_STATE",
+      state: {
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        streaming: false,
+        thinkingEnabled: false,
+      },
+    });
+
+    expect(state.thinkingEnabled).toBe(false);
+    expect(state.chatState.thinkingEnabled).toBe(false);
   });
 
   it("restores condense row metadata from persisted uiHint", async () => {
@@ -591,6 +708,29 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(restored[0]?.content).toBe("/review");
     expect(restored[0]?.isSlashCommand).toBe(true);
     expect(restored[0]?.slashCommandLabel).toBe("/review");
+  });
+
+  it("projects persisted user-message origin metadata into chat messages", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      {
+        role: "user",
+        content: "hello from remote",
+        uiHint: {
+          userMessage: {
+            origin: "browser",
+          },
+        },
+      },
+    ] as unknown[]);
+
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({
+      role: "user",
+      content: "hello from remote",
+      origin: "browser",
+    });
   });
 
   it("preserves user context text around persisted slash commands", async () => {
@@ -811,12 +951,7 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(restored).toHaveLength(2);
     expect(restored[0]?.role).toBe("user");
     expect(restored[1]?.role).toBe("assistant");
-    expect(restored[1]?.blocks).toEqual([
-      {
-        type: "text",
-        text: "Codex API error: An error occurred while processing your request.",
-      },
-    ]);
+    expect(restored[1]?.blocks).toEqual([]);
     expect(restored[1]?.error).toEqual({
       message:
         "Codex API error: An error occurred while processing your request.",
@@ -845,6 +980,9 @@ describe("webview App reducer background agent launch blocks", () => {
 
     expect(restored).toHaveLength(2);
     expect(restored[1]?.role).toBe("assistant");
+    expect(restored[1]?.blocks).toEqual([
+      { type: "text", text: "Codex API error 429" },
+    ]);
     expect(restored[1]?.error).toEqual({
       message: "Codex API error 429: The usage limit has been reached.",
       retryable: true,
@@ -927,6 +1065,25 @@ describe("webview App reducer background agent launch blocks", () => {
     });
     expect(state.detectedQuestion).toBeNull();
     expect(state.dismissedDetectedQuestionIds).toContain("assistant-1");
+  });
+
+  it("reconciles a committed browser user message into the live transcript", async () => {
+    const { reducer, initialState } = await import("./App");
+
+    const state = reducer(initialState, {
+      type: "ADD_COMMITTED_USER_MESSAGE",
+      text: "hello from browser",
+      origin: "browser",
+    });
+
+    expect(state.streaming).toBe(true);
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages[0]).toMatchObject({
+      role: "user",
+      content: "hello from browser",
+      origin: "browser",
+    });
+    expect(state.messages[1]).toMatchObject({ role: "assistant" });
   });
 
   it("dismisses detected question when user sends a normal message", () => {

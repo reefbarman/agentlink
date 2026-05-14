@@ -1,6 +1,7 @@
 import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
-import type { TodoItem } from "./todoTool.js";
+
 import type { MessageParam } from "./providers/types.js";
+import type { TodoItem } from "./todoTool.js";
 
 // --- Agent Message (conversation history with condense metadata) ---
 
@@ -40,6 +41,7 @@ export type AgentMessage = MessageParam & {
       displayText?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
+      origin?: "vscode" | "browser";
     };
     condense?: {
       prevInputTokens?: number;

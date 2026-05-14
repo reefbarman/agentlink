@@ -1,4 +1,8 @@
-import { useState, useRef, useEffect } from "preact/hooks";
+import {
+  ToolbarControlButton,
+  ToolbarSelector,
+} from "../../../shared/ui/ToolbarSelector";
+import { useEffect, useRef, useState } from "preact/hooks";
 
 const WRITE_APPROVAL_OPTIONS = [
   { value: "prompt", label: "Prompt", icon: "shield" },
@@ -43,38 +47,40 @@ export function WriteApprovalSelector({
   };
 
   return (
-    <div class="toolbar-selector" ref={ref}>
-      <button
-        class={`toolbar-control write-approval-toggle ${isActive ? "active" : ""}`}
-        onClick={() => !disabled && setOpen((o) => !o)}
-        disabled={disabled}
-        title={`Writes: ${currentOption.label}`}
-        type="button"
-      >
-        <i class="codicon codicon-edit" />
-        <span>{currentOption.label}</span>
-        <i
-          class={`codicon codicon-chevron-${open ? "up" : "down"} toolbar-selector-chevron`}
-        />
-      </button>
-      {open && (
-        <div class="toolbar-selector-dropdown">
-          {WRITE_APPROVAL_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              class={`toolbar-selector-option ${opt.value === current ? "active" : ""}`}
-              onClick={() => handleSelect(opt.value)}
-              type="button"
-            >
-              <i class={`codicon codicon-${opt.icon}`} />
-              <span>{opt.label}</span>
-              {opt.value === current && (
-                <i class="codicon codicon-check toolbar-selector-check" />
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <ToolbarSelector
+      containerRef={ref}
+      open={open}
+      trigger={
+        <ToolbarControlButton
+          className="write-approval-toggle"
+          active={isActive}
+          onClick={() => !disabled && setOpen((o) => !o)}
+          disabled={disabled}
+          title={`Writes: ${currentOption.label}`}
+          type="button"
+        >
+          <i class="codicon codicon-edit" />
+          <span>{currentOption.label}</span>
+          <i
+            class={`codicon codicon-chevron-${open ? "up" : "down"} toolbar-selector-chevron`}
+          />
+        </ToolbarControlButton>
+      }
+    >
+      {WRITE_APPROVAL_OPTIONS.map((opt) => (
+        <button
+          key={opt.value}
+          class={`toolbar-selector-option ${opt.value === current ? "active" : ""}`}
+          onClick={() => handleSelect(opt.value)}
+          type="button"
+        >
+          <i class={`codicon codicon-${opt.icon}`} />
+          <span>{opt.label}</span>
+          {opt.value === current && (
+            <i class="codicon codicon-check toolbar-selector-check" />
+          )}
+        </button>
+      ))}
+    </ToolbarSelector>
   );
 }

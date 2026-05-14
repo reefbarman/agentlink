@@ -1,18 +1,20 @@
-import { useState, useCallback, useEffect } from "preact/hooks";
-import type { ComponentChild } from "preact";
 import type { ChatMessage, ContentBlock } from "../types";
-import { StreamingText } from "./StreamingText";
-import { ThinkingBlock } from "./ThinkingBlock";
-import { ToolCallBlock } from "./ToolCallBlock";
-import { SkillLoadBlock } from "./SkillLoadBlock";
-import { ErrorBlock } from "./ErrorBlock";
+import { useCallback, useEffect, useState } from "preact/hooks";
+
 import { ApiRequestBlock } from "./ApiRequestBlock";
 import { BgAgentBlock } from "./BgAgentBlock";
 import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import { BgQuestionBlock } from "./BgQuestionBlock";
-import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
+import type { ComponentChild } from "preact";
 import type { DetectedQuestion } from "../questionDetection";
+import { ErrorBlock } from "./ErrorBlock";
+import { PairingCodeBlock } from "./PairingCodeBlock";
+import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
+import { SkillLoadBlock } from "./SkillLoadBlock";
+import { StreamingText } from "./StreamingText";
+import { ThinkingBlock } from "./ThinkingBlock";
+import { ToolCallBlock } from "./ToolCallBlock";
 import { matchFilePaths } from "./filePathLinks";
 
 /**
@@ -83,11 +85,16 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   // Track whether the streaming text block has started its reveal animation
   const [_textRevealed, setTextRevealed] = useState(false);
+  const [showAllDetectedOptions, setShowAllDetectedOptions] = useState(false);
 
   // Reset when streaming starts a new message
   useEffect(() => {
     if (streaming) setTextRevealed(false);
   }, [streaming]);
+
+  useEffect(() => {
+    setShowAllDetectedOptions(false);
+  }, [message.id, detectedQuestion?.messageId]);
 
   if (message.role === "user") {
     // Annotation messages (follow-up / rejection from approval cards)
@@ -130,7 +137,10 @@ export function MessageBubble({
     }
 
     const showAttachmentRow =
-      files.length > 0 || mediaLabel !== null || hasSlashLabel;
+      files.length > 0 ||
+      mediaLabel !== null ||
+      hasSlashLabel ||
+      message.origin === "browser";
 
     return (
       <div class="message user-message">
@@ -140,6 +150,7 @@ export function MessageBubble({
               files={files}
               mediaLabel={mediaLabel}
               slashLabel={hasSlashLabel ? slashLabel : undefined}
+              remote={message.origin === "browser"}
               onOpenFile={onOpenFile}
             />
           )}
@@ -235,6 +246,13 @@ export function MessageBubble({
               );
             case "question_answer":
               return <QuestionAnswerBlock key={`qa-${i}`} block={block} />;
+            case "pairing_code":
+              return (
+                <PairingCodeBlock
+                  key={`pair-${block.pairingId}`}
+                  block={block}
+                />
+              );
           }
         })}
 
@@ -257,38 +275,61 @@ export function MessageBubble({
           </div>
         )}
 
-        {!streaming && detectedQuestion && (
-          <div class="detected-question-card">
-            <div class="detected-question-header">
-              <i class="codicon codicon-lightbulb" />
-              <span>Detected choice prompt</span>
-              {onDismissDetectedQuestion && (
-                <button
-                  class="icon-button detected-question-dismiss"
-                  title="Dismiss"
-                  onClick={() => onDismissDetectedQuestion(message.id)}
-                >
-                  <i class="codicon codicon-close" />
-                </button>
-              )}
-            </div>
-            <div class="detected-question-text">{detectedQuestion.prompt}</div>
-            <div class="detected-question-options">
-              {detectedQuestion.options.map((opt) => (
-                <button
-                  key={`${opt.label}-${opt.payload}`}
-                  class="question-option detected-question-option"
-                  onClick={() => {
-                    onDismissDetectedQuestion?.(message.id);
-                    onDetectedQuestionAnswer?.(opt.payload);
-                  }}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        {!streaming &&
+          detectedQuestion &&
+          (() => {
+            const visibleOptions = showAllDetectedOptions
+              ? detectedQuestion.options
+              : detectedQuestion.options.slice(0, 6);
+            const hiddenCount = Math.max(
+              0,
+              detectedQuestion.options.length - 6,
+            );
+
+            return (
+              <div class="detected-question-card">
+                <div class="detected-question-header">
+                  <i class="codicon codicon-lightbulb" />
+                  <span>Detected choice prompt</span>
+                  {onDismissDetectedQuestion && (
+                    <button
+                      class="icon-button detected-question-dismiss"
+                      title="Dismiss"
+                      onClick={() => onDismissDetectedQuestion(message.id)}
+                    >
+                      <i class="codicon codicon-close" />
+                    </button>
+                  )}
+                </div>
+                <div class="detected-question-text">
+                  {detectedQuestion.prompt}
+                </div>
+                <div class="detected-question-options">
+                  {visibleOptions.map((opt) => (
+                    <button
+                      key={`${opt.label}-${opt.payload}`}
+                      class="question-option detected-question-option"
+                      onClick={() => {
+                        onDismissDetectedQuestion?.(message.id);
+                        onDetectedQuestionAnswer?.(opt.payload);
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  {hiddenCount > 0 && !showAllDetectedOptions && (
+                    <button
+                      class="question-option detected-question-option detected-question-more"
+                      onClick={() => setShowAllDetectedOptions(true)}
+                      type="button"
+                    >
+                      Show {hiddenCount} more
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
       </div>
 
       {/* API request inspector */}
@@ -361,14 +402,16 @@ function UserAttachments({
   files,
   mediaLabel,
   slashLabel,
+  remote,
   onOpenFile,
 }: {
   files: string[];
   mediaLabel: string | null;
   slashLabel?: string;
+  remote?: boolean;
   onOpenFile?: (path: string, line?: number) => void;
 }) {
-  if (files.length === 0 && !mediaLabel && !slashLabel) return null;
+  if (files.length === 0 && !mediaLabel && !slashLabel && !remote) return null;
 
   return (
     <div class="user-attachments">
@@ -404,6 +447,12 @@ function UserAttachments({
         <span class="user-attachment-chip user-attachment-slash-command">
           <i class="codicon codicon-terminal" />
           <span class="user-attachment-chip-name">{slashLabel}</span>
+        </span>
+      )}
+      {remote && (
+        <span class="user-attachment-chip user-attachment-remote">
+          <i class="codicon codicon-device-mobile" />
+          <span class="user-attachment-chip-name">Remote</span>
         </span>
       )}
     </div>

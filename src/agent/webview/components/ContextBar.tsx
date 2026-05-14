@@ -5,11 +5,14 @@ interface ContextBarProps {
   outputTokens: number;
   cacheReadTokens?: number;
   maxContextWindow: number;
+  maxInputTokens?: number;
+  usedInputTokens?: number;
   outputReservation?: number;
   safetyBufferTokens?: number;
   softThresholdBudget?: number;
   hardBudget?: number;
   condenseThreshold?: number;
+  budgetBasis?: "input" | "total";
   /** Running estimate of total context usage (from engine, includes tool results added between API calls). */
   estimatedTotalUsed?: number;
 }
@@ -25,54 +28,82 @@ export function ContextBar({
   outputTokens,
   cacheReadTokens = 0,
   maxContextWindow,
+  maxInputTokens,
+  usedInputTokens,
   outputReservation = DEFAULT_OUTPUT_RESERVATION,
   safetyBufferTokens = 0,
   softThresholdBudget,
   hardBudget,
   condenseThreshold,
+  budgetBasis = "total",
   estimatedTotalUsed = 0,
 }: ContextBarProps) {
   // Use the higher of: last API total vs running estimate (which includes
   // tool results accumulated since the last API response).
-  const used = Math.max(inputTokens + outputTokens, estimatedTotalUsed);
-  const reserved = Math.min(
-    outputReservation,
-    Math.max(0, maxContextWindow - used),
+  const totalUsed = Math.max(inputTokens + outputTokens, estimatedTotalUsed);
+  const projectedInputUsed = Math.max(
+    usedInputTokens ?? inputTokens,
+    Math.max(0, estimatedTotalUsed - outputTokens),
   );
-  const available = Math.max(0, maxContextWindow - used - reserved);
+  const isInputBudget = budgetBasis === "input" && maxInputTokens != null;
+  const budgetLimit = isInputBudget ? maxInputTokens : maxContextWindow;
+  const used = isInputBudget ? projectedInputUsed : totalUsed;
+  const reserved = isInputBudget
+    ? 0
+    : Math.min(outputReservation, Math.max(0, maxContextWindow - used));
+  const available = Math.max(0, budgetLimit - used - reserved);
 
-  const usedPct = maxContextWindow > 0 ? (used / maxContextWindow) * 100 : 0;
-  const reservedPct =
-    maxContextWindow > 0 ? (reserved / maxContextWindow) * 100 : 0;
+  const usedPct = budgetLimit > 0 ? (used / budgetLimit) * 100 : 0;
+  const reservedPct = budgetLimit > 0 ? (reserved / budgetLimit) * 100 : 0;
   const thresholdPct =
     softThresholdBudget != null
-      ? (softThresholdBudget / maxContextWindow) * 100
+      ? (softThresholdBudget / budgetLimit) * 100
       : condenseThreshold != null
         ? condenseThreshold * 100
         : null;
   const hardBudgetPct =
-    hardBudget != null && maxContextWindow > 0
-      ? (hardBudget / maxContextWindow) * 100
+    hardBudget != null && budgetLimit > 0
+      ? (hardBudget / budgetLimit) * 100
       : null;
 
-  const tooltipParts = [
-    `Used: ${used.toLocaleString()} (input ${inputTokens.toLocaleString()} + output ${outputTokens.toLocaleString()})`,
-    `Reserved for response: ${reserved.toLocaleString()}`,
-    ...(safetyBufferTokens > 0
-      ? [`Safety buffer: ${safetyBufferTokens.toLocaleString()}`]
-      : []),
-    `Available before response reserve: ${Math.max(0, maxContextWindow - used).toLocaleString()}`,
-    `Available after reserve: ${available.toLocaleString()}`,
-    ...(cacheReadTokens > 0
-      ? [`Cached (0.1x): ${cacheReadTokens.toLocaleString()} tokens`]
-      : []),
-    ...(thresholdPct != null
-      ? [`Auto-condense target: ${Math.round(thresholdPct)}%`]
-      : []),
-    ...(hardBudgetPct != null
-      ? [`Hard fit limit: ${Math.round(hardBudgetPct)}%`]
-      : []),
-  ];
+  const tooltipParts = isInputBudget
+    ? [
+        `Input used: ${used.toLocaleString()} tokens`,
+        `Input cap: ${budgetLimit.toLocaleString()} tokens`,
+        `Total context envelope: ${maxContextWindow.toLocaleString()} tokens`,
+        `Max/reserved output: ${outputReservation.toLocaleString()} tokens`,
+        ...(safetyBufferTokens > 0
+          ? [`Safety buffer: ${safetyBufferTokens.toLocaleString()}`]
+          : []),
+        `Available input before hard limit: ${available.toLocaleString()}`,
+        ...(cacheReadTokens > 0
+          ? [`Cached (0.1x): ${cacheReadTokens.toLocaleString()} tokens`]
+          : []),
+        ...(thresholdPct != null
+          ? [`Auto-condense target: ${Math.round(thresholdPct)}%`]
+          : []),
+        ...(hardBudgetPct != null
+          ? [`Hard input fit limit: ${Math.round(hardBudgetPct)}%`]
+          : []),
+      ]
+    : [
+        `Used: ${used.toLocaleString()} (input ${inputTokens.toLocaleString()} + output ${outputTokens.toLocaleString()})`,
+        `Reserved for response: ${reserved.toLocaleString()}`,
+        ...(safetyBufferTokens > 0
+          ? [`Safety buffer: ${safetyBufferTokens.toLocaleString()}`]
+          : []),
+        `Available before response reserve: ${Math.max(0, maxContextWindow - used).toLocaleString()}`,
+        `Available after reserve: ${available.toLocaleString()}`,
+        ...(cacheReadTokens > 0
+          ? [`Cached (0.1x): ${cacheReadTokens.toLocaleString()} tokens`]
+          : []),
+        ...(thresholdPct != null
+          ? [`Auto-condense target: ${Math.round(thresholdPct)}%`]
+          : []),
+        ...(hardBudgetPct != null
+          ? [`Hard fit limit: ${Math.round(hardBudgetPct)}%`]
+          : []),
+      ];
 
   return (
     <div class="context-bar" title={tooltipParts.join("\n")}>
@@ -95,8 +126,8 @@ export function ContextBar({
         )}
       </div>
       <span class="context-bar-label">
-        {formatTokens(used)} / {formatTokens(maxContextWindow)} (
-        {Math.round(usedPct)}%)
+        {formatTokens(used)} / {formatTokens(budgetLimit)}
+        {isInputBudget ? " input" : ""} ({Math.round(usedPct)}%)
       </span>
     </div>
   );

@@ -152,6 +152,13 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     source: "builtin",
     builtin: true,
   },
+  {
+    name: "pair",
+    description:
+      "Show a pairing code for a new browser device (or /pair list to manage)",
+    source: "builtin",
+    builtin: true,
+  },
 ];
 
 export class SlashCommandRegistry {

@@ -1,4 +1,9 @@
-import { useState, useRef, useEffect } from "preact/hooks";
+import {
+  ToolbarControlButton,
+  ToolbarSelector,
+} from "../../../shared/ui/ToolbarSelector";
+import { useEffect, useRef, useState } from "preact/hooks";
+
 import type { ModeInfo } from "../types";
 
 interface ModeSelectorProps {
@@ -36,38 +41,38 @@ export function ModeSelector({
   };
 
   return (
-    <div class="toolbar-selector" ref={ref}>
-      <button
-        class="toolbar-control"
-        onClick={() => !disabled && setOpen((o) => !o)}
-        disabled={disabled}
-        title={`Mode: ${current?.name ?? currentMode}`}
-        type="button"
-      >
-        {current && <i class={`codicon codicon-${current.icon}`} />}
-        <span>{current?.name ?? currentMode}</span>
-        <i
-          class={`codicon codicon-chevron-${open ? "up" : "down"} toolbar-selector-chevron`}
-        />
-      </button>
-      {open && (
-        <div class="toolbar-selector-dropdown">
-          {modes.map((m) => (
-            <button
-              key={m.slug}
-              class={`toolbar-selector-option ${m.slug === currentMode ? "active" : ""}`}
-              onClick={() => handleSelect(m.slug)}
-              type="button"
-            >
-              <i class={`codicon codicon-${m.icon}`} />
-              <span>{m.name}</span>
-              {m.slug === currentMode && (
-                <i class="codicon codicon-check toolbar-selector-check" />
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <ToolbarSelector
+      containerRef={ref}
+      open={open}
+      trigger={
+        <ToolbarControlButton
+          onClick={() => !disabled && setOpen((o) => !o)}
+          disabled={disabled}
+          title={`Mode: ${current?.name ?? currentMode}`}
+          type="button"
+        >
+          {current && <i class={`codicon codicon-${current.icon}`} />}
+          <span>{current?.name ?? currentMode}</span>
+          <i
+            class={`codicon codicon-chevron-${open ? "up" : "down"} toolbar-selector-chevron`}
+          />
+        </ToolbarControlButton>
+      }
+    >
+      {modes.map((m) => (
+        <button
+          key={m.slug}
+          class={`toolbar-selector-option ${m.slug === currentMode ? "active" : ""}`}
+          onClick={() => handleSelect(m.slug)}
+          type="button"
+        >
+          <i class={`codicon codicon-${m.icon}`} />
+          <span>{m.name}</span>
+          {m.slug === currentMode && (
+            <i class="codicon codicon-check toolbar-selector-check" />
+          )}
+        </button>
+      ))}
+    </ToolbarSelector>
   );
 }

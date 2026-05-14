@@ -1,10 +1,26 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import * as vscode from "vscode";
 
 import {
   TerminalManager,
   escapeHistoryExpansion,
   shouldEscapeHistoryExpansion,
 } from "./TerminalManager.js";
+
+type MockVscodeTerminal = {
+  name: string;
+  show: ReturnType<typeof vi.fn>;
+  sendText: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
+  shellIntegration?: {
+    cwd?: { fsPath: string };
+    executeCommand: ReturnType<typeof vi.fn>;
+  };
+};
+
+type MockVscodeWindow = {
+  terminals?: MockVscodeTerminal[];
+};
 
 type MockManagedTerminal = {
   id: string;
@@ -90,6 +106,7 @@ describe("escapeHistoryExpansion", () => {
 describe("TerminalManager terminal selection", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    Reflect.deleteProperty(vscode.window as object, "terminals");
   });
 
   it("creates a new default terminal when the only idle default terminal has a different cwd", async () => {
@@ -465,5 +482,120 @@ describe("TerminalManager terminal selection", () => {
     });
 
     expect(second.terminal_id).toBe(first.terminal_id);
+  });
+
+  it("prunes managed terminals that are no longer open before listing", () => {
+    const manager = new TerminalManager();
+    const retainedTerminal = {
+      name: "AgentLink",
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies MockVscodeTerminal;
+    const closedTerminal = {
+      name: "AgentLink",
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies MockVscodeTerminal;
+
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      {
+        id: "term_open",
+        name: "AgentLink",
+        cwd: "/workspace",
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal: retainedTerminal,
+      },
+      {
+        id: "term_closed",
+        name: "AgentLink",
+        cwd: "/workspace",
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal: closedTerminal,
+      },
+    ];
+    (vscode.window as unknown as MockVscodeWindow).terminals = [
+      retainedTerminal,
+    ];
+
+    expect(manager.listTerminals()).toEqual([
+      { id: "term_open", name: "AgentLink", busy: false },
+    ]);
+    expect(manager.getRecentlyClosedTerminals()).toHaveLength(1);
+    expect(manager.getRecentlyClosedTerminals()[0]?.id).toBe("term_closed");
+  });
+
+  it("adopts currently open AgentLink terminals before listing", () => {
+    const agentTerminal = {
+      name: "AgentLink",
+      shellIntegration: {
+        cwd: { fsPath: "/workspace" },
+        executeCommand: vi.fn(),
+      },
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies MockVscodeTerminal;
+    (vscode.window as unknown as MockVscodeWindow).terminals = [agentTerminal];
+
+    const manager = new TerminalManager();
+
+    expect(manager.listTerminals()).toEqual([
+      {
+        id: expect.stringMatching(/^term_/),
+        name: "AgentLink",
+        busy: false,
+        stale: true,
+      },
+    ]);
+  });
+
+  it("does not adopt non-AgentLink open terminals", () => {
+    const userTerminal = {
+      name: "zsh",
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies MockVscodeTerminal;
+    (vscode.window as unknown as MockVscodeWindow).terminals = [userTerminal];
+
+    const manager = new TerminalManager();
+
+    expect(manager.listTerminals()).toEqual([]);
+  });
+
+  it("rejects terminal_id reuse for adopted stale terminals", async () => {
+    const staleTerminal = {
+      name: "AgentLink",
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies MockVscodeTerminal;
+    (vscode.window as unknown as MockVscodeWindow).terminals = [staleTerminal];
+
+    const manager = new TerminalManager();
+    const stale = manager.listTerminals()[0];
+    expect(stale).toMatchObject({ name: "AgentLink", stale: true });
+
+    await expect(
+      manager.executeCommand({
+        command: "echo should-not-run",
+        cwd: "/workspace",
+        terminal_id: stale?.id,
+      }),
+    ).rejects.toThrow(/adopted after extension reload/);
   });
 });

@@ -783,6 +783,12 @@ Ask the user one or more structured questions and wait for responses before cont
 | ----------- | ---------- | ---------------------------------------------- |
 | `questions` | question[] | Questions shown to the user in a structured UI |
 
+`question` objects support:
+- `id`, `type`, `question`
+- `options` and `recommended` for choice questions
+- `scale_min`, `scale_max`, `scale_min_label`, `scale_max_label` for scale questions
+- `allowBlank` for `text` questions when an intentionally empty response should be submittable
+
 Use this when the agent needs explicit confirmation or a bounded choice rather than guessing.
 
 ### switch_mode
@@ -974,6 +980,25 @@ Set `agentlink.masterBypass` to `true` in settings to skip all approval prompts.
 When you approve a command or file write, the approval is remembered for a short window (default: 60 seconds). Repeat identical operations within that window are auto-approved without prompting.
 
 Configure with `agentlink.recentApprovalTtl` (seconds). Set to `0` to disable.
+
+## Browser Remote Session Control
+
+AgentLink can be driven from a browser on the same machine for remote interaction with a running built-in agent session. Open the UI with **AgentLink: Open Browser Gateway** from the command palette.
+
+A shared local helper process serves the browser UI on a stable configured port (`agentlink.browserGatewayPort`, default `47137`) so the URL is bookmarkable. When multiple VS Code windows are open, each registers a per-window API/SSE bridge and the browser can switch between them by instance from a single URL.
+
+The browser surface supports:
+
+- live transcript viewing and send
+- approvals and structured questions
+- background task visibility
+- read-only diff review
+- read-only command/output visibility
+- mode, model, and write-approval selectors
+- `@` project-file mentions and external-file attach (routed through VS Code's file picker)
+- media paste and drag-drop (images/PDFs)
+
+It is **not** a full browser IDE — diff apply and terminal interaction intentionally stay in VS Code. The gateway is designed for local/dev use; treat it as MVP-grade rather than final-hardened.
 
 ## Multi-Window Support
 

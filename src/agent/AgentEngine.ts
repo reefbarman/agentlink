@@ -30,6 +30,8 @@ import type {
   ToolDefinition,
   MessageParam,
   ImageBlock,
+  ModelCapabilities,
+  ReasoningEffort,
 } from "./providers/types.js";
 import { toSupportedImageMediaType } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
@@ -139,6 +141,18 @@ function isAuthError(msg: string): boolean {
  */
 const CONTEXT_WINDOW_SAFETY_BUFFER = 0.05;
 
+function normalizeReasoningEffort(
+  effort: ReasoningEffort,
+  capabilities: ModelCapabilities,
+): ReasoningEffort {
+  if (!capabilities.supportsThinking) return "none";
+  const supported = capabilities.reasoningEfforts;
+  if (!supported?.length || supported.includes(effort)) return effort;
+  const defaultEffort = capabilities.defaultReasoningEffort ?? "high";
+  if (supported.includes(defaultEffort)) return defaultEffort;
+  return supported[0] ?? "none";
+}
+
 /** Estimate the character size of a set of tool results (for token estimation). */
 function estimateToolResultChars(toolResults: ToolCallResult[]): number {
   return toolResults.reduce(
@@ -173,20 +187,29 @@ function getCondenseBudgetSnapshot(
   provider: ModelProvider,
 ): {
   usedTokens: number;
+  contextWindow: number;
+  maxInputTokens: number;
   outputReservation: number;
   safetyBufferTokens: number;
   softThresholdBudget: number;
   hardBudget: number;
   effectiveThreshold: number;
   triggerReason: "soft_threshold" | "hard_budget" | null;
+  basis: "input" | "total";
 } {
   const caps = provider.getCapabilities(session.model);
   const outputReservation = getOutputReservation(session, provider);
-  const safetyBufferTokens = Math.floor(
-    caps.contextWindow * CONTEXT_WINDOW_SAFETY_BUFFER,
+  const derivedInputLimit = Math.max(
+    0,
+    caps.contextWindow - caps.maxOutputTokens,
   );
-  // Use the session's running estimate: last API total + accumulated since then.
-  const usedTokens = session.estimatedTotalUsed;
+  const maxInputTokens = caps.maxInputTokens ?? derivedInputLimit;
+  const safetyBufferTokens = Math.floor(
+    maxInputTokens * CONTEXT_WINDOW_SAFETY_BUFFER,
+  );
+  // Providers reject oversized prompts based on request input, not previous output.
+  // For fixed-envelope models, usable input is contextWindow - maxOutputTokens.
+  const usedTokens = session.estimatedInputUsed;
   const cacheHitRatio =
     session.lastInputTokens > 0
       ? session.lastCacheReadTokens / session.lastInputTokens
@@ -195,13 +218,8 @@ function getCondenseBudgetSnapshot(
     session.autoCondenseThreshold + cacheHitRatio * 0.1,
     0.95,
   );
-  const softThresholdBudget = Math.floor(
-    caps.contextWindow * effectiveThreshold,
-  );
-  const hardBudget = Math.max(
-    0,
-    caps.contextWindow - safetyBufferTokens - outputReservation,
-  );
+  const softThresholdBudget = Math.floor(maxInputTokens * effectiveThreshold);
+  const hardBudget = Math.max(0, maxInputTokens - safetyBufferTokens);
   const triggerReason =
     usedTokens >= hardBudget
       ? "hard_budget"
@@ -211,12 +229,15 @@ function getCondenseBudgetSnapshot(
 
   return {
     usedTokens,
+    contextWindow: caps.contextWindow,
+    maxInputTokens,
     outputReservation,
     safetyBufferTokens,
     softThresholdBudget,
     hardBudget,
     effectiveThreshold,
     triggerReason,
+    basis: "input",
   };
 }
 
@@ -580,10 +601,14 @@ export class AgentEngine {
         let timeToFirstToken = 0;
 
         const capabilities = provider.getCapabilities(session.model);
-        const useThinking =
-          capabilities.supportsThinking && session.thinkingBudget > 0;
+        const reasoningEffort = normalizeReasoningEffort(
+          session.reasoningEffort,
+          capabilities,
+        );
+        const useThinking = reasoningEffort !== "none";
 
-        // When thinking is enabled, max_tokens must exceed budget_tokens
+        // When budget-based thinking is enabled, max_tokens must exceed budget_tokens.
+        // Effort-based providers still benefit from a larger output reservation.
         const maxTokens = useThinking
           ? Math.max(session.maxTokens, session.thinkingBudget + 4096)
           : session.maxTokens;
@@ -788,6 +813,7 @@ export class AgentEngine {
             thinking: useThinking
               ? { budgetTokens: session.thinkingBudget }
               : undefined,
+            reasoningEffort,
             cache: currentCache,
             state: currentState,
             signal: ac.signal,

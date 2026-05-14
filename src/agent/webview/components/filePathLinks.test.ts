@@ -33,6 +33,32 @@ describe("matchFilePaths", () => {
     ]);
   });
 
+  it("matches @-prefixed relative paths and strips @ from the opened file path", () => {
+    const text = "Look at @src/agent/webview/components/InputArea.tsx next";
+
+    expect(matchFilePaths(text)).toEqual([
+      {
+        fullMatch: "@src/agent/webview/components/InputArea.tsx",
+        filePath: "src/agent/webview/components/InputArea.tsx",
+        line: undefined,
+        index: 8,
+      },
+    ]);
+  });
+
+  it("matches @-prefixed relative paths with line numbers", () => {
+    const text = "Look at @src/agent/webview/components/InputArea.tsx:42 next";
+
+    expect(matchFilePaths(text)).toEqual([
+      {
+        fullMatch: "@src/agent/webview/components/InputArea.tsx:42",
+        filePath: "src/agent/webview/components/InputArea.tsx",
+        line: 42,
+        index: 8,
+      },
+    ]);
+  });
+
   it("does not include surrounding punctuation in the match prefix", () => {
     const text =
       "(/home/trist/workspace/native-claude/src/agent/webview/App.tsx)";

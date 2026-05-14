@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 
-import { cleanTerminalOutput } from "../util/ansi.js";
 import { buildAgentExecutionEnv } from "../process/agentExecutionPolicy.js";
+import { cleanTerminalOutput } from "../util/ansi.js";
 
 let terminalIconPath: vscode.Uri | undefined;
 
@@ -61,6 +61,7 @@ interface ManagedTerminal {
   cwd: string;
   busy: boolean;
   envKey?: string;
+  stale?: boolean;
   /** Timestamp when the last foreground command completed — used for reuse cooldown */
   lastCommandEndedAt: number;
   /** Accumulated output from the current shell integration execution */
@@ -87,6 +88,7 @@ export interface CommandResult {
   cwd?: string;
   output_captured: boolean;
   terminal_id: string;
+  terminal_name?: string;
   output_file?: string;
   output_warning?: string;
   total_lines?: number;
@@ -175,6 +177,75 @@ export class TerminalManager {
     return entries.map(([k, v]) => `${k}=${v}`).join("\n");
   }
 
+  private getOpenVscodeTerminals(): vscode.Terminal[] | undefined {
+    const maybeWindow =
+      "window" in vscode
+        ? (
+            vscode as unknown as {
+              window?: { terminals?: Iterable<vscode.Terminal> };
+            }
+          ).window
+        : undefined;
+    const terminals = maybeWindow?.terminals;
+    if (!terminals || typeof terminals[Symbol.iterator] !== "function") {
+      return undefined;
+    }
+    return [...terminals];
+  }
+
+  private adoptExistingAgentLinkTerminals(
+    openTerminals = this.getOpenVscodeTerminals(),
+  ): void {
+    if (!openTerminals) return;
+
+    for (const terminal of openTerminals) {
+      if (terminal.name !== "AgentLink") continue;
+      if (this.terminals.some((managed) => managed.terminal === terminal))
+        continue;
+      const cwd = terminal.shellIntegration?.cwd?.fsPath ?? "";
+      this.terminals.push({
+        id: `term_${nextTerminalId++}`,
+        terminal,
+        name: terminal.name,
+        cwd,
+        busy: false,
+        stale: true,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundRunning: false,
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+      });
+    }
+  }
+
+  private stopTrackingManagedTerminal(managed: ManagedTerminal): void {
+    this.rememberClosedTerminal(managed);
+    for (const d of managed.backgroundDisposables) d.dispose();
+    managed.backgroundDisposables = [];
+  }
+
+  private syncTerminalRegistry(): void {
+    const openTerminals = this.getOpenVscodeTerminals();
+    if (!openTerminals) return;
+
+    const openSet = new Set(openTerminals);
+    const retained: ManagedTerminal[] = [];
+
+    for (const managed of this.terminals) {
+      const terminal = managed.terminal as vscode.Terminal | undefined;
+      if (!terminal || openSet.has(terminal)) {
+        retained.push(managed);
+      } else {
+        this.stopTrackingManagedTerminal(managed);
+      }
+    }
+
+    this.terminals = retained;
+    this.adoptExistingAgentLinkTerminals(openTerminals);
+  }
+
   /** Wait until the terminal's reuse cooldown has elapsed. */
   private async waitForCooldown(managed: ManagedTerminal): Promise<void> {
     const remaining =
@@ -208,6 +279,8 @@ export class TerminalManager {
   }
 
   constructor() {
+    this.adoptExistingAgentLinkTerminals();
+
     // Clean up terminals that get closed
     this.disposables.push(
       vscode.window.onDidCloseTerminal((closedTerminal) => {
@@ -215,9 +288,7 @@ export class TerminalManager {
           (t) => t.terminal === closedTerminal,
         );
         for (const managed of closing) {
-          this.rememberClosedTerminal(managed);
-          for (const d of managed.backgroundDisposables) d.dispose();
-          managed.backgroundDisposables = [];
+          this.stopTrackingManagedTerminal(managed);
         }
         this.terminals = this.terminals.filter(
           (t) => t.terminal !== closedTerminal,
@@ -271,6 +342,7 @@ export class TerminalManager {
   private async resolveTerminal(
     options: ExecuteOptions,
   ): Promise<ManagedTerminal> {
+    this.syncTerminalRegistry();
     const { cwd, terminal_id, terminal_name, split_from } = options;
     const envKey = this.buildEnvKey(options.env);
 
@@ -278,6 +350,11 @@ export class TerminalManager {
     if (terminal_id) {
       const existing = this.terminals.find((t) => t.id === terminal_id);
       if (existing) {
+        if (existing.stale) {
+          throw new Error(
+            `Terminal ${terminal_id} was adopted after extension reload and needs a fresh AgentLink environment. Close it or use a new terminal.`,
+          );
+        }
         if (existing.envKey !== envKey) {
           throw new Error(
             `Terminal ${terminal_id} was created with a different env set. Use a different terminal_id/terminal_name or omit env to reuse.`,
@@ -307,6 +384,7 @@ export class TerminalManager {
           t.name === terminal_name &&
           !t.busy &&
           !t.backgroundRunning &&
+          !t.stale &&
           t.envKey === envKey,
       );
       if (existing) {
@@ -340,6 +418,7 @@ export class TerminalManager {
       (t) =>
         !t.busy &&
         !t.backgroundRunning &&
+        !t.stale &&
         t.name === "AgentLink" &&
         t.cwd === cwd &&
         t.envKey === envKey,
@@ -800,6 +879,7 @@ export class TerminalManager {
       ...(actualCwd && { cwd: actualCwd }),
       output_captured: true,
       terminal_id: managed.id,
+      terminal_name: managed.name,
       execution_mode: "shell_integration",
       command_sent: true,
     };
@@ -858,6 +938,7 @@ export class TerminalManager {
         "Command was sent to the terminal, but output capture is unavailable because shell integration is not active.",
       output_captured: false,
       terminal_id: managed.id,
+      terminal_name: managed.name,
       execution_mode: "send_text",
       command_sent: true,
       verification_hint:
@@ -1093,6 +1174,7 @@ export class TerminalManager {
       output: `Background command started in terminal "${managed.name}". Use terminal_id "${managed.id}" with get_terminal_output to check on progress.`,
       output_captured: false,
       terminal_id: managed.id,
+      terminal_name: managed.name,
       execution_mode: shellIntegration ? "shell_integration" : "send_text",
       command_sent: true,
       ...(shellIntegration
@@ -1206,11 +1288,15 @@ export class TerminalManager {
     id: string;
     name: string;
     busy: boolean;
+    stale?: boolean;
   }> {
+    this.syncTerminalRegistry();
+
     return this.terminals.map((t) => ({
       id: t.id,
       name: t.name,
-      busy: t.busy,
+      busy: t.busy || t.backgroundRunning,
+      ...(t.stale && { stale: true }),
     }));
   }
 

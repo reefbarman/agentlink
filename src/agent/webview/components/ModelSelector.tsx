@@ -1,4 +1,9 @@
-import { useState, useRef, useEffect } from "preact/hooks";
+import {
+  ToolbarControlButton,
+  ToolbarSelector,
+} from "../../../shared/ui/ToolbarSelector";
+import { useEffect, useRef, useState } from "preact/hooks";
+
 import type { WebviewModelInfo } from "../types";
 
 interface ModelSelectorProps {
@@ -104,120 +109,120 @@ export function ModelSelector({
   };
 
   return (
-    <div class="toolbar-selector" ref={ref}>
-      <button
-        class="toolbar-control model-selector-trigger"
-        onClick={() => !disabled && setOpen((o) => !o)}
-        disabled={disabled}
-        title={`Model: ${displayName} · Auto-condense ${thresholdText}`}
-        type="button"
-      >
-        <i class="codicon codicon-symbol-namespace" />
-        <span>{displayName}</span>
-        <span class="model-selector-threshold-badge">{thresholdText}</span>
-        <i
-          class={`codicon codicon-chevron-${open ? "up" : "down"} toolbar-selector-chevron`}
-        />
-      </button>
-      {open && (
-        <div class="toolbar-selector-dropdown model-selector-dropdown">
-          {Array.from(providers.entries()).map(
-            ([provider, providerModels], groupIdx) => (
-              <div key={provider}>
-                {providers.size > 1 && (
-                  <>
-                    {groupIdx > 0 && <div class="toolbar-selector-divider" />}
-                    <div class="toolbar-selector-group-label">
-                      <i class={`codicon codicon-${providerIcon(provider)}`} />
-                      <span>{provider}</span>
-                    </div>
-                  </>
-                )}
-                {providerModels.map((m) => {
-                  const isCurrent = m.id === currentModel;
-                  const optionThreshold = getModelThreshold(
-                    m,
-                    currentModel,
-                    effectiveCurrentThreshold,
-                  );
-                  const optionThresholdText = thresholdLabel(optionThreshold);
-                  return (
-                    <div key={m.id} class="model-selector-option-wrap">
-                      <button
-                        class={`toolbar-selector-option ${isCurrent ? "active" : ""} ${!m.authenticated ? "disabled" : ""}`}
-                        onClick={() => {
-                          if (m.authenticated) {
-                            handleSelect(m.id);
-                          } else if (onSignIn) {
-                            setOpen(false);
-                            onSignIn(m.provider);
-                          }
+    <ToolbarSelector
+      containerRef={ref}
+      open={open}
+      dropdownClassName="model-selector-dropdown"
+      trigger={
+        <ToolbarControlButton
+          className="model-selector-trigger"
+          onClick={() => !disabled && setOpen((o) => !o)}
+          disabled={disabled}
+          title={`Model: ${displayName} · Auto-condense ${thresholdText}`}
+          type="button"
+        >
+          <i class="codicon codicon-symbol-namespace" />
+          <span>{displayName}</span>
+          <span class="model-selector-threshold-badge">{thresholdText}</span>
+          <i
+            class={`codicon codicon-chevron-${open ? "up" : "down"} toolbar-selector-chevron`}
+          />
+        </ToolbarControlButton>
+      }
+    >
+      {Array.from(providers.entries()).map(
+        ([provider, providerModels], groupIdx) => (
+          <div key={provider}>
+            {providers.size > 1 && (
+              <>
+                {groupIdx > 0 && <div class="toolbar-selector-divider" />}
+                <div class="toolbar-selector-group-label">
+                  <i class={`codicon codicon-${providerIcon(provider)}`} />
+                  <span>{provider}</span>
+                </div>
+              </>
+            )}
+            {providerModels.map((m) => {
+              const isCurrent = m.id === currentModel;
+              const optionThreshold = getModelThreshold(
+                m,
+                currentModel,
+                effectiveCurrentThreshold,
+              );
+              const optionThresholdText = thresholdLabel(optionThreshold);
+              return (
+                <div key={m.id} class="model-selector-option-wrap">
+                  <button
+                    class={`toolbar-selector-option ${isCurrent ? "active" : ""} ${!m.authenticated ? "disabled" : ""}`}
+                    onClick={() => {
+                      if (m.authenticated) {
+                        handleSelect(m.id);
+                      } else if (onSignIn) {
+                        setOpen(false);
+                        onSignIn(m.provider);
+                      }
+                    }}
+                    type="button"
+                  >
+                    <span>{m.displayName}</span>
+                    <span
+                      class={`model-selector-option-threshold ${isCurrent ? "interactive" : ""}`}
+                      title={
+                        isCurrent
+                          ? `Auto-condense ${optionThresholdText} — click to adjust`
+                          : `Auto-condense ${optionThresholdText}`
+                      }
+                      onClick={(e) => {
+                        if (!isCurrent) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSliderOpen((v) => !v);
+                      }}
+                    >
+                      {optionThresholdText}
+                      {isCurrent && <i class="codicon codicon-settings-gear" />}
+                    </span>
+                    {isCurrent && (
+                      <i class="codicon codicon-check toolbar-selector-check" />
+                    )}
+                    {!m.authenticated && (
+                      <span class="toolbar-selector-sign-in">Sign in</span>
+                    )}
+                  </button>
+                  {isCurrent && sliderOpen && onSetCondenseThreshold && (
+                    <div
+                      class="model-selector-slider-panel"
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div class="model-selector-slider-header">
+                        <span>Auto-condense</span>
+                        <span>{optionThresholdText}</span>
+                      </div>
+                      <input
+                        class="model-selector-slider"
+                        type="range"
+                        min={10}
+                        max={100}
+                        step={1}
+                        value={Math.round(
+                          (effectiveCurrentThreshold ?? 0.9) * 100,
+                        )}
+                        onInput={(e) => {
+                          const next = Number(
+                            (e.currentTarget as HTMLInputElement).value,
+                          );
+                          setDraftThreshold(next / 100);
                         }}
-                        type="button"
-                      >
-                        <span>{m.displayName}</span>
-                        <span
-                          class={`model-selector-option-threshold ${isCurrent ? "interactive" : ""}`}
-                          title={
-                            isCurrent
-                              ? `Auto-condense ${optionThresholdText} — click to adjust`
-                              : `Auto-condense ${optionThresholdText}`
-                          }
-                          onClick={(e) => {
-                            if (!isCurrent) return;
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setSliderOpen((v) => !v);
-                          }}
-                        >
-                          {optionThresholdText}
-                          {isCurrent && (
-                            <i class="codicon codicon-settings-gear" />
-                          )}
-                        </span>
-                        {isCurrent && (
-                          <i class="codicon codicon-check toolbar-selector-check" />
-                        )}
-                        {!m.authenticated && (
-                          <span class="toolbar-selector-sign-in">Sign in</span>
-                        )}
-                      </button>
-                      {isCurrent && sliderOpen && onSetCondenseThreshold && (
-                        <div
-                          class="model-selector-slider-panel"
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div class="model-selector-slider-header">
-                            <span>Auto-condense</span>
-                            <span>{optionThresholdText}</span>
-                          </div>
-                          <input
-                            class="model-selector-slider"
-                            type="range"
-                            min={10}
-                            max={100}
-                            step={1}
-                            value={Math.round(
-                              (effectiveCurrentThreshold ?? 0.9) * 100,
-                            )}
-                            onInput={(e) => {
-                              const next = Number(
-                                (e.currentTarget as HTMLInputElement).value,
-                              );
-                              setDraftThreshold(next / 100);
-                            }}
-                          />
-                        </div>
-                      )}
+                      />
                     </div>
-                  );
-                })}
-              </div>
-            ),
-          )}
-        </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ),
       )}
-    </div>
+    </ToolbarSelector>
   );
 }

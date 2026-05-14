@@ -1,11 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
+
 import type { AgentMessage, SessionInfo } from "./types.js";
-import type { Checkpoint } from "./CheckpointManager.js";
 import {
-  buildSessionTitleFromUserText,
   DEFAULT_SESSION_TITLE,
+  buildSessionTitleFromUserText,
 } from "./sessionTitle.js";
+
+import type { Checkpoint } from "./CheckpointManager.js";
 
 /**
  * Persisted session index entry — lightweight metadata kept in sessions.json.
@@ -44,6 +46,7 @@ interface MetadataFile {
   totalCacheCreationTokens?: number;
   lastInputTokens?: number;
   lastCacheReadTokens?: number;
+  reasoningEffort?: import("./providers/types.js").ReasoningEffort;
   loadedSkills?: string[];
   checkpoints?: Checkpoint[];
 }
@@ -135,6 +138,7 @@ export class SessionStore {
     totalCacheCreationTokens: number;
     lastInputTokens: number;
     lastCacheReadTokens: number;
+    reasoningEffort?: import("./providers/types.js").ReasoningEffort;
     background?: boolean;
     getLoadedSkills?(): string[];
     getAllMessages(): AgentMessage[];
@@ -165,6 +169,7 @@ export class SessionStore {
       totalCacheCreationTokens: session.totalCacheCreationTokens,
       lastInputTokens: session.lastInputTokens,
       lastCacheReadTokens: session.lastCacheReadTokens,
+      reasoningEffort: session.reasoningEffort,
       loadedSkills: session.getLoadedSkills?.() ?? [],
       checkpoints: session.checkpoints,
     };

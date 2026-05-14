@@ -2,6 +2,8 @@
 !dist/extension.js
 !dist/extension.js.map
 !dist/indexer-worker.js
+!dist/browser-gateway-helper.js
+!dist/browser-gateway-helper.js.map
 !dist/wasm/**
 !dist/sidebar.js
 !dist/sidebar.css
@@ -11,6 +13,8 @@
 !dist/fr-preview.css
 !dist/chat.js
 !dist/chat.css
+!dist/browser-gateway.js
+!dist/browser-gateway.css
 !dist/codicon.css
 !dist/codicon.ttf
 !package.json

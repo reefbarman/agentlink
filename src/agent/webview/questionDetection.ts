@@ -1,13 +1,9 @@
-export interface DetectedQuestionOption {
-  label: string;
-  payload: string;
-}
+import type {
+  DetectedQuestion,
+  DetectedQuestionOption,
+} from "../../shared/questionDetection";
 
-export interface DetectedQuestion {
-  kind: "yes_no" | "single_choice";
-  prompt: string;
-  options: DetectedQuestionOption[];
-}
+export type { DetectedQuestion, DetectedQuestionOption };
 
 function stripCodeBlocks(text: string): string {
   return text.replace(/```[\s\S]*?```/g, " ");

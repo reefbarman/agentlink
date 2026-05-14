@@ -33,7 +33,11 @@ export function validateCommand(command: string): ValidationResult | null {
   const directViolation = checkDirectFileCommands(command);
   if (directViolation) return directViolation;
 
-  // Check 2: Piped filtering (cmd | head/tail/grep)
+  // Check 2: Inline scripting used to write files outside write_file/apply_diff
+  const inlineScriptWriteViolation = checkInlineScriptFileWriters(command);
+  if (inlineScriptWriteViolation) return inlineScriptWriteViolation;
+
+  // Check 3: Piped filtering (cmd | head/tail/grep)
   return detectPipedFiltering(command);
 }
 
@@ -274,6 +278,98 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
   return null;
 }
 
+interface InlineInterpreter {
+  /** Commands that invoke this interpreter (matched against argv[0]) */
+  commands: Set<string>;
+  /** Display name used in the rejection message */
+  displayName: string;
+  /** Flags that pass a script inline (e.g. "-c", "-e") */
+  inlineFlags: Set<string>;
+  /** Detects a file-write API call in the script body */
+  writesFile: (script: string) => boolean;
+}
+
+const INLINE_INTERPRETERS: InlineInterpreter[] = [
+  {
+    commands: new Set(["python", "python3"]),
+    displayName: "Python",
+    inlineFlags: new Set(["-c", "--command"]),
+    writesFile: containsPythonFileWrite,
+  },
+  {
+    commands: new Set(["node", "bun", "deno", "tsx", "ts-node"]),
+    displayName: "JavaScript/TypeScript",
+    inlineFlags: new Set(["-e", "--eval", "-p", "--print"]),
+    writesFile: containsJsFileWrite,
+  },
+  {
+    commands: new Set(["perl"]),
+    displayName: "Perl",
+    inlineFlags: new Set(["-e", "-E"]),
+    writesFile: containsPerlFileWrite,
+  },
+  {
+    commands: new Set(["ruby"]),
+    displayName: "Ruby",
+    inlineFlags: new Set(["-e"]),
+    writesFile: containsRubyFileWrite,
+  },
+  {
+    commands: new Set(["osascript"]),
+    displayName: "osascript",
+    inlineFlags: new Set(["-e"]),
+    writesFile: containsOsascriptFileWrite,
+  },
+];
+
+function checkInlineScriptFileWriters(
+  command: string,
+): ValidationResult | null {
+  // Heredoc bodies commonly contain semicolons. Check the full command first so
+  // compound splitting does not detach the interpreter invocation from its body.
+  if (command.includes("<<")) {
+    const heredocMatch = extractInlineInterpreterScript(command.trim());
+    if (heredocMatch?.interpreter.writesFile(heredocMatch.script)) {
+      return buildInlineScriptWriteViolation(heredocMatch.interpreter);
+    }
+  }
+
+  const subCommands = splitOnCompoundOperators(command);
+
+  for (const sub of subCommands) {
+    const trimmed = sub.trim();
+    if (!trimmed) continue;
+
+    const pipeSegments = splitOnUnquotedPipes(trimmed);
+    for (const rawSegment of pipeSegments) {
+      const segment = rawSegment.trim();
+      if (!segment) continue;
+
+      const match = extractInlineInterpreterScript(segment);
+      if (!match) continue;
+
+      if (!match.interpreter.writesFile(match.script)) continue;
+
+      return buildInlineScriptWriteViolation(match.interpreter);
+    }
+  }
+
+  return null;
+}
+
+function buildInlineScriptWriteViolation(
+  interpreter: InlineInterpreter,
+): ValidationResult {
+  return {
+    type: "direct",
+    message: [
+      `Command rejected: inline ${interpreter.displayName} that writes files should not be run in the terminal — it bypasses user review.`,
+      ``,
+      `Use the write_file or apply_diff tool instead — they open a diff view for the user to review and approve changes, and return diagnostics from the language server.`,
+    ].join("\n"),
+  };
+}
+
 /**
  * Find the file/path argument in a token list (skip flags and their values).
  * For grep, the file arg is the second positional arg (first is the pattern).
@@ -381,6 +477,129 @@ function findTeeFileTargets(args: string[]): string[] {
   }
 
   return files;
+}
+
+function extractInlineInterpreterScript(
+  segment: string,
+): { interpreter: InlineInterpreter; script: string } | null {
+  const tokens = tokenize(segment);
+  if (tokens.length === 0) return null;
+
+  // Strip an optional `npx` prefix so `npx tsx -e '...'` matches the tsx entry.
+  let cmdIndex = 0;
+  if (tokens[0] === "npx") {
+    // Skip npx flags like -y / --yes / -p <pkg>
+    let j = 1;
+    while (j < tokens.length && tokens[j].startsWith("-")) {
+      if (tokens[j] === "-p" || tokens[j] === "--package") j += 2;
+      else j++;
+    }
+    if (j >= tokens.length) return null;
+    cmdIndex = j;
+  }
+
+  const cmd = tokens[cmdIndex];
+  const interpreter = INLINE_INTERPRETERS.find((i) => i.commands.has(cmd));
+  if (!interpreter) return null;
+
+  if (segment.includes("<<")) {
+    return { interpreter, script: segment };
+  }
+
+  for (let i = cmdIndex + 1; i < tokens.length; i++) {
+    const token = tokens[i];
+
+    if (interpreter.inlineFlags.has(token) && i + 1 < tokens.length) {
+      return { interpreter, script: stripQuotes(tokens[i + 1]) };
+    }
+
+    // Combined short form like -c<script> or -e<script>
+    for (const flag of interpreter.inlineFlags) {
+      if (flag.length !== 2 || !flag.startsWith("-")) continue;
+      if (token.length <= flag.length || !token.startsWith(flag)) continue;
+      return { interpreter, script: stripQuotes(token.slice(flag.length)) };
+    }
+  }
+
+  return null;
+}
+
+function containsPythonFileWrite(script: string): boolean {
+  return (
+    /\.write_text\s*\(/s.test(script) ||
+    /\.write_bytes\s*\(/s.test(script) ||
+    /\.open\s*\(\s*([rubt]*)(['"])(?:w|a|x|wb|ab|xb|wt|at|xt)\2/s.test(
+      script,
+    ) ||
+    /\bopen\s*\([^,\n]+,\s*([rubt]*)(['"])(?:w|a|x|wb|ab|xb|wt|at|xt)\2/s.test(
+      script,
+    )
+  );
+}
+
+function containsJsFileWrite(script: string): boolean {
+  return (
+    // Node fs — writeFileSync, appendFileSync, createWriteStream, writeSync, cpSync (copyFileSync), renameSync, etc.
+    /\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|truncateSync|mkdirSync|rmSync|rmdirSync|unlinkSync|symlinkSync|linkSync|chmodSync|chownSync)\s*\(/s.test(
+      script,
+    ) ||
+    // Promises / async forms: fs.writeFile(…), fs.promises.writeFile, await writeFile(…)
+    /\b(?:fs|fsp|fsPromises)\s*\.\s*(?:promises\s*\.\s*)?(?:writeFile|appendFile|copyFile|rename|truncate|mkdir|rm|rmdir|unlink|symlink|link|chmod|chown)\s*\(/s.test(
+      script,
+    ) ||
+    // fs.promises destructuring / direct imports: writeFile(path, data)
+    /\b(?:writeFile|appendFile)\s*\([^)]*,\s*/s.test(script) ||
+    // Bun
+    /\bBun\s*\.\s*write\s*\(/s.test(script) ||
+    // Deno
+    /\bDeno\s*\.\s*(?:writeTextFile|writeFile|create|remove|rename|mkdir|copyFile|symlink|link|chmod|chown)(?:Sync)?\s*\(/s.test(
+      script,
+    )
+  );
+}
+
+function containsPerlFileWrite(script: string): boolean {
+  // Perl open in write/append mode: open(FH, ">file"), open FH, ">>file", three-arg open(FH, ">", $file)
+  if (/\bopen\s*\(?\s*[\w$]+\s*,\s*["']\s*[>+]{1,2}/s.test(script)) return true;
+  // Three-arg open with mode as its own argument
+  if (/\bopen\s*\(?\s*[\w$]+\s*,\s*["']\s*[>+]{1,2}\s*["']\s*,/s.test(script))
+    return true;
+  // File-mutating built-ins
+  if (
+    /\b(?:unlink|rename|symlink|link|mkdir|rmdir|chmod|chown|truncate)\s*\(/.test(
+      script,
+    )
+  )
+    return true;
+  return false;
+}
+
+function containsRubyFileWrite(script: string): boolean {
+  // File.write(path, data) / IO.write(…) are always writes
+  if (/\b(?:File|IO)\s*\.\s*write\s*\(/s.test(script)) return true;
+  // File.open(path, "w"|"a"|"w+"|"a+"|"wb"|"ab") — mode string indicates write
+  if (
+    /\bFile\s*\.\s*(?:open|new)\s*\([^)]*["'](?:w|a|r\+|w\+|a\+|wb|ab)["']/s.test(
+      script,
+    )
+  )
+    return true;
+  // FileUtils mutating operations
+  if (
+    /\bFileUtils\s*\.\s*(?:cp|mv|mkdir|mkdir_p|rm|rm_r|rm_rf|touch|chmod|chown|ln_s)\b/s.test(
+      script,
+    )
+  )
+    return true;
+  return false;
+}
+
+function containsOsascriptFileWrite(script: string): boolean {
+  // AppleScript file writes: "write … to file", "open for access … with write permission"
+  return (
+    /\bwrite\s+.+\s+to\s+(?:file|POSIX\s+file)/is.test(script) ||
+    /\bopen\s+for\s+access\b/is.test(script)
+  );
 }
 
 function hasOutputRedirection(command: string): boolean {

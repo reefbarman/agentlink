@@ -438,6 +438,32 @@ body {
 .rule-pattern-input.skipped {
   opacity: 0.6;
 }
+.rule-suggest-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.rule-suggest-btn:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+.rule-suggest-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.rule-row-suggest-error {
+  font-size: 11px;
+  color: var(--vscode-errorForeground);
+  margin-bottom: 6px;
+}
 .rule-row-options {
   display: flex;
   flex-direction: column;

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.10.20",
+  "version": "1.11.19",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -104,6 +104,22 @@
       {
         "command": "agentlink.completeToolCall",
         "title": "AgentLink: Complete Tool Call"
+      },
+      {
+        "command": "agentlink.openBrowserGateway",
+        "title": "AgentLink: Open Browser Gateway"
+      },
+      {
+        "command": "agentlink.showBrowserGatewayStatus",
+        "title": "AgentLink: Show Browser Gateway Status"
+      },
+      {
+        "command": "agentlink.pairBrowserDevice",
+        "title": "AgentLink: Pair Browser Device"
+      },
+      {
+        "command": "agentlink.managePairedDevices",
+        "title": "AgentLink: Manage Paired Browser Devices"
       },
       {
         "command": "agentlink.setOpenaiApiKey",
@@ -215,6 +231,23 @@
           "default": 0,
           "description": "HTTP port for the MCP server. Use 0 (default) for an OS-assigned port — required for multi-window support. Set a fixed port only if you need a stable URL."
         },
+        "agentlink.browserGatewayPort": {
+          "type": "number",
+          "default": 47137,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Stable localhost port for the shared AgentLink browser gateway helper. Use a fixed value so the remote UI URL is bookmarkable."
+        },
+        "agentlink.browserGatewayLanAccess": {
+          "type": "boolean",
+          "default": false,
+          "description": "Expose the browser gateway on your LAN so phones and other devices can connect (e.g. http://agentlink.local:<port>). Requires per-device pairing (run /pair in the chat, then enter the code on the new device). When disabled the gateway only accepts loopback connections. AgentLink will restart the shared gateway helper automatically the next time it's used after this setting changes."
+        },
+        "agentlink.browserGatewayMdnsName": {
+          "type": "string",
+          "default": "agentlink",
+          "description": "Hostname to advertise over mDNS when LAN access is enabled (resolves as <name>.local on the same network). If the name collides on the network, a short suffix is appended automatically."
+        },
         "agentlink.autoStart": {
           "type": "boolean",
           "default": true,
@@ -270,6 +303,86 @@
           "type": "string",
           "default": "http://localhost:6333",
           "description": "Qdrant vector database URL for semantic codebase search"
+        },
+        "agentlink.openaiCompatible.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:1234/v1",
+          "description": "OpenAI-compatible base URL used by helper-model features (question detection, background-agent summaries). Examples: LM Studio http://127.0.0.1:1234/v1, OpenAI https://api.openai.com/v1, OpenRouter https://openrouter.ai/api/v1."
+        },
+        "agentlink.openaiCompatible.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model id for the OpenAI-compatible endpoint. Leave empty to let the server pick (LM Studio uses the loaded model)."
+        },
+        "agentlink.openaiCompatible.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional API key sent as Bearer token. LM Studio ignores it; hosted endpoints (OpenAI, OpenRouter, etc.) require it."
+        },
+        "agentlink.openaiCompatible.timeoutMs": {
+          "type": "number",
+          "default": 5000,
+          "description": "Max milliseconds to wait for the OpenAI-compatible endpoint before falling back."
+        },
+        "agentlink.questionDetection.mode": {
+          "type": "string",
+          "enum": [
+            "heuristic",
+            "agent",
+            "openai"
+          ],
+          "enumDescriptions": [
+            "Use the built-in regex heuristic (no LLM call).",
+            "Use the current chat provider's low-tier model (Claude Haiku, gpt-5.4-mini, etc.). Spends your provider quota on every idle turn.",
+            "Use the OpenAI-compatible endpoint configured under agentlink.openaiCompatible.*."
+          ],
+          "default": "heuristic",
+          "description": "How to detect whether the agent is asking a question before it idles, and generate answer buttons."
+        },
+        "agentlink.bgSummary.mode": {
+          "type": "string",
+          "enum": [
+            "agent",
+            "openai",
+            "heuristic"
+          ],
+          "enumDescriptions": [
+            "Use the background session's own provider (Haiku / gpt-5.4-mini family).",
+            "Use the OpenAI-compatible endpoint configured under agentlink.openaiCompatible.*.",
+            "Skip the LLM call and show only the inferred phase status."
+          ],
+          "default": "agent",
+          "description": "How the tiny status string shown for background agents is summarized."
+        },
+        "agentlink.questionDetection.llmEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deprecated: use agentlink.questionDetection.mode instead. When true, mapped to mode=\"openai\".",
+          "deprecationMessage": "Use agentlink.questionDetection.mode instead."
+        },
+        "agentlink.questionDetection.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Deprecated: use agentlink.openaiCompatible.baseUrl instead.",
+          "deprecationMessage": "Use agentlink.openaiCompatible.baseUrl instead."
+        },
+        "agentlink.questionDetection.model": {
+          "type": "string",
+          "default": "",
+          "description": "Deprecated: use agentlink.openaiCompatible.model instead.",
+          "deprecationMessage": "Use agentlink.openaiCompatible.model instead."
+        },
+        "agentlink.questionDetection.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Deprecated: use agentlink.openaiCompatible.apiKey instead.",
+          "deprecationMessage": "Use agentlink.openaiCompatible.apiKey instead."
+        },
+        "agentlink.questionDetection.timeoutMs": {
+          "type": "number",
+          "default": 0,
+          "description": "Deprecated: use agentlink.openaiCompatible.timeoutMs instead.",
+          "deprecationMessage": "Use agentlink.openaiCompatible.timeoutMs instead."
         },
         "agentlink.autoIndex": {
           "type": "boolean",
@@ -430,7 +543,7 @@
     "package": "vsce package",
     "release": "bash scripts/release.sh",
     "benchmark:codex-oauth-models": "node --experimental-strip-types scripts/benchmark-codex-oauth-models.mts",
-    "lint": "bash -c 'e=0; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; oxlint src/ --deny-warnings || e=1; exit $e'",
+    "lint": "bash -c 'e=0; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; oxlint src/ --deny-warnings || e=1; exit $e'",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -438,13 +551,18 @@
     "@anthropic-ai/sdk": "^0.78.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@tanstack/virtual-core": "^3.13.20",
+    "@types/multicast-dns": "^7.2.4",
     "@vscode/codicons": "^0.0.44",
     "@vscode/tree-sitter-wasm": "^0.3.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "diff": "^8.0.3",
     "dompurify": "^3.3.2",
+    "eslint": "^10.2.1",
     "gray-matter": "^4.0.3",
     "marked": "^17.0.4",
-    "mermaid": "^11.12.3",
+    "mermaid": "^11.14.0",
+    "multicast-dns": "^7.2.5",
     "openai": "^6.32.0",
     "picomatch": "^4.0.3",
     "preact": "^10.28.4",
@@ -456,6 +574,9 @@
     "zod": "^4.3.6",
     "zod-to-json-schema": "^3.25.1"
   },
+  "overrides": {
+    "uuid": "^14.0.0"
+  },
   "devDependencies": {
     "@testing-library/preact": "^3.2.4",
     "@types/dompurify": "^3.0.5",
@@ -464,6 +585,7 @@
     "@types/vscode": "^1.109.0",
     "@vitest/coverage-v8": "^4.0.18",
     "esbuild": "^0.27.3",
+    "jsdom": "^29.0.2",
     "oxlint": "^1.53.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"

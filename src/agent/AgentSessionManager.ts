@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
-import type { AgentConfig, SessionInfo } from "./types.js";
+import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
 import { hasPendingTodos, todoTool, type TodoItem } from "./todoTool.js";
 import { AgentSession } from "./AgentSession.js";
 import { AgentEngine } from "./AgentEngine.js";
@@ -23,6 +23,22 @@ import {
 import { providerRegistry } from "./providers/index.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
 import { CODEX_CONDENSE_MODEL_FALLBACKS } from "./providers/codex/models.js";
+import {
+  callOpenAiCompatibleChat,
+  getOpenAiCompatibleEndpoint,
+} from "./openaiCompatibleClient.js";
+
+export type BgSummaryMode = "agent" | "openai" | "heuristic";
+
+export function getBgSummaryMode(): BgSummaryMode {
+  const value = vscode.workspace
+    .getConfiguration("agentlink")
+    .get<string>("bgSummary.mode", "agent");
+  if (value === "agent" || value === "openai" || value === "heuristic") {
+    return value;
+  }
+  return "agent";
+}
 import {
   getConfiguredBaseThresholdForModel,
   getEffectiveAutoCondenseThreshold,
@@ -305,6 +321,7 @@ export class AgentSessionManager {
         totalCacheCreationTokens: session.totalCacheCreationTokens,
         lastInputTokens: session.lastInputTokens,
         lastCacheReadTokens: session.lastCacheReadTokens,
+        reasoningEffort: session.reasoningEffort,
         background: session.background,
         getLoadedSkills: () => session.getLoadedSkills(),
         getAllMessages: () => session.getAllMessages(),
@@ -339,10 +356,12 @@ export class AgentSessionManager {
     mode: string,
     opts?: {
       thinkingEnabled?: boolean;
+      reasoningEffort?: import("./providers/types.js").ReasoningEffort;
       activeFilePath?: string;
       displayText?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
+      origin?: "vscode" | "browser";
       images?: Array<{ name: string; mimeType: string; base64: string }>;
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
     },
@@ -357,11 +376,19 @@ export class AgentSessionManager {
       });
     }
 
-    // Update thinking budget based on toggle (0 = disabled)
-    if (opts?.thinkingEnabled === false) {
+    // Update reasoning effort. Legacy callers can still send thinkingEnabled.
+    if (opts?.reasoningEffort) {
+      session.reasoningEffort = opts.reasoningEffort;
+    } else if (opts?.thinkingEnabled === false) {
+      session.reasoningEffort = "none";
+    } else if (session.reasoningEffort === "none") {
+      session.reasoningEffort = "high";
+    }
+
+    // Keep the legacy budget field in sync for budget-based providers.
+    if (session.reasoningEffort === "none") {
       session.thinkingBudget = 0;
     } else if (session.thinkingBudget === 0) {
-      // Re-enable with config default
       session.thinkingBudget = this.config.thinkingBudget;
     }
 
@@ -396,6 +423,7 @@ export class AgentSessionManager {
       displayText: opts?.displayText,
       isSlashCommand: opts?.isSlashCommand === true,
       slashCommandLabel: opts?.slashCommandLabel,
+      origin: opts?.origin,
     });
 
     // Store pasted images/PDFs bound to the just-added user message index.
@@ -973,6 +1001,14 @@ export class AgentSessionManager {
     return this.store?.list() ?? [];
   }
 
+  getPersistedSessionSummary(sessionId: string): SessionSummary | undefined {
+    return this.store?.get(sessionId);
+  }
+
+  getPersistedSessionMessages(sessionId: string): AgentMessage[] | null {
+    return this.store?.loadMessages(sessionId) ?? null;
+  }
+
   /**
    * Load a persisted session's message history into memory and make it the
    * foreground session. Returns the loaded session or null if not found.
@@ -1019,6 +1055,7 @@ export class AgentSessionManager {
       lastInputTokens: metadata?.lastInputTokens ?? 0,
       // Use 0 for resumed sessions so cache-aware threshold isn't biased by stale prior runs.
       lastCacheReadTokens: 0,
+      reasoningEffort: metadata?.reasoningEffort,
       loadedSkills: metadata?.loadedSkills ?? [],
       messages,
     });
@@ -1762,6 +1799,9 @@ export class AgentSessionManager {
     resultText?: string;
     errorMessage?: string;
   }): Promise<void> {
+    const mode = getBgSummaryMode();
+    if (mode === "heuristic") return;
+
     const summary = this.getOrInitBgSummary(args.sessionId);
     const now = Date.now();
     const cooldownMs = 10_000;
@@ -1792,26 +1832,7 @@ export class AgentSessionManager {
       const session = this.sessions.get(args.sessionId);
       if (!session) return;
 
-      const provider = providerRegistry.tryResolveProvider(session.model);
-      if (!provider) {
-        summary.lastFailureAt = Date.now();
-        summary.lastFailureReason = `No provider for model ${session.model}`;
-        summary.needsRefresh = false;
-        return;
-      }
-
-      const modelCandidates =
-        provider.id === "codex"
-          ? ["gpt-5.4-mini", ...CODEX_CONDENSE_MODEL_FALLBACKS]
-          : [provider.condenseModel];
-      const uniqueModels = [...new Set(modelCandidates)];
-
-      let selectedModel: string | undefined;
-      let fallbackUsed = false;
-      let text = "";
-      let lastError = "";
-
-      const prompt = [
+      const systemPrompt = [
         "Summarize the background agent's current state for a tiny UI status area.",
         "Return ONLY JSON with shape:",
         '{"status":"string","confidence":0.0}',
@@ -1826,22 +1847,58 @@ export class AgentSessionManager {
         `Context:\n${contextText}`,
       ].join("\n\n");
 
-      for (let i = 0; i < uniqueModels.length; i++) {
-        const model = uniqueModels[i];
+      let text = "";
+      let selectedModel: string | undefined;
+      let fallbackUsed = false;
+      let lastError = "";
+
+      if (mode === "openai") {
+        const endpoint = getOpenAiCompatibleEndpoint();
         try {
-          const result = await provider.complete({
-            model,
-            systemPrompt: prompt,
-            messages: [{ role: "user", content: userPayload }],
+          const result = await callOpenAiCompatibleChat({
+            endpoint,
+            systemPrompt,
+            userContent: userPayload,
             maxTokens: 120,
             temperature: 0,
           });
-          selectedModel = model;
-          fallbackUsed = i > 0;
-          text = result.text;
-          break;
+          text = result.content;
+          selectedModel = endpoint.model || "openai-compatible";
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
+        }
+      } else {
+        const provider = providerRegistry.tryResolveProvider(session.model);
+        if (!provider) {
+          summary.lastFailureAt = Date.now();
+          summary.lastFailureReason = `No provider for model ${session.model}`;
+          summary.needsRefresh = false;
+          return;
+        }
+
+        const modelCandidates =
+          provider.id === "codex"
+            ? ["gpt-5.4-mini", ...CODEX_CONDENSE_MODEL_FALLBACKS]
+            : [provider.condenseModel];
+        const uniqueModels = [...new Set(modelCandidates)];
+
+        for (let i = 0; i < uniqueModels.length; i++) {
+          const model = uniqueModels[i];
+          try {
+            const result = await provider.complete({
+              model,
+              systemPrompt,
+              messages: [{ role: "user", content: userPayload }],
+              maxTokens: 120,
+              temperature: 0,
+            });
+            selectedModel = model;
+            fallbackUsed = i > 0;
+            text = result.text;
+            break;
+          } catch (err) {
+            lastError = err instanceof Error ? err.message : String(err);
+          }
         }
       }
 

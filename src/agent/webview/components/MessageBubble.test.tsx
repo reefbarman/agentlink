@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/preact";
+import { fireEvent, render, screen } from "@testing-library/preact";
 
-import { MessageBubble } from "./MessageBubble";
 import type { ChatMessage } from "../types";
+import { MessageBubble } from "./MessageBubble";
 
 describe("MessageBubble slash-command rendering", () => {
   it("renders standalone slash command as a tool-call-style block with args", () => {
@@ -72,6 +72,66 @@ describe("MessageBubble slash-command rendering", () => {
     expect(screen.getByText("Please inspect this file")).toBeTruthy();
   });
 
+  it("renders inline @path mentions as clickable file links in user text", () => {
+    const onOpenFile = vi.fn();
+    const message: ChatMessage = {
+      id: "user-inline-mention",
+      role: "user",
+      content: "Please check @src/agent/webview/App.tsx before continuing",
+      timestamp: Date.now(),
+      blocks: [],
+    };
+
+    const { container } = render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const fileLink = container.querySelector(
+      ".file-path-link",
+    ) as HTMLAnchorElement;
+    expect(fileLink).toBeTruthy();
+    expect(fileLink.textContent).toBe("@src/agent/webview/App.tsx");
+
+    fireEvent.click(fileLink);
+    expect(onOpenFile).toHaveBeenCalledWith(
+      "src/agent/webview/App.tsx",
+      undefined,
+    );
+  });
+
+  it("opens inline @path:line mentions at the referenced line", () => {
+    const onOpenFile = vi.fn();
+    const message: ChatMessage = {
+      id: "user-inline-mention-line",
+      role: "user",
+      content: "Please check @src/agent/webview/App.tsx:42 before continuing",
+      timestamp: Date.now(),
+      blocks: [],
+    };
+
+    const { container } = render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const fileLink = container.querySelector(
+      ".file-path-link",
+    ) as HTMLAnchorElement;
+    expect(fileLink).toBeTruthy();
+    expect(fileLink.textContent).toBe("@src/agent/webview/App.tsx:42");
+    expect(fileLink.title).toContain("src/agent/webview/App.tsx:42");
+
+    fireEvent.click(fileLink);
+    expect(onOpenFile).toHaveBeenCalledWith("src/agent/webview/App.tsx", 42);
+  });
+
   it("renders detected question fallback options and dispatches selected payload", () => {
     const onAnswer = vi.fn();
     const onDismiss = vi.fn();
@@ -105,6 +165,53 @@ describe("MessageBubble slash-command rendering", () => {
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     expect(onAnswer).toHaveBeenCalledWith("Yes, proceed with test updates.");
     expect(onDismiss).toHaveBeenCalledWith("assistant-1");
+  });
+
+  it("collapses detected question options after the first 6 and expands on demand", () => {
+    const onAnswer = vi.fn();
+    const onDismiss = vi.fn();
+    const message: ChatMessage = {
+      id: "assistant-3",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [{ type: "text", text: "Pick one" }],
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        detectedQuestion={{
+          messageId: "assistant-3",
+          kind: "single_choice",
+          prompt: "Pick one",
+          options: [
+            { label: "One", payload: "One" },
+            { label: "Two", payload: "Two" },
+            { label: "Three", payload: "Three" },
+            { label: "Four", payload: "Four" },
+            { label: "Five", payload: "Five" },
+            { label: "Six", payload: "Six" },
+            { label: "Seven", payload: "Seven" },
+            { label: "Eight", payload: "Eight" },
+          ],
+        }}
+        onDetectedQuestionAnswer={onAnswer}
+        onDismissDetectedQuestion={onDismiss}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "One" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Six" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Seven" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Eight" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+
+    expect(screen.getByRole("button", { name: "Seven" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Eight" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show 2 more" })).toBeNull();
   });
 
   it("renders MCP approval promotion actions for completed tool calls", () => {

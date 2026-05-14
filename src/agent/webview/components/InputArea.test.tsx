@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, fireEvent } from "@testing-library/preact";
+import { fireEvent, render } from "@testing-library/preact";
 
 import { InputArea } from "./InputArea";
 import type { SlashCommandInfo } from "../types";
@@ -10,8 +10,8 @@ function renderInputArea(slashCommands: SlashCommandInfo[]) {
       onSend={vi.fn()}
       onStop={vi.fn()}
       streaming={false}
-      thinkingEnabled={false}
-      onToggleThinking={vi.fn()}
+      reasoningEffort="none"
+      onSetReasoningEffort={vi.fn()}
       onExportTranscript={vi.fn()}
       hasMessages={false}
       vscodeApi={{ postMessage: vi.fn() }}

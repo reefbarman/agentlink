@@ -1,14 +1,17 @@
-import * as vscode from "vscode";
-import * as path from "path";
-import * as fs from "fs/promises";
 import * as diffLib from "diff";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as vscode from "vscode";
 
-import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 import type {
   ApprovalPanelProvider,
   WriteApprovalResponse,
 } from "../approvals/ApprovalPanelProvider.js";
+
+import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 import type { OnApprovalRequest } from "../shared/types.js";
+import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
+import { randomUUID } from "crypto";
 
 export type DiffDecision =
   | "accept"
@@ -17,13 +20,18 @@ export type DiffDecision =
   | "accept-always"
   | "reject";
 
-// Map of file path → pending decision resolver.
-// Allows multiple diff views to be open simultaneously (e.g. agent + MCP)
-// without overwriting each other's resolve callbacks.
-const pendingDecisionResolvers = new Map<
-  string,
-  (decision: DiffDecision) => void
->();
+interface PendingDiffDecision {
+  requestId: string;
+  filePath: string;
+  resolve: (decision: DiffDecision) => void;
+}
+
+// Map of diff request ID → pending decision metadata.
+const pendingDecisionResolvers = new Map<string, PendingDiffDecision>();
+
+// Map of absolute file path → active diff request ID.
+// Used by editor title bar commands to resolve the diff for the active tab.
+const pendingDiffRequestIdsByPath = new Map<string, string>();
 
 /**
  * Resolve the diff for the currently active editor tab.
@@ -36,21 +44,26 @@ export function resolveCurrentDiff(decision: DiffDecision): boolean {
   const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
   if (activeTab?.input instanceof vscode.TabInputTextDiff) {
     const filePath = activeTab.input.modified.fsPath;
-    const resolve = pendingDecisionResolvers.get(filePath);
-    if (resolve) {
-      pendingDecisionResolvers.delete(filePath);
-      resolve(decision);
+    const requestId = pendingDiffRequestIdsByPath.get(filePath);
+    const pending = requestId
+      ? pendingDecisionResolvers.get(requestId)
+      : undefined;
+    if (requestId && pending) {
+      pendingDecisionResolvers.delete(requestId);
+      pendingDiffRequestIdsByPath.delete(filePath);
+      pending.resolve(decision);
       return true;
     }
   }
 
   // Fallback: if only one diff is pending, resolve it
   if (pendingDecisionResolvers.size === 1) {
-    const [filePath, resolve] = pendingDecisionResolvers
+    const [requestId, pending] = pendingDecisionResolvers
       .entries()
       .next().value!;
-    pendingDecisionResolvers.delete(filePath);
-    resolve(decision);
+    pendingDecisionResolvers.delete(requestId);
+    pendingDiffRequestIdsByPath.delete(pending.filePath);
+    pending.resolve(decision);
     return true;
   }
 
@@ -184,8 +197,11 @@ export class DiffViewProvider {
   /** Populated when the approval panel is used for write decisions */
   writeApprovalResponse?: WriteApprovalResponse;
 
-  constructor(diagnosticDelay?: number) {
+  readonly requestId: string;
+
+  constructor(diagnosticDelay?: number, requestId?: string) {
     this.diagnosticDelay = diagnosticDelay ?? 1500;
+    this.requestId = requestId ?? randomUUID();
   }
 
   async open(
@@ -254,42 +270,57 @@ export class DiffViewProvider {
       }
     }
 
-    // Open diff view
-    const fileName = path.basename(this.absolutePath);
-    const leftUri = vscode.Uri.parse(
-      `${DIFF_VIEW_URI_SCHEME}:${fileName}`,
-    ).with({
-      query: Buffer.from(this.originalContent).toString("base64"),
-    });
-    const rightUri = vscode.Uri.file(this.absolutePath);
-
-    const outsidePrefix = this.outsideWorkspace
-      ? "\u26a0 OUTSIDE WORKSPACE: "
-      : "";
-    await vscode.commands.executeCommand(
-      "vscode.diff",
-      leftUri,
-      rightUri,
-      `${outsidePrefix}${this.relPath}: ${fileExists ? "Proposed Changes" : "New File"} (Editable)`,
-      { preview: true, preserveFocus: true },
-    );
-
-    // Wait for the diff editor to open
-    await new Promise<void>((resolve) => setTimeout(resolve, 300));
-
-    // Find the diff editor
-    this.activeDiffEditor = vscode.window.visibleTextEditors.find(
-      (editor) =>
-        editor.document.uri.scheme === "file" &&
-        editor.document.uri.fsPath === this.absolutePath,
-    );
-
-    if (!this.activeDiffEditor) {
-      // Fallback: open the file and try again
-      const doc = await vscode.workspace.openTextDocument(this.absolutePath);
-      this.activeDiffEditor = await vscode.window.showTextDocument(doc, {
-        preserveFocus: true,
+    try {
+      // Open diff view
+      const fileName = path.basename(this.absolutePath);
+      const leftUri = vscode.Uri.parse(
+        `${DIFF_VIEW_URI_SCHEME}:${fileName}`,
+      ).with({
+        query: Buffer.from(this.originalContent).toString("base64"),
       });
+      const rightUri = vscode.Uri.file(this.absolutePath);
+
+      const outsidePrefix = this.outsideWorkspace
+        ? "\u26a0 OUTSIDE WORKSPACE: "
+        : "";
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        leftUri,
+        rightUri,
+        `${outsidePrefix}${this.relPath}: ${fileExists ? "Proposed Changes" : "New File"} (Editable)`,
+        { preview: true, preserveFocus: true },
+      );
+
+      // Wait for the diff editor to open
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+
+      // Find the diff editor
+      this.activeDiffEditor = vscode.window.visibleTextEditors.find(
+        (editor) =>
+          editor.document.uri.scheme === "file" &&
+          editor.document.uri.fsPath === this.absolutePath,
+      );
+
+      if (!this.activeDiffEditor) {
+        // Fallback: open the file and try again
+        const doc = await vscode.workspace.openTextDocument(this.absolutePath);
+        this.activeDiffEditor = await vscode.window.showTextDocument(doc, {
+          preserveFocus: true,
+        });
+      }
+
+      diffSnapshotHub.upsert({
+        requestId: this.requestId,
+        filePath: this.relPath,
+        operation: this.editType,
+        originalContent: this.originalContent,
+        proposedContent: this.newContent,
+        outsideWorkspace: this.outsideWorkspace,
+        createdAt: Date.now(),
+      });
+    } catch (err) {
+      diffSnapshotHub.remove(this.requestId);
+      throw err;
     }
 
     // Apply new content to the right side
@@ -337,7 +368,10 @@ export class DiffViewProvider {
         const finish = (decision: DiffDecision) => {
           if (resolved) return;
           resolved = true;
-          pendingDecisionResolvers.delete(this.absolutePath!);
+          pendingDecisionResolvers.delete(this.requestId);
+          if (this.absolutePath) {
+            pendingDiffRequestIdsByPath.delete(this.absolutePath);
+          }
           editorCloseDisposable.dispose();
           try {
             disposeUI?.();
@@ -348,7 +382,20 @@ export class DiffViewProvider {
         };
 
         // Allow editor title bar commands to resolve this decision
-        pendingDecisionResolvers.set(this.absolutePath!, finish);
+        const existingRequestId = pendingDiffRequestIdsByPath.get(
+          this.absolutePath!,
+        );
+        if (existingRequestId && existingRequestId !== this.requestId) {
+          throw new Error(
+            `Pending diff decision already registered for ${this.absolutePath}`,
+          );
+        }
+        pendingDecisionResolvers.set(this.requestId, {
+          requestId: this.requestId,
+          filePath: this.absolutePath!,
+          resolve: finish,
+        });
+        pendingDiffRequestIdsByPath.set(this.absolutePath!, this.requestId);
 
         // Listen for diff tab being closed (treat as rejection).
         const editorCloseDisposable = vscode.window.tabGroups.onDidChangeTabs(
@@ -375,6 +422,7 @@ export class DiffViewProvider {
           onApprovalRequest(
             {
               kind: "write",
+              id: this.requestId,
               title: `${operation} \`${this.relPath}\`?`,
               choices: [],
             },
@@ -412,6 +460,7 @@ export class DiffViewProvider {
             approvalPanel.enqueueWriteApproval(this.relPath!, {
               operation: this.editType!,
               outsideWorkspace: this.outsideWorkspace,
+              id: this.requestId,
             });
 
           // If title bar or editor close resolves first, cancel the panel entry
@@ -459,6 +508,8 @@ export class DiffViewProvider {
     if (document.isDirty) {
       await document.save();
     }
+
+    diffSnapshotHub.remove(this.requestId);
 
     // Show file in normal editor (not diff)
     await vscode.window.showTextDocument(vscode.Uri.file(this.absolutePath!), {
@@ -573,6 +624,8 @@ export class DiffViewProvider {
         }
       }
     }
+
+    diffSnapshotHub.remove(this.requestId);
 
     return {
       status: "rejected_by_user",

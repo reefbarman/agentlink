@@ -1,17 +1,22 @@
-import { randomUUID } from "crypto";
-import type { ContentBlock, TextBlock } from "./providers/types.js";
 import type {
-  SessionStatus,
   AgentConfig,
   AgentMessage,
   AgentRuntimeError,
+  SessionStatus,
 } from "./types.js";
-import { buildPromptArtifacts } from "./systemPrompt.js";
-import type { AgentMode } from "./modes.js";
-import type { SkillEntry } from "./skillLoader.js";
-import { BUILT_IN_MODES } from "./modes.js";
+import type {
+  ContentBlock,
+  ReasoningEffort,
+  TextBlock,
+} from "./providers/types.js";
 import { getEffectiveHistory, injectSyntheticToolResults } from "./condense.js";
+
+import type { AgentMode } from "./modes.js";
+import { BUILT_IN_MODES } from "./modes.js";
+import type { SkillEntry } from "./skillLoader.js";
+import { buildPromptArtifacts } from "./systemPrompt.js";
 import { buildSessionTitleFromUserText } from "./sessionTitle.js";
+import { randomUUID } from "crypto";
 
 export class AgentSession {
   id: string;
@@ -26,6 +31,7 @@ export class AgentSession {
   model: string;
   maxTokens: number;
   thinkingBudget: number;
+  reasoningEffort: ReasoningEffort;
   autoCondense: boolean;
   autoCondenseThreshold: number;
   codexStatefulResponses: boolean;
@@ -157,6 +163,7 @@ export class AgentSession {
     this.model = opts.config.model;
     this.maxTokens = opts.config.maxTokens;
     this.thinkingBudget = opts.config.thinkingBudget;
+    this.reasoningEffort = "high";
     this.autoCondense = opts.config.autoCondense ?? true;
     this.autoCondenseThreshold = opts.config.autoCondenseThreshold ?? 0.9;
     this.codexStatefulResponses = opts.config.codexStatefulResponses ?? true;
@@ -287,12 +294,17 @@ export class AgentSession {
       displayText?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
+      origin?: "vscode" | "browser";
     },
   ): void {
     this.messages.push({
       role: "user",
       content: text,
-      ...(opts && (opts.displayText || opts.isSlashCommand)
+      ...(opts &&
+      (opts.displayText ||
+        opts.isSlashCommand ||
+        opts.slashCommandLabel ||
+        opts.origin)
         ? {
             uiHint: {
               userMessage: {
@@ -301,6 +313,7 @@ export class AgentSession {
                 ...(opts.slashCommandLabel
                   ? { slashCommandLabel: opts.slashCommandLabel }
                   : {}),
+                ...(opts.origin ? { origin: opts.origin } : {}),
               },
             },
           }
@@ -377,6 +390,7 @@ export class AgentSession {
     totalCacheCreationTokens?: number;
     lastInputTokens?: number;
     lastCacheReadTokens?: number;
+    reasoningEffort?: ReasoningEffort;
     loadedSkills?: string[];
     messages: AgentMessage[];
   }): void {
@@ -390,6 +404,7 @@ export class AgentSession {
     this.totalCacheCreationTokens = data.totalCacheCreationTokens ?? 0;
     this.lastInputTokens = data.lastInputTokens ?? 0;
     this.lastCacheReadTokens = data.lastCacheReadTokens ?? 0;
+    this.reasoningEffort = data.reasoningEffort ?? this.reasoningEffort;
     this.messages = data.messages;
     this.resetProviderResponseState();
     this.loadedSkills.clear();
@@ -450,15 +465,19 @@ export class AgentSession {
   }
 
   /**
+   * Running estimate of next request input usage:
+   * last API input + estimated new content since then.
+   */
+  get estimatedInputUsed(): number {
+    return this.lastInputTokens + this.estimatedAccumulatedTokens;
+  }
+
+  /**
    * Running estimate of total context window usage:
    * last API total + estimated new content since then.
    */
   get estimatedTotalUsed(): number {
-    return (
-      this.lastInputTokens +
-      this.lastOutputTokens +
-      this.estimatedAccumulatedTokens
-    );
+    return this.estimatedInputUsed + this.lastOutputTokens;
   }
 
   /** Return the text content of the last assistant message, if any. */

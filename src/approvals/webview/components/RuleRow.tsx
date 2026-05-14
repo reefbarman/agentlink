@@ -13,11 +13,24 @@ interface RuleRowProps {
   entry: SubCommandEntry;
   value: RuleEntry;
   onChange: (value: RuleEntry) => void;
+  onSuggestRegex?: () => void;
+  suggestStatus?: "idle" | "loading" | "error";
+  suggestError?: string;
 }
 
-export function RuleRow({ entry, value, onChange }: RuleRowProps) {
+export function RuleRow({
+  entry,
+  value,
+  onChange,
+  onSuggestRegex,
+  suggestStatus = "idle",
+  suggestError,
+}: RuleRowProps) {
   const hasExisting = !!entry.existingRule;
   const isSkipped = value.scope === "skip";
+  const isRegex = value.mode === "regex";
+  const canSuggest = !!onSuggestRegex && isRegex && !isSkipped;
+  const isSuggesting = suggestStatus === "loading";
 
   return (
     <div class={`rule-row ${isSkipped ? "rule-row-skipped" : ""}`}>
@@ -45,6 +58,20 @@ export function RuleRow({ entry, value, onChange }: RuleRowProps) {
           }
           disabled={isSkipped}
         />
+        {canSuggest && (
+          <button
+            type="button"
+            class="rule-suggest-btn"
+            onClick={onSuggestRegex}
+            disabled={isSuggesting}
+            title="Ask the current model to suggest a regex pattern that matches this command and similar safe variants"
+          >
+            <span
+              class={`codicon ${isSuggesting ? "codicon-loading codicon-modifier-spin" : "codicon-sparkle"}`}
+            />
+            <span>{isSuggesting ? "Suggesting…" : "Suggest"}</span>
+          </button>
+        )}
         <div class="radio-group">
           {MODES.map((mode) => (
             <label key={mode} class="radio-label">
@@ -60,6 +87,9 @@ export function RuleRow({ entry, value, onChange }: RuleRowProps) {
           ))}
         </div>
       </div>
+      {suggestStatus === "error" && suggestError && (
+        <div class="rule-row-suggest-error">{suggestError}</div>
+      )}
 
       <div class="rule-row-options">
         <div class="rule-row-option-line">

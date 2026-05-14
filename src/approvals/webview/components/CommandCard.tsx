@@ -14,12 +14,27 @@ interface CommandCardProps {
   request: ApprovalRequest;
   submit: (data: Omit<DecisionMessage, "type">) => void;
   followUpRef: RefObject<string>;
+  /**
+   * Optional: request a regex suggestion from the current model in a fresh
+   * context. Returns the suggested pattern string (no flags, no delimiters).
+   * If absent, the "Suggest" button is hidden.
+   */
+  onSuggestRegex?: (args: {
+    subCommand: string;
+    fullCommand: string;
+  }) => Promise<string>;
+}
+
+interface SuggestState {
+  status: "idle" | "loading" | "error";
+  error?: string;
 }
 
 export function CommandCard({
   request,
   submit,
   followUpRef,
+  onSuggestRegex,
 }: CommandCardProps) {
   const originalCommand = request.command ?? "";
   const [command, setCommand] = useState(originalCommand);
@@ -137,17 +152,68 @@ export function CommandCard({
     });
   }, []);
 
+  const [suggestStates, setSuggestStates] = useState<
+    Record<number, SuggestState>
+  >({});
+
+  const handleSuggestRegex = useCallback(
+    (index: number, subCommand: string) => {
+      if (!onSuggestRegex) return;
+      setSuggestStates((prev) => ({ ...prev, [index]: { status: "loading" } }));
+      void (async () => {
+        try {
+          const pattern = await onSuggestRegex({
+            subCommand,
+            fullCommand: originalCommand,
+          });
+          const trimmed = pattern.trim();
+          if (!trimmed) throw new Error("Empty suggestion");
+          setRules((prev) => {
+            const next = [...prev];
+            const current = next[index];
+            if (!current) return prev;
+            next[index] = {
+              ...current,
+              pattern: trimmed,
+              mode: "regex",
+              scope: current.scope === "skip" ? "session" : current.scope,
+            };
+            return next;
+          });
+          setSuggestStates((prev) => ({ ...prev, [index]: { status: "idle" } }));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          setSuggestStates((prev) => ({
+            ...prev,
+            [index]: { status: "error", error: message },
+          }));
+        }
+      })();
+    },
+    [onSuggestRegex, originalCommand],
+  );
+
   const rulesJsx =
     subCommands.length > 0 ? (
       <>
-        {subCommands.map((entry, i) => (
-          <RuleRow
-            key={i}
-            entry={entry}
-            value={rules[i]}
-            onChange={(v) => updateRule(i, v)}
-          />
-        ))}
+        {subCommands.map((entry, i) => {
+          const state = suggestStates[i] ?? { status: "idle" };
+          return (
+            <RuleRow
+              key={i}
+              entry={entry}
+              value={rules[i]}
+              onChange={(v) => updateRule(i, v)}
+              onSuggestRegex={
+                onSuggestRegex
+                  ? () => handleSuggestRegex(i, entry.command)
+                  : undefined
+              }
+              suggestStatus={state.status}
+              suggestError={state.error}
+            />
+          );
+        })}
       </>
     ) : undefined;
 

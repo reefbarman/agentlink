@@ -1,5 +1,7 @@
+import { EmptyState, PaneHeader } from "../../../shared/ui/Panes";
+
 import type { ChatMessage } from "../types";
-import { MessageBubble } from "./MessageBubble";
+import { TranscriptMessageList } from "./TranscriptMessageList";
 
 interface TranscriptViewProps {
   task: string;
@@ -14,26 +16,26 @@ export function TranscriptView({
 }: TranscriptViewProps) {
   return (
     <div class="transcript-overlay">
-      <div class="transcript-header">
-        <i class="codicon codicon-server-process transcript-header-icon" />
-        <span class="transcript-header-title" title={task}>
-          {task}
-        </span>
-        <button
-          class="icon-button transcript-close"
-          onClick={onClose}
-          title="Close"
-        >
-          <i class="codicon codicon-close" />
-        </button>
-      </div>
+      <PaneHeader
+        className="transcript-header"
+        title={task}
+        right={
+          <button
+            class="icon-button transcript-close"
+            onClick={onClose}
+            title="Close"
+          >
+            <i class="codicon codicon-close" />
+          </button>
+        }
+      />
       <div class="transcript-messages">
         {messages.length === 0 ? (
-          <div class="transcript-empty">No messages recorded.</div>
+          <EmptyState className="transcript-empty">
+            No messages recorded.
+          </EmptyState>
         ) : (
-          messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} streaming={false} />
-          ))
+          <TranscriptMessageList messages={messages} streaming={false} />
         )}
       </div>
     </div>

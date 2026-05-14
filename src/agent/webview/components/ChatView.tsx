@@ -1,11 +1,9 @@
-import { useRef, useEffect, useCallback } from "preact/hooks";
-import type { ChatMessage } from "../types";
+import { useCallback, useEffect, useRef } from "preact/hooks";
+
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
+import type { ChatMessage } from "../types";
 import type { DetectedQuestion } from "../questionDetection";
-import { MessageBubble } from "./MessageBubble";
-import { CondenseRow } from "./CondenseRow";
-import { WarningRow } from "./WarningRow";
-import { CheckpointRow } from "./CheckpointRow";
+import { TranscriptMessageList } from "./TranscriptMessageList";
 
 interface ChatViewProps {
   messages: ChatMessage[];
@@ -71,6 +69,20 @@ export function ChatView({
     el.scrollTop = el.scrollHeight;
   }, []);
 
+  const scrollToBottomAfterLayout = useCallback(() => {
+    let frame = 0;
+    let raf = 0;
+    const tick = () => {
+      scrollToBottom();
+      frame += 1;
+      if (frame < 3) {
+        raf = requestAnimationFrame(tick);
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [scrollToBottom]);
+
   // Derive a scroll key that changes whenever content grows —
   // new messages, new blocks, text/input deltas, tool results
   const lastMsg = messages[messages.length - 1];
@@ -87,12 +99,18 @@ export function ChatView({
       }`
     : "empty";
 
+  // Treat a loaded/switched session as a fresh transcript and start at the bottom.
+  useEffect(() => {
+    shouldAutoScroll.current = true;
+    return scrollToBottomAfterLayout();
+  }, [sessionId, scrollToBottomAfterLayout]);
+
   // Auto-scroll to bottom when content changes
   useEffect(() => {
     if (shouldAutoScroll.current) {
-      scrollToBottom();
+      return scrollToBottomAfterLayout();
     }
-  }, [scrollKey, streaming]);
+  }, [scrollKey, streaming, scrollToBottomAfterLayout]);
 
   // Track scrollHeight changes (e.g. mermaid diagrams rendering async)
   // and auto-scroll when content grows
@@ -166,78 +184,26 @@ export function ChatView({
         </button>
       )}
       <div class="chat-messages" ref={containerRef} onScroll={handleScroll}>
-        {messages.map((msg) =>
-          msg.role === "condense" ? (
-            <CondenseRow key={msg.id} message={msg} />
-          ) : msg.role === "warning" ? (
-            <WarningRow
-              key={msg.id}
-              message={msg}
-              onRetry={
-                msg === messages[messages.length - 1] && msg.error
-                  ? onRetry
-                  : undefined
-              }
-            />
-          ) : (
-            <>
-              {msg.role === "user" &&
-                msg.checkpointId &&
-                onRevertCheckpoint && (
-                  <CheckpointRow
-                    key={`cp-${msg.id}`}
-                    checkpointId={msg.checkpointId}
-                    sessionId={sessionId}
-                    onRevert={onRevertCheckpoint}
-                    onViewDiff={onViewCheckpointDiff}
-                  />
-                )}
-              <MessageBubble
-                key={msg.id}
-                message={msg}
-                streaming={
-                  streaming &&
-                  msg === messages[messages.length - 1] &&
-                  msg.role === "assistant"
-                }
-                detectedQuestion={
-                  msg.role === "assistant" &&
-                  detectedQuestion?.messageId === msg.id
-                    ? detectedQuestion
-                    : null
-                }
-                onDetectedQuestionAnswer={onDetectedQuestionAnswer}
-                onDismissDetectedQuestion={onDismissDetectedQuestion}
-                onOpenFile={onOpenFile}
-                onPromoteMcpToolApproval={onPromoteMcpToolApproval}
-                onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
-                onRetry={
-                  msg === messages[messages.length - 1] && msg.error
-                    ? onRetry
-                    : undefined
-                }
-                onSignIn={
-                  msg === messages[messages.length - 1] && msg.error
-                    ? onSignIn
-                    : undefined
-                }
-                onSignInAnotherAccount={
-                  msg === messages[messages.length - 1] && msg.error
-                    ? onSignInAnotherAccount
-                    : undefined
-                }
-                onCondense={
-                  msg === messages[messages.length - 1] && msg.error
-                    ? onCondense
-                    : undefined
-                }
-                bgSessions={bgSessions}
-                onStopBackground={onStopBackground}
-                onOpenTranscript={onOpenTranscript}
-              />
-            </>
-          ),
-        )}
+        <TranscriptMessageList
+          messages={messages}
+          streaming={streaming}
+          sessionId={sessionId}
+          detectedQuestion={detectedQuestion}
+          onDetectedQuestionAnswer={onDetectedQuestionAnswer}
+          onDismissDetectedQuestion={onDismissDetectedQuestion}
+          onOpenFile={onOpenFile}
+          onPromoteMcpToolApproval={onPromoteMcpToolApproval}
+          onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
+          onRetry={onRetry}
+          onSignIn={onSignIn}
+          onSignInAnotherAccount={onSignInAnotherAccount}
+          onCondense={onCondense}
+          bgSessions={bgSessions}
+          onStopBackground={onStopBackground}
+          onOpenTranscript={onOpenTranscript}
+          onRevertCheckpoint={onRevertCheckpoint}
+          onViewCheckpointDiff={onViewCheckpointDiff}
+        />
       </div>
     </>
   );

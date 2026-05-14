@@ -94,7 +94,14 @@ export function handleToolError(
   return errorResult(message, context);
 }
 
-/** Status info for a running background agent session. */
+/** Snapshot of VS Code theme variables forwarded to the browser gateway UI. */
+export interface BrowserGatewayThemeSnapshot {
+  cssVariables: Record<string, string>;
+  colorScheme?: "light" | "dark" | "hc" | "hc-light";
+  themeLabel?: string;
+  source?: "webview-dom" | "vscode-theme-api";
+}
+
 export interface BgSessionInfo {
   id: string;
   task: string;

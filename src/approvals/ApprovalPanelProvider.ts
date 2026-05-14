@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
-import { randomUUID } from "crypto";
+
 import type {
-  SubCommandEntry,
   ApprovalRequest,
   DecisionMessage,
+  SubCommandEntry,
 } from "./webview/types.js";
+
 import type { StatusBarManager } from "../util/StatusBarManager.js";
+import { randomUUID } from "crypto";
 
 // ── Response types ──────────────────────────────────────────────────────────
 
@@ -190,9 +192,13 @@ export class ApprovalPanelProvider
 
   enqueueWriteApproval(
     relPath: string,
-    options: { operation: "create" | "modify"; outsideWorkspace: boolean },
+    options: {
+      operation: "create" | "modify";
+      outsideWorkspace: boolean;
+      id?: string;
+    },
   ): { promise: Promise<WriteApprovalResponse>; id: string } {
-    const id = randomUUID();
+    const id = options.id ?? randomUUID();
     const promise = this.enqueue({
       kind: "write",
       id,

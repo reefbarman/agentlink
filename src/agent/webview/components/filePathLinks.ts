@@ -5,9 +5,9 @@ export interface MatchedFilePath {
   index: number;
 }
 
-// Matches file paths like `src/foo/bar.ts`, `/abs/path.ts`, `src/foo.ts:42`
+// Matches file paths like `src/foo/bar.ts`, `/abs/path.ts`, `src/foo.ts:42`, `@src/foo.ts`
 const FILE_PATH_RE =
-  /(^|[^.:/\w-])((?:(?:\/[\w.-]+)+|[\w][\w-]*(?:\/[\w.-]+)+)\.\w{1,8})(?::(\d+)(?:-\d+)?)?/g;
+  /(^|[^@.:/\w-])(@?((?:(?:\/[\w.-]+)+|[\w][\w-]*(?:\/[\w.-]+)+)\.\w{1,8})(?::(\d+)(?:-\d+)?)?)/g;
 
 export function matchFilePaths(text: string): MatchedFilePath[] {
   const matches: MatchedFilePath[] = [];
@@ -16,9 +16,9 @@ export function matchFilePaths(text: string): MatchedFilePath[] {
   let match: RegExpExecArray | null;
   while ((match = FILE_PATH_RE.exec(text)) !== null) {
     const prefix = match[1] ?? "";
-    const filePath = match[2];
-    const line = match[3] ? parseInt(match[3], 10) : undefined;
-    const fullMatch = match[0].slice(prefix.length);
+    const fullMatch = match[2];
+    const filePath = match[3];
+    const line = match[4] ? parseInt(match[4], 10) : undefined;
     const index = match.index + prefix.length;
 
     matches.push({

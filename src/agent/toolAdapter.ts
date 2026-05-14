@@ -5,59 +5,60 @@
  * tool calls to the existing handler functions in src/tools/*.ts.
  */
 
-import type { ToolDefinition, JsonSchema } from "./providers/types.js";
-import { z } from "zod";
+import * as schemas from "../shared/toolSchemas.js";
 import * as vscode from "vscode";
-import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import type { ToolResult } from "../shared/types.js";
+
+import type { JsonSchema, ToolDefinition } from "./providers/types.js";
 import type {
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
 } from "./backgroundTypes.js";
-import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
-import * as schemas from "../shared/toolSchemas.js";
-import type { AgentMode } from "./modes.js";
-import { getToolsForMode } from "./toolPermissions.js";
-import { McpClientHub } from "./McpClientHub.js";
 import {
   getMcpConfigFilePaths,
-  persistMcpToolApproval,
   persistMcpServerApproval,
+  persistMcpToolApproval,
 } from "./mcpConfig.js";
+import {
+  handleApplyCodeAction,
+  handleGetCodeActions,
+} from "../tools/codeActions.js";
 
-// --- Handler imports ---
-import { handleReadFile } from "../tools/readFile.js";
-import { handleLoadSkill } from "../tools/loadSkill.js";
-import { handleListFiles } from "../tools/listFiles.js";
-import { handleSearchFiles } from "../tools/searchFiles.js";
-import { handleWriteFile } from "../tools/writeFile.js";
+import type { AgentMode } from "./modes.js";
+import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { McpClientHub } from "./McpClientHub.js";
+import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
+import type { ToolResult } from "../shared/types.js";
+import { getToolsForMode } from "./toolPermissions.js";
 import { handleApplyDiff } from "../tools/applyDiff.js";
-import { handleFindAndReplace } from "../tools/findAndReplace.js";
-import { handleExecuteCommand } from "../tools/executeCommand.js";
-import { handleGetTerminalOutput } from "../tools/getTerminalOutput.js";
 import { handleCloseTerminals } from "../tools/closeTerminals.js";
-import { handleOpenFile } from "../tools/openFile.js";
-import { handleShowNotification } from "../tools/showNotification.js";
+import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
+import { handleExecuteCommand } from "../tools/executeCommand.js";
+import { handleFindAndReplace } from "../tools/findAndReplace.js";
+import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
+import { handleGetCompletions } from "../tools/getCompletions.js";
 import { handleGetDiagnostics } from "../tools/getDiagnostics.js";
+import { handleGetFeedback } from "../tools/getFeedback.js";
+import { handleGetHover } from "../tools/getHover.js";
+import { handleGetInlayHints } from "../tools/getInlayHints.js";
+import { handleGetReferences } from "../tools/getReferences.js";
+import { handleGetSymbols } from "../tools/getSymbols.js";
+import { handleGetTerminalOutput } from "../tools/getTerminalOutput.js";
+import { handleGetTypeHierarchy } from "../tools/getTypeHierarchy.js";
 import { handleGoToDefinition } from "../tools/goToDefinition.js";
 import { handleGoToImplementation } from "../tools/goToImplementation.js";
 import { handleGoToTypeDefinition } from "../tools/goToTypeDefinition.js";
-import { handleGetReferences } from "../tools/getReferences.js";
-import { handleGetSymbols } from "../tools/getSymbols.js";
-import { handleGetHover } from "../tools/getHover.js";
-import { handleGetCompletions } from "../tools/getCompletions.js";
-import {
-  handleGetCodeActions,
-  handleApplyCodeAction,
-} from "../tools/codeActions.js";
-import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
-import { handleGetTypeHierarchy } from "../tools/getTypeHierarchy.js";
-import { handleGetInlayHints } from "../tools/getInlayHints.js";
+import { handleListFiles } from "../tools/listFiles.js";
+import { handleLoadSkill } from "../tools/loadSkill.js";
+import { handleOpenFile } from "../tools/openFile.js";
+// --- Handler imports ---
+import { handleReadFile } from "../tools/readFile.js";
 import { handleRenameSymbol } from "../tools/renameSymbol.js";
+import { handleSearchFiles } from "../tools/searchFiles.js";
 import { handleSendFeedback } from "../tools/sendFeedback.js";
-import { handleGetFeedback } from "../tools/getFeedback.js";
-import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
+import { handleShowNotification } from "../tools/showNotification.js";
+import { handleWriteFile } from "../tools/writeFile.js";
+import { z } from "zod";
 
 // --- Read-only tools (safe to execute in parallel) ---
 
@@ -272,6 +273,11 @@ const ASK_USER_TOOL: ToolDefinition = {
               type: "string",
               description:
                 "Recommended option value; required for multiple_choice and multiple_select.",
+            },
+            allowBlank: {
+              type: "boolean",
+              description:
+                "Allows submitting a blank text answer. Only applies to text questions.",
             },
             scale_min: {
               type: "number",

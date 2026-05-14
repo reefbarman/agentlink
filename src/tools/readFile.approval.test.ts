@@ -1,3 +1,5 @@
+import * as os from "os";
+import * as path from "path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
@@ -120,6 +122,36 @@ describe("handleReadFile outside-workspace approval ordering", () => {
     expect(parsed.path).toBe("/outside/missing.txt");
     expect(parsed.error).toBeDefined();
     expect(String(parsed.error)).toContain("File not found");
+  });
+
+  it("skips outside-workspace approval for agentlink tmp artifacts (saveOutputTempFile)", async () => {
+    const tmpArtifactPath = path.join(
+      os.tmpdir(),
+      "agentlink-output-abc123",
+      "output.txt",
+    );
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: tmpArtifactPath,
+      inWorkspace: false,
+    });
+
+    readFileMock.mockResolvedValue("stashed output");
+    statMock.mockResolvedValue({ size: 14 });
+
+    const approvalManager = {
+      isPathTrusted: vi.fn(() => false),
+    } as unknown as ApprovalManager;
+
+    const approvalPanel = {} as ApprovalPanelProvider;
+
+    await handleReadFile(
+      { path: tmpArtifactPath, include_symbols: false },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
   });
 
   it("skips outside-workspace approval for trusted paths and returns file-not-found", async () => {

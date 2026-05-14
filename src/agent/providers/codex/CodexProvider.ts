@@ -637,7 +637,7 @@ export class CodexProvider implements ModelProvider {
       messages,
       tools,
       maxTokens,
-      thinking,
+      reasoningEffort: requestedEffort,
       cache,
       state,
       signal,
@@ -676,9 +676,10 @@ export class CodexProvider implements ModelProvider {
     }
 
     const modelDef = CODEX_MODEL_MAP.get(model);
-    const reasoningEffort = thinking
-      ? "high"
-      : (modelDef?.defaultReasoningEffort ?? "medium");
+    const reasoningEffort =
+      requestedEffort === "none"
+        ? undefined
+        : (requestedEffort ?? modelDef?.defaultReasoningEffort ?? "medium");
 
     let auth = await this.getModelAuthOrThrow();
     const attemptedOAuthAccountIds = new Set<string>();

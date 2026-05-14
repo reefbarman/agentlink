@@ -1,95 +1,79 @@
-import {
-  useReducer,
-  useEffect,
-  useCallback,
-  useRef,
-  useState,
-} from "preact/hooks";
-import type {
-  ExtensionMessage,
-  ChatMessage,
-  ChatState,
-  ContentBlock,
-  TodoItem,
-  ModeInfo,
-  SlashCommandInfo,
-  Question,
-  SessionSummary,
-} from "./types";
-import {
-  detectQuestionFromAssistantText,
-  type DetectedQuestion,
-} from "./questionDetection";
 import type {
   ApprovalRequest,
   DecisionMessage,
 } from "../../approvals/webview/types";
-import { ChatView } from "./components/ChatView";
-import { ElicitationModal } from "./components/ElicitationModal";
-import { InputArea } from "./components/InputArea";
-import { DebugInfo } from "./components/DebugInfo";
-import { ContextBar } from "./components/ContextBar";
-import { TodoPanel } from "./components/TodoPanel";
-import { CommandCard } from "../../approvals/webview/components/CommandCard";
-import { WriteCard } from "../../approvals/webview/components/WriteCard";
-import { RenameCard } from "../../approvals/webview/components/RenameCard";
-import { PathCard } from "../../approvals/webview/components/PathCard";
-import { McpCard } from "../../approvals/webview/components/McpCard";
-import { ModeSwitchCard } from "../../approvals/webview/components/ModeSwitchCard";
-import { QuestionCard } from "./components/QuestionCard";
-import { SessionHistory } from "./components/SessionHistory";
+import type {
+  ChatMessage,
+  ExtensionMessage,
+  ReasoningEffort,
+  SessionSummary,
+} from "./types";
+import {
+  agentMessagesToChatMessages,
+  initialState,
+  reducer,
+  shouldAcceptSessionChunk,
+  shouldDropSessionScopedEvent,
+} from "../../shared/chatProjection.js";
+import {
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "preact/hooks";
+
 import { BackgroundSessionStrip } from "./components/BackgroundSessionStrip";
 import type { BgSessionInfoProps } from "./components/BackgroundSessionStrip";
-import { getStreamingActivity } from "./components/MessageBubble";
-import { TranscriptView } from "./components/TranscriptView";
 import { BtwPanel } from "./components/BtwPanel";
 import type { BtwState } from "./components/BtwPanel";
-import type { WebviewModelInfo } from "./types";
+import { ChatView } from "./components/ChatView";
+import { CommandCard } from "../../approvals/webview/components/CommandCard";
+import { ContextBar } from "./components/ContextBar";
+import { DebugInfo } from "./components/DebugInfo";
+import { ElicitationModal } from "./components/ElicitationModal";
+import { InputArea } from "./components/InputArea";
+import { McpCard } from "../../approvals/webview/components/McpCard";
+import { ModeSwitchCard } from "../../approvals/webview/components/ModeSwitchCard";
+import { PathCard } from "../../approvals/webview/components/PathCard";
+import { QuestionCard } from "./components/QuestionCard";
+import { RenameCard } from "../../approvals/webview/components/RenameCard";
+import { SessionHistory } from "./components/SessionHistory";
+import { TodoPanel } from "./components/TodoPanel";
+import { TranscriptView } from "./components/TranscriptView";
+import { WriteCard } from "../../approvals/webview/components/WriteCard";
+import { detectQuestionFromAssistantText } from "./questionDetection";
+import { getStreamingActivity } from "./components/MessageBubble";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 
-function parseLoadSkillResult(result: string): {
-  skillName?: string;
-  path?: string;
-  content?: string;
+function captureVsCodeThemeSnapshot(): {
+  cssVariables: Record<string, string>;
+  colorScheme: "light" | "dark" | "hc" | "hc-light";
 } {
-  try {
-    const parsed = JSON.parse(result) as {
-      skill_name?: unknown;
-      path?: unknown;
-      content?: unknown;
-    };
-    return {
-      skillName:
-        typeof parsed.skill_name === "string" ? parsed.skill_name : undefined,
-      path: typeof parsed.path === "string" ? parsed.path : undefined,
-      content: typeof parsed.content === "string" ? parsed.content : undefined,
-    };
-  } catch {
-    return {};
+  const computed = getComputedStyle(document.documentElement);
+  const cssVariables: Record<string, string> = {};
+  for (let i = 0; i < computed.length; i += 1) {
+    const key = computed.item(i);
+    if (!key || !key.startsWith("--vscode-")) continue;
+    const value = computed.getPropertyValue(key).trim();
+    if (!value) continue;
+    cssVariables[key] = value;
   }
-}
 
-function parseJsonObject(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
+  const bodyClass = document.body.classList;
+  const colorScheme = bodyClass.contains("vscode-high-contrast-light")
+    ? "hc-light"
+    : bodyClass.contains("vscode-high-contrast")
+      ? "hc"
+      : bodyClass.contains("vscode-light")
+        ? "light"
+        : "dark";
 
-function inferBgResultStatus(
-  resultText: string,
-): "completed" | "error" | "cancelled" {
-  const normalized = resultText.trim().toLowerCase();
-  if (!normalized) return "completed";
-  if (normalized.startsWith("background agent stopped:")) {
-    return normalized.includes("cancel") ? "cancelled" : "error";
-  }
-  return "completed";
+  return {
+    cssVariables,
+    colorScheme,
+  };
 }
 
 interface VsCodeApi {
@@ -98,1526 +82,12 @@ interface VsCodeApi {
   setState(state: unknown): void;
 }
 
-interface AppState {
-  messages: ChatMessage[];
-  chatState: ChatState;
-  streaming: boolean;
-  thinkingEnabled: boolean;
-  lastInputTokens: number;
-  lastOutputTokens: number;
-  lastCacheReadTokens: number;
-  debugInfo: Record<string, string | number> | null;
-  systemPrompt: string | null;
-  /** Running token estimate from the engine — updated between API calls. */
-  estimatedTotalUsed: number;
-  loadedInstructions: Array<{ source: string; chars: number }> | null;
-  todos: TodoItem[];
-  modes: ModeInfo[];
-  availableModels: WebviewModelInfo[];
-  slashCommands: SlashCommandInfo[];
-  messageQueue: Array<{
-    id: string;
-    text: string;
-    fullText?: string;
-    isSlashCommand?: boolean;
-    slashCommandLabel?: string;
-    attachments?: string[];
-    images?: Array<{ name: string; mimeType: string; base64: string }>;
-    documents?: Array<{ name: string; mimeType: string; base64: string }>;
-  }>;
-  questionRequest: { id: string; questions: Question[] } | null;
-  detectedQuestion: (DetectedQuestion & { messageId: string }) | null;
-  dismissedDetectedQuestionIds: string[];
-  /** Temporary status override shown in the streaming spinner (e.g. "Refreshing credentials…") */
-  statusOverride: string | null;
-  restoringSession: boolean;
-  /** Number of visible user turns before the first rendered message in `messages`. */
-  loadedUserTurnOffset: number;
-}
-
-type AppAction =
-  | { type: "SET_STATE"; state: ChatState }
-  | {
-      type: "SET_DEBUG_INFO";
-      info: Record<string, string | number>;
-      systemPrompt?: string;
-      loadedInstructions?: Array<{ source: string; chars: number }>;
-    }
-  | {
-      type: "ADD_USER_MESSAGE";
-      text: string;
-      isSlashCommand?: boolean;
-      slashCommandLabel?: string;
-    }
-  | { type: "THINKING_START"; thinkingId: string }
-  | { type: "THINKING_DELTA"; thinkingId: string; text: string }
-  | { type: "THINKING_END"; thinkingId: string }
-  | { type: "TEXT_DELTA"; text: string }
-  | {
-      type: "API_REQUEST";
-      requestId: string;
-      model: string;
-      inputTokens: number;
-      uncachedInputTokens: number;
-      outputTokens: number;
-      cacheReadTokens: number;
-      cacheCreationTokens?: number;
-      durationMs: number;
-      timeToFirstToken: number;
-      usedPreviousResponseId?: boolean;
-      previousResponseIdFallback?: boolean;
-      promptCacheKey?: string;
-      promptCacheRetention?: "in_memory" | "24h";
-      storeResponseState?: boolean;
-      providerResponseId?: string;
-    }
-  | { type: "TOOL_START"; toolCallId: string; toolName: string }
-  | { type: "TOOL_INPUT_DELTA"; toolCallId: string; partialJson: string }
-  | {
-      type: "TOOL_COMPLETE";
-      toolCallId: string;
-      toolName: string;
-      result: string;
-      durationMs: number;
-      input?: unknown;
-      mcpApprovalPromotion?: import("../../shared/types.js").McpApprovalPromotionMeta;
-    }
-  | { type: "TODO_UPDATE"; todos: TodoItem[] }
-  | { type: "ADD_ANNOTATION"; text: string; badge: "follow-up" | "rejection" }
-  | {
-      type: "ERROR";
-      error: string;
-      retryable: boolean;
-      code?: string;
-      actions?: {
-        signIn?: boolean;
-        signInAnotherAccount?: boolean;
-        condense?: boolean;
-      };
-    }
-  | { type: "DONE" }
-  | { type: "NEW_SESSION" }
-  | { type: "TOGGLE_THINKING" }
-  | { type: "SET_MODES"; modes: ModeInfo[] }
-  | { type: "SET_MODELS"; models: WebviewModelInfo[] }
-  | { type: "SET_SLASH_COMMANDS"; commands: SlashCommandInfo[] }
-  | {
-      type: "ENQUEUE_MESSAGE";
-      id: string;
-      text: string;
-      fullText?: string;
-      isSlashCommand?: boolean;
-      slashCommandLabel?: string;
-      attachments?: string[];
-      images?: Array<{ name: string; mimeType: string; base64: string }>;
-      documents?: Array<{ name: string; mimeType: string; base64: string }>;
-    }
-  | { type: "EDIT_QUEUE_MESSAGE"; id: string; text: string }
-  | { type: "REMOVE_FROM_QUEUE"; id: string }
-  | { type: "CLEAR_QUEUE" }
-  | {
-      type: "ADD_INTERJECTION";
-      text: string;
-      isSlashCommand?: boolean;
-      slashCommandLabel?: string;
-    }
-  | { type: "SET_QUESTION"; id: string; questions: Question[] }
-  | { type: "CLEAR_QUESTION" }
-  | {
-      type: "SET_DETECTED_QUESTION";
-      detectedQuestion: (DetectedQuestion & { messageId: string }) | null;
-    }
-  | { type: "DISMISS_DETECTED_QUESTION"; messageId: string }
-  | {
-      type: "ADD_CONDENSE";
-      prevInputTokens: number;
-      newInputTokens: number;
-      durationMs: number;
-      validationWarnings?: string[];
-    }
-  | {
-      type: "ADD_CONDENSE_ERROR";
-      errorMessage: string;
-      retryable?: boolean;
-      code?: string;
-      actions?: {
-        signIn?: boolean;
-        signInAnotherAccount?: boolean;
-        condense?: boolean;
-      };
-    }
-  | {
-      type: "ADD_WARNING";
-      message: string;
-      retryDelayMs?: number;
-      retryAt?: number;
-      retryAttempt?: number;
-      retryMaxAttempts?: number;
-    }
-  | { type: "SET_STATUS_OVERRIDE"; message: string | null }
-  | { type: "SET_RESTORING_SESSION"; restoring: boolean }
-  | {
-      type: "LOAD_SESSION";
-      sessionId: string;
-      title: string;
-      mode: string;
-      messages: ChatMessage[];
-      lastInputTokens?: number;
-      lastOutputTokens?: number;
-      checkpoints?: Array<{ turnIndex: number; checkpointId: string }>;
-      userTurnOffset?: number;
-      hasMoreBefore?: boolean;
-    }
-  | {
-      type: "PREPEND_SESSION_CHUNK";
-      messages: ChatMessage[];
-      userTurnOffset: number;
-      hasMoreBefore: boolean;
-      checkpoints?: Array<{ turnIndex: number; checkpointId: string }>;
-    }
-  | { type: "SET_CHECKPOINT"; checkpointId: string; turnIndex: number }
-  | { type: "CONDENSE_START" }
-  | { type: "CLEAR_ERROR" }
-  | {
-      type: "BG_AGENT_DONE";
-      sessionId: string;
-      task: string;
-      status: "completed" | "error" | "cancelled";
-      resultText?: string;
-      summary?: string;
-    }
-  | {
-      type: "ADD_BG_QUESTION";
-      bgTask: string;
-      questions: string[];
-      answer: string;
-    }
-  | { type: "TOKEN_ESTIMATE"; estimatedTotalUsed: number };
-
-/**
- * Convert persisted AgentMessage[] (Anthropic API format) to ChatMessage[] (webview display format).
- * Tool-result user messages are filtered out as they're internal plumbing.
- * Condense summary messages are rendered as condense rows.
- */
-export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
-  const getSummaryText = (content: unknown): string => {
-    if (typeof content === "string") return content;
-    if (!Array.isArray(content)) return "";
-    return (content as Array<{ type: string; text?: string }>)
-      .filter((b) => b.type === "text")
-      .map((b) => b.text ?? "")
-      .join("");
-  };
-
-  // First pass: collect tool results keyed by tool_use_id
-  const toolResults = new Map<string, string>();
-  for (const msg of raw) {
-    const m = msg as { role: string; content: unknown };
-    if (m.role === "user" && Array.isArray(m.content)) {
-      for (const block of m.content as Array<{
-        type: string;
-        tool_use_id?: string;
-        content?: unknown;
-      }>) {
-        if (block.type === "tool_result" && block.tool_use_id) {
-          const text = Array.isArray(block.content)
-            ? (block.content as Array<{ type: string; text?: string }>)
-                .filter((c) => c.type === "text")
-                .map((c) => c.text ?? "")
-                .join("\n")
-            : typeof block.content === "string"
-              ? block.content
-              : "";
-          toolResults.set(block.tool_use_id, text);
-        }
-      }
-    }
-  }
-
-  // Second pass: build ChatMessages
-  const result: ChatMessage[] = [];
-  for (const msg of raw) {
-    const m = msg as {
-      role: string;
-      content: unknown;
-      isSummary?: boolean;
-      uiHint?: {
-        userMessage?: {
-          displayText?: string;
-          isSlashCommand?: boolean;
-          slashCommandLabel?: string;
-        };
-        condense?: {
-          prevInputTokens?: number;
-          newInputTokens?: number;
-          durationMs?: number;
-          validationWarnings?: string[];
-          errorMessage?: string;
-          condensing?: boolean;
-        };
-      };
-      runtimeError?: {
-        message: string;
-        retryable: boolean;
-        code?: string;
-        actions?: {
-          signIn?: boolean;
-          signInAnotherAccount?: boolean;
-          condense?: boolean;
-        };
-      };
-    };
-    if (m.isSummary) {
-      const summaryText = getSummaryText(m.content);
-      const hint = m.uiHint?.condense;
-      result.push({
-        id: crypto.randomUUID(),
-        role: "condense",
-        content: "",
-        timestamp: Date.now(),
-        blocks: [],
-        condenseInfo: {
-          prevInputTokens: hint?.prevInputTokens ?? 0,
-          newInputTokens: hint?.newInputTokens ?? 0,
-          durationMs: hint?.durationMs,
-          validationWarnings: hint?.validationWarnings,
-          errorMessage: hint?.errorMessage,
-          condensing: hint?.condensing,
-        },
-      });
-      if (summaryText) {
-        result.push({
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "",
-          timestamp: Date.now(),
-          blocks: [{ type: "text", text: summaryText }],
-        });
-      }
-      continue;
-    }
-
-    if (m.role === "user") {
-      if (typeof m.content === "string") {
-        const hint = m.uiHint?.userMessage;
-        result.push({
-          id: crypto.randomUUID(),
-          role: "user",
-          content: hint?.displayText ?? m.content,
-          timestamp: Date.now(),
-          blocks: [],
-          isSlashCommand: hint?.isSlashCommand,
-          slashCommandLabel:
-            hint?.slashCommandLabel ??
-            (hint?.isSlashCommand ? hint.displayText : undefined),
-        });
-      }
-      // Skip tool_result arrays — they're internal and shouldn't be displayed
-    } else if (m.role === "assistant") {
-      const blocks: ContentBlock[] = [];
-      const contentArr = Array.isArray(m.content) ? m.content : [];
-      for (const block of contentArr as Array<{
-        type: string;
-        text?: string;
-        id?: string;
-        name?: string;
-        input?: unknown;
-        thinking?: string;
-      }>) {
-        if (block.type === "text" && block.text) {
-          blocks.push({ type: "text", text: block.text });
-        } else if (block.type === "thinking" && block.thinking) {
-          blocks.push({
-            type: "thinking",
-            id: block.id ?? crypto.randomUUID(),
-            text: block.thinking,
-            complete: true,
-          });
-        } else if (block.type === "tool_use") {
-          const toolId = block.id ?? crypto.randomUUID();
-          const toolName = block.name ?? "";
-          const toolResult = toolResults.get(toolId) ?? "";
-          const inputJson = JSON.stringify(block.input ?? {});
-
-          if (toolName === "load_skill") {
-            const parsed = parseLoadSkillResult(toolResult);
-            blocks.push({
-              type: "skill_load",
-              id: toolId,
-              inputJson,
-              result: toolResult,
-              complete: true,
-              skillName: parsed.skillName,
-              path: parsed.path,
-              content: parsed.content,
-            });
-          } else if (toolName === "spawn_background_agent") {
-            const parsedResult = parseJsonObject(toolResult);
-            const parsedInput =
-              block.input &&
-              typeof block.input === "object" &&
-              !Array.isArray(block.input)
-                ? (block.input as Record<string, unknown>)
-                : null;
-            const sessionId =
-              typeof parsedResult?.sessionId === "string"
-                ? parsedResult.sessionId
-                : undefined;
-            const task =
-              typeof parsedInput?.task === "string" && parsedInput.task
-                ? parsedInput.task
-                : "Background Agent";
-            const message =
-              typeof parsedInput?.message === "string" && parsedInput.message
-                ? parsedInput.message
-                : undefined;
-
-            blocks.push({
-              type: "tool_call",
-              id: toolId,
-              name: toolName,
-              inputJson,
-              result: toolResult,
-              complete: true,
-            });
-
-            if (sessionId) {
-              blocks.push({
-                type: "bg_agent",
-                sessionId,
-                task,
-                message,
-                resolvedModel:
-                  typeof parsedResult?.resolvedModel === "string"
-                    ? parsedResult.resolvedModel
-                    : undefined,
-                resolvedProvider:
-                  typeof parsedResult?.resolvedProvider === "string"
-                    ? parsedResult.resolvedProvider
-                    : undefined,
-                resolvedMode:
-                  typeof parsedResult?.resolvedMode === "string"
-                    ? parsedResult.resolvedMode
-                    : undefined,
-                taskClass:
-                  typeof parsedResult?.taskClass === "string"
-                    ? parsedResult.taskClass
-                    : undefined,
-                routingReason:
-                  typeof parsedResult?.routingReason === "string"
-                    ? parsedResult.routingReason
-                    : undefined,
-              });
-            }
-          } else if (toolName === "get_background_result") {
-            const parsedInput =
-              block.input &&
-              typeof block.input === "object" &&
-              !Array.isArray(block.input)
-                ? (block.input as Record<string, unknown>)
-                : null;
-            const sessionId =
-              typeof parsedInput?.sessionId === "string"
-                ? parsedInput.sessionId
-                : undefined;
-
-            blocks.push({
-              type: "tool_call",
-              id: toolId,
-              name: toolName,
-              inputJson,
-              result: toolResult,
-              complete: true,
-            });
-
-            if (sessionId) {
-              const status = inferBgResultStatus(toolResult);
-              let task = "Background Agent";
-              for (let i = blocks.length - 1; i >= 0; i--) {
-                const candidate = blocks[i];
-                if (
-                  candidate.type === "bg_agent" &&
-                  candidate.sessionId === sessionId
-                ) {
-                  task = candidate.task;
-                  break;
-                }
-              }
-              if (task === "Background Agent") {
-                for (let msgIdx = result.length - 1; msgIdx >= 0; msgIdx--) {
-                  const prior = result[msgIdx];
-                  if (prior.role !== "assistant") continue;
-                  for (
-                    let blockIdx = prior.blocks.length - 1;
-                    blockIdx >= 0;
-                    blockIdx--
-                  ) {
-                    const candidate = prior.blocks[blockIdx];
-                    if (
-                      candidate.type === "bg_agent" &&
-                      candidate.sessionId === sessionId
-                    ) {
-                      task = candidate.task;
-                      break;
-                    }
-                  }
-                  if (task !== "Background Agent") break;
-                }
-              }
-              blocks.push({
-                type: "bg_agent_result",
-                sessionId,
-                task,
-                status,
-                resultText: toolResult || undefined,
-                summary: undefined,
-              });
-            }
-          } else {
-            blocks.push({
-              type: "tool_call",
-              id: toolId,
-              name: toolName,
-              inputJson,
-              result: toolResult,
-              complete: true,
-            });
-          }
-        }
-      }
-      const hasRuntimeError = Boolean(m.runtimeError?.message);
-      if (blocks.length > 0 || hasRuntimeError) {
-        result.push({
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "",
-          timestamp: Date.now(),
-          blocks,
-          ...(hasRuntimeError
-            ? {
-                error: {
-                  message: m.runtimeError!.message,
-                  retryable: m.runtimeError!.retryable,
-                  code: m.runtimeError!.code,
-                  actions: m.runtimeError!.actions,
-                },
-              }
-            : {}),
-        });
-      }
-    }
-  }
-  return result;
-}
-
-/** Ensure the last message is an assistant message with blocks. */
-function ensureAssistant(messages: ChatMessage[]): ChatMessage[] {
-  const last = messages[messages.length - 1];
-  if (last?.role === "assistant") return messages;
-  return [
-    ...messages,
-    {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: "",
-      timestamp: Date.now(),
-      blocks: [],
-    },
-  ];
-}
-
-/** Get the last block of a given type, or null. */
-function lastBlock(blocks: ContentBlock[], type: string) {
-  const last = blocks[blocks.length - 1];
-  return last?.type === type ? last : null;
-}
-
-/** Clone messages array with cloned last message. */
-function cloneLast(messages: ChatMessage[]): {
-  msgs: ChatMessage[];
-  last: ChatMessage;
-} {
-  const msgs = [...messages];
-  const last = {
-    ...msgs[msgs.length - 1],
-    blocks: [...msgs[msgs.length - 1].blocks],
-  };
-  msgs[msgs.length - 1] = last;
-  return { msgs, last };
-}
-
-function applyCheckpoints(
-  messages: ChatMessage[],
-  checkpoints: Array<{ turnIndex: number; checkpointId: string }> | undefined,
-  userTurnOffset: number,
-): ChatMessage[] {
-  if (!checkpoints || checkpoints.length === 0) return messages;
-  const msgs = [...messages];
-  for (const cp of checkpoints) {
-    let userCount = 0;
-    const targetUserIndex = cp.turnIndex - 1 - userTurnOffset;
-    if (targetUserIndex < 0) continue;
-    for (let i = 0; i < msgs.length; i++) {
-      if (msgs[i].role === "user") {
-        if (userCount === targetUserIndex) {
-          msgs[i] = { ...msgs[i], checkpointId: cp.checkpointId };
-          break;
-        }
-        userCount++;
-      }
-    }
-  }
-  return msgs;
-}
-
-export function shouldAcceptSessionChunk(
-  chunkSessionId: string,
-  currentSessionId: string | null,
-  loadingSessionId: string | null,
-): boolean {
-  const targetSessionId = loadingSessionId ?? currentSessionId;
-  return chunkSessionId === targetSessionId;
-}
-
-export function shouldDropSessionScopedEvent(
-  eventType: string,
-  eventSessionId: string | undefined,
-  currentSessionId: string | null,
-  isBackgroundEvent: boolean,
-): boolean {
-  if (!eventSessionId) return false;
-  if (
-    eventType === "agentSessionLoaded" ||
-    eventType === "agentSessionChunk" ||
-    eventType === "showBgTranscript"
-  ) {
-    return false;
-  }
-  if (isBackgroundEvent) return false;
-  return eventSessionId !== currentSessionId;
-}
-
-export function reducer(state: AppState, action: AppAction): AppState {
-  switch (action.type) {
-    case "SET_STATE":
-      return {
-        ...state,
-        chatState: action.state,
-        streaming: action.state.streaming,
-      };
-
-    case "SET_DEBUG_INFO":
-      return {
-        ...state,
-        debugInfo: action.info,
-        systemPrompt: action.systemPrompt ?? state.systemPrompt,
-        loadedInstructions:
-          action.loadedInstructions ?? state.loadedInstructions,
-      };
-
-    case "ADD_USER_MESSAGE": {
-      const dismissedMessageId = state.detectedQuestion?.messageId;
-      return {
-        ...state,
-        streaming: true,
-        detectedQuestion: null,
-        dismissedDetectedQuestionIds:
-          dismissedMessageId &&
-          !state.dismissedDetectedQuestionIds.includes(dismissedMessageId)
-            ? [...state.dismissedDetectedQuestionIds, dismissedMessageId]
-            : state.dismissedDetectedQuestionIds,
-        messages: [
-          ...state.messages,
-          {
-            id: crypto.randomUUID(),
-            role: "user",
-            content: action.text,
-            timestamp: Date.now(),
-            blocks: [],
-            isSlashCommand: action.isSlashCommand,
-            slashCommandLabel: action.slashCommandLabel,
-          },
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: "",
-            timestamp: Date.now(),
-            blocks: [],
-          },
-        ],
-      };
-    }
-
-    case "ADD_ANNOTATION":
-      return {
-        ...state,
-        messages: [
-          ...state.messages,
-          {
-            id: crypto.randomUUID(),
-            role: "user",
-            content: action.text,
-            badge: action.badge,
-            timestamp: Date.now(),
-            blocks: [],
-          },
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: "",
-            timestamp: Date.now(),
-            blocks: [],
-          },
-        ],
-      };
-
-    case "ADD_BG_QUESTION": {
-      const bgMsgs = [...state.messages];
-      const bgLast =
-        bgMsgs.length > 0 ? { ...bgMsgs[bgMsgs.length - 1] } : null;
-      const bgBlock = {
-        type: "bg_question" as const,
-        bgTask: action.bgTask,
-        questions: action.questions,
-        answer: action.answer,
-      };
-      if (bgLast && bgLast.role === "assistant") {
-        bgLast.blocks = [...(bgLast.blocks ?? []), bgBlock];
-        bgMsgs[bgMsgs.length - 1] = bgLast;
-        return { ...state, messages: bgMsgs };
-      }
-      bgMsgs.push({
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        blocks: [bgBlock],
-      });
-      return { ...state, messages: bgMsgs };
-    }
-
-    case "THINKING_START": {
-      const all = ensureAssistant(state.messages);
-      const { msgs, last } = cloneLast(all);
-      last.blocks.push({
-        type: "thinking",
-        id: action.thinkingId,
-        text: "",
-        complete: false,
-      });
-      return { ...state, messages: msgs, statusOverride: null };
-    }
-
-    case "THINKING_DELTA": {
-      const { msgs, last } = cloneLast(state.messages);
-      last.blocks = last.blocks.map((b) =>
-        b.type === "thinking" && b.id === action.thinkingId
-          ? { ...b, text: b.text + action.text }
-          : b,
-      );
-      return { ...state, messages: msgs };
-    }
-
-    case "THINKING_END": {
-      const { msgs, last } = cloneLast(state.messages);
-      last.blocks = last.blocks.map((b) =>
-        b.type === "thinking" && b.id === action.thinkingId
-          ? { ...b, complete: true }
-          : b,
-      );
-      return { ...state, messages: msgs };
-    }
-
-    case "TOOL_START": {
-      const all = ensureAssistant(state.messages);
-      const { msgs, last } = cloneLast(all);
-      last.blocks.push(
-        action.toolName === "load_skill"
-          ? {
-              type: "skill_load",
-              id: action.toolCallId,
-              inputJson: "",
-              result: "",
-              complete: false,
-            }
-          : {
-              type: "tool_call",
-              id: action.toolCallId,
-              name: action.toolName,
-              inputJson: "",
-              result: "",
-              complete: false,
-            },
-      );
-      return { ...state, messages: msgs, statusOverride: null };
-    }
-
-    case "TOOL_INPUT_DELTA": {
-      // Search backwards for the message containing this tool_call (same
-      // rationale as TOOL_COMPLETE — events can push new messages).
-      let tiIdx = state.messages.length - 1;
-      for (; tiIdx >= 0; tiIdx--) {
-        if (
-          state.messages[tiIdx].blocks.some(
-            (b) =>
-              (b.type === "tool_call" || b.type === "skill_load") &&
-              b.id === action.toolCallId,
-          )
-        ) {
-          break;
-        }
-      }
-      if (tiIdx < 0) return state;
-      const tiMsgs = [...state.messages];
-      const tiTarget = { ...tiMsgs[tiIdx] };
-      tiTarget.blocks = tiTarget.blocks.map((b) =>
-        (b.type === "tool_call" || b.type === "skill_load") &&
-        b.id === action.toolCallId
-          ? { ...b, inputJson: b.inputJson + action.partialJson }
-          : b,
-      );
-      tiMsgs[tiIdx] = tiTarget;
-      return { ...state, messages: tiMsgs };
-    }
-
-    case "TOOL_COMPLETE": {
-      // Search ALL messages for the matching tool_call — not just the last one.
-      // Events like ADD_ANNOTATION, ADD_INTERJECTION, BG_AGENT_DONE, or ADD_CONDENSE
-      // can push new messages between TOOL_START and TOOL_COMPLETE, leaving the
-      // tool_call block in an earlier message. This is especially common with
-      // long-running tools like get_background_result.
-      let targetIdx = -1;
-      for (let i = state.messages.length - 1; i >= 0; i--) {
-        if (
-          state.messages[i].blocks.some(
-            (b) =>
-              (b.type === "tool_call" || b.type === "skill_load") &&
-              b.id === action.toolCallId,
-          )
-        ) {
-          targetIdx = i;
-          break;
-        }
-      }
-      if (targetIdx === -1) return state; // tool_call not found — no-op
-
-      const msgs = [...state.messages];
-      const target = { ...msgs[targetIdx] };
-      target.blocks = target.blocks.map((b) => {
-        if (
-          (b.type === "tool_call" || b.type === "skill_load") &&
-          b.id === action.toolCallId
-        ) {
-          const nextBase = {
-            ...b,
-            inputJson:
-              b.inputJson !== "" || action.input === undefined
-                ? b.inputJson
-                : JSON.stringify(action.input),
-            result: action.result,
-            complete: true,
-            durationMs: action.durationMs,
-            ...(b.type === "tool_call"
-              ? { mcpApprovalPromotion: action.mcpApprovalPromotion }
-              : {}),
-          };
-          if (b.type === "skill_load") {
-            const parsed = parseLoadSkillResult(action.result);
-            return {
-              ...nextBase,
-              skillName: parsed.skillName,
-              path: parsed.path,
-              content: parsed.content,
-            };
-          }
-          return nextBase;
-        }
-        return b;
-      });
-      msgs[targetIdx] = target;
-
-      // When ask_user completes, add a question_answer summary block
-      if (action.toolName === "ask_user") {
-        try {
-          const parsed = JSON.parse(action.result);
-          if (parsed.responses && Array.isArray(parsed.responses)) {
-            const items = parsed.responses.map(
-              (r: { question: string; answer: unknown; note?: string }) => ({
-                question: r.question ?? "",
-                answer: r.answer ?? null,
-                ...(r.note ? { note: r.note } : {}),
-              }),
-            );
-            if (items.length > 0) {
-              target.blocks = [
-                ...target.blocks,
-                { type: "question_answer" as const, items },
-              ];
-              msgs[targetIdx] = target;
-            }
-          }
-        } catch {
-          // ignore parse error
-        }
-      }
-
-      // When spawn_background_agent completes, add a bg_agent block to track progress
-      if (action.toolName === "spawn_background_agent") {
-        try {
-          const parsed = JSON.parse(action.result);
-          if (parsed.sessionId) {
-            // Extract task and message from the tool_call input
-            const toolBlock = target.blocks.find(
-              (b) => b.type === "tool_call" && b.id === action.toolCallId,
-            );
-            let task = "Background Agent";
-            let message: string | undefined;
-
-            const finalInput =
-              action.input &&
-              typeof action.input === "object" &&
-              !Array.isArray(action.input)
-                ? action.input
-                : null;
-            if (finalInput) {
-              const input = finalInput as { task?: unknown; message?: unknown };
-              if (typeof input.task === "string" && input.task)
-                task = input.task;
-              if (typeof input.message === "string" && input.message) {
-                message = input.message;
-              }
-            }
-
-            if (toolBlock && toolBlock.type === "tool_call") {
-              try {
-                const input = JSON.parse(toolBlock.inputJson) as {
-                  task?: unknown;
-                  message?: unknown;
-                };
-                if (
-                  task === "Background Agent" &&
-                  typeof input.task === "string" &&
-                  input.task
-                ) {
-                  task = input.task;
-                }
-                if (
-                  !message &&
-                  typeof input.message === "string" &&
-                  input.message
-                ) {
-                  message = input.message;
-                }
-              } catch {
-                // ignore parse error
-              }
-            }
-            target.blocks = [
-              ...target.blocks,
-              {
-                type: "bg_agent",
-                sessionId: parsed.sessionId,
-                task,
-                message,
-                resolvedModel: parsed.resolvedModel,
-                resolvedProvider: parsed.resolvedProvider,
-                resolvedMode: parsed.resolvedMode,
-                taskClass: parsed.taskClass,
-                routingReason: parsed.routingReason,
-              },
-            ];
-            msgs[targetIdx] = target;
-          }
-        } catch {
-          // ignore parse error
-        }
-      }
-      return { ...state, messages: msgs };
-    }
-
-    case "TEXT_DELTA": {
-      const all = ensureAssistant(state.messages);
-      const { msgs, last } = cloneLast(all);
-      // Append to existing text block or start a new one.
-      // Each Claude API turn naturally produces interleaved text+tool blocks:
-      //   [text: "Let me do X:"] → [tool_call] → [text: "Follow-up:"] → ...
-      // The colon at the end of pre-tool text is Claude's natural lead-in style.
-      const tail = lastBlock(last.blocks, "text");
-      if (tail && tail.type === "text") {
-        last.blocks[last.blocks.length - 1] = {
-          ...tail,
-          text: tail.text + action.text,
-        };
-      } else {
-        last.blocks.push({ type: "text", text: action.text });
-      }
-      return { ...state, messages: msgs };
-    }
-
-    case "API_REQUEST": {
-      if (state.messages.length === 0) return state;
-      const { msgs, last } = cloneLast(state.messages);
-      last.apiRequest = {
-        requestId: action.requestId,
-        model: action.model,
-        inputTokens: action.inputTokens,
-        uncachedInputTokens: action.uncachedInputTokens,
-        cacheReadTokens: action.cacheReadTokens,
-        cacheCreationTokens: action.cacheCreationTokens,
-        outputTokens: action.outputTokens,
-        durationMs: action.durationMs,
-        timeToFirstToken: action.timeToFirstToken,
-        usedPreviousResponseId: action.usedPreviousResponseId,
-        previousResponseIdFallback: action.previousResponseIdFallback,
-        promptCacheKey: action.promptCacheKey,
-        promptCacheRetention: action.promptCacheRetention,
-        storeResponseState: action.storeResponseState,
-        providerResponseId: action.providerResponseId,
-      };
-      return {
-        ...state,
-        messages: msgs,
-        lastInputTokens: action.inputTokens,
-        lastOutputTokens: action.outputTokens,
-        lastCacheReadTokens: action.cacheReadTokens,
-        // Real API data resets the running estimate.
-        estimatedTotalUsed: 0,
-      };
-    }
-
-    case "TOKEN_ESTIMATE": {
-      return { ...state, estimatedTotalUsed: action.estimatedTotalUsed };
-    }
-
-    case "TODO_UPDATE":
-      return {
-        ...state,
-        todos: Array.isArray(action.todos) ? action.todos : [],
-      };
-
-    case "ERROR": {
-      const all = ensureAssistant(state.messages);
-      const { msgs, last } = cloneLast(all);
-      last.error = {
-        message: action.error,
-        retryable: action.retryable,
-        code: action.code,
-        actions: action.actions,
-      };
-      return {
-        ...state,
-        streaming: false,
-        messages: msgs,
-        statusOverride: null,
-      };
-    }
-
-    case "CLEAR_ERROR": {
-      // Remove the error from the last message and set streaming=true for retry
-      if (state.messages.length === 0) return state;
-      const all2 = [...state.messages];
-      const lastMsg2 = { ...all2[all2.length - 1] };
-      delete lastMsg2.error;
-      all2[all2.length - 1] = lastMsg2;
-      return { ...state, messages: all2, streaming: true };
-    }
-
-    case "DONE": {
-      // Mark any incomplete tool calls / thinking blocks as complete so
-      // their spinners stop when the user clicks Stop.
-      const doneMessages = state.messages.map((m) => {
-        const hasIncomplete = m.blocks.some(
-          (b) =>
-            ((b.type === "tool_call" || b.type === "skill_load") &&
-              !b.complete) ||
-            (b.type === "thinking" && !b.complete),
-        );
-        if (!hasIncomplete) return m;
-        return {
-          ...m,
-          blocks: m.blocks.map((b) => {
-            if (
-              (b.type === "tool_call" || b.type === "skill_load") &&
-              !b.complete
-            ) {
-              return {
-                ...b,
-                complete: true,
-                result: b.result || '{"status":"stopped"}',
-              };
-            }
-            if (b.type === "thinking" && !b.complete) {
-              return { ...b, complete: true };
-            }
-            return b;
-          }),
-        };
-      });
-
-      // Mark any in_progress todos as pending so their spinners stop
-      const stopTodos = (items: TodoItem[]): TodoItem[] =>
-        items.map((t) => ({
-          ...t,
-          status: t.status === "in_progress" ? "pending" : t.status,
-          children: t.children ? stopTodos(t.children) : t.children,
-        }));
-
-      // Remove the empty assistant placeholder added after condensing if the
-      // agent ended before producing any content (e.g. manual /condense).
-      const last = doneMessages[doneMessages.length - 1];
-      const secondToLast = doneMessages[doneMessages.length - 2];
-      const finalMessages =
-        last?.role === "assistant" &&
-        last.blocks.length === 0 &&
-        !last.error &&
-        secondToLast?.role === "condense"
-          ? doneMessages.slice(0, -1)
-          : doneMessages;
-
-      return {
-        ...state,
-        streaming: false,
-        messages: finalMessages,
-        todos: stopTodos(state.todos),
-        statusOverride: null,
-      };
-    }
-
-    case "NEW_SESSION":
-      return {
-        ...state,
-        messages: [],
-        streaming: false,
-        loadedUserTurnOffset: 0,
-        lastInputTokens: 0,
-        lastOutputTokens: 0,
-        lastCacheReadTokens: 0,
-        estimatedTotalUsed: 0,
-        todos: [],
-        messageQueue: [],
-        questionRequest: null,
-        detectedQuestion: null,
-        dismissedDetectedQuestionIds: [],
-        statusOverride: null,
-      };
-
-    case "TOGGLE_THINKING":
-      return { ...state, thinkingEnabled: !state.thinkingEnabled };
-
-    case "SET_MODES":
-      return {
-        ...state,
-        modes: Array.isArray(action.modes) ? action.modes : state.modes,
-      };
-
-    case "SET_MODELS":
-      return {
-        ...state,
-        availableModels: Array.isArray(action.models)
-          ? action.models
-          : state.availableModels,
-      };
-
-    case "SET_SLASH_COMMANDS":
-      return {
-        ...state,
-        slashCommands: Array.isArray(action.commands)
-          ? action.commands
-          : state.slashCommands,
-      };
-
-    case "ENQUEUE_MESSAGE": {
-      const dismissedMessageId = state.detectedQuestion?.messageId;
-      return {
-        ...state,
-        detectedQuestion: null,
-        dismissedDetectedQuestionIds:
-          dismissedMessageId &&
-          !state.dismissedDetectedQuestionIds.includes(dismissedMessageId)
-            ? [...state.dismissedDetectedQuestionIds, dismissedMessageId]
-            : state.dismissedDetectedQuestionIds,
-        messageQueue: [
-          ...state.messageQueue,
-          {
-            id: action.id,
-            text: action.text,
-            ...(action.fullText ? { fullText: action.fullText } : {}),
-            ...(action.isSlashCommand ? { isSlashCommand: true } : {}),
-            ...(action.slashCommandLabel
-              ? { slashCommandLabel: action.slashCommandLabel }
-              : {}),
-            ...(action.attachments ? { attachments: action.attachments } : {}),
-            ...(action.images ? { images: action.images } : {}),
-            ...(action.documents ? { documents: action.documents } : {}),
-          },
-        ],
-      };
-    }
-
-    case "EDIT_QUEUE_MESSAGE":
-      return {
-        ...state,
-        messageQueue: state.messageQueue.map((q) =>
-          q.id === action.id
-            ? {
-                ...q,
-                text: action.text,
-                fullText: action.text,
-                isSlashCommand: false,
-                slashCommandLabel: undefined,
-              }
-            : q,
-        ),
-      };
-
-    case "REMOVE_FROM_QUEUE":
-      return {
-        ...state,
-        messageQueue: state.messageQueue.filter((q) => q.id !== action.id),
-      };
-
-    case "CLEAR_QUEUE":
-      return { ...state, messageQueue: [] };
-
-    case "ADD_INTERJECTION":
-      // Insert user interjection bubble mid-run without resetting streaming state
-      return {
-        ...state,
-        messages: [
-          ...state.messages,
-          {
-            id: crypto.randomUUID(),
-            role: "user" as const,
-            content: action.text,
-            timestamp: Date.now(),
-            blocks: [],
-            isSlashCommand: action.isSlashCommand,
-            slashCommandLabel: action.slashCommandLabel,
-          },
-          {
-            id: crypto.randomUUID(),
-            role: "assistant" as const,
-            content: "",
-            timestamp: Date.now(),
-            blocks: [],
-          },
-        ],
-      };
-
-    case "SET_QUESTION":
-      return {
-        ...state,
-        questionRequest: { id: action.id, questions: action.questions },
-      };
-
-    case "CLEAR_QUESTION":
-      return { ...state, questionRequest: null };
-
-    case "SET_DETECTED_QUESTION":
-      return {
-        ...state,
-        detectedQuestion: action.detectedQuestion,
-      };
-
-    case "DISMISS_DETECTED_QUESTION":
-      return {
-        ...state,
-        detectedQuestion:
-          state.detectedQuestion?.messageId === action.messageId
-            ? null
-            : state.detectedQuestion,
-        dismissedDetectedQuestionIds:
-          state.dismissedDetectedQuestionIds.includes(action.messageId)
-            ? state.dismissedDetectedQuestionIds
-            : [...state.dismissedDetectedQuestionIds, action.messageId],
-      };
-
-    case "CONDENSE_START": {
-      // Add a pending condense row — replaced with final stats when complete.
-      // Set streaming: true so the input area queues messages during condense
-      // (prevents racing with message history changes).
-      const tail = state.messages[state.messages.length - 1];
-      const base =
-        tail?.role === "assistant" && tail.blocks.length === 0 && !tail.error
-          ? state.messages.slice(0, -1)
-          : state.messages;
-      return {
-        ...state,
-        streaming: true,
-        messages: [
-          ...base,
-          {
-            id: crypto.randomUUID(),
-            role: "condense" as const,
-            content: "",
-            timestamp: Date.now(),
-            blocks: [],
-            condenseInfo: {
-              prevInputTokens: 0,
-              newInputTokens: 0,
-              condensing: true,
-            },
-          },
-        ],
-      };
-    }
-
-    case "ADD_CONDENSE": {
-      // Remove any trailing empty assistant placeholder (added optimistically by ADD_USER_MESSAGE)
-      // Also remove the pending condense row (condensing: true) if present
-      const filtered = state.messages.filter(
-        (m) => !(m.role === "condense" && m.condenseInfo?.condensing),
-      );
-      return {
-        ...state,
-        messages: [
-          ...filtered,
-          {
-            id: crypto.randomUUID(),
-            role: "condense" as const,
-            content: "",
-            timestamp: Date.now(),
-            blocks: [],
-            condenseInfo: {
-              prevInputTokens: action.prevInputTokens,
-              newInputTokens: action.newInputTokens,
-              durationMs: action.durationMs,
-              validationWarnings: action.validationWarnings,
-            },
-          },
-          // Add an empty assistant placeholder so the streaming dots appear
-          // immediately after condensing while waiting for the next API response.
-          // DONE strips this if the agent ends without producing any content.
-          {
-            id: crypto.randomUUID(),
-            role: "assistant" as const,
-            content: "",
-            timestamp: Date.now(),
-            blocks: [],
-          },
-        ],
-        lastInputTokens: action.newInputTokens,
-        lastOutputTokens: 0,
-        lastCacheReadTokens: 0,
-      };
-    }
-
-    case "ADD_WARNING": {
-      return {
-        ...state,
-        messages: [
-          ...state.messages,
-          {
-            id: crypto.randomUUID(),
-            role: "warning" as const,
-            content: "",
-            timestamp: Date.now(),
-            blocks: [],
-            warningMessage: action.message,
-            warningRetry:
-              action.retryDelayMs !== undefined ||
-              action.retryAt !== undefined ||
-              action.retryAttempt !== undefined ||
-              action.retryMaxAttempts !== undefined
-                ? {
-                    retryDelayMs: action.retryDelayMs,
-                    retryAt: action.retryAt,
-                    retryAttempt: action.retryAttempt,
-                    retryMaxAttempts: action.retryMaxAttempts,
-                  }
-                : undefined,
-          },
-        ],
-      };
-    }
-
-    case "SET_STATUS_OVERRIDE": {
-      return { ...state, statusOverride: action.message };
-    }
-
-    case "SET_RESTORING_SESSION": {
-      return { ...state, restoringSession: action.restoring };
-    }
-
-    case "ADD_CONDENSE_ERROR": {
-      const filtered = state.messages.filter(
-        (m) => !(m.role === "condense" && m.condenseInfo?.condensing),
-      );
-      const withCondenseRow = [
-        ...filtered,
-        {
-          id: crypto.randomUUID(),
-          role: "condense" as const,
-          content: "",
-          timestamp: Date.now(),
-          blocks: [],
-          condenseInfo: {
-            prevInputTokens: 0,
-            newInputTokens: 0,
-            errorMessage: action.errorMessage,
-          },
-        },
-      ];
-
-      if (!action.retryable && !action.code && !action.actions) {
-        return {
-          ...state,
-          messages: withCondenseRow,
-          statusOverride: null,
-        };
-      }
-
-      const all = ensureAssistant(withCondenseRow);
-      const { msgs, last } = cloneLast(all);
-      last.error = {
-        message: action.errorMessage,
-        retryable: action.retryable ?? false,
-        code: action.code,
-        actions: action.actions,
-      };
-
-      return {
-        ...state,
-        messages: msgs,
-        statusOverride: null,
-      };
-    }
-
-    case "LOAD_SESSION": {
-      const userTurnOffset = action.userTurnOffset ?? 0;
-      const msgs = applyCheckpoints(
-        action.messages,
-        action.checkpoints,
-        userTurnOffset,
-      );
-      return {
-        ...state,
-        messages: msgs,
-        streaming: false,
-        restoringSession: false,
-        loadedUserTurnOffset: userTurnOffset,
-        lastInputTokens: action.lastInputTokens ?? 0,
-        lastOutputTokens: action.lastOutputTokens ?? 0,
-        todos: [],
-        messageQueue: [],
-        questionRequest: null,
-        detectedQuestion: null,
-        dismissedDetectedQuestionIds: [],
-        chatState: {
-          ...state.chatState,
-          sessionId: action.sessionId,
-          mode: action.mode,
-          streaming: false,
-        },
-      };
-    }
-
-    case "PREPEND_SESSION_CHUNK": {
-      const prepended = [...action.messages, ...state.messages];
-      const withCheckpoints = applyCheckpoints(
-        prepended,
-        action.checkpoints,
-        action.userTurnOffset,
-      );
-      return {
-        ...state,
-        messages: withCheckpoints,
-        loadedUserTurnOffset: action.userTurnOffset,
-      };
-    }
-
-    case "BG_AGENT_DONE": {
-      // Insert a bg_agent_result notification at the current position in chat.
-      // If the last message is an assistant message, append the block to it.
-      // Otherwise, create a new assistant message for the notification.
-      const resultBlock: ContentBlock = {
-        type: "bg_agent_result",
-        sessionId: action.sessionId,
-        task: action.task,
-        status: action.status,
-        resultText: action.resultText,
-        summary: action.summary,
-      };
-      const lastMsg = state.messages[state.messages.length - 1];
-      if (lastMsg?.role === "assistant") {
-        const { msgs, last } = cloneLast(state.messages);
-        last.blocks = [...last.blocks, resultBlock];
-        return { ...state, messages: msgs };
-      }
-      return {
-        ...state,
-        messages: [
-          ...state.messages,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant" as const,
-            content: "",
-            timestamp: Date.now(),
-            blocks: [resultBlock],
-          },
-        ],
-      };
-    }
-
-    case "SET_CHECKPOINT": {
-      // Attach checkpointId to the user message immediately before this checkpoint.
-      // `turnIndex` is a snapshot user-turn count, so the visible row is
-      // `turnIndex - 1`, adjusted by any loaded history offset.
-      const msgs = [...state.messages];
-      let userCount = 0;
-      const targetUserIndex = action.turnIndex - 1 - state.loadedUserTurnOffset;
-      if (targetUserIndex < 0) return state;
-      for (let i = 0; i < msgs.length; i++) {
-        if (msgs[i].role === "user") {
-          if (userCount === targetUserIndex) {
-            msgs[i] = { ...msgs[i], checkpointId: action.checkpointId };
-            break;
-          }
-          userCount++;
-        }
-      }
-      return { ...state, messages: msgs };
-    }
-
-    default:
-      return state;
-  }
-}
-
-export const initialState: AppState = {
-  messages: [],
-  chatState: {
-    sessionId: null,
-    mode: "code",
-    model: "claude-sonnet-4-6",
-    streaming: false,
-  },
-  streaming: false,
-  thinkingEnabled: true,
-  lastInputTokens: 0,
-  lastOutputTokens: 0,
-  lastCacheReadTokens: 0,
-  estimatedTotalUsed: 0,
-  debugInfo: null,
-  systemPrompt: null,
-  loadedInstructions: null,
-  todos: [],
-  modes: [
-    { slug: "code", name: "Code", icon: "code" },
-    { slug: "architect", name: "Architect", icon: "organization" },
-    { slug: "ask", name: "Ask", icon: "question" },
-    { slug: "debug", name: "Debug", icon: "debug" },
-    { slug: "review", name: "Review", icon: "checklist" },
-  ],
-  availableModels: [],
-  slashCommands: [],
-  messageQueue: [],
-  questionRequest: null,
-  detectedQuestion: null,
-  dismissedDetectedQuestionIds: [],
-  statusOverride: null,
-  restoringSession: false,
-  loadedUserTurnOffset: 0,
+export {
+  agentMessagesToChatMessages,
+  initialState,
+  reducer,
+  shouldAcceptSessionChunk,
+  shouldDropSessionScopedEvent,
 };
 
 export interface Injection {
@@ -1633,13 +103,25 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state.chatState);
   stateRef.current = state.chatState;
+  const fullStateRef = useRef(state);
+  fullStateRef.current = state;
   const previousStreamingRef = useRef(state.streaming);
+  const activeDetectRequestRef = useRef<{
+    requestId: string;
+    messageId: string;
+    assistantText: string;
+  } | null>(null);
   const startupRestorePendingRef = useRef(true);
   const loadingSessionIdRef = useRef<string | null>(null);
   const messageQueueRef = useRef(state.messageQueue);
   messageQueueRef.current = state.messageQueue;
-  const thinkingEnabledRef = useRef(state.thinkingEnabled);
-  thinkingEnabledRef.current = state.thinkingEnabled;
+  const reasoningEffortRef = useRef<ReasoningEffort>(
+    state.chatState.reasoningEffort ??
+      (state.thinkingEnabled ? "high" : "none"),
+  );
+  reasoningEffortRef.current =
+    state.chatState.reasoningEffort ??
+    (state.thinkingEnabled ? "high" : "none");
   // Guards against stale delta events arriving after agentDone (stop race condition).
   // Set true when a turn starts, false when agentDone fires.
   const streamingRef = useRef(false);
@@ -1685,6 +167,16 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [approvalResizing, setApprovalResizing] = useState(false);
   const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
   const forwardedFollowUpRef = useRef("");
+  const [remoteQuestionProgress, setRemoteQuestionProgress] = useState<{
+    id: string;
+    step: number;
+    answers: Record<string, string | string[] | number | boolean | undefined>;
+    notes: Record<string, string>;
+    origin: string;
+  } | null>(null);
+  const questionProgressOriginRef = useRef<string>(
+    `ext-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`,
+  );
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
   const [editingQueueText, setEditingQueueText] = useState("");
   const [bgSessions, setBgSessions] = useState<BgSessionInfoProps[]>([]);
@@ -1696,6 +188,51 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     messages: ChatMessage[];
   } | null>(null);
   const [btwState, setBtwState] = useState<BtwState | null>(null);
+
+  useEffect(() => {
+    const sendThemeSnapshot = () => {
+      const snapshot = captureVsCodeThemeSnapshot();
+      vscodeApi.postMessage({
+        command: "themeSnapshot",
+        cssVariables: snapshot.cssVariables,
+        colorScheme: snapshot.colorScheme,
+      });
+    };
+
+    let themeReportTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleThemeSnapshot = () => {
+      if (themeReportTimer !== null) {
+        clearTimeout(themeReportTimer);
+      }
+      themeReportTimer = setTimeout(() => {
+        themeReportTimer = null;
+        sendThemeSnapshot();
+      }, 75);
+    };
+
+    sendThemeSnapshot();
+
+    const root = document.documentElement;
+    const body = document.body;
+    const observer = new MutationObserver(() => {
+      scheduleThemeSnapshot();
+    });
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ["style", "class"],
+    });
+    observer.observe(body, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+
+    return () => {
+      observer.disconnect();
+      if (themeReportTimer !== null) {
+        clearTimeout(themeReportTimer);
+      }
+    };
+  }, [vscodeApi]);
 
   useEffect(() => {
     // Drain all delta buffers, dispatching one action per buffer.
@@ -1957,7 +494,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                   documentsCombined.length > 0 ? documentsCombined : undefined,
                 sessionId: stateRef.current.sessionId,
                 mode: stateRef.current.mode,
-                thinkingEnabled: thinkingEnabledRef.current,
+                reasoningEffort: reasoningEffortRef.current,
+                thinkingEnabled: reasoningEffortRef.current !== "none",
               });
             }, 0);
           }
@@ -2067,12 +605,44 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           });
           break;
 
+        case "regexSuggestion": {
+          const pending = pendingRegexSuggestionsRef.current.get(msg.requestId);
+          if (pending) {
+            pendingRegexSuggestionsRef.current.delete(msg.requestId);
+            if (msg.error) {
+              pending.reject(new Error(msg.error));
+            } else if (msg.pattern) {
+              pending.resolve(msg.pattern);
+            } else {
+              pending.reject(new Error("No suggestion returned"));
+            }
+          }
+          break;
+        }
+
         case "agentQuestionRequest":
           dispatch({
             type: "SET_QUESTION",
             id: msg.id,
             questions: msg.questions,
           });
+          break;
+
+        case "agentQuestionCleared":
+          dispatch({ type: "CLEAR_QUESTION" });
+          setRemoteQuestionProgress(null);
+          break;
+
+        case "agentQuestionProgress":
+          if (msg.origin !== questionProgressOriginRef.current) {
+            setRemoteQuestionProgress({
+              id: msg.id,
+              step: msg.step,
+              answers: msg.answers,
+              notes: msg.notes,
+              origin: msg.origin,
+            });
+          }
           break;
 
         case "agentSessionList":
@@ -2154,6 +724,21 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           );
           break;
 
+        case "agentCommittedUserMessage":
+          dispatch({
+            type: "ADD_COMMITTED_USER_MESSAGE",
+            text: (msg.displayText as string | undefined) ?? msg.text,
+            isSlashCommand:
+              (msg.isSlashCommand as boolean | undefined) ?? false,
+            slashCommandLabel:
+              (msg.slashCommandLabel as string | undefined) ??
+              ((msg.isSlashCommand as boolean | undefined)
+                ? (msg.displayText as string | undefined)
+                : undefined),
+            origin: msg.origin as "vscode" | "browser" | undefined,
+          });
+          break;
+
         case "agentBgSessionsUpdate":
           setBgSessions(msg.sessions as BgSessionInfoProps[]);
           break;
@@ -2233,11 +818,60 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           });
           break;
 
+        case "agentPairingCode":
+          dispatch({
+            type: "ADD_PAIRING_CODE",
+            pairingId: msg.pairingId,
+            code: msg.code,
+            expiresAt: msg.expiresAt,
+            pairingUrls: msg.pairingUrls,
+          });
+          break;
+
+        case "agentPairingStatus":
+          dispatch({
+            type: "UPDATE_PAIRING_STATUS",
+            pairingId: msg.pairingId,
+            status: msg.status,
+            deviceLabel: msg.deviceLabel,
+          });
+          break;
+
         case "showBgTranscript": {
           const converted = agentMessagesToChatMessages(
             (msg.messages as unknown[]) ?? [],
           );
           setTranscriptView({ task: msg.task as string, messages: converted });
+          break;
+        }
+
+        case "agentDetectQuestionResult": {
+          const active = activeDetectRequestRef.current;
+          if (!active || active.requestId !== msg.requestId) break;
+          activeDetectRequestRef.current = null;
+
+          if (streamingRef.current) break;
+          const snapshot = fullStateRef.current;
+          if (snapshot.questionRequest) break;
+          if (
+            snapshot.dismissedDetectedQuestionIds.includes(active.messageId)
+          ) {
+            break;
+          }
+          const currentLast = snapshot.messages[snapshot.messages.length - 1];
+          if (!currentLast || currentLast.id !== active.messageId) break;
+
+          let detected = msg.detected;
+          if (msg.fallback) {
+            detected = detectQuestionFromAssistantText(active.assistantText);
+          }
+
+          dispatch({
+            type: "SET_DETECTED_QUESTION",
+            detectedQuestion: detected
+              ? { ...detected, messageId: active.messageId }
+              : null,
+          });
           break;
         }
       }
@@ -2374,10 +1008,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         documents: documents.length > 0 ? documents : undefined,
         sessionId: stateRef.current.sessionId,
         mode: stateRef.current.mode,
-        thinkingEnabled: thinkingEnabledRef.current,
+        reasoningEffort: reasoningEffortRef.current,
+        thinkingEnabled: reasoningEffortRef.current !== "none",
       });
     },
-    [vscodeApi, state.streaming, state.thinkingEnabled],
+    [vscodeApi, state.streaming, state.chatState.reasoningEffort],
   );
 
   const handleStop = useCallback(() => {
@@ -2438,18 +1073,24 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
       return;
     }
 
-    const detected = detectQuestionFromAssistantText(assistantText);
-    dispatch({
-      type: "SET_DETECTED_QUESTION",
-      detectedQuestion: detected
-        ? { ...detected, messageId: lastMsg.id }
-        : null,
+    const requestId = `detect-question-${lastMsg.id}-${Date.now()}`;
+    activeDetectRequestRef.current = {
+      requestId,
+      messageId: lastMsg.id,
+      assistantText,
+    };
+    vscodeApi.postMessage({
+      command: "agentDetectQuestion",
+      requestId,
+      messageId: lastMsg.id,
+      text: assistantText,
     });
   }, [
     state.streaming,
     state.messages,
     state.questionRequest,
     state.dismissedDetectedQuestionIds,
+    vscodeApi,
   ]);
 
   const handleStopBackground = useCallback(
@@ -2573,6 +1214,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             attachments: [],
             sessionId: stateRef.current.sessionId,
             mode: stateRef.current.mode,
+            reasoningEffort: "none",
             thinkingEnabled: false,
           });
           break;
@@ -2587,6 +1229,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
           break;
         case "btw":
+          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
+          break;
+        case "pair":
           vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
           break;
         case "condense":
@@ -2630,6 +1275,28 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
       setForwardedApproval(null);
       forwardedFollowUpRef.current = "";
       vscodeApi.postMessage({ command: "approvalDecision", ...data });
+    },
+    [vscodeApi],
+  );
+
+  const pendingRegexSuggestionsRef = useRef<
+    Map<
+      string,
+      { resolve: (pattern: string) => void; reject: (err: Error) => void }
+    >
+  >(new Map());
+  const handleSuggestRegex = useCallback(
+    (args: { subCommand: string; fullCommand: string }): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const requestId = `regex-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        pendingRegexSuggestionsRef.current.set(requestId, { resolve, reject });
+        vscodeApi.postMessage({
+          command: "agentSuggestRegex",
+          requestId,
+          subCommand: args.subCommand,
+          fullCommand: args.fullCommand,
+        });
+      });
     },
     [vscodeApi],
   );
@@ -2696,8 +1363,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [clampApprovalPanelHeight, stopApprovalResize],
   );
 
-  const handleToggleThinking = useCallback(() => {
-    dispatch({ type: "TOGGLE_THINKING" });
+  const handleSetReasoningEffort = useCallback((effort: ReasoningEffort) => {
+    dispatch({ type: "SET_REASONING_EFFORT", effort });
   }, []);
 
   const handleExportTranscript = useCallback(() => {
@@ -3173,6 +1840,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 maxContextWindow={
                   currentModel?.contextWindow ?? DEFAULT_MAX_TOKENS
                 }
+                maxInputTokens={
+                  state.chatState.contextBudget?.maxInputTokens ??
+                  currentModel?.maxInputTokens
+                }
+                usedInputTokens={state.chatState.contextBudget?.usedInputTokens}
+                budgetBasis={state.chatState.contextBudget?.basis}
                 outputReservation={
                   state.chatState.contextBudget?.outputReservation
                 }
@@ -3287,6 +1960,27 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           <QuestionCard
             id={state.questionRequest.id}
             questions={state.questionRequest.questions}
+            remoteProgress={
+              remoteQuestionProgress &&
+              remoteQuestionProgress.id === state.questionRequest.id
+                ? {
+                    step: remoteQuestionProgress.step,
+                    answers: remoteQuestionProgress.answers,
+                    notes: remoteQuestionProgress.notes,
+                  }
+                : null
+            }
+            onProgressChange={(progress) => {
+              if (!state.questionRequest) return;
+              vscodeApi.postMessage({
+                command: "agentQuestionProgress",
+                id: state.questionRequest.id,
+                step: progress.step,
+                answers: progress.answers,
+                notes: progress.notes,
+                origin: questionProgressOriginRef.current,
+              });
+            }}
             onSubmit={(
               id: string,
               answers: Record<
@@ -3296,6 +1990,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               notes: Record<string, string>,
             ) => {
               dispatch({ type: "CLEAR_QUESTION" });
+              setRemoteQuestionProgress(null);
               vscodeApi.postMessage({
                 command: "agentQuestionResponse",
                 id,
@@ -3322,6 +2017,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 request={forwardedApproval}
                 submit={handleForwardedApprovalSubmit}
                 followUpRef={forwardedFollowUpRef}
+                onSuggestRegex={handleSuggestRegex}
               />
             ) : forwardedApproval.kind === "write" ? (
               <WriteCard
@@ -3383,8 +2079,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onSend={handleSend}
           onStop={handleStop}
           streaming={state.streaming}
-          thinkingEnabled={state.thinkingEnabled}
-          onToggleThinking={handleToggleThinking}
+          reasoningEffort={
+            state.chatState.reasoningEffort ??
+            (state.thinkingEnabled ? "high" : "none")
+          }
+          onSetReasoningEffort={handleSetReasoningEffort}
           onExportTranscript={handleExportTranscript}
           hasMessages={state.messages.length > 0}
           vscodeApi={vscodeApi}

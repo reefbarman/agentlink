@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { render } from "@testing-library/preact";
 
 import { SkillLoadBlock } from "./SkillLoadBlock";
+import { render } from "@testing-library/preact";
 
 describe("SkillLoadBlock", () => {
   it("renders stopped results as warning", () => {
