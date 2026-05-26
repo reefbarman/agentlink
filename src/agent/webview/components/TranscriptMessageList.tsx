@@ -31,6 +31,7 @@ interface TranscriptMessageListProps {
   bgSessions?: BgSessionInfoProps[];
   onStopBackground?: (sessionId: string) => void;
   onOpenTranscript?: (sessionId: string) => void;
+  onFinalMarkerContinue?: (prompt: string) => void;
   onRevertCheckpoint?: (sessionId: string, checkpointId: string) => void;
   onViewCheckpointDiff?: (
     sessionId: string,
@@ -56,6 +57,7 @@ export function TranscriptMessageList({
   bgSessions,
   onStopBackground,
   onOpenTranscript,
+  onFinalMarkerContinue,
   onRevertCheckpoint,
   onViewCheckpointDiff,
 }: TranscriptMessageListProps) {
@@ -125,6 +127,7 @@ export function TranscriptMessageList({
               bgSessions={bgSessions}
               onStopBackground={onStopBackground}
               onOpenTranscript={onOpenTranscript}
+              onFinalMarkerContinue={onFinalMarkerContinue}
             />
           </Fragment>
         ),

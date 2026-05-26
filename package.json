@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.11.19",
+  "version": "1.11.53",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -124,6 +124,10 @@
       {
         "command": "agentlink.setOpenaiApiKey",
         "title": "AgentLink: Set OpenAI API Key for Embeddings"
+      },
+      {
+        "command": "agentlink.setAnthropicApiKey",
+        "title": "AgentLink: Set Anthropic API Key"
       },
       {
         "command": "agentlink.configureAgents",

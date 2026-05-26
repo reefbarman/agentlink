@@ -11,6 +11,7 @@ import type {
 } from "../agent/webview/types.js";
 
 import type { DetectedQuestion } from "./questionDetection.js";
+import type { FinalMessageMarker } from "./finalStatus.js";
 import type { McpApprovalPromotionMeta } from "./types.js";
 
 function parseLoadSkillResult(result: string): {
@@ -94,6 +95,8 @@ export interface AppState {
   loadedUserTurnOffset: number;
   /** Checkpoints that arrived before their target user message row was present. */
   pendingCheckpoints: Array<{ turnIndex: number; checkpointId: string }>;
+  /** Explicit final marker intent recorded by set_task_status for the current turn. */
+  pendingFinalMarker: FinalMessageMarker | null;
 }
 
 export type AppAction =
@@ -163,6 +166,8 @@ export type AppAction =
         condense?: boolean;
       };
     }
+  | { type: "SET_FINAL_MARKER"; marker: FinalMessageMarker | null }
+  | { type: "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS" }
   | { type: "DONE" }
   | { type: "NEW_SESSION" }
   | { type: "SET_REASONING_EFFORT"; effort: ReasoningEffort }
@@ -354,6 +359,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           errorMessage?: string;
           condensing?: boolean;
         };
+        finalMarker?: FinalMessageMarker;
       };
       runtimeError?: {
         message: string;
@@ -443,6 +449,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         } else if (block.type === "tool_use") {
           const toolId = block.id ?? crypto.randomUUID();
           const toolName = block.name ?? "";
+          if (toolName === "set_task_status") continue;
           const toolResult = toolResults.get(toolId) ?? "";
           const inputJson = JSON.stringify(block.input ?? {});
 
@@ -604,13 +611,15 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                 ),
             )
           : blocks;
-      if (visibleBlocks.length > 0 || hasRuntimeError) {
+      const finalMarker = m.uiHint?.finalMarker;
+      if (visibleBlocks.length > 0 || hasRuntimeError || finalMarker) {
         result.push({
           id: crypto.randomUUID(),
           role: "assistant",
           content: "",
           timestamp: Date.now(),
           blocks: visibleBlocks,
+          finalMarker,
           ...(hasRuntimeError
             ? {
                 error: {
@@ -662,6 +671,68 @@ function cloneLast(messages: ChatMessage[]): {
   };
   msgs[msgs.length - 1] = last;
   return { msgs, last };
+}
+
+function applyFinalMarkerToLatestAssistant(
+  messages: ChatMessage[],
+  marker: FinalMessageMarker,
+): ChatMessage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    const next = [...messages];
+    next[i] = { ...message, finalMarker: marker };
+    return next;
+  }
+  return messages;
+}
+
+function completeIncompleteRuntimeBlocks(
+  messages: ChatMessage[],
+): ChatMessage[] {
+  return messages.map((m) => {
+    const hasIncomplete = m.blocks.some(
+      (b) =>
+        ((b.type === "tool_call" || b.type === "skill_load") && !b.complete) ||
+        (b.type === "thinking" && !b.complete),
+    );
+    if (!hasIncomplete) return m;
+    return {
+      ...m,
+      blocks: m.blocks.map((b) => {
+        if (
+          (b.type === "tool_call" || b.type === "skill_load") &&
+          !b.complete
+        ) {
+          return {
+            ...b,
+            complete: true,
+            result: b.result || '{"status":"stopped"}',
+          };
+        }
+        if (b.type === "thinking" && !b.complete) {
+          return { ...b, complete: true };
+        }
+        return b;
+      }),
+    };
+  });
+}
+
+function clearFinalMarkerContinueActions(
+  messages: ChatMessage[],
+): ChatMessage[] {
+  let changed = false;
+  const next = messages.map((message) => {
+    if (message.role !== "assistant" || !message.finalMarker?.continueAction) {
+      return message;
+    }
+    changed = true;
+    const { continueAction: _continueAction, ...finalMarker } =
+      message.finalMarker;
+    return { ...message, finalMarker };
+  });
+  return changed ? next : messages;
 }
 
 function applyCheckpointToMessages(
@@ -768,8 +839,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
     case "ADD_USER_MESSAGE": {
       const dismissedMessageId = state.detectedQuestion?.messageId;
+      const messagesWithoutContinueActions = clearFinalMarkerContinueActions(
+        state.messages,
+      );
       const withNewRows = [
-        ...state.messages,
+        ...messagesWithoutContinueActions,
         {
           id: crypto.randomUUID(),
           role: "user" as const,
@@ -887,6 +961,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_START": {
+      if (action.toolName === "set_task_status") {
+        return { ...state, statusOverride: null };
+      }
       const all = ensureAssistant(state.messages);
       const { msgs, last } = cloneLast(all);
       last.blocks.push(
@@ -911,6 +988,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_INPUT_DELTA": {
+      // set_task_status is an invisible meta-tool, so it has no visible block to update.
       // Search backwards for the message containing this tool_call (same
       // rationale as TOOL_COMPLETE — events can push new messages).
       let tiIdx = state.messages.length - 1;
@@ -939,6 +1017,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_COMPLETE": {
+      if (action.toolName === "set_task_status") return state;
       // Search ALL messages for the matching tool_call — not just the last one.
       // Events like ADD_ANNOTATION, ADD_INTERJECTION, BG_AGENT_DONE, or ADD_CONDENSE
       // can push new messages between TOOL_START and TOOL_COMPLETE, leaving the
@@ -1153,6 +1232,15 @@ export function reducer(state: AppState, action: AppAction): AppState {
         todos: Array.isArray(action.todos) ? action.todos : [],
       };
 
+    case "SET_FINAL_MARKER":
+      return { ...state, pendingFinalMarker: action.marker };
+
+    case "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS":
+      return {
+        ...state,
+        messages: clearFinalMarkerContinueActions(state.messages),
+      };
+
     case "ERROR": {
       const all = ensureAssistant(state.messages);
       const { msgs, last } = cloneLast(all);
@@ -1165,7 +1253,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         streaming: false,
-        messages: msgs,
+        messages: completeIncompleteRuntimeBlocks(msgs),
         statusOverride: null,
       };
     }
@@ -1183,34 +1271,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case "DONE": {
       // Mark any incomplete tool calls / thinking blocks as complete so
       // their spinners stop when the user clicks Stop.
-      const doneMessages = state.messages.map((m) => {
-        const hasIncomplete = m.blocks.some(
-          (b) =>
-            ((b.type === "tool_call" || b.type === "skill_load") &&
-              !b.complete) ||
-            (b.type === "thinking" && !b.complete),
-        );
-        if (!hasIncomplete) return m;
-        return {
-          ...m,
-          blocks: m.blocks.map((b) => {
-            if (
-              (b.type === "tool_call" || b.type === "skill_load") &&
-              !b.complete
-            ) {
-              return {
-                ...b,
-                complete: true,
-                result: b.result || '{"status":"stopped"}',
-              };
-            }
-            if (b.type === "thinking" && !b.complete) {
-              return { ...b, complete: true };
-            }
-            return b;
-          }),
-        };
-      });
+      const doneMessages = completeIncompleteRuntimeBlocks(state.messages);
 
       // Mark any in_progress todos as pending so their spinners stop
       const stopTodos = (items: TodoItem[]): TodoItem[] =>
@@ -1232,12 +1293,20 @@ export function reducer(state: AppState, action: AppAction): AppState {
           ? doneMessages.slice(0, -1)
           : doneMessages;
 
+      const messagesWithMarker = state.pendingFinalMarker
+        ? applyFinalMarkerToLatestAssistant(
+            finalMessages,
+            state.pendingFinalMarker,
+          )
+        : finalMessages;
+
       return {
         ...state,
         streaming: false,
-        messages: finalMessages,
+        messages: messagesWithMarker,
         todos: stopTodos(state.todos),
         statusOverride: null,
+        pendingFinalMarker: null,
       };
     }
 
@@ -1248,6 +1317,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         streaming: false,
         loadedUserTurnOffset: 0,
         pendingCheckpoints: [],
+        pendingFinalMarker: null,
         lastInputTokens: 0,
         lastOutputTokens: 0,
         lastCacheReadTokens: 0,
@@ -1407,7 +1477,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
         previousMessage.content === action.text;
 
       if (optimisticUserPendingAssistant) {
-        const updatedMessages = [...state.messages];
+        const updatedMessages = clearFinalMarkerContinueActions([
+          ...state.messages,
+        ]);
         updatedMessages[updatedMessages.length - 2] = {
           ...previousMessage,
           isSlashCommand: action.isSlashCommand,
@@ -1426,8 +1498,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
         };
       }
 
+      const messagesWithoutContinueActions = clearFinalMarkerContinueActions(
+        state.messages,
+      );
       const withCommittedRows = [
-        ...state.messages,
+        ...messagesWithoutContinueActions,
         {
           id: crypto.randomUUID(),
           role: "user" as const,
@@ -1701,6 +1776,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         restoringSession: false,
         loadedUserTurnOffset: userTurnOffset,
         pendingCheckpoints: applied.pending,
+        pendingFinalMarker: null,
         lastInputTokens: action.lastInputTokens ?? 0,
         lastOutputTokens: action.lastOutputTokens ?? 0,
         todos: [],
@@ -1741,6 +1817,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         messages: applied.messages,
         loadedUserTurnOffset: action.userTurnOffset,
         pendingCheckpoints: applied.pending,
+        pendingFinalMarker: null,
       };
     }
 
@@ -1849,4 +1926,5 @@ export const initialState: AppState = {
   restoringSession: false,
   loadedUserTurnOffset: 0,
   pendingCheckpoints: [],
+  pendingFinalMarker: null,
 };

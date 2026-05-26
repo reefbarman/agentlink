@@ -12,8 +12,12 @@ const SCOPE_LABELS: Record<string, string> = {
 interface RuleRowProps {
   entry: SubCommandEntry;
   value: RuleEntry;
+  modeGroupName: string;
   onChange: (value: RuleEntry) => void;
   onSuggestRegex?: () => void;
+  onAcceptSuggestion?: () => void;
+  onDismissSuggestion?: () => void;
+  suggestedPattern?: string;
   suggestStatus?: "idle" | "loading" | "error";
   suggestError?: string;
 }
@@ -21,15 +25,18 @@ interface RuleRowProps {
 export function RuleRow({
   entry,
   value,
+  modeGroupName,
   onChange,
   onSuggestRegex,
+  onAcceptSuggestion,
+  onDismissSuggestion,
+  suggestedPattern,
   suggestStatus = "idle",
   suggestError,
 }: RuleRowProps) {
   const hasExisting = !!entry.existingRule;
   const isSkipped = value.scope === "skip";
-  const isRegex = value.mode === "regex";
-  const canSuggest = !!onSuggestRegex && isRegex && !isSkipped;
+  const canSuggest = !!onSuggestRegex;
   const isSuggesting = suggestStatus === "loading";
 
   return (
@@ -58,37 +65,64 @@ export function RuleRow({
           }
           disabled={isSkipped}
         />
-        {canSuggest && (
-          <button
-            type="button"
-            class="rule-suggest-btn"
-            onClick={onSuggestRegex}
-            disabled={isSuggesting}
-            title="Ask the current model to suggest a regex pattern that matches this command and similar safe variants"
-          >
-            <span
-              class={`codicon ${isSuggesting ? "codicon-loading codicon-modifier-spin" : "codicon-sparkle"}`}
-            />
-            <span>{isSuggesting ? "Suggesting…" : "Suggest"}</span>
-          </button>
-        )}
         <div class="radio-group">
           {MODES.map((mode) => (
             <label key={mode} class="radio-label">
               <input
                 type="radio"
-                name={`mode-${entry.command}`}
+                name={modeGroupName}
                 checked={value.mode === mode}
                 onChange={() => onChange({ ...value, mode })}
                 disabled={isSkipped}
               />
               {mode.charAt(0).toUpperCase() + mode.slice(1)}
+              {mode === "regex" && canSuggest && (
+                <button
+                  type="button"
+                  class="rule-suggest-btn"
+                  onClick={onSuggestRegex}
+                  disabled={isSuggesting}
+                  title="Ask the current model to suggest a reviewable regex for this command and useful same-shape variants"
+                >
+                  <span
+                    class={`codicon ${isSuggesting ? "codicon-loading codicon-modifier-spin" : "codicon-sparkle"}`}
+                  />
+                  <span>{isSuggesting ? "Suggesting…" : "Safe regex"}</span>
+                </button>
+              )}
             </label>
           ))}
         </div>
       </div>
       {suggestStatus === "error" && suggestError && (
         <div class="rule-row-suggest-error">{suggestError}</div>
+      )}
+      {suggestedPattern && (
+        <div class="rule-row-suggestion">
+          <div class="rule-row-suggestion-header">
+            <span class="rule-row-suggestion-title">
+              <span class="codicon codicon-sparkle" /> AI suggested regex
+            </span>
+            <button
+              type="button"
+              class="rule-row-suggestion-close"
+              onClick={onDismissSuggestion}
+              title="Dismiss suggestion"
+            >
+              <span class="codicon codicon-close" />
+            </button>
+          </div>
+          <code>{suggestedPattern}</code>
+          <div class="rule-row-suggestion-actions">
+            <button
+              type="button"
+              class="rule-row-suggestion-accept"
+              onClick={onAcceptSuggestion}
+            >
+              Accept suggestion
+            </button>
+          </div>
+        </div>
       )}
 
       <div class="rule-row-options">

@@ -10,6 +10,7 @@ import {
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
+import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 
 const DEFAULT_MAX_RESULTS = 300;
 
@@ -195,9 +196,11 @@ export async function handleSearchFiles(
       params.path,
     );
 
-    // Outside-workspace gate
+    // Outside-workspace gate — agentlink tmp artifacts (truncated tool results)
+    // are always readable/searchable without approval since we wrote them ourselves.
     if (
       !inWorkspace &&
+      !isAgentlinkTmpArtifact(resolvedPath) &&
       !approvalManager.isPathTrusted(sessionId, resolvedPath)
     ) {
       const { approved, reason } = await approveOutsideWorkspaceAccess(

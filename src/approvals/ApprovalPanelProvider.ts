@@ -7,6 +7,8 @@ import type {
 } from "./webview/types.js";
 
 import type { StatusBarManager } from "../util/StatusBarManager.js";
+import path from "path";
+import picomatch from "picomatch";
 import { randomUUID } from "crypto";
 
 // ── Response types ──────────────────────────────────────────────────────────
@@ -114,9 +116,16 @@ export class ApprovalPanelProvider
   private currentEntry: QueueEntry | undefined;
 
   // Recent single-use approvals cache (key → timestamp)
-  // When a user approves a "run-once" command or "accept" write, repeat
-  // identical requests within the TTL window are auto-approved.
+  // When a user approves a request once, repeat matching requests within the
+  // TTL window are auto-approved. Path approvals use rule-aware matching so a
+  // parallel batch of outside-workspace reads under the same approved directory
+  // does not require one prompt per file.
   private recentApprovals = new Map<string, number>();
+  private recentPathApprovals: Array<{
+    path: string;
+    mode: "glob" | "prefix" | "exact";
+    timestamp: number;
+  }> = [];
 
   // Alert
   private alertDisposable: vscode.Disposable | undefined;
@@ -261,8 +270,11 @@ export class ApprovalPanelProvider
   // ── Queue management ────────────────────────────────────────────────────
 
   private enqueue(request: InternalRequest): Promise<unknown> {
-    // Auto-resolve immediately if a matching approval was granted recently
-    if (this.isRecentlyApprovedRequest(request)) {
+    // Auto-resolve command repeats immediately if a matching approval was
+    // granted recently. Path approvals are intentionally checked only while
+    // draining the existing queue so "Allow Once" applies to the current
+    // parallel batch, not future requests within the TTL window.
+    if (request.kind !== "path" && this.isRecentlyApprovedRequest(request)) {
       return Promise.resolve(this.makeAutoApproveResponse(request.kind));
     }
 
@@ -273,13 +285,20 @@ export class ApprovalPanelProvider
     });
   }
 
-  private processQueue(): void {
+  private processQueue(options?: { allowRecentPathApprovals?: boolean }): void {
     if (this.currentEntry) return;
 
-    // Auto-resolve any recently-approved items at the front of the queue
+    // Auto-resolve any recently-approved items at the front of the queue.
+    // Path approvals are only eligible immediately after a path approval
+    // decision, so "Allow Once" covers an already-queued parallel batch but
+    // not future requests that happen within the command TTL window.
     while (this.queue.length > 0) {
       const front = this.queue[0];
-      if (this.isRecentlyApprovedRequest(front.request)) {
+      if (
+        this.isRecentlyApprovedRequest(front.request, {
+          allowPathApprovals: options?.allowRecentPathApprovals ?? false,
+        })
+      ) {
         this.queue.shift();
         this.updatePendingCount();
         front.resolve(this.makeAutoApproveResponse(front.request.kind));
@@ -421,8 +440,14 @@ export class ApprovalPanelProvider
 
     const followUp = message.followUp || undefined;
 
+    let response:
+      | CommandApprovalResponse
+      | PathApprovalResponse
+      | WriteApprovalResponse
+      | RenameApprovalResponse;
+
     if (entry.request.kind === "command") {
-      const response: CommandApprovalResponse = {
+      response = {
         decision: message.decision as CommandApprovalResponse["decision"],
         editedCommand: message.editedCommand,
         rejectionReason: message.rejectionReason || undefined,
@@ -433,9 +458,8 @@ export class ApprovalPanelProvider
         rules: message.rules as CommandApprovalResponse["rules"],
         followUp,
       };
-      entry.resolve(response);
     } else if (entry.request.kind === "write") {
-      const response: WriteApprovalResponse = {
+      response = {
         decision: message.decision as WriteApprovalResponse["decision"],
         rejectionReason: message.rejectionReason || undefined,
         trustScope: message.trustScope as WriteApprovalResponse["trustScope"],
@@ -443,9 +467,8 @@ export class ApprovalPanelProvider
         ruleMode: message.ruleMode as WriteApprovalResponse["ruleMode"],
         followUp,
       };
-      entry.resolve(response);
     } else if (entry.request.kind === "rename") {
-      const response: RenameApprovalResponse = {
+      response = {
         decision: message.decision as RenameApprovalResponse["decision"],
         rejectionReason: message.rejectionReason || undefined,
         trustScope: message.trustScope as RenameApprovalResponse["trustScope"],
@@ -453,9 +476,8 @@ export class ApprovalPanelProvider
         ruleMode: message.ruleMode as RenameApprovalResponse["ruleMode"],
         followUp,
       };
-      entry.resolve(response);
     } else {
-      const response: PathApprovalResponse = {
+      response = {
         decision: message.decision as PathApprovalResponse["decision"],
         rejectionReason: message.rejectionReason || undefined,
         rulePattern: message.rulePattern || undefined,
@@ -464,8 +486,9 @@ export class ApprovalPanelProvider
           | undefined,
         followUp,
       };
-      entry.resolve(response);
     }
+
+    entry.resolve(response);
 
     // Record for repeat auto-approve within TTL window.
     // Skip rejections and edited commands (user wanted to review those).
@@ -473,10 +496,12 @@ export class ApprovalPanelProvider
     const isEdited =
       entry.request.kind === "command" && !!message.editedCommand;
     if (!isRejection && !isEdited) {
-      this.recordApproval(entry.request);
+      this.recordApproval(entry.request, response);
     }
 
-    this.processQueue();
+    this.processQueue({
+      allowRecentPathApprovals: entry.request.kind === "path",
+    });
   }
 
   private rejectCurrent(reason?: string): void {
@@ -645,20 +670,18 @@ export class ApprovalPanelProvider
 
   /**
    * Check whether a request of the given kind/identifier was recently
-   * approved (within the configured TTL).  Tool implementations can call
+   * approved (within the configured TTL). Tool implementations can call
    * this *before* enqueueing to skip expensive UI (diff views, approval
    * panels) entirely.
-   *
-   * Only applies to "command" approvals — file writes, renames, and path
-   * approvals always require explicit user review.
    */
   isRecentlyApproved(
     kind: InternalRequest["kind"],
     identifier: string,
   ): boolean {
-    if (kind !== "command") return false;
     const ttl = this.getRecentApprovalTtl();
     if (ttl <= 0) return false;
+
+    if (kind !== "command") return false;
     const key = this.buildKey(kind, identifier);
     if (!key) return false;
     return this.hasRecentApproval(key);
@@ -719,7 +742,26 @@ export class ApprovalPanelProvider
     return true;
   }
 
-  private recordApproval(request: InternalRequest): void {
+  private hasRecentPathApproval(filePath: string): boolean {
+    this.pruneRecentPathApprovals();
+    return this.recentPathApprovals.some((approval) =>
+      this.matchesPathApproval(filePath, approval),
+    );
+  }
+
+  private recordApproval(
+    request: InternalRequest,
+    response?:
+      | CommandApprovalResponse
+      | PathApprovalResponse
+      | WriteApprovalResponse
+      | RenameApprovalResponse,
+  ): void {
+    if (request.kind === "path") {
+      this.recordPathApproval(request, response as PathApprovalResponse);
+      return;
+    }
+
     if (request.kind !== "command") return;
     const key = this.approvalKeyForRequest(request);
     if (!key) return;
@@ -734,11 +776,127 @@ export class ApprovalPanelProvider
     }
   }
 
-  private isRecentlyApprovedRequest(request: InternalRequest): boolean {
-    if (request.kind !== "command") return false;
+  private recordPathApproval(
+    request: InternalRequest,
+    response?: PathApprovalResponse,
+  ): void {
+    if (!request.filePath) return;
+
+    const rule =
+      response?.rulePattern && response.ruleMode
+        ? { path: response.rulePattern, mode: response.ruleMode }
+        : {
+            path: this.containingDirectoryPattern(request.filePath),
+            mode: "prefix" as const,
+          };
+
+    this.recentPathApprovals.push({ ...rule, timestamp: Date.now() });
+    this.pruneRecentPathApprovals();
+  }
+
+  private pruneRecentPathApprovals(): void {
+    const ttl = this.getRecentApprovalTtl();
+    const now = Date.now();
+    this.recentPathApprovals = this.recentPathApprovals.filter(
+      (approval) => now - approval.timestamp <= ttl,
+    );
+
+    if (this.recentPathApprovals.length > 100) {
+      this.recentPathApprovals.splice(0, this.recentPathApprovals.length - 100);
+    }
+  }
+
+  private containingDirectoryPattern(filePath: string): string {
+    const normalized = this.normalizeRulePath(filePath);
+    const dir = path.posix.dirname(normalized);
+    if (dir === ".") return normalized;
+    return dir === "/" ? "/" : `${dir}/`;
+  }
+
+  private matchesPathApproval(
+    filePath: string,
+    approval: { path: string; mode: "glob" | "prefix" | "exact" },
+  ): boolean {
+    try {
+      const normalizedPath = this.normalizeRulePath(filePath);
+      const normalizedPattern = this.normalizeRulePath(approval.path);
+
+      switch (approval.mode) {
+        case "exact":
+          return normalizedPath === normalizedPattern;
+        case "prefix":
+          return this.matchesPrefixPath(normalizedPath, normalizedPattern);
+        case "glob": {
+          if (picomatch.isMatch(normalizedPath, normalizedPattern)) {
+            return true;
+          }
+          const directoryGlob = this.toDirectoryGlob(normalizedPattern);
+          return (
+            directoryGlob !== undefined &&
+            picomatch.isMatch(normalizedPath, directoryGlob)
+          );
+        }
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  private normalizeRulePath(value: string): string {
+    return value.replace(/\\/g, "/");
+  }
+
+  private toDirectoryGlob(pattern: string): string | undefined {
+    if (!pattern || pattern.endsWith("/")) {
+      return undefined;
+    }
+    if (pattern.endsWith("/**")) {
+      return undefined;
+    }
+    if (this.hasGlobSyntax(pattern)) {
+      return undefined;
+    }
+    return `${pattern}/**`;
+  }
+
+  private matchesPrefixPath(filePath: string, pattern: string): boolean {
+    const normalizedPattern = pattern.endsWith("/")
+      ? pattern.slice(0, -1)
+      : pattern;
+    return (
+      filePath === normalizedPattern ||
+      filePath.startsWith(`${normalizedPattern}/`)
+    );
+  }
+
+  private hasGlobSyntax(pattern: string): boolean {
+    return (
+      pattern.includes("*") ||
+      pattern.includes("?") ||
+      pattern.includes("[") ||
+      pattern.includes("{") ||
+      pattern.includes("(") ||
+      pattern.includes("!")
+    );
+  }
+
+  private isRecentlyApprovedRequest(
+    request: InternalRequest,
+    options?: { allowPathApprovals?: boolean },
+  ): boolean {
     const identifier =
-      request.kind === "command" ? request.fullCommand : undefined;
+      request.kind === "command"
+        ? request.fullCommand
+        : request.kind === "path"
+          ? request.filePath
+          : undefined;
     if (!identifier) return false;
+    if (request.kind === "path") {
+      return options?.allowPathApprovals
+        ? this.hasRecentPathApproval(identifier)
+        : false;
+    }
+
     return this.isRecentlyApproved(request.kind, identifier);
   }
 

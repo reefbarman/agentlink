@@ -187,13 +187,17 @@ export async function handleExecuteCommand(
 
     // Apply output filtering and temp file saving
     if (result.output_captured && result.output) {
-      const { filtered, totalLines, linesShown } = filterOutput(result.output, {
+      const filterOptions = {
         output_head: params.output_head,
         output_tail: params.output_tail,
         output_offset: params.output_offset,
         output_grep: params.output_grep,
         output_grep_context: params.output_grep_context,
-      });
+      };
+      const { filtered, totalLines, linesShown } = filterOutput(
+        result.output,
+        filterOptions,
+      );
 
       result.total_lines = totalLines;
       result.lines_shown = linesShown;
@@ -209,6 +213,12 @@ export async function handleExecuteCommand(
       }
 
       result.output = filtered;
+      if (result.terminal_raw_output) {
+        result.terminal_raw_output = filterOutput(
+          result.terminal_raw_output,
+          filterOptions,
+        ).filtered;
+      }
     } else if (!result.output_captured && !result.output) {
       result.output =
         "Command execution was sent to the terminal, but no output was captured.";

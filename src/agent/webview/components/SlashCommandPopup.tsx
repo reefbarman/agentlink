@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "preact/hooks";
+
 import type { SlashCommandInfo } from "../types.js";
+import { forwardRef } from "preact/compat";
 
 interface SlashCommandPopupProps {
   commands: SlashCommandInfo[];
@@ -13,22 +15,30 @@ interface SlashCommandPopupProps {
   onBack?: () => void;
 }
 
-const SOURCE_SECTIONS: Array<{ source: string; label: string }> = [
+const COMMAND_SOURCE_SECTIONS: Array<{ source: string; label: string }> = [
   { source: "project", label: "Project" },
   { source: "global", label: "Global" },
   { source: "agentlink", label: "AgentLink" },
 ];
 
-export function SlashCommandPopup({
-  commands,
-  selectedIndex,
-  anchor,
-  onSelect,
-  onClose: _onClose,
-  isSubView,
-  subViewTitle,
-  onBack,
-}: SlashCommandPopupProps) {
+const SKILL_SOURCE_SECTION = { source: "skill", label: "Skills" };
+
+export const SlashCommandPopup = forwardRef<
+  HTMLDivElement,
+  SlashCommandPopupProps
+>(function SlashCommandPopup(
+  {
+    commands,
+    selectedIndex,
+    anchor,
+    onSelect,
+    onClose: _onClose,
+    isSubView,
+    subViewTitle,
+    onBack,
+  },
+  ref,
+) {
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -42,6 +52,7 @@ export function SlashCommandPopup({
   if (isSubView) {
     return (
       <div
+        ref={ref}
         class="slash-cmd-popup"
         style={{ bottom: `${anchor.bottom}px`, left: `${anchor.left}px` }}
       >
@@ -89,7 +100,7 @@ export function SlashCommandPopup({
         <i class={`codicon codicon-${cmd.icon} slash-cmd-icon`} />
       ) : (
         <i
-          class={`codicon codicon-${cmd.builtin ? "symbol-event" : "file"} slash-cmd-icon`}
+          class={`codicon codicon-${cmd.builtin ? "symbol-event" : cmd.source === "skill" ? "sparkle" : "file"} slash-cmd-icon`}
         />
       )}
       <span class="slash-cmd-name">/{cmd.name}</span>
@@ -101,11 +112,12 @@ export function SlashCommandPopup({
 
   return (
     <div
+      ref={ref}
       class="slash-cmd-popup"
       style={{ bottom: `${anchor.bottom}px`, left: `${anchor.left}px` }}
     >
       <div class="slash-cmd-list" ref={listRef}>
-        {SOURCE_SECTIONS.map(({ source, label }) => {
+        {COMMAND_SOURCE_SECTIONS.map(({ source, label }) => {
           const cmds = fileCmds.filter((c) => c.source === source);
           if (cmds.length === 0) return null;
           return (
@@ -127,7 +139,22 @@ export function SlashCommandPopup({
             })}
           </>
         )}
+        {(() => {
+          const cmds = fileCmds.filter(
+            (c) => c.source === SKILL_SOURCE_SECTION.source,
+          );
+          if (cmds.length === 0) return null;
+          return (
+            <div key={SKILL_SOURCE_SECTION.source}>
+              <div class="slash-cmd-section">{SKILL_SOURCE_SECTION.label}</div>
+              {cmds.map((cmd) => {
+                const idx = flatIdx++;
+                return renderItem(cmd, idx);
+              })}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
-}
+});

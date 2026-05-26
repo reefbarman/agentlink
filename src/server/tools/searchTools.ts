@@ -1,5 +1,5 @@
-import { codebaseSearchSchema } from "../../shared/toolSchemas.js";
 import type { ToolRegistrationContext } from "./types.js";
+import { codebaseSearchSchema } from "../../shared/toolSchemas.js";
 
 export function registerSearchTools(ctx: ToolRegistrationContext): void {
   const { server, tracker, sid, touch, desc } = ctx;
@@ -27,6 +27,7 @@ export function registerSearchTools(ctx: ToolRegistrationContext): void {
           String(params.query),
           params.limit,
           params.exclude_globs,
+          { includeAllWorkspaceRoots: !params.path },
         );
       },
       (p) => String(p.query ?? "").slice(0, 60),

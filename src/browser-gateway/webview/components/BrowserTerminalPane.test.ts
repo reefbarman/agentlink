@@ -127,6 +127,36 @@ describe("TerminalViewport", () => {
     expect(xtermWrites.at(-1)).toContain("passed");
   });
 
+  it("prefers raw terminal chunks when available", async () => {
+    render(
+      h(TerminalViewport, {
+        buffer: {
+          ...testBuffer,
+          chunks: [
+            {
+              id: "raw-output-1",
+              kind: "raw",
+              text: "\u001b[32mraw-green\u001b[0m\rprogress",
+              command: "npm test",
+              prompt: "➜  agentlink git:(remote-browser-sessions) ✗",
+            },
+            {
+              id: "raw-output-2",
+              kind: "raw",
+              text: "\nnext",
+            },
+          ],
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(xtermWrites.at(-1)).toBe(
+        "\u001b[1;32m➜\u001b[0m \u001b[1;32magentlink\u001b[0m \u001b[1;34mgit:(remote-browser-sessions)\u001b[0m\u001b[1;34m ✗\u001b[0m npm test\r\n\u001b[32mraw-green\u001b[0m\rprogress\nnext",
+      );
+    });
+  });
+
   it("writes ANSI colored output to xterm", async () => {
     render(
       h(TerminalViewport, {

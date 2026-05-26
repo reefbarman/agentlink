@@ -26,6 +26,7 @@ import {
 import type { AgentMode } from "./modes.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { McpClientHub } from "./McpClientHub.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import type { ToolResult } from "../shared/types.js";
@@ -304,6 +305,37 @@ const ASK_USER_TOOL: ToolDefinition = {
   },
 };
 
+/** Schema for the final task status meta-tool (foreground sessions only). */
+const SET_TASK_STATUS_TOOL: ToolDefinition = {
+  name: "set_task_status",
+  description:
+    "Mark the current turn's final status. Use when your response is final: completed, waiting_for_user, blocked, or cancelled. Include an informative but concise summary of what was accomplished or why the task is pausing. Optionally include a short continuation button label and prompt when the user can safely continue with one click.",
+  input_schema: {
+    type: "object",
+    properties: {
+      status: {
+        type: "string",
+        enum: ["completed", "waiting_for_user", "blocked", "cancelled"],
+      },
+      summary: {
+        type: "string",
+        description:
+          "Informative but concise status summary shown with the marker. Markdown is rendered. For completed work, summarize what changed and any validation run; usually a few sentences or 1-2 short paragraphs is enough.",
+      },
+      continueLabel: {
+        type: "string",
+        description: "Optional button label for a clear next-step continuation",
+      },
+      continuePrompt: {
+        type: "string",
+        description:
+          "Optional visible user message sent when the continuation button is clicked",
+      },
+    },
+    required: ["status"],
+  },
+};
+
 /** Schema for the switch_mode meta-tool (always available, regardless of mode). */
 const SWITCH_MODE_TOOL: ToolDefinition = {
   name: "switch_mode",
@@ -527,7 +559,9 @@ export function getAgentTools(
     ...allowedMcpTools,
     ...metaTools,
     ...(profileAllowlist ? [] : [ASK_USER_TOOL]),
-    ...(isBackground ? [] : [SWITCH_MODE_TOOL, ...BG_AGENT_TOOLS]),
+    ...(isBackground || profileAllowlist
+      ? []
+      : [SET_TASK_STATUS_TOOL, SWITCH_MODE_TOOL, ...BG_AGENT_TOOLS]),
   ];
 }
 
@@ -577,6 +611,8 @@ export interface ToolDispatchContext {
     sessionId: string,
     reason?: string,
   ) => { killed: boolean; partialOutput?: string };
+  /** Records the intended final marker for the current foreground turn. */
+  onFinalStatus?: (marker: FinalMessageMarker) => void;
 }
 
 /**
@@ -755,6 +791,47 @@ export async function dispatchToolCall(
   const params = input as any;
 
   switch (toolName) {
+    case "set_task_status": {
+      const status = params.status;
+      if (
+        status !== "completed" &&
+        status !== "waiting_for_user" &&
+        status !== "blocked" &&
+        status !== "cancelled"
+      ) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: "Invalid status" }),
+            },
+          ],
+        };
+      }
+      const continueLabel =
+        typeof params.continueLabel === "string"
+          ? params.continueLabel.trim()
+          : "";
+      const continuePrompt =
+        typeof params.continuePrompt === "string"
+          ? params.continuePrompt.trim()
+          : "";
+      const marker: FinalMessageMarker = {
+        status,
+        source: "tool",
+        ...(typeof params.summary === "string" && params.summary.trim()
+          ? { summary: params.summary.trim() }
+          : {}),
+        ...(continueLabel && continuePrompt
+          ? { continueAction: { label: continueLabel, prompt: continuePrompt } }
+          : {}),
+      };
+      ctx.onFinalStatus?.(marker);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      };
+    }
+
     // --- File reading ---
     case "read_file":
       if (ctx.onFileRead && typeof params.path === "string") {
@@ -932,7 +1009,13 @@ export async function dispatchToolCall(
       const dirPath = params.path
         ? resolveAndValidatePath(String(params.path)).absolutePath
         : (tryGetFirstWorkspaceRoot() ?? ".");
-      return semanticSearch(dirPath, String(params.query), params.limit);
+      return semanticSearch(
+        dirPath,
+        String(params.query),
+        params.limit,
+        params.exclude_globs,
+        { includeAllWorkspaceRoots: !params.path },
+      );
     }
 
     case "list_mcp_resources": {

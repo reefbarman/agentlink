@@ -10,6 +10,7 @@ import {
   READ_ONLY_TOOLS,
   type ToolDispatchContext,
 } from "./toolAdapter.js";
+import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { handleToolError } from "../shared/types.js";
 import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
 import type { TrackerContext } from "../server/ToolCallTracker.js";
@@ -195,7 +196,6 @@ function getCondenseBudgetSnapshot(
   hardBudget: number;
   effectiveThreshold: number;
   triggerReason: "soft_threshold" | "hard_budget" | null;
-  basis: "input" | "total";
 } {
   const caps = provider.getCapabilities(session.model);
   const outputReservation = getOutputReservation(session, provider);
@@ -237,7 +237,6 @@ function getCondenseBudgetSnapshot(
     hardBudget,
     effectiveThreshold,
     triggerReason,
-    basis: "input",
   };
 }
 
@@ -318,6 +317,26 @@ function buildModeSwitchSkippedResult(
     toolName: call.name,
     result: {
       content: [{ type: "text", text: JSON.stringify(payload) }],
+    },
+    durationMs: 0,
+  };
+}
+
+function buildFinalStatusSkippedResult(call: ToolUseBlock): ToolCallResult {
+  return {
+    tool_use_id: call.id,
+    toolName: call.name,
+    result: {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "skipped",
+            skipped_by: "set_task_status",
+            reason: "Skipped because final task status was set for this turn.",
+          }),
+        },
+      ],
     },
     durationMs: 0,
   };
@@ -488,6 +507,7 @@ export class AgentEngine {
     let totalToolCalls = 0;
     let wrapUpAttempts = 0; // Track wrap-up injections to prevent infinite loops
     const MAX_WRAP_UP_ATTEMPTS = 2;
+    let pendingFinalMarker: FinalMessageMarker | null = null;
 
     try {
       let retryCount = 0;
@@ -1205,6 +1225,9 @@ export class AgentEngine {
           ...this.toolCtx,
           sessionId: session.id,
           mode: session.agentMode.slug,
+          onFinalStatus: (marker) => {
+            pendingFinalMarker = marker;
+          },
         };
 
         // Execute tools (parallel for read-only, sequential for write)
@@ -1334,7 +1357,13 @@ export class AgentEngine {
 
         // Append assistant turn + tool results atomically — no async gap between
         // them so the session is never left with orphaned tool_use blocks.
+        const finalMarkerForTurn = pendingFinalMarker;
         session.appendAssistantTurn(contentBlocks);
+        if (finalMarkerForTurn) {
+          session.applyFinalMarker(finalMarkerForTurn);
+          yield { type: "final_marker", marker: finalMarkerForTurn };
+          pendingFinalMarker = null;
+        }
         session.appendToolResults(
           toolResults.map((tr) => ({
             type: "tool_result" as const,
@@ -1371,6 +1400,12 @@ export class AgentEngine {
         const successfulModeSwitch = toolResults.find((tr) =>
           getSuccessfulModeSwitch(tr),
         );
+        const successfulFinalMarker = toolResults.some(
+          (tr) => tr.toolName === "set_task_status" && finalMarkerForTurn,
+        );
+        if (successfulFinalMarker) {
+          break;
+        }
         if (successfulModeSwitch) {
           // Enforce a hard boundary: after a successful mode switch, stop this turn
           // before another provider round-trip under the previous request contract.
@@ -1522,21 +1557,22 @@ export class AgentEngine {
       length: calls.length,
     }).fill(null);
 
-    const runTrackedToolCall = async (
-      call: ToolUseBlock,
-      start: number,
-    ): Promise<ToolCallResult> => {
-      const tracker = ctx.toolCallTracker;
+    const tracker = ctx.toolCallTracker;
+    const trackedCalls = new Map<
+      string,
+      {
+        trackerCtx: TrackerContext;
+        forcePromise: Promise<ToolResult>;
+      }
+    >();
 
-      let trackerCtx: TrackerContext | undefined;
-      let forceResolve: ((result: ToolResult) => void) | undefined;
-      let forcePromise: Promise<ToolResult> | undefined;
-
-      if (tracker) {
-        forcePromise = new Promise<ToolResult>((resolve) => {
+    if (tracker) {
+      for (const call of calls) {
+        let forceResolve!: (result: ToolResult) => void;
+        const forcePromise = new Promise<ToolResult>((resolve) => {
           forceResolve = resolve;
         });
-        trackerCtx = tracker.registerAgentCall(
+        const trackerCtx = tracker.registerAgentCall(
           call.id,
           call.name,
           extractAgentDisplayArgs(
@@ -1544,10 +1580,20 @@ export class AgentEngine {
             call.input as Record<string, unknown>,
           ),
           session.id,
-          forceResolve!,
+          forceResolve,
           JSON.stringify(call.input, null, 2),
         );
+        trackedCalls.set(call.id, { trackerCtx, forcePromise });
       }
+    }
+
+    const runTrackedToolCall = async (
+      call: ToolUseBlock,
+      start: number,
+    ): Promise<ToolCallResult> => {
+      const trackedCall = trackedCalls.get(call.id);
+      const trackerCtx = trackedCall?.trackerCtx;
+      const forcePromise = trackedCall?.forcePromise;
 
       try {
         const result = await (forcePromise
@@ -1628,6 +1674,12 @@ export class AgentEngine {
     // Execute read-only tools in parallel
     await Promise.all(readOnlyIndices.map((i) => executeAtIndex(i)));
 
+    if (signal.aborted) {
+      for (let i = 0; i < resultSlots.length; i++) {
+        if (!resultSlots[i]) tracker?.completeAgentCall(calls[i].id);
+      }
+    }
+
     // Execute write tools sequentially
     for (let wi = 0; wi < writeIndices.length; wi++) {
       const i = writeIndices[wi];
@@ -1637,37 +1689,41 @@ export class AgentEngine {
       const completed = resultSlots[i];
       if (!completed) continue;
       const modeSwitch = getSuccessfulModeSwitch(completed);
-      if (!modeSwitch) continue;
+      const finalStatusSet = completed.toolName === "set_task_status";
+      if (!modeSwitch && !finalStatusSet) continue;
 
-      // A successful mode switch is a turn boundary. Skip any trailing
-      // non-read-only tools from this batch so they execute in the resumed turn.
+      // A successful mode switch or final status marker is a turn boundary.
+      // Skip trailing non-read-only tools from this batch.
       for (let r = wi + 1; r < writeIndices.length; r++) {
         const skipIdx = writeIndices[r];
         if (resultSlots[skipIdx]) continue;
-        const skipped = buildModeSwitchSkippedResult(
-          calls[skipIdx],
-          modeSwitch.mode,
-        );
+        const skipped = modeSwitch
+          ? buildModeSwitchSkippedResult(calls[skipIdx], modeSwitch.mode)
+          : buildFinalStatusSkippedResult(calls[skipIdx]);
         resultSlots[skipIdx] = skipped;
+        tracker?.completeAgentCall(calls[skipIdx].id);
         onToolComplete?.(skipped);
       }
       break;
     }
 
-    // Return results in original order, filling any gaps (from abort) with errors
-    return resultSlots.map(
-      (slot, i) =>
-        slot ?? {
-          tool_use_id: calls[i].id,
-          toolName: calls[i].name,
-          result: {
-            content: [
-              { type: "text", text: JSON.stringify({ error: "Aborted" }) },
-            ],
-          },
-          durationMs: 0,
+    // Return results in original order, filling any gaps (from abort) with errors.
+    // Calls are pre-registered with the sidebar tracker before execution, so any
+    // never-executed slots must be completed here to avoid stale active rows.
+    return resultSlots.map((slot, i) => {
+      if (slot) return slot;
+      tracker?.completeAgentCall(calls[i].id);
+      return {
+        tool_use_id: calls[i].id,
+        toolName: calls[i].name,
+        result: {
+          content: [
+            { type: "text", text: JSON.stringify({ error: "Aborted" }) },
+          ],
         },
-    );
+        durationMs: 0,
+      };
+    });
   }
 
   /**

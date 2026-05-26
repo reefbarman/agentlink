@@ -16,6 +16,8 @@ import type {
   WorkerToExtensionMessage,
   IndexPhase,
   EmbeddingAuthRefreshRequestMessage,
+  ExtensionToWorkerMessage,
+  IndexStats,
 } from "./types.js";
 import type {
   SemanticReadinessReason,
@@ -25,6 +27,7 @@ import {
   classifySemanticReadiness,
   getSemanticReadinessMessage,
 } from "../shared/semanticReadiness.js";
+import { getWorkspaceRootForPath, getWorkspaceRoots } from "../util/paths.js";
 
 // --- Public types ---
 
@@ -78,6 +81,15 @@ export class IndexerManager implements vscode.Disposable {
   private status: IndexStatus = { state: "idle" };
   private disposables: vscode.Disposable[] = [];
   private cancelRequested = false;
+  private activeWorkerJob:
+    | {
+        resolve: (stats: IndexStats) => void;
+        reject: (error: Error) => void;
+        currentOffset?: number;
+        total?: number;
+        detailPrefix?: string;
+      }
+    | undefined;
 
   // File watcher debounce state
   private pendingAdded = new Set<string>();
@@ -117,14 +129,14 @@ export class IndexerManager implements vscode.Disposable {
         "qdrantUrl",
         "http://localhost:6333",
       );
-      const workspaceRoot = this.getWorkspaceRoot();
+      const workspaceRoots = this.getWorkspaceRoots();
 
       const embeddingBearerToken = await this.getEmbeddingBearerToken();
 
       if (!semanticEnabled) {
         const readinessReason = this.classifyPreflightReadinessReason({
           semanticEnabled,
-          hasWorkspace: Boolean(workspaceRoot),
+          hasWorkspace: workspaceRoots.length > 0,
           hasEmbeddingAuth: Boolean(embeddingBearerToken),
         });
         const message = getSemanticReadinessMessage(readinessReason);
@@ -137,7 +149,7 @@ export class IndexerManager implements vscode.Disposable {
         return;
       }
 
-      if (!workspaceRoot) {
+      if (workspaceRoots.length === 0) {
         const readinessReason = this.classifyPreflightReadinessReason({
           semanticEnabled,
           hasWorkspace: false,
@@ -196,34 +208,137 @@ export class IndexerManager implements vscode.Disposable {
         return;
       }
 
-      const collectionName = this.getCollectionName(workspaceRoot);
-      const cachePath = this.getCachePath(collectionName);
+      const discoveredByRoot = new Map<string, string[]>();
+      let totalFiles = 0;
+      for (const workspaceRoot of workspaceRoots) {
+        if (this.cancelRequested) {
+          this.updateStatus({ state: "idle" });
+          return;
+        }
+        const files = await this.discoverIndexableFiles(workspaceRoot, config);
+        discoveredByRoot.set(workspaceRoot, files);
+        totalFiles += files.length;
+        this.log(
+          `Discovered ${files.length} files for indexing in ${workspaceRoot}`,
+        );
+      }
 
-      const files = await this.discoverIndexableFiles(workspaceRoot, config);
-
-      this.log(`Discovered ${files.length} files for indexing`);
-      this.updateStatus({ state: "indexing", current: 0, total: files.length });
-
-      // Ensure worker is running
-      this.ensureWorker();
-      const worker = this.worker!; // guaranteed non-null after ensureWorker()
+      this.log(
+        `Discovered ${totalFiles} files for indexing across ${workspaceRoots.length} workspace folder(s)`,
+      );
+      this.updateStatus({ state: "indexing", current: 0, total: totalFiles });
 
       const granularity = config.get<"standard" | "fine">(
         "chunkGranularity",
         "fine",
       );
 
-      // Send start message
-      worker.send({
-        type: "start",
-        files,
-        workspaceRoot,
-        collectionName,
-        qdrantUrl,
-        embeddingBearerToken,
-        cachePath,
-        force,
-        granularity,
+      const aggregateStats: IndexStats = {
+        filesIndexed: 0,
+        totalFilesInIndex: 0,
+        chunksCreated: 0,
+        totalChunksInIndex: 0,
+        pointsUpserted: 0,
+        pointsDeleted: 0,
+        durationMs: 0,
+        errors: [],
+      };
+      const startTime = Date.now();
+      let completedRoots = 0;
+
+      for (const workspaceRoot of workspaceRoots) {
+        if (this.cancelRequested) break;
+
+        const collectionName = this.getCollectionName(workspaceRoot);
+        const cachePath = this.getCachePath(collectionName);
+        const files = discoveredByRoot.get(workspaceRoot) ?? [];
+        const folder = vscode.workspace.getWorkspaceFolder(
+          vscode.Uri.file(workspaceRoot),
+        );
+        const label = folder?.name ?? path.basename(workspaceRoot);
+
+        this.log(
+          `Indexing workspace folder ${label} (${completedRoots + 1}/${workspaceRoots.length})`,
+        );
+        this.updateStatus({
+          state: "indexing",
+          current: aggregateStats.filesIndexed,
+          total: totalFiles,
+          detail: `workspace ${completedRoots + 1}/${workspaceRoots.length}: ${label}`,
+        });
+
+        try {
+          const stats = await this.runWorkerJob(
+            {
+              type: "start",
+              files,
+              workspaceRoot,
+              collectionName,
+              qdrantUrl,
+              embeddingBearerToken,
+              cachePath,
+              force,
+              granularity,
+            },
+            {
+              currentOffset: aggregateStats.filesIndexed,
+              total: totalFiles,
+              detailPrefix: `workspace ${completedRoots + 1}/${workspaceRoots.length}: ${label}`,
+            },
+          );
+
+          this.addStats(aggregateStats, stats);
+          completedRoots++;
+
+          if (stats.cancelled) {
+            aggregateStats.cancelled = true;
+            break;
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          aggregateStats.errors.push(`${label}: ${message}`);
+          this.log(`Indexing failed for workspace folder ${label}: ${message}`);
+        }
+      }
+
+      aggregateStats.durationMs = Date.now() - startTime;
+      this.log(
+        `Indexing complete across ${completedRoots}/${workspaceRoots.length} workspace folder(s): ` +
+          `${aggregateStats.filesIndexed} files, ${aggregateStats.chunksCreated} chunks, ` +
+          `${aggregateStats.pointsUpserted} upserted, ${aggregateStats.pointsDeleted} deleted` +
+          (aggregateStats.errors.length > 0
+            ? ` — ${aggregateStats.errors.length} error(s)`
+            : ""),
+      );
+      if (aggregateStats.errors.length > 0) {
+        this.log(`Indexing errors:\n${aggregateStats.errors.join("\n")}`);
+      }
+      if (
+        completedRoots === 0 &&
+        aggregateStats.errors.length > 0 &&
+        !aggregateStats.cancelled
+      ) {
+        const message = `Indexing failed for all workspace folders: ${aggregateStats.errors.join("; ")}`;
+        this.updateStatus({
+          state: "error",
+          readinessReason: "generic_error",
+          readinessMessage: getSemanticReadinessMessage("generic_error"),
+          error: message,
+        });
+        return;
+      }
+      this.updateStatus({
+        state: "idle",
+        lastCompleted: {
+          filesIndexed: aggregateStats.filesIndexed,
+          totalFilesInIndex: aggregateStats.totalFilesInIndex,
+          chunksCreated: aggregateStats.chunksCreated,
+          totalChunksInIndex: aggregateStats.totalChunksInIndex,
+          durationMs: aggregateStats.durationMs,
+          errorCount: aggregateStats.errors.length || undefined,
+          cancelled: aggregateStats.cancelled || undefined,
+        },
       });
     } catch (err) {
       const message = `Failed to start indexing: ${err}`;
@@ -337,6 +452,13 @@ export class IndexerManager implements vscode.Disposable {
     this.worker.on("exit", (code, signal) => {
       this.log(`Indexer worker exited (code=${code}, signal=${signal})`);
       this.worker = null;
+      const activeJob = this.activeWorkerJob;
+      this.activeWorkerJob = undefined;
+      activeJob?.reject(
+        new Error(
+          `Worker process exited unexpectedly (code=${code}, signal=${signal})`,
+        ),
+      );
       if (this.status.state === "indexing") {
         this.updateStatus({
           state: "error",
@@ -350,6 +472,9 @@ export class IndexerManager implements vscode.Disposable {
     this.worker.on("error", (err) => {
       this.log(`Indexer worker error: ${err}`);
       this.worker = null;
+      const activeJob = this.activeWorkerJob;
+      this.activeWorkerJob = undefined;
+      activeJob?.reject(err);
       this.updateStatus({
         state: "error",
         readinessReason: "generic_error",
@@ -359,23 +484,80 @@ export class IndexerManager implements vscode.Disposable {
     });
   }
 
+  private runWorkerJob(
+    message: ExtensionToWorkerMessage,
+    progress?: {
+      currentOffset?: number;
+      total?: number;
+      detailPrefix?: string;
+    },
+  ): Promise<IndexStats> {
+    if (
+      message.type === "cancel" ||
+      message.type === "embeddingAuthRefreshResponse"
+    ) {
+      throw new Error(`Unsupported worker job message: ${message.type}`);
+    }
+    if (this.activeWorkerJob) {
+      throw new Error("Indexer worker job already in progress");
+    }
+
+    this.ensureWorker();
+    const worker = this.worker!;
+
+    return new Promise<IndexStats>((resolve, reject) => {
+      this.activeWorkerJob = { resolve, reject, ...progress };
+      worker.send(message, (error) => {
+        if (!error) return;
+        if (this.activeWorkerJob?.reject === reject) {
+          this.activeWorkerJob = undefined;
+        }
+        reject(error);
+      });
+    });
+  }
+
+  private addStats(target: IndexStats, source: IndexStats): void {
+    target.filesIndexed += source.filesIndexed;
+    target.totalFilesInIndex += source.totalFilesInIndex;
+    target.chunksCreated += source.chunksCreated;
+    target.totalChunksInIndex += source.totalChunksInIndex;
+    target.pointsUpserted += source.pointsUpserted;
+    target.pointsDeleted += source.pointsDeleted;
+    target.errors.push(...source.errors);
+    if (source.cancelled) target.cancelled = true;
+  }
+
   private handleWorkerMessage(msg: WorkerToExtensionMessage): void {
     switch (msg.type) {
       case "ready":
         this.log("Indexer worker ready");
         break;
 
-      case "progress":
+      case "progress": {
+        const activeJob = this.activeWorkerJob;
         this.updateStatus({
           state: "indexing",
           phase: msg.phase,
-          current: msg.current,
-          total: msg.total,
-          detail: msg.detail,
+          current: (activeJob?.currentOffset ?? 0) + msg.current,
+          total: activeJob?.total ?? msg.total,
+          detail: activeJob?.detailPrefix
+            ? msg.detail
+              ? `${activeJob.detailPrefix} — ${msg.detail}`
+              : activeJob.detailPrefix
+            : msg.detail,
         });
         break;
+      }
 
-      case "complete":
+      case "complete": {
+        const activeJob = this.activeWorkerJob;
+        if (activeJob) {
+          this.activeWorkerJob = undefined;
+          activeJob.resolve(msg.stats);
+          break;
+        }
+
         this.log(
           `Indexing complete: ${msg.stats.filesIndexed} files, ${msg.stats.chunksCreated} chunks, ` +
             `${msg.stats.pointsUpserted} upserted, ${msg.stats.pointsDeleted} deleted ` +
@@ -400,10 +582,14 @@ export class IndexerManager implements vscode.Disposable {
           },
         });
         break;
+      }
 
       case "error":
         this.log(`Indexer error: ${msg.message}`);
         if (msg.fatal) {
+          const activeJob = this.activeWorkerJob;
+          this.activeWorkerJob = undefined;
+          activeJob?.reject(new Error(msg.message));
           this.updateStatus({
             state: "error",
             readinessReason: "generic_error",
@@ -455,30 +641,73 @@ export class IndexerManager implements vscode.Disposable {
   }
 
   private async flushIncrementalUpdate(): Promise<void> {
-    const workspaceRoot = this.getWorkspaceRoot();
-    if (!workspaceRoot) return;
-
-    let added = [...this.pendingAdded];
-    let removed = [...this.pendingRemoved];
-
-    const config = vscode.workspace.getConfiguration("agentlink");
-    const exclusions = this.getIndexExclusions(config);
-    added = await this.filterIndexableFiles(added, workspaceRoot, exclusions);
-    removed = await this.filterExplicitlyIncludedRemovedPaths(
-      removed,
-      workspaceRoot,
-      exclusions,
-    );
-
-    if (added.length === 0 && removed.length === 0) {
-      this.pendingAdded.clear();
-      this.pendingRemoved.clear();
-      return;
-    }
     if (
       this.status.state === "indexing" ||
       this.status.state === "discovering"
     ) {
+      return;
+    }
+
+    const config = vscode.workspace.getConfiguration("agentlink");
+    const exclusions = this.getIndexExclusions(config);
+    const changesByRoot = new Map<
+      string,
+      { added: string[]; removed: string[] }
+    >();
+
+    for (const filePath of this.pendingAdded) {
+      const workspaceRoot = getWorkspaceRootForPath(filePath);
+      if (!workspaceRoot) continue;
+      const entry = changesByRoot.get(workspaceRoot) ?? {
+        added: [],
+        removed: [],
+      };
+      entry.added.push(filePath);
+      changesByRoot.set(workspaceRoot, entry);
+    }
+
+    for (const filePath of this.pendingRemoved) {
+      const workspaceRoot = getWorkspaceRootForPath(filePath);
+      if (!workspaceRoot) continue;
+      const entry = changesByRoot.get(workspaceRoot) ?? {
+        added: [],
+        removed: [],
+      };
+      entry.removed.push(filePath);
+      changesByRoot.set(workspaceRoot, entry);
+    }
+
+    if (changesByRoot.size === 0) {
+      this.pendingAdded.clear();
+      this.pendingRemoved.clear();
+      return;
+    }
+
+    const filteredChanges: Array<{
+      workspaceRoot: string;
+      added: string[];
+      removed: string[];
+    }> = [];
+
+    for (const [workspaceRoot, changes] of changesByRoot) {
+      const added = await this.filterIndexableFiles(
+        changes.added,
+        workspaceRoot,
+        exclusions,
+      );
+      const removed = await this.filterExplicitlyIncludedRemovedPaths(
+        changes.removed,
+        workspaceRoot,
+        exclusions,
+      );
+      if (added.length > 0 || removed.length > 0) {
+        filteredChanges.push({ workspaceRoot, added, removed });
+      }
+    }
+
+    if (filteredChanges.length === 0) {
+      this.pendingAdded.clear();
+      this.pendingRemoved.clear();
       return;
     }
 
@@ -489,11 +718,17 @@ export class IndexerManager implements vscode.Disposable {
     const embeddingBearerToken = await this.getEmbeddingBearerToken();
     if (!embeddingBearerToken) return;
 
-    const collectionName = this.getCollectionName(workspaceRoot);
-    const cachePath = this.getCachePath(collectionName);
+    const totalAdded = filteredChanges.reduce(
+      (sum, changes) => sum + changes.added.length,
+      0,
+    );
+    const totalRemoved = filteredChanges.reduce(
+      (sum, changes) => sum + changes.removed.length,
+      0,
+    );
 
     this.log(
-      `Incremental update: ${added.length} added/changed, ${removed.length} removed`,
+      `Incremental update: ${totalAdded} added/changed, ${totalRemoved} removed across ${filteredChanges.length} workspace folder(s)`,
     );
     this.updateStatus({ state: "indexing" });
 
@@ -502,19 +737,58 @@ export class IndexerManager implements vscode.Disposable {
       "fine",
     );
 
-    this.ensureWorker();
-    const worker = this.worker!; // guaranteed non-null after ensureWorker()
-    worker.send({
-      type: "incrementalUpdate",
-      added,
-      removed,
-      workspaceRoot,
-      collectionName,
-      qdrantUrl,
-      embeddingBearerToken,
-      cachePath,
-      granularity,
-    });
+    const aggregateStats: IndexStats = {
+      filesIndexed: 0,
+      totalFilesInIndex: 0,
+      chunksCreated: 0,
+      totalChunksInIndex: 0,
+      pointsUpserted: 0,
+      pointsDeleted: 0,
+      durationMs: 0,
+      errors: [],
+    };
+    const startTime = Date.now();
+
+    try {
+      for (const { workspaceRoot, added, removed } of filteredChanges) {
+        const collectionName = this.getCollectionName(workspaceRoot);
+        const cachePath = this.getCachePath(collectionName);
+        const stats = await this.runWorkerJob({
+          type: "incrementalUpdate",
+          added,
+          removed,
+          workspaceRoot,
+          collectionName,
+          qdrantUrl,
+          embeddingBearerToken,
+          cachePath,
+          granularity,
+        });
+        this.addStats(aggregateStats, stats);
+      }
+
+      aggregateStats.durationMs = Date.now() - startTime;
+      this.updateStatus({
+        state: "idle",
+        lastCompleted: {
+          filesIndexed: aggregateStats.filesIndexed,
+          totalFilesInIndex: aggregateStats.totalFilesInIndex,
+          chunksCreated: aggregateStats.chunksCreated,
+          totalChunksInIndex: aggregateStats.totalChunksInIndex,
+          durationMs: aggregateStats.durationMs,
+          errorCount: aggregateStats.errors.length || undefined,
+          cancelled: aggregateStats.cancelled || undefined,
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.updateStatus({
+        state: "error",
+        readinessReason: "generic_error",
+        readinessMessage: getSemanticReadinessMessage("generic_error"),
+        error: message,
+      });
+    }
   }
 
   private async discoverIndexableFiles(
@@ -523,8 +797,18 @@ export class IndexerManager implements vscode.Disposable {
   ): Promise<string[]> {
     const exclusions = this.getIndexExclusions(config);
     const excludePattern = `{${exclusions.join(",")}}`;
+    const folder = vscode.workspace.getWorkspaceFolder(
+      vscode.Uri.file(workspaceRoot),
+    );
+    const includePattern = new vscode.RelativePattern(
+      folder ?? workspaceRoot,
+      "**/*",
+    );
 
-    const uris = await vscode.workspace.findFiles("**/*", excludePattern);
+    const uris = await vscode.workspace.findFiles(
+      includePattern,
+      excludePattern,
+    );
     const discovered = uris.map((u) => u.fsPath);
     return this.filterIndexableFiles(discovered, workspaceRoot, exclusions);
   }
@@ -713,8 +997,8 @@ export class IndexerManager implements vscode.Disposable {
     return reason === "ready" ? "generic_error" : reason;
   }
 
-  private getWorkspaceRoot(): string | undefined {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  private getWorkspaceRoots(): string[] {
+    return getWorkspaceRoots();
   }
 
   private getCollectionName(workspacePath: string): string {

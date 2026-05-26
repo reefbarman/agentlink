@@ -442,27 +442,118 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
+  padding: 3px 7px;
   font-size: 11px;
-  background: transparent;
-  color: var(--vscode-foreground);
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 3px;
+  line-height: 1.2;
+  background: color-mix(in srgb, #4ec9b0 8%, transparent);
+  color: var(--vscode-textLink-foreground, #4ec9b0);
+  border: 1px solid color-mix(in srgb, #4ec9b0 35%, transparent);
+  border-radius: 999px;
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
 }
 .rule-suggest-btn:hover:not(:disabled) {
-  background: var(--vscode-toolbar-hoverBackground);
+  background: color-mix(in srgb, #4ec9b0 14%, transparent);
+  border-color: color-mix(in srgb, #4ec9b0 55%, transparent);
 }
 .rule-suggest-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.65;
   cursor: default;
 }
 .rule-row-suggest-error {
   font-size: 11px;
   color: var(--vscode-errorForeground);
-  margin-bottom: 6px;
+  margin: 2px 0 8px;
+}
+.rule-row-suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 0 10px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, #4ec9b0 26%, var(--vscode-panel-border));
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    #4ec9b0 6%,
+    var(--vscode-editor-background)
+  );
+}
+.rule-row-suggestion-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rule-row-suggestion-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-weight: 600;
+}
+.rule-row-suggestion-title .codicon {
+  color: #4ec9b0;
+  font-size: 13px;
+}
+.rule-row-suggestion-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.rule-row-suggestion-close:hover {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground);
+}
+.rule-row-suggestion code {
+  display: block;
+  padding: 7px 8px;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--vscode-editor-foreground);
+  background: var(
+    --vscode-textCodeBlock-background,
+    var(--vscode-editor-background)
+  );
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  line-height: 1.45;
+}
+.rule-row-suggestion-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.rule-row-suggestion-accept {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  color: #000;
+  background: #4ec9b0;
+  border: 1px solid #4ec9b0;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rule-row-suggestion-accept:hover {
+  background: color-mix(in srgb, #4ec9b0 88%, white);
+  border-color: color-mix(in srgb, #4ec9b0 88%, white);
 }
 .rule-row-options {
   display: flex;
@@ -518,13 +609,15 @@ body {
 .radio-group {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  align-items: center;
+  gap: 8px 14px;
   margin-top: 4px;
 }
 .radio-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-height: 24px;
   font-size: 13px;
   cursor: pointer;
 }

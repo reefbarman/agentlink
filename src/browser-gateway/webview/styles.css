@@ -26,6 +26,18 @@
   --ag-terminal-fg: var(--vscode-terminal-foreground, #cccccc);
   --ag-terminal-muted: var(--vscode-descriptionForeground, #8b949e);
   --ag-terminal-cursor: var(--vscode-terminalCursor-foreground, #aeafad);
+  --ag-terminal-cursor-accent: var(
+    --vscode-terminalCursor-background,
+    var(--ag-terminal-bg)
+  );
+  --ag-terminal-selection-bg: var(
+    --vscode-terminal-selectionBackground,
+    rgba(255, 255, 255, 0.25)
+  );
+  --ag-terminal-selection-inactive-bg: var(
+    --vscode-terminal-inactiveSelectionBackground,
+    rgba(255, 255, 255, 0.15)
+  );
   --ag-terminal-black: var(--vscode-terminal-ansiBlack, #000000);
   --ag-terminal-red: var(--vscode-terminal-ansiRed, #cd3131);
   --ag-terminal-green: var(--vscode-terminal-ansiGreen, #0dbc79);
@@ -45,6 +57,14 @@
   );
   --ag-terminal-bright-cyan: var(--vscode-terminal-ansiBrightCyan, #29b8db);
   --ag-terminal-bright-white: var(--vscode-terminal-ansiBrightWhite, #ffffff);
+  --ag-terminal-font-family: var(
+    --vscode-terminal-fontFamily,
+    "Cascadia Mono", var(--vscode-editor-font-family, monospace)
+  );
+  --ag-terminal-font-size: var(--vscode-terminal-fontSize, 14px);
+  --ag-terminal-line-height: var(--vscode-terminal-lineHeight, 1);
+  --ag-terminal-font-weight: var(--vscode-terminal-fontWeight, normal);
+  --ag-terminal-letter-spacing: var(--vscode-terminal-letterSpacing, 0px);
 }
 
 * {
@@ -609,11 +629,6 @@ textarea {
   overflow: hidden;
   background: var(--ag-terminal-bg);
   color: var(--ag-terminal-fg);
-  font-family:
-    var(--vscode-editor-font-family), ui-monospace, SFMono-Regular, Menlo,
-    Monaco, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.25;
 }
 
 .browser-terminal-viewport {
@@ -630,185 +645,45 @@ textarea {
   padding: 5px 8px 8px;
 }
 
-.browser-terminal-viewport .xterm-rows {
-  font-weight: 400;
-}
-
 .browser-terminal-viewport .xterm-viewport {
-  background: var(--ag-terminal-bg) !important;
+  background: var(--vscode-terminal-background, var(--ag-terminal-bg)) !important;
 }
 
 .browser-terminal-viewport .xterm-screen {
   min-height: 100%;
 }
 
-.terminal-line {
-  min-height: 18px;
-  color: var(--ag-terminal-fg);
-}
-
-.terminal-command-line {
-  color: var(--ag-terminal-fg);
-}
-
-.terminal-prompt {
-  color: var(--ag-terminal-green);
-  font-weight: 700;
-  margin-right: 6px;
-}
-
-.terminal-prompt-ohmyzsh {
-  font-weight: 700;
-}
-
-.terminal-prompt-arrow,
-.terminal-prompt-directory {
-  color: var(--ag-terminal-green);
-}
-
-.terminal-prompt-git-label,
-.terminal-prompt-branch,
-.terminal-prompt-dirty {
-  color: var(--ag-terminal-blue);
-}
-
-.terminal-output-line {
-  color: var(--ag-terminal-fg);
-}
-
-.ansi-black {
-  color: var(--ag-terminal-black);
-}
-
-.ansi-red {
-  color: var(--ag-terminal-red);
-}
-
-.ansi-green {
-  color: var(--ag-terminal-green);
-}
-
-.ansi-yellow {
-  color: var(--ag-terminal-yellow);
-}
-
-.ansi-blue {
-  color: var(--ag-terminal-blue);
-}
-
-.ansi-magenta {
-  color: var(--ag-terminal-magenta);
-}
-
-.ansi-cyan {
-  color: var(--ag-terminal-cyan);
-}
-
-.ansi-white {
-  color: var(--ag-terminal-white);
-}
-
-.ansi-bright-black {
-  color: var(--ag-terminal-bright-black);
-}
-
-.ansi-bright-red {
-  color: var(--ag-terminal-bright-red);
-}
-
-.ansi-bright-green {
-  color: var(--ag-terminal-bright-green);
-}
-
-.ansi-bright-yellow {
-  color: var(--ag-terminal-bright-yellow);
-}
-
-.ansi-bright-blue {
-  color: var(--ag-terminal-bright-blue);
-}
-
-.ansi-bright-magenta {
-  color: var(--ag-terminal-bright-magenta);
-}
-
-.ansi-bright-cyan {
-  color: var(--ag-terminal-bright-cyan);
-}
-
-.ansi-bright-white {
-  color: var(--ag-terminal-bright-white);
-}
-
-.ansi-bold {
-  font-weight: 700;
-}
-
-.ansi-faint {
-  opacity: 0.72;
-}
-
-.terminal-path-highlight {
-  color: var(--vscode-textLink-foreground, var(--ag-terminal-blue));
-  background: color-mix(
-    in srgb,
-    var(--vscode-textLink-foreground, var(--ag-terminal-blue)) 18%,
-    transparent
+.terminal-instance-status-warning .terminal-instance-badge {
+  color: var(
+    --vscode-list-warningForeground,
+    var(--vscode-editorWarning-foreground, var(--ag-terminal-yellow))
   );
-  border-radius: 3px;
-  padding: 0 1px;
 }
 
-.terminal-status-line {
-  color: var(--ag-terminal-muted);
-  font-style: italic;
+.terminal-instance-status-error .terminal-instance-badge {
+  color: var(--vscode-errorForeground, var(--ag-terminal-red));
 }
 
-.terminal-line-status-warning,
-.terminal-instance-status-warning .codicon {
-  color: var(--ag-terminal-yellow);
+.terminal-instance-status-running .terminal-instance-badge {
+  color: var(--vscode-progressBar-background, var(--ag-terminal-blue));
 }
 
-.terminal-line-status-error,
-.terminal-instance-status-error .codicon {
-  color: var(--ag-terminal-red);
+.terminal-instance-status-completed .terminal-instance-badge {
+  color: var(
+    --vscode-testing-iconPassed,
+    var(--vscode-terminal-ansiGreen, var(--ag-terminal-green))
+  );
 }
 
-.terminal-line-status-running,
-.terminal-instance-status-running .codicon {
-  color: var(--ag-terminal-blue);
-}
-
-.terminal-cursor {
-  display: inline-block;
-  width: 7px;
-  height: 1.15em;
-  margin-left: 2px;
-  vertical-align: -0.18em;
-  background: var(--ag-terminal-cursor);
-  animation: terminal-cursor-blink 1.1s steps(1, end) infinite;
-}
-
-.terminal-cursor-inline {
-  width: 6px;
-  height: 1em;
-}
-
-@keyframes terminal-cursor-blink {
-  0%,
-  49% {
-    opacity: 1;
-  }
-  50%,
-  100% {
-    opacity: 0;
-  }
-}
 
 .terminal-instance-list {
   min-width: 0;
   border-left: 1px solid var(--ag-border);
   background: var(--vscode-panel-background, var(--ag-panel));
+  color: var(--vscode-list-foreground, var(--ag-text));
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  line-height: normal;
   padding: 4px 3px;
   overflow: auto;
 }
@@ -820,39 +695,35 @@ textarea {
   font-weight: 600;
 }
 
-.browser-side-bottom .terminal-instance-list .terminal-instance-item,
-.mobile-secondary-pane .terminal-instance-list .terminal-instance-item,
 .terminal-instance-list .terminal-instance-item {
   width: 100%;
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 16px;
   align-items: center;
   gap: 5px;
+  height: 22px;
   min-height: 22px;
-  padding: 2px 7px;
+  padding: 0 7px;
   border: 0;
-  border-radius: 2px;
+  border-radius: 0;
   background: transparent;
-  color: var(--ag-terminal-fg);
+  color: inherit;
   text-align: left;
   cursor: pointer;
   box-shadow: none;
 }
 
-.browser-side-bottom .terminal-instance-list .terminal-instance-item:hover,
-.mobile-secondary-pane .terminal-instance-list .terminal-instance-item:hover,
 .terminal-instance-list .terminal-instance-item:hover {
   background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, 0.31));
+  color: var(--vscode-list-hoverForeground, inherit);
 }
 
-.browser-side-bottom .terminal-instance-list .terminal-instance-item.active,
-.mobile-secondary-pane .terminal-instance-list .terminal-instance-item.active,
 .terminal-instance-list .terminal-instance-item.active {
   background: var(
     --vscode-list-activeSelectionBackground,
     rgba(55, 55, 55, 0.9)
   );
-  color: var(--vscode-list-activeSelectionForeground, var(--ag-terminal-fg));
+  color: var(--vscode-list-activeSelectionForeground, var(--ag-text));
 }
 
 .terminal-instance-list .terminal-instance-item:focus-visible {
@@ -862,13 +733,17 @@ textarea {
 
 .terminal-instance-item .terminal-instance-icon {
   font-size: 14px;
-  color: var(--ag-terminal-muted);
+  color: var(--vscode-descriptionForeground, var(--ag-muted));
 }
 
-.terminal-instance-item .terminal-instance-warning {
+.terminal-instance-item.active .terminal-instance-icon {
+  color: currentColor;
+}
+
+.terminal-instance-item .terminal-instance-badge {
   justify-self: end;
   font-size: 13px;
-  color: var(--ag-terminal-yellow);
+  color: var(--vscode-descriptionForeground, var(--ag-terminal-muted));
 }
 
 .terminal-instance-label {

@@ -16,6 +16,7 @@ import type { BrowserGatewayService } from "./BrowserGatewayService.js";
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { DecisionMessage } from "../approvals/webview/types.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
+import { writeBrowserGatewayThemeCache } from "./browserGatewayThemeCache.js";
 
 export type BrowserGatewaySnapshot = ReturnType<
   BrowserGatewayService["getSerializableSnapshotState"]
@@ -39,6 +40,8 @@ export class BrowserGatewayServer implements vscode.Disposable {
     NodeJS.Timeout
   >();
   private readonly disposables: vscode.Disposable[] = [];
+  private startedAtIso: string | null = null;
+  private lastPersistedThemeSnapshot = "";
 
   constructor(
     private readonly gatewayService: BrowserGatewayService,
@@ -64,6 +67,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     this.disposables.push(
       this.gatewayService.onDidChange(() => {
+        void this.persistCurrentThemeSnapshot();
         this.broadcast(this.getSnapshot());
       }),
     );
@@ -90,6 +94,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.port = typeof address === "object" && address ? address.port : port;
     const url = `http://127.0.0.1:${this.port}`;
     const startedAt = new Date().toISOString();
+    this.startedAtIso = startedAt;
     await writeBrowserGatewayDiscovery({
       pid: process.pid,
       port: this.port,
@@ -97,6 +102,11 @@ export class BrowserGatewayServer implements vscode.Disposable {
       protocolVersion: 1,
       startedAt,
       authToken: this.authToken,
+    });
+    const theme = this.gatewayService.getCurrentThemeSnapshot();
+    this.lastPersistedThemeSnapshot = JSON.stringify(theme);
+    await writeBrowserGatewayThemeCache(theme).catch((err: unknown) => {
+      this.log(`[browser-gateway] failed to write theme cache: ${err}`);
     });
     await upsertBrowserGatewayInstance({
       instanceId: this.instanceId,
@@ -108,6 +118,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       protocolVersion: 1,
       startedAt,
       authToken: this.authToken,
+      theme,
     });
     this.log(`[browser-gateway] listening on ${url}`);
     return this.port;
@@ -120,6 +131,31 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
   getSnapshot(): BrowserGatewaySnapshot {
     return this.gatewayService.getSerializableSnapshotState();
+  }
+
+  private async persistCurrentThemeSnapshot(): Promise<void> {
+    if (this.port === null) return;
+    const theme = this.gatewayService.getCurrentThemeSnapshot();
+    const serializedTheme = JSON.stringify(theme);
+    if (serializedTheme === this.lastPersistedThemeSnapshot) return;
+    this.lastPersistedThemeSnapshot = serializedTheme;
+    await writeBrowserGatewayThemeCache(theme).catch((err: unknown) => {
+      this.log(`[browser-gateway] failed to write theme cache: ${err}`);
+    });
+    await upsertBrowserGatewayInstance({
+      instanceId: this.instanceId,
+      workspaceName: this.workspaceName,
+      workspacePath: this.workspacePath,
+      pid: process.pid,
+      port: this.port,
+      url: `http://127.0.0.1:${this.port}`,
+      protocolVersion: 1,
+      startedAt: this.startedAtIso ?? new Date().toISOString(),
+      authToken: this.authToken,
+      theme,
+    }).catch((err: unknown) => {
+      this.log(`[browser-gateway] failed to update theme registry: ${err}`);
+    });
   }
 
   async stop(): Promise<void> {
@@ -142,6 +178,8 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.server = null;
     }
     this.port = null;
+    this.startedAtIso = null;
+    this.lastPersistedThemeSnapshot = "";
   }
 
   dispose(): void {

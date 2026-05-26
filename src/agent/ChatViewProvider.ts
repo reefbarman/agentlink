@@ -20,6 +20,7 @@ import type {
   BrowserGatewayThemeSnapshot,
   McpApprovalPromotionMeta,
 } from "../shared/types.js";
+import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { TodoItem } from "./todoTool.js";
 import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
 import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
@@ -108,6 +109,11 @@ export type ExtensionToWebview =
       type: "agentTodoUpdate";
       sessionId: string;
       todos: TodoItem[];
+    }
+  | {
+      type: "agentFinalMarker";
+      sessionId: string;
+      marker: FinalMessageMarker | null;
     }
   | {
       type: "agentApiRequest";
@@ -496,10 +502,11 @@ export interface ChatState {
     safetyBufferTokens: number;
     softThresholdBudget: number;
     hardBudget: number;
-    basis: "input" | "total";
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
 }
+
+type ContextBudget = NonNullable<ChatState["contextBudget"]>;
 
 const RESTORE_TAIL_TURNS = 8;
 const RESTORE_BACKFILL_BATCH_TURNS = 12;
@@ -1210,26 +1217,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }): Promise<string> {
     const fg = this.sessionManager?.getForegroundSession();
     const model =
-      fg?.model ?? this.sessionManager?.getConfig().model ?? "claude-sonnet-4-6";
+      fg?.model ??
+      this.sessionManager?.getConfig().model ??
+      "claude-sonnet-4-6";
     const provider = providerRegistry.tryResolveProvider(model);
     if (!provider) {
       throw new Error(`No provider available for model "${model}"`);
     }
 
     const systemPrompt = [
-      "You generate regex patterns for approving shell commands.",
-      "Given a specific command, suggest a regex that matches that command and similar safe variants with different inputs (e.g. different file paths, flag values, query strings).",
-      "The regex MUST NOT match commands that could delete data, modify system files, exfiltrate data, execute arbitrary code, or otherwise be destructive.",
-      "Err on the side of being more restrictive.",
-      "Use JavaScript/ECMAScript regex syntax. Do NOT include delimiters (no leading/trailing `/`), do NOT include flags, do NOT explain your reasoning.",
+      "You generate JavaScript regex patterns for command approval suggestions.",
+      "Given one concrete command, return a simple, reviewable regex that matches that command and useful variants for the same command shape.",
+      "For read-only file-oriented commands such as wc, cat, head, tail, ls, find, grep, rg, git diff/status/log/show, and test runners, generalize file/path/glob/query/test-name inputs. Example: `wc -l README.md package.json` should become a pattern for `wc -l` over one or more file/path/glob tokens, not only those exact two files.",
+      "Prefer readable regexes over exhaustive filename validation. Broad token patterns such as `[^\\s;&|><$`()'\"]+` are acceptable for path/glob-like arguments.",
+      "Preserve the command/program structure and fixed flags/subcommands. Generalize only obvious input positions such as paths, globs, branch names, package names, URLs, search queries, test filters, and numeric limits.",
+      "Avoid matching obvious shell-control syntax such as command separators, shell pipelines, command substitution, redirects, quotes, or newlines, but do not overfit. The user will review the suggestion before accepting it.",
+      "The regex must be fully anchored with ^ and $, must match a single command line, and must not rely on flags.",
+      "Use JavaScript/ECMAScript regex syntax. Do not include delimiters, flags, markdown, or explanation.",
       "Respond with ONLY the regex pattern as a single line of plain text.",
-    ].join(" ");
+    ].join("\n");
 
     const userPrompt = [
-      `Full command being approved: ${args.fullCommand}`,
-      `Sub-command to match: ${args.subCommand}`,
+      "Generate a limited-approval regex for this execute_command approval row.",
       "",
-      "Suggest a regex that would safely approve this and similar variants.",
+      "Full compound command:",
+      args.fullCommand,
+      "",
+      "Sub-command this rule will match:",
+      args.subCommand,
+      "",
+      "Return one anchored JavaScript regex pattern that matches the sub-command and useful variants with the same command shape.",
     ].join("\n");
 
     const result = await provider.complete({
@@ -1245,13 +1262,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!pattern) {
       throw new Error("Model returned no usable regex");
     }
-    try {
-      new RegExp(pattern);
-    } catch (err) {
-      throw new Error(
-        `Model returned an invalid regex: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    validateSuggestedCommandRegex(pattern, args.subCommand);
     return pattern;
   }
 
@@ -1630,6 +1641,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const fg = mgr.getForegroundSession();
     if (fg) {
+      const condenseThreshold = getConfiguredBaseThresholdForModel(
+        vscode.workspace.getConfiguration("agentlink"),
+        fg.model,
+      );
       this.postMessage({
         type: "stateUpdate",
         state: {
@@ -1637,9 +1652,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           mode: fg.mode,
           model: fg.model,
           streaming: true,
-          condenseThreshold: getConfiguredBaseThresholdForModel(
-            vscode.workspace.getConfiguration("agentlink"),
+          condenseThreshold,
+          contextBudget: this.buildContextBudget(
+            fg,
             fg.model,
+            condenseThreshold,
           ),
           agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
             fg.id,
@@ -2165,6 +2182,39 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: "agentSessionList", sessions });
   }
 
+  private buildContextBudget(
+    session: AgentSession | undefined,
+    modelId: string,
+    condenseThreshold: number,
+  ): ContextBudget | undefined {
+    const provider = providerRegistry.tryResolveProvider(modelId);
+    const caps = provider?.getCapabilities(modelId);
+    if (!caps) return undefined;
+
+    const config = this.sessionManager?.getConfig();
+    const maxInputTokens =
+      caps.maxInputTokens ??
+      Math.max(0, caps.contextWindow - caps.maxOutputTokens);
+    const outputReservation = Math.min(
+      Math.max(
+        session?.maxTokens ?? config?.maxTokens ?? 0,
+        (session?.thinkingBudget ?? config?.thinkingBudget ?? 0) + 4096,
+      ),
+      caps.maxOutputTokens,
+    );
+    const safetyBufferTokens = Math.floor(maxInputTokens * 0.05);
+
+    return {
+      contextWindow: caps.contextWindow,
+      maxInputTokens,
+      usedInputTokens: session?.estimatedInputUsed ?? 0,
+      outputReservation,
+      safetyBufferTokens,
+      softThresholdBudget: Math.floor(maxInputTokens * condenseThreshold),
+      hardBudget: Math.max(0, maxInputTokens - safetyBufferTokens),
+    };
+  }
+
   log(message: string): void {
     const timestamp = new Date().toISOString();
     this.outputChannel.appendLine(`[${timestamp}] ${message}`);
@@ -2172,6 +2222,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   setSessionManager(manager: AgentSessionManager): void {
     this.sessionManager = manager;
+    this.slashRegistry?.setMode(manager.getForegroundSession()?.mode ?? "code");
+    void this.slashRegistry?.reload().then(() => this.sendSlashCommands());
 
     manager.onEvent = (sessionId, event) => {
       this.handleAgentEvent(sessionId, event);
@@ -2192,6 +2244,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // when a tracked tool is force-cancelled/completed from the sidebar). Push a
       // full foreground state refresh so the chat webview's streaming/session state
       // stays aligned with the real session status, then refresh the sidebar strips.
+      this.slashRegistry?.setMode(
+        manager.getForegroundSession()?.mode ?? "code",
+      );
+      void this.slashRegistry?.reload().then(() => this.sendSlashCommands());
       this.sendInitialState();
       this.sendBgSessionsUpdate();
     };
@@ -2461,6 +2517,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         const fg = mgr.getForegroundSession();
         if (fg) {
+          const condenseThreshold = getConfiguredBaseThresholdForModel(
+            vscode.workspace.getConfiguration("agentlink"),
+            fg.model,
+          );
           this.postMessage({
             type: "stateUpdate",
             state: {
@@ -2468,9 +2528,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               mode: fg.mode,
               model: fg.model,
               streaming: true,
-              condenseThreshold: getConfiguredBaseThresholdForModel(
-                vscode.workspace.getConfiguration("agentlink"),
+              condenseThreshold,
+              contextBudget: this.buildContextBudget(
+                fg,
                 fg.model,
+                condenseThreshold,
               ),
               agentWriteApproval:
                 this.approvalManager?.getAgentWriteApprovalState(fg.id),
@@ -2555,6 +2617,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           // Update state to show streaming
           const fg = this.sessionManager.getForegroundSession();
           if (fg) {
+            const condenseThreshold = getConfiguredBaseThresholdForModel(
+              vscode.workspace.getConfiguration("agentlink"),
+              fg.model,
+            );
             this.postMessage({
               type: "stateUpdate",
               state: {
@@ -2562,9 +2628,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 mode: fg.mode,
                 model: fg.model,
                 streaming: true,
-                condenseThreshold: getConfiguredBaseThresholdForModel(
-                  vscode.workspace.getConfiguration("agentlink"),
+                condenseThreshold,
+                contextBudget: this.buildContextBudget(
+                  fg,
                   fg.model,
+                  condenseThreshold,
                 ),
                 agentWriteApproval:
                   this.approvalManager?.getAgentWriteApprovalState(fg.id),
@@ -2590,6 +2658,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentSwitchMode": {
         const mode = (msg.mode as string) ?? "code";
+        this.slashRegistry?.setMode(mode);
         const fg = this.sessionManager.getForegroundSession();
         if (fg && fg.mode !== mode) {
           this.sessionManager
@@ -2602,8 +2671,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               this.approvalManager?.resetSessionAgentWriteApproval(session.id);
               return session;
             })
-            .then(() => {
+            .then(async () => {
+              await this.slashRegistry?.reload();
               this.sendInitialState();
+              this.sendSlashCommands();
               this.log(`[mode] user switched mode to ${mode}`);
             })
             .catch((err) => {
@@ -2611,8 +2682,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             });
         } else if (!fg) {
           // No session yet — create one in the target mode
-          this.sessionManager.createSession(mode).then(() => {
+          this.sessionManager.createSession(mode).then(async () => {
+            await this.slashRegistry?.reload();
             this.sendInitialState();
+            this.sendSlashCommands();
             this.log(`[mode] new session created in mode ${mode}`);
           });
         }
@@ -2935,6 +3008,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
 
           await this.revertCheckpointWithConfirmation(fg.id, checkpoint.id);
+        } else if (name === "skills") {
+          await this.slashRegistry?.reload();
+          const skills = this.slashRegistry?.getSkillCommands() ?? [];
+          const lines = [
+            `Detected skills for mode "${this.sessionManager.getForegroundSession()?.mode ?? "code"}": ${skills.length}`,
+            "",
+            ...skills.map((skill) =>
+              [
+                `/${skill.name}`,
+                `  ${skill.description}`,
+                `  ${skill.skillPath ?? ""}`,
+              ].join("\n"),
+            ),
+          ];
+          this.outputChannel.appendLine(lines.join("\n"));
+          this.outputChannel.show(true);
         } else if (name === "mcp") {
           const infos = this.mcpHub.getServerInfos();
           this.postMessage({
@@ -3667,6 +3756,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.applyProjectedAction({ type: "TODO_UPDATE", todos: extMsg.todos });
         break;
 
+      case "agentFinalMarker":
+        this.applyProjectedAction({
+          type: "SET_FINAL_MARKER",
+          marker: extMsg.marker,
+        });
+        break;
+
       case "agentDone":
         this.applyProjectedAction({ type: "DONE" });
         this.applyProjectedAction({ type: "CLEAR_QUESTION" });
@@ -4109,6 +4205,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           type: "agentTodoUpdate",
           sessionId,
           todos: event.todos,
+        } as ExtensionToWebview);
+        break;
+
+      case "final_marker":
+        this.postMessage({
+          type: "agentFinalMarker",
+          sessionId,
+          marker: event.marker,
         } as ExtensionToWebview);
         break;
 
@@ -5070,33 +5174,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       vscode.workspace.getConfiguration("agentlink"),
       modelId,
     );
-    const provider = providerRegistry.tryResolveProvider(modelId);
-    const caps = provider?.getCapabilities(modelId);
-    const contextBudget = caps
-      ? (() => {
-          const maxInputTokens =
-            caps.maxInputTokens ??
-            Math.max(0, caps.contextWindow - caps.maxOutputTokens);
-          const outputReservation = Math.min(
-            Math.max(
-              fg?.maxTokens ?? config.maxTokens,
-              (fg?.thinkingBudget ?? config.thinkingBudget ?? 0) + 4096,
-            ),
-            caps.maxOutputTokens,
-          );
-          const safetyBufferTokens = Math.floor(maxInputTokens * 0.05);
-          return {
-            contextWindow: caps.contextWindow,
-            maxInputTokens,
-            usedInputTokens: fg?.estimatedInputUsed ?? 0,
-            outputReservation,
-            safetyBufferTokens,
-            softThresholdBudget: Math.floor(maxInputTokens * condenseThreshold),
-            hardBudget: Math.max(0, maxInputTokens - safetyBufferTokens),
-            basis: "input" as const,
-          };
-        })()
-      : undefined;
+    const contextBudget = this.buildContextBudget(
+      fg,
+      modelId,
+      condenseThreshold,
+    );
     const state: ChatState = {
       sessionId: fg?.id ?? null,
       mode: fg?.mode ?? "code",
@@ -5260,6 +5342,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private getBrowserGatewayTerminalSettingsCssVariables(): Record<
+    string,
+    string
+  > {
+    const config = vscode.workspace.getConfiguration("terminal.integrated");
+    const cssVariables: Record<string, string> = {};
+
+    const fontFamily = config.get<string>("fontFamily")?.trim();
+    if (fontFamily) {
+      cssVariables["--vscode-terminal-fontFamily"] = fontFamily;
+    }
+
+    const fontSize = config.get<number>("fontSize");
+    if (typeof fontSize === "number" && Number.isFinite(fontSize)) {
+      cssVariables["--vscode-terminal-fontSize"] = `${fontSize}px`;
+    }
+
+    const lineHeight = config.get<number>("lineHeight");
+    if (typeof lineHeight === "number" && Number.isFinite(lineHeight)) {
+      cssVariables["--vscode-terminal-lineHeight"] = String(lineHeight);
+    }
+
+    const letterSpacing = config.get<number>("letterSpacing");
+    if (typeof letterSpacing === "number" && Number.isFinite(letterSpacing)) {
+      cssVariables["--vscode-terminal-letterSpacing"] = `${letterSpacing}px`;
+    }
+
+    const fontWeight = config.get<string | number>("fontWeight");
+    if (typeof fontWeight === "string" && fontWeight.trim()) {
+      cssVariables["--vscode-terminal-fontWeight"] = fontWeight.trim();
+    } else if (typeof fontWeight === "number" && Number.isFinite(fontWeight)) {
+      cssVariables["--vscode-terminal-fontWeight"] = String(fontWeight);
+    }
+
+    return cssVariables;
+  }
+
   private parseThemeSnapshot(
     msg: Record<string, unknown>,
   ): BrowserGatewayThemeSnapshot | null {
@@ -5268,7 +5387,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return null;
     }
 
-    const cssVariables: Record<string, string> = {};
+    const cssVariables: Record<string, string> = {
+      ...this.getBrowserGatewayTerminalSettingsCssVariables(),
+    };
     for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
       if (!key.startsWith("--vscode-")) continue;
       if (typeof value !== "string") continue;
@@ -5320,7 +5441,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             : "Dark";
 
     return {
-      cssVariables: {},
+      cssVariables: this.getBrowserGatewayTerminalSettingsCssVariables(),
       colorScheme,
       themeLabel,
       source: "vscode-theme-api",
@@ -5556,4 +5677,41 @@ function extractRegexPattern(raw: string): string | undefined {
 
   const firstLine = text.split(/\r?\n/)[0]?.trim();
   return firstLine || undefined;
+}
+
+function validateSuggestedCommandRegex(
+  pattern: string,
+  subCommand: string,
+): void {
+  if (pattern.length > 300) {
+    throw new Error("Model returned an overly long regex");
+  }
+  if (hasHighRiskRegexBacktrackingShape(pattern)) {
+    throw new Error("Model returned a regex with unsafe backtracking risk");
+  }
+
+  let regex: RegExp;
+  try {
+    regex = new RegExp(pattern);
+  } catch (err) {
+    throw new Error(
+      `Model returned an invalid regex: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (!pattern.startsWith("^") || !pattern.endsWith("$")) {
+    throw new Error("Model returned an unanchored regex");
+  }
+  if (!regex.test(subCommand.trim())) {
+    throw new Error(
+      "Model returned a regex that does not match the current command",
+    );
+  }
+}
+
+function hasHighRiskRegexBacktrackingShape(pattern: string): boolean {
+  const groups =
+    pattern.match(/\((?:\?:)?(?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)[+*{]/g) ??
+    [];
+  return groups.some((group) => /\.\*|\.\+/.test(group));
 }

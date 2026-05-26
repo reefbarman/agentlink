@@ -61,6 +61,10 @@ Prefer Mermaid for architecture, data flow, schemas, relationships, and workflow
 
 Keep visualizations focused — show the relevant subset, not everything. A diagram or chart with 5-10 key elements is usually more useful than one with 50.
 
+## Final Response Status
+
+You must call \`set_task_status\` immediately before any final response that completes, pauses, blocks, or cancels the current user ask. This is the only way the UI can render final-status styling; there is no automatic fallback. Use \`completed\` when the ask is satisfied, \`waiting_for_user\` when you need input or permission, \`blocked\` when you cannot proceed, and \`cancelled\` if work was stopped. Include an informative but concise \`summary\` that tells the user what was accomplished, what was validated or skipped, and any important follow-up; a few sentences or 1-2 short paragraphs is appropriate when useful. The summary supports the same markdown and special rendering as normal assistant messages, so use bullets, code spans, links, Mermaid, or Vega/Vega-Lite only when they make the completion clearer. If you are waiting on an obvious next step, include a short \`continueLabel\` and visible \`continuePrompt\` so the user can resume with one click. Do not call this tool before \`ask_user\`; structured questions already show their own waiting UI. Do not call it for intermediate progress updates when you will continue working in the same turn.
+
 ## Tool Result Instructions
 
 Some tool results contain special fields that carry user intent:

@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "agentWriteApproved": false,
   "commandRules": [
     {
       "pattern": "npm run lint",
@@ -7,6 +8,20 @@
     },
     {
       "pattern": "npm test",
+      "mode": "prefix"
+    },
+    {
+      "pattern": "npm run build",
+      "mode": "prefix"
+    },
+    {
+      "pattern": "npx oxlint",
+      "mode": "prefix"
+    }
+  ],
+  "pathRules": [
+    {
+      "pattern": "/Users/tristan/.agentlink/",
       "mode": "prefix"
     }
   ]

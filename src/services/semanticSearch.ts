@@ -7,7 +7,11 @@ import {
   openAiCodexAuthManager,
   type OpenAiCodexResolvedAuth,
 } from "../agent/providers/index.js";
-import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
+import {
+  getWorkspaceRootForPath,
+  getWorkspaceRoots,
+  tryGetFirstWorkspaceRoot,
+} from "../util/paths.js";
 import {
   execRipgrepSearch,
   getRipgrepBinPath,
@@ -97,6 +101,71 @@ function classifySemanticReasonFromError(
   return undefined;
 }
 
+function getWorkspaceRootsForSemanticQuery(
+  dirPath: string,
+  options?: { includeAllWorkspaceRoots?: boolean },
+): SemanticQueryTarget[] {
+  const roots = getWorkspaceRoots();
+  if (roots.length === 0) return [];
+
+  if (options?.includeAllWorkspaceRoots) {
+    return roots.map((workspacePath) => ({ workspacePath }));
+  }
+
+  const queryRoot = getWorkspaceRootForPath(dirPath);
+  if (!queryRoot) return [];
+
+  return [
+    {
+      workspacePath: queryRoot,
+      directoryPrefix: getDirectoryPrefix(queryRoot, dirPath),
+    },
+  ];
+}
+
+function getDirectoryPrefix(
+  workspacePath: string,
+  dirPath: string,
+): string | undefined {
+  const relativeDir = path.relative(workspacePath, dirPath).replace(/\\/g, "/");
+  return relativeDir === "" ? undefined : relativeDir;
+}
+
+function prefixResultPaths(
+  results: QdrantSearchResult[],
+  workspacePath: string,
+  allWorkspaceRoots: string[],
+): QdrantSearchResult[] {
+  if (allWorkspaceRoots.length <= 1) return results;
+
+  const folder = vscode.workspace.getWorkspaceFolder(
+    vscode.Uri.file(workspacePath),
+  );
+  const prefix = folder?.name;
+  if (!prefix) return results;
+
+  return results.map((result) => {
+    const payload = result.payload;
+    const filePath = payload?.filePath;
+    if (
+      !payload ||
+      !filePath ||
+      filePath === prefix ||
+      filePath.startsWith(`${prefix}/`)
+    ) {
+      return result;
+    }
+
+    return {
+      ...result,
+      payload: {
+        ...payload,
+        filePath: `${prefix}/${filePath}`,
+      },
+    };
+  });
+}
+
 // --- Collection name derivation ---
 
 /** AgentLink collection name (al- prefix) */
@@ -175,6 +244,11 @@ interface QdrantSearchResult {
   id: string | number;
   score: number;
   payload?: QdrantPayload;
+}
+
+interface SemanticQueryTarget {
+  workspacePath: string;
+  directoryPrefix?: string;
 }
 
 // --- Query enhancement (Phase 3) ---
@@ -939,6 +1013,7 @@ async function keywordFallbackSearch(
 export async function semanticFileQuery(
   relFilePath: string,
   query: string,
+  workspacePath?: string,
 ): Promise<{ startLine: number; endLine: number } | null> {
   if (!isSemanticSearchEnabled()) return null;
 
@@ -946,10 +1021,10 @@ export async function semanticFileQuery(
   if (!auth) return null;
 
   const qdrantUrl = getQdrantUrl();
-  const workspacePath = tryGetFirstWorkspaceRoot();
-  if (!workspacePath) return null;
+  const resolvedWorkspacePath = workspacePath ?? tryGetFirstWorkspaceRoot();
+  if (!resolvedWorkspacePath) return null;
 
-  const collectionName = getAlCollectionName(workspacePath);
+  const collectionName = getAlCollectionName(resolvedWorkspacePath);
 
   // Normalize to forward slashes for Qdrant filePath matching
   const normalizedPath = relFilePath.replace(/\\/g, "/");
@@ -1008,6 +1083,7 @@ export async function semanticFileList(
   dirPath: string,
   query: string,
   limit: number = 20,
+  options?: { includeAllWorkspaceRoots?: boolean },
 ): Promise<{
   files: Array<{ path: string; score: number }>;
   error?: string;
@@ -1028,14 +1104,10 @@ export async function semanticFileList(
   }
 
   const qdrantUrl = getQdrantUrl();
-  const workspacePath = tryGetFirstWorkspaceRoot();
-  if (!workspacePath) {
+  const workspacePaths = getWorkspaceRootsForSemanticQuery(dirPath, options);
+  if (workspacePaths.length === 0) {
     return { files: [], ...semanticErrorPayload("no_workspace") };
   }
-
-  const collectionName = getAlCollectionName(workspacePath);
-  const relativeDir = path.relative(workspacePath, dirPath);
-  const directoryPrefix = relativeDir === "" ? undefined : relativeDir;
 
   try {
     const expandedQuery = expandQuery(query);
@@ -1043,15 +1115,26 @@ export async function semanticFileList(
 
     // Fetch more chunks than limit since multiple chunks map to the same file
     const fetchLimit = limit * 5;
+    const allWorkspaceRoots = getWorkspaceRoots();
 
-    const results = await queryQdrant(
-      qdrantUrl,
-      collectionName,
-      queryVector,
-      query,
-      directoryPrefix,
-      fetchLimit,
+    const perWorkspaceResults = await Promise.all(
+      workspacePaths.map(async ({ workspacePath, directoryPrefix }) => {
+        const collectionName = getAlCollectionName(workspacePath);
+        const results = await queryQdrant(
+          qdrantUrl,
+          collectionName,
+          queryVector,
+          query,
+          directoryPrefix,
+          fetchLimit,
+        );
+        return prefixResultPaths(results, workspacePath, allWorkspaceRoots);
+      }),
     );
+    const results = perWorkspaceResults
+      .flat()
+      .sort((a, b) => b.score - a.score)
+      .slice(0, fetchLimit);
 
     // Deduplicate by filePath, keeping the best score per file
     const fileScores = new Map<string, number>();
@@ -1088,6 +1171,7 @@ export async function semanticSearch(
   query: string,
   limit?: number,
   excludeGlobs?: string[],
+  options?: { includeAllWorkspaceRoots?: boolean },
 ): Promise<ToolResult> {
   if (!isSemanticSearchEnabled()) {
     return {
@@ -1113,8 +1197,8 @@ export async function semanticSearch(
   }
 
   const qdrantUrl = getQdrantUrl();
-  const workspacePath = tryGetFirstWorkspaceRoot();
-  if (!workspacePath) {
+  const workspacePaths = getWorkspaceRootsForSemanticQuery(dirPath, options);
+  if (workspacePaths.length === 0) {
     return {
       content: [
         {
@@ -1124,27 +1208,33 @@ export async function semanticSearch(
       ],
     };
   }
-  const collectionName = getAlCollectionName(workspacePath);
-
-  // Compute directory prefix relative to workspace
-  const relativeDir = path.relative(workspacePath, dirPath);
-  const directoryPrefix = relativeDir === "" ? undefined : relativeDir;
 
   try {
     // Expand query for better embedding recall, then embed
     const expandedQuery = expandQuery(query);
     const queryVector = await generateEmbedding(expandedQuery, auth);
     const effectiveLimit = limit ?? 10;
+    const allWorkspaceRoots = getWorkspaceRoots();
 
-    const results = await queryQdrant(
-      qdrantUrl,
-      collectionName,
-      queryVector,
-      query,
-      directoryPrefix,
-      effectiveLimit,
-      excludeGlobs,
+    const perWorkspaceResults = await Promise.all(
+      workspacePaths.map(async ({ workspacePath, directoryPrefix }) => {
+        const collectionName = getAlCollectionName(workspacePath);
+        const results = await queryQdrant(
+          qdrantUrl,
+          collectionName,
+          queryVector,
+          query,
+          directoryPrefix,
+          effectiveLimit,
+          excludeGlobs,
+        );
+        return prefixResultPaths(results, workspacePath, allWorkspaceRoots);
+      }),
     );
+    const results = perWorkspaceResults
+      .flat()
+      .sort((a, b) => b.score - a.score)
+      .slice(0, effectiveLimit);
     return buildOutput(query, formatResults(results));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

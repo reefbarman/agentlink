@@ -33,6 +33,8 @@ import {
   type DiffSnapshotPreview,
 } from "./DiffSnapshotHub.js";
 
+const REPOSITORY_INFO_CACHE_MS = 1_000;
+
 export interface QuestionProgressState {
   id: string;
   step: number;
@@ -71,9 +73,15 @@ export interface BrowserGatewayTerminalInfo {
   stale?: boolean;
 }
 
+export interface BrowserGatewayRepositoryInfo {
+  branch?: string;
+  dirty?: boolean;
+}
+
 export interface BrowserGatewaySessionState {
   sessions: SessionSummary[];
   terminals: BrowserGatewayTerminalInfo[];
+  repository: BrowserGatewayRepositoryInfo | null;
   foreground:
     | {
         sessionId: string;
@@ -108,6 +116,7 @@ export interface BrowserGatewaySessionState {
 export interface BrowserGatewayWireSessionState {
   sessions: SessionSummary[];
   terminals: BrowserGatewayTerminalInfo[];
+  repository: BrowserGatewayRepositoryInfo | null;
   foreground: {
     sessionId: string;
     title: string;
@@ -154,6 +163,57 @@ function listBrowserGatewayTerminals(): BrowserGatewayTerminalInfo[] {
   }
 }
 
+function isSameOrNestedPath(pathValue: string, candidateRoot: string): boolean {
+  const normalizedPath = pathValue.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalizedRoot = candidateRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  return (
+    normalizedPath === normalizedRoot ||
+    normalizedPath.startsWith(`${normalizedRoot}/`)
+  );
+}
+
+function getBrowserGatewayRepositoryInfo(): BrowserGatewayRepositoryInfo | null {
+  try {
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspacePath) return null;
+
+    const gitExtension = vscode.extensions.getExtension("vscode.git")
+      ?.exports as
+      | { getAPI(version: 1): { repositories: unknown[] } }
+      | undefined;
+    const gitApi = gitExtension?.getAPI(1);
+    if (!gitApi) return null;
+
+    const repositories = gitApi.repositories as Array<{
+      rootUri?: { fsPath?: string };
+      state?: {
+        HEAD?: { name?: string; commit?: string };
+        workingTreeChanges?: unknown[];
+        indexChanges?: unknown[];
+        mergeChanges?: unknown[];
+      };
+    }>;
+    const repository =
+      repositories.find((candidate) => {
+        const rootPath = candidate.rootUri?.fsPath;
+        return rootPath ? isSameOrNestedPath(workspacePath, rootPath) : false;
+      }) ?? repositories[0];
+    const state = repository?.state;
+    if (!state) return null;
+
+    const branch = state.HEAD?.name || state.HEAD?.commit?.slice(0, 8);
+    const dirty = Boolean(
+      state.workingTreeChanges?.length ||
+      state.indexChanges?.length ||
+      state.mergeChanges?.length,
+    );
+
+    return { ...(branch && { branch }), dirty };
+  } catch {
+    return null;
+  }
+}
+
 export class BrowserGatewayService implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly onDidChangeEmitter =
@@ -169,6 +229,9 @@ export class BrowserGatewayService implements vscode.Disposable {
     | undefined;
   private questionProgress: QuestionProgressState | undefined;
   private recentEvents: AgentUiEvent[] = [];
+  private repositoryInfoCache:
+    | { value: BrowserGatewayRepositoryInfo | null; expiresAt: number }
+    | undefined;
 
   readonly onDidChange = this.onDidChangeEmitter.event;
 
@@ -215,6 +278,10 @@ export class BrowserGatewayService implements vscode.Disposable {
     }, 150);
   }
 
+  getCurrentThemeSnapshot(): BrowserGatewayThemeSnapshot {
+    return this.getThemeSnapshot();
+  }
+
   getUiState(): BrowserGatewayUiState {
     return {
       approval: this.approval,
@@ -238,6 +305,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       return {
         sessions,
         terminals: listBrowserGatewayTerminals(),
+        repository: this.getRepositoryInfo(),
         foreground: undefined,
       };
     }
@@ -262,6 +330,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     return {
       sessions,
       terminals: listBrowserGatewayTerminals(),
+      repository: this.getRepositoryInfo(),
       foreground: {
         sessionId: foreground.id,
         title: foreground.title,
@@ -350,6 +419,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     return {
       sessions: sessionState.sessions,
       terminals: sessionState.terminals,
+      repository: sessionState.repository,
       foreground: sessionState.foreground
         ? {
             sessionId: sessionState.foreground.sessionId,
@@ -465,6 +535,20 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.recentEvents = [];
     this.lastSerializedSnapshot = "";
     this.onDidChangeEmitter.dispose();
+  }
+
+  private getRepositoryInfo(): BrowserGatewayRepositoryInfo | null {
+    const now = Date.now();
+    if (this.repositoryInfoCache && this.repositoryInfoCache.expiresAt > now) {
+      return this.repositoryInfoCache.value;
+    }
+
+    const value = getBrowserGatewayRepositoryInfo();
+    this.repositoryInfoCache = {
+      value,
+      expiresAt: now + REPOSITORY_INFO_CACHE_MS,
+    };
+    return value;
   }
 
   private applyEvent(event: AgentUiEvent): void {

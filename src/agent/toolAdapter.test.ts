@@ -153,13 +153,14 @@ describe("READ_ONLY_TOOLS", () => {
     expect(READ_ONLY_TOOLS.has("codebase_search")).toBe(true);
   });
 
-  it("does not include write tools", () => {
+  it("does not include write or terminal meta tools", () => {
     expect(READ_ONLY_TOOLS.has("write_file")).toBe(false);
     expect(READ_ONLY_TOOLS.has("apply_diff")).toBe(false);
     expect(READ_ONLY_TOOLS.has("find_and_replace")).toBe(false);
     expect(READ_ONLY_TOOLS.has("execute_command")).toBe(false);
     expect(READ_ONLY_TOOLS.has("rename_symbol")).toBe(false);
     expect(READ_ONLY_TOOLS.has("switch_mode")).toBe(false);
+    expect(READ_ONLY_TOOLS.has("set_task_status")).toBe(false);
   });
 });
 
@@ -199,13 +200,23 @@ describe("getAgentTools", () => {
     }
   });
 
-  it("includes the core file tools", () => {
+  it("includes the core file tools and foreground task status tool", () => {
     const names = getAgentTools().map((t) => t.name);
     expect(names).toContain("read_file");
     expect(names).toContain("write_file");
     expect(names).toContain("apply_diff");
     expect(names).toContain("execute_command");
     expect(names).toContain("get_diagnostics");
+    expect(names).toContain("set_task_status");
+  });
+
+  it("excludes set_task_status from background and profile-restricted tool sets", () => {
+    expect(
+      getAgentTools(undefined, undefined, true).map((t) => t.name),
+    ).not.toContain("set_task_status");
+    expect(
+      getAgentTools(undefined, undefined, false, "review").map((t) => t.name),
+    ).not.toContain("set_task_status");
   });
 
   it("restricts tools when toolProfile is set to 'review'", () => {
@@ -363,6 +374,47 @@ describe("dispatchToolCall", () => {
     expect(JSON.parse(text)).toMatchObject({
       error: expect.stringContaining("not_a_real_tool"),
     });
+  });
+
+  it("records final task status intent", async () => {
+    const onFinalStatus = vi.fn();
+    const result = await dispatchToolCall(
+      "set_task_status",
+      {
+        status: "waiting_for_user",
+        summary: "Ready to implement",
+        continueLabel: "Implement this",
+        continuePrompt: "Please implement this plan.",
+      },
+      { ...mockCtx, onFinalStatus },
+    );
+
+    expect(onFinalStatus).toHaveBeenCalledWith({
+      status: "waiting_for_user",
+      source: "tool",
+      summary: "Ready to implement",
+      continueAction: {
+        label: "Implement this",
+        prompt: "Please implement this plan.",
+      },
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: JSON.stringify({ ok: true }),
+    });
+  });
+
+  it("rejects invalid final task status values", async () => {
+    const onFinalStatus = vi.fn();
+    const result = await dispatchToolCall(
+      "set_task_status",
+      { status: "done-ish" },
+      { ...mockCtx, onFinalStatus },
+    );
+
+    expect(onFinalStatus).not.toHaveBeenCalled();
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(JSON.parse(text)).toMatchObject({ error: "Invalid status" });
   });
 
   it("dispatches read_file to handleReadFile", async () => {

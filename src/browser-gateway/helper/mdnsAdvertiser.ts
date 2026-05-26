@@ -47,6 +47,15 @@ type MdnsPacket = {
   answers?: MdnsAnswer[];
   questions?: Array<{ name?: string; type?: string }>;
 };
+type MdnsRemoteInfo = {
+  address?: string;
+  host?: string;
+  port: number;
+};
+type MdnsTransport = {
+  mdns: MulticastDNSInstance;
+  iface?: string;
+};
 
 export interface MdnsAdvertiserOptions {
   /** Desired hostname (without ".local"), e.g. "agentlink". */
@@ -84,6 +93,20 @@ function listLanIpv4Addresses(): string[] {
   return addrs;
 }
 
+function listLanIpv4Interfaces(): Array<{ name: string; address: string }> {
+  const addrs: Array<{ name: string; address: string }> = [];
+  const ifaces = os.networkInterfaces();
+  for (const [name, list] of Object.entries(ifaces)) {
+    if (!list) continue;
+    for (const entry of list) {
+      if (entry.family !== "IPv4") continue;
+      if (entry.internal) continue;
+      addrs.push({ name, address: entry.address });
+    }
+  }
+  return addrs;
+}
+
 function listLanIpv6Addresses(): string[] {
   const addrs: string[] = [];
   const ifaces = os.networkInterfaces();
@@ -111,7 +134,7 @@ export class MdnsAdvertiser {
   private readonly port: number;
   private readonly log: (message: string) => void;
 
-  private mdns: MulticastDNSInstance | null = null;
+  private transports: MdnsTransport[] = [];
   private hostName: string | null = null;
   private fqdn: string | null = null;
   private stopped = false;
@@ -125,43 +148,54 @@ export class MdnsAdvertiser {
   }
 
   async start(): Promise<MdnsAdvertiserState> {
-    if (this.mdns) {
+    if (this.transports.length > 0) {
       throw new Error("mdns_advertiser_already_started");
     }
     this.stopped = false;
 
     let attemptName = this.desiredName;
     for (let attempt = 0; attempt < 5 && !this.stopped; attempt++) {
-      const mdns = makeMdns();
       const fqdn = `${attemptName}.local`;
+      const transports = await this.createTransports();
 
       try {
-        await waitForReady(mdns, 2_000);
+        await Promise.all(
+          transports.map((transport) => waitForReady(transport.mdns, 2_000)),
+        );
       } catch (err) {
-        await new Promise<void>((resolve) => mdns.destroy(() => resolve()));
+        await this.destroyTransports(transports);
         throw new Error(`mdns_bind_failed: ${String(err)}`);
       }
 
-      const conflictDetected = await this.probeForConflict(mdns, fqdn);
+      const conflictDetected = await this.probeForConflict(transports, fqdn);
       if (conflictDetected) {
         this.log(
           `[mdns] name ${fqdn} is already in use on the network — rotating suffix`,
         );
-        await new Promise<void>((resolve) => mdns.destroy(() => resolve()));
+        await this.destroyTransports(transports);
         attemptName = `${this.desiredName}-${randomBytes(2).toString("hex")}`;
         continue;
       }
 
-      this.mdns = mdns;
+      this.transports = transports;
       this.hostName = attemptName;
       this.fqdn = fqdn;
-      mdns.on("query", (query) => this.handleQuery(query as MdnsPacket));
-      mdns.on("response", (response) =>
-        this.handleResponse(response as MdnsPacket),
-      );
-      mdns.on("error", (err: unknown) => {
-        this.log(`[mdns] transport error: ${String(err)}`);
-      });
+      for (const transport of this.transports) {
+        transport.mdns.on("query", (query, rinfo) =>
+          this.handleQuery(
+            query as MdnsPacket,
+            rinfo as MdnsRemoteInfo | undefined,
+          ),
+        );
+        transport.mdns.on("response", (response) =>
+          this.handleResponse(response as MdnsPacket),
+        );
+        transport.mdns.on("error", (err: unknown) => {
+          this.log(
+            `[mdns] transport error${transport.iface ? ` on ${transport.iface}` : ""}: ${String(err)}`,
+          );
+        });
+      }
 
       this.announceAll();
       this.log(
@@ -188,17 +222,15 @@ export class MdnsAdvertiser {
       clearInterval(this.periodicTimer);
       this.periodicTimer = undefined;
     }
-    if (!this.mdns) return;
+    if (this.transports.length === 0) return;
 
     try {
       this.sendRecords(0);
     } catch {
       // ignore — interface may already be gone
     }
-    await new Promise<void>((resolve) => {
-      this.mdns!.destroy(() => resolve());
-    });
-    this.mdns = null;
+    await this.destroyTransports(this.transports);
+    this.transports = [];
     this.hostName = null;
     this.fqdn = null;
   }
@@ -216,8 +248,30 @@ export class MdnsAdvertiser {
     return [`http://${fqdn}:${this.port}`];
   }
 
+  private async createTransports(): Promise<MdnsTransport[]> {
+    const ifaces = listLanIpv4Interfaces();
+    if (os.platform() !== "darwin" || ifaces.length === 0) {
+      return [{ mdns: makeMdns() }];
+    }
+    return ifaces.map((iface) => ({
+      mdns: makeMdns({ interface: iface.address }),
+      iface: `${iface.name}/${iface.address}`,
+    }));
+  }
+
+  private async destroyTransports(transports: MdnsTransport[]): Promise<void> {
+    await Promise.all(
+      transports.map(
+        (transport) =>
+          new Promise<void>((resolve) =>
+            transport.mdns.destroy(() => resolve()),
+          ),
+      ),
+    );
+  }
+
   private async probeForConflict(
-    mdns: MulticastDNSInstance,
+    transports: MdnsTransport[],
     fqdn: string,
   ): Promise<boolean> {
     return await new Promise<boolean>((resolve) => {
@@ -243,20 +297,26 @@ export class MdnsAdvertiser {
         }
       };
       const cleanup = () => {
-        mdns.removeListener("response", onResponse);
+        for (const transport of transports) {
+          transport.mdns.removeListener("response", onResponse);
+        }
         clearTimeout(timer);
       };
-      mdns.on("response", onResponse as (packet: unknown) => void);
+      for (const transport of transports) {
+        transport.mdns.on("response", onResponse as (packet: unknown) => void);
+      }
 
-      try {
-        mdns.query({
-          questions: [
-            { name: fqdn, type: "A" },
-            { name: fqdn, type: "AAAA" },
-          ],
-        });
-      } catch (err) {
-        this.log(`[mdns] probe query failed: ${String(err)}`);
+      for (const transport of transports) {
+        try {
+          transport.mdns.query({
+            questions: [
+              { name: fqdn, type: "A" },
+              { name: fqdn, type: "AAAA" },
+            ],
+          });
+        } catch (err) {
+          this.log(`[mdns] probe query failed: ${String(err)}`);
+        }
       }
 
       const timer = setTimeout(() => {
@@ -269,12 +329,12 @@ export class MdnsAdvertiser {
   }
 
   private announceAll(): void {
-    if (!this.mdns || !this.fqdn) return;
+    if (this.transports.length === 0 || !this.fqdn) return;
     this.sendRecords(120);
   }
 
-  private sendRecords(ttl: number): void {
-    if (!this.mdns || !this.fqdn) return;
+  private sendRecords(ttl: number, rinfo?: MdnsRemoteInfo): void {
+    if (this.transports.length === 0 || !this.fqdn) return;
     const ipv4 = listLanIpv4Addresses();
     const ipv6 = listLanIpv6Addresses();
     if (ipv4.length === 0 && ipv6.length === 0) return;
@@ -293,15 +353,23 @@ export class MdnsAdvertiser {
         data: ip,
       })),
     ];
-    try {
-      this.mdns.respond({ answers });
-    } catch (err) {
-      this.log(`[mdns] respond failed: ${String(err)}`);
+    for (const transport of this.transports) {
+      try {
+        if (rinfo) {
+          transport.mdns.respond({ answers }, rinfo);
+        } else {
+          transport.mdns.respond({ answers });
+        }
+      } catch (err) {
+        this.log(
+          `[mdns] respond failed${transport.iface ? ` on ${transport.iface}` : ""}: ${String(err)}`,
+        );
+      }
     }
   }
 
-  private handleQuery(query: MdnsPacket): void {
-    if (!this.mdns || !this.fqdn) return;
+  private handleQuery(query: MdnsPacket, rinfo?: MdnsRemoteInfo): void {
+    if (this.transports.length === 0 || !this.fqdn) return;
     const lower = this.fqdn.toLowerCase();
     let shouldRespond = false;
     for (const q of query.questions ?? []) {
@@ -314,10 +382,13 @@ export class MdnsAdvertiser {
     }
     if (!shouldRespond) return;
     this.sendRecords(120);
+    if (rinfo?.address && rinfo.port) {
+      this.sendRecords(120, rinfo);
+    }
   }
 
   private handleResponse(response: MdnsPacket): void {
-    if (!this.fqdn || !this.mdns) return;
+    if (!this.fqdn || this.transports.length === 0) return;
     const lower = this.fqdn.toLowerCase();
     const ourIps = new Set([
       ...listLanIpv4Addresses(),

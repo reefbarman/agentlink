@@ -156,6 +156,24 @@ export function InputArea({
   const [emojiSelectedIdx, setEmojiSelectedIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputWrapperRef = useRef<HTMLDivElement>(null);
+  const slashPopupRef = useRef<HTMLDivElement>(null);
+
+  // DIAGNOSTIC[input-loop]: instrumentation to identify the cause of the
+  // "replaying last character" bug in chat input. Remove once root-caused.
+  const renderCountRef = useRef(0);
+  renderCountRef.current += 1;
+  const prevTextRef = useRef(text);
+  const inputEventCountRef = useRef(0);
+  useEffect(() => {
+    if (prevTextRef.current !== text) {
+      const domValue = textareaRef.current?.value;
+      const domMatches = domValue === text;
+      console.log(
+        `[agentlink:input-loop] text CHANGED render=${renderCountRef.current} prev=${JSON.stringify(prevTextRef.current)} next=${JSON.stringify(text)} domValue=${JSON.stringify(domValue)} domMatches=${domMatches}`,
+      );
+      prevTextRef.current = text;
+    }
+  }, [text]);
 
   const matchedSlashCommand = useMemo(
     () => parseMatchedSlashCommand(text, slashCommands),
@@ -340,6 +358,7 @@ export function InputArea({
         if (c.name === "new") return { ...c, icon: "add" };
         if (c.name === "clear") return { ...c, icon: "clear-all" };
         if (c.name === "help") return { ...c, icon: "question" };
+        if (c.name === "skills") return { ...c, icon: "sparkle" };
         if (c.name === "condense") return { ...c, icon: "fold" };
         if (c.name === "checkpoint") return { ...c, icon: "git-commit" };
         if (c.name === "revert") return { ...c, icon: "history" };
@@ -378,6 +397,7 @@ export function InputArea({
     "checkpoint",
     "revert",
     "help",
+    "skills",
     "mcp",
     "mcp-refresh",
     "pair",
@@ -391,6 +411,35 @@ export function InputArea({
     setEmojiStart(-1);
     setEmojiSelectedIdx(0);
   }, []);
+
+  useEffect(() => {
+    if (!slashOpen) return;
+
+    const handleDocumentPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (slashPopupRef.current?.contains(target)) return;
+      if (inputWrapperRef.current?.contains(target)) return;
+      closeSlash();
+    };
+
+    const handleDocumentKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeSlash();
+    };
+
+    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+    document.addEventListener("keydown", handleDocumentKeyDown, true);
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        handleDocumentPointerDown,
+        true,
+      );
+      document.removeEventListener("keydown", handleDocumentKeyDown, true);
+    };
+  }, [slashOpen, closeSlash]);
 
   const handleEmojiSelect = useCallback(
     (suggestion: { emoji: string; shortcode: string }) => {
@@ -779,6 +828,12 @@ export function InputArea({
       const target = e.target as HTMLTextAreaElement;
       const value = target.value;
       const cursor = target.selectionStart ?? value.length;
+      // DIAGNOSTIC[input-loop]: log every onInput firing so we can correlate
+      // user keystrokes with downstream setText calls when the bug reproduces.
+      inputEventCountRef.current += 1;
+      console.log(
+        `[agentlink:input-loop] onInput #${inputEventCountRef.current} render=${renderCountRef.current} stateText=${JSON.stringify(text)} domValue=${JSON.stringify(value)} cursor=${cursor} pickerOpen=${pickerOpen} slashOpen=${slashOpen} emojiOpen=${emojiOpen}`,
+      );
       setText(value);
 
       // Auto-resize textarea
@@ -924,6 +979,12 @@ export function InputArea({
 
   // Handle injections from extension (code actions, context menus)
   useEffect(() => {
+    // DIAGNOSTIC[input-loop]: surface every effect firing — if the bug is
+    // caused by a stale `injection` object being re-applied on parent renders,
+    // this will show it.
+    console.log(
+      `[agentlink:input-loop] injectionEffect render=${renderCountRef.current} injection=${injection ? injection.type : "null"} stateText=${JSON.stringify(text)}`,
+    );
     if (!injection) return;
     switch (injection.type) {
       case "prompt": {
@@ -1259,6 +1320,7 @@ export function InputArea({
       )}
       {shouldShowSlashPopup && (
         <SlashCommandPopup
+          ref={slashPopupRef}
           commands={filteredSlashCommands}
           selectedIndex={slashSelectedIdx}
           anchor={getPickerAnchor()}

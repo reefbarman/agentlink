@@ -4,7 +4,10 @@ import { getRelativePath } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
-import { decisionToScope, applyInlineTrustScope } from "./writeApprovalUI.js";
+import {
+  saveInlineWriteTrustRules,
+  saveWriteTrustRules,
+} from "./writeApprovalUI.js";
 
 import { type ToolResult, type OnApprovalRequest } from "../shared/types.js";
 
@@ -121,6 +124,8 @@ export async function handleRenameSymbol(
           sessionId,
         );
         decision = typeof result === "string" ? result : result.decision;
+        renameFollowUp =
+          typeof result === "string" ? undefined : result.followUp;
         if (decision === "reject") {
           return {
             content: [
@@ -135,6 +140,12 @@ export async function handleRenameSymbol(
             ],
           };
         }
+        saveInlineWriteTrustRules({
+          response: result,
+          approvalManager,
+          sessionId,
+          relPath,
+        });
       } else {
         const { promise } = approvalPanel.enqueueRenameApproval(
           oldName,
@@ -162,17 +173,13 @@ export async function handleRenameSymbol(
           };
         }
 
-        // Save trust rules for session/project/always decisions
-        const scope = decisionToScope(response.decision);
-        if (scope && response.trustScope) {
-          applyInlineTrustScope(
-            response,
-            approvalManager,
-            sessionId,
-            scope,
-            relPath,
-          );
-        }
+        saveWriteTrustRules({
+          panelResponse: response,
+          approvalManager,
+          sessionId,
+          relPath,
+          inWorkspace: true,
+        });
       }
     }
 

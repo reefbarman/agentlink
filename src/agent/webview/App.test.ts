@@ -90,6 +90,39 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
+  it("marks incomplete tool calls complete when the turn errors", () => {
+    const toolCallId = "tool-error-stop";
+
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "write a file",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId,
+      toolName: "write_file",
+    });
+
+    state = reducer(state, {
+      type: "ERROR",
+      error: "API request failed",
+      retryable: false,
+    });
+
+    const assistant = state.messages[state.messages.length - 1];
+    const toolBlock = assistant?.blocks.find(
+      (b) => b.type === "tool_call" && b.id === toolCallId,
+    );
+    expect(toolBlock).toMatchObject({
+      type: "tool_call",
+      id: toolCallId,
+      complete: true,
+      result: '{"status":"stopped"}',
+    });
+    expect(assistant?.error?.message).toBe("API request failed");
+  });
+
   it("backfills tool inputJson from TOOL_COMPLETE when no input deltas arrived", () => {
     const toolCallId = "tool-no-delta";
     const finalInput = {
@@ -681,6 +714,272 @@ describe("webview App reducer background agent launch blocks", () => {
       errorMessage: undefined,
       condensing: undefined,
     });
+  });
+
+  it("projects persisted final markers and hides set_task_status tool calls", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "plan this" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I can implement this next." },
+          {
+            type: "tool_use",
+            id: "final-1",
+            name: "set_task_status",
+            input: { status: "waiting_for_user" },
+          },
+        ],
+        uiHint: {
+          finalMarker: {
+            status: "waiting_for_user",
+            source: "tool",
+            summary: "Ready to continue",
+            continueAction: {
+              label: "Implement this",
+              prompt: "Please implement this plan.",
+            },
+          },
+        },
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "final-1",
+            content: '{"ok":true}',
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored).toHaveLength(2);
+    expect(restored[1]?.blocks).toEqual([
+      { type: "text", text: "I can implement this next." },
+    ]);
+    expect(restored[1]?.finalMarker).toMatchObject({
+      status: "waiting_for_user",
+      source: "tool",
+      summary: "Ready to continue",
+      continueAction: {
+        label: "Implement this",
+        prompt: "Please implement this plan.",
+      },
+    });
+  });
+
+  it("preserves marker-only final messages during historical projection", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "can you test it again?" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "final-only-1",
+            name: "set_task_status",
+            input: {
+              status: "completed",
+              summary: "One-shot test complete.",
+            },
+          },
+        ],
+        uiHint: {
+          finalMarker: {
+            status: "completed",
+            source: "tool",
+            summary: "One-shot test complete.",
+          },
+        },
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "final-only-1",
+            content: '{"ok":true}',
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored).toHaveLength(2);
+    expect(restored[1]).toMatchObject({
+      role: "assistant",
+      blocks: [],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "One-shot test complete.",
+      },
+    });
+  });
+
+  it("does not add a final marker when projecting messages without explicit marker metadata", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "finish this" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+      },
+    ] as unknown[]);
+
+    expect(restored.at(-1)?.finalMarker).toBeUndefined();
+  });
+
+  it("does not override persisted explicit final markers during projection", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "finish this" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Need credentials." }],
+        uiHint: {
+          finalMarker: {
+            status: "blocked",
+            source: "tool",
+            summary: "Need credentials",
+          },
+        },
+      },
+    ] as unknown[]);
+
+    expect(restored.at(-1)?.finalMarker).toEqual({
+      status: "blocked",
+      source: "tool",
+      summary: "Need credentials",
+    });
+  });
+
+  it("does not add a final marker on DONE when no explicit marker exists", () => {
+    const state = reducer(
+      {
+        ...initialState,
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            timestamp: 1,
+            blocks: [{ type: "text", text: "Done." }],
+          },
+        ],
+        streaming: true,
+      },
+      { type: "DONE" },
+    );
+
+    expect(state.messages[0]?.finalMarker).toBeUndefined();
+  });
+
+  it("clears final marker continue actions without removing marker styling", () => {
+    const state = reducer(
+      {
+        ...initialState,
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            timestamp: 1,
+            blocks: [{ type: "text", text: "Ready." }],
+            finalMarker: {
+              status: "completed",
+              source: "tool",
+              summary: "Ready to continue.",
+              continueAction: {
+                label: "Continue",
+                prompt: "Please continue.",
+              },
+            },
+          },
+        ],
+      },
+      { type: "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS" },
+    );
+
+    expect(state.messages[0]?.finalMarker).toEqual({
+      status: "completed",
+      source: "tool",
+      summary: "Ready to continue.",
+    });
+  });
+
+  it("clears stale final marker continue actions when a new message is added", () => {
+    const state = reducer(
+      {
+        ...initialState,
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            timestamp: 1,
+            blocks: [{ type: "text", text: "Ready." }],
+            finalMarker: {
+              status: "completed",
+              source: "tool",
+              summary: "Ready to continue.",
+              continueAction: {
+                label: "Continue",
+                prompt: "Please continue.",
+              },
+            },
+          },
+        ],
+      },
+      { type: "ADD_USER_MESSAGE", text: "Please continue." },
+    );
+
+    expect(state.messages[0]?.finalMarker).toEqual({
+      status: "completed",
+      source: "tool",
+      summary: "Ready to continue.",
+    });
+    expect(state.messages.at(-2)).toMatchObject({
+      role: "user",
+      content: "Please continue.",
+    });
+  });
+
+  it("applies explicit final marker intent on DONE", () => {
+    const marker = {
+      status: "blocked" as const,
+      source: "tool" as const,
+      summary: "Need credentials",
+    };
+    const withIntent = reducer(initialState, {
+      type: "SET_FINAL_MARKER",
+      marker,
+    });
+    const state = reducer(
+      {
+        ...withIntent,
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            timestamp: 1,
+            blocks: [{ type: "text", text: "I am blocked." }],
+          },
+        ],
+        streaming: true,
+      },
+      { type: "DONE" },
+    );
+
+    expect(state.pendingFinalMarker).toBeNull();
+    expect(state.messages[0]?.finalMarker).toEqual(marker);
   });
 
   it("restores slash-command display text and pill metadata from persisted uiHint", async () => {

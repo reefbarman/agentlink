@@ -64,6 +64,7 @@ interface MessageBubbleProps {
   bgSessions?: BgSessionInfoProps[];
   onStopBackground?: (sessionId: string) => void;
   onOpenTranscript?: (sessionId: string) => void;
+  onFinalMarkerContinue?: (prompt: string) => void;
 }
 
 export function MessageBubble({
@@ -82,6 +83,7 @@ export function MessageBubble({
   bgSessions,
   onStopBackground,
   onOpenTranscript,
+  onFinalMarkerContinue,
 }: MessageBubbleProps) {
   // Track whether the streaming text block has started its reveal animation
   const [_textRevealed, setTextRevealed] = useState(false);
@@ -172,6 +174,10 @@ export function MessageBubble({
   // Show dots while streaming — always visible at the bottom until response completes.
   // This ensures there's always a visible loading indicator during any streaming gap.
   const showDots = streaming;
+  const finalMarker = !streaming ? message.finalMarker : undefined;
+  const finalRegionClass = finalMarker
+    ? `assistant-final-region assistant-final-region-${finalMarker.status}`
+    : undefined;
 
   return (
     <div class="message assistant-message">
@@ -269,68 +275,83 @@ export function MessageBubble({
         )}
 
         {/* Empty response fallback — shown when streaming ended with no visible content */}
-        {!streaming && blocks.length === 0 && !message.error && (
-          <div class="message-content assistant-content empty-response">
-            (No response)
+        {!streaming &&
+          blocks.length === 0 &&
+          !message.error &&
+          !finalMarker && (
+            <div class="message-content assistant-content empty-response">
+              (No response)
+            </div>
+          )}
+
+        {finalMarker && (
+          <div class={finalRegionClass}>
+            <FinalMarkerHeader marker={finalMarker} />
+            {(finalMarker.summary ||
+              (finalMarker.continueAction && onFinalMarkerContinue)) && (
+              <FinalMarkerActions
+                marker={finalMarker}
+                onContinue={onFinalMarkerContinue}
+                onOpenFile={onOpenFile}
+                onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
+              />
+            )}
           </div>
         )}
-
-        {!streaming &&
-          detectedQuestion &&
-          (() => {
-            const visibleOptions = showAllDetectedOptions
-              ? detectedQuestion.options
-              : detectedQuestion.options.slice(0, 6);
-            const hiddenCount = Math.max(
-              0,
-              detectedQuestion.options.length - 6,
-            );
-
-            return (
-              <div class="detected-question-card">
-                <div class="detected-question-header">
-                  <i class="codicon codicon-lightbulb" />
-                  <span>Detected choice prompt</span>
-                  {onDismissDetectedQuestion && (
-                    <button
-                      class="icon-button detected-question-dismiss"
-                      title="Dismiss"
-                      onClick={() => onDismissDetectedQuestion(message.id)}
-                    >
-                      <i class="codicon codicon-close" />
-                    </button>
-                  )}
-                </div>
-                <div class="detected-question-text">
-                  {detectedQuestion.prompt}
-                </div>
-                <div class="detected-question-options">
-                  {visibleOptions.map((opt) => (
-                    <button
-                      key={`${opt.label}-${opt.payload}`}
-                      class="question-option detected-question-option"
-                      onClick={() => {
-                        onDismissDetectedQuestion?.(message.id);
-                        onDetectedQuestionAnswer?.(opt.payload);
-                      }}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                  {hiddenCount > 0 && !showAllDetectedOptions && (
-                    <button
-                      class="question-option detected-question-option detected-question-more"
-                      onClick={() => setShowAllDetectedOptions(true)}
-                      type="button"
-                    >
-                      Show {hiddenCount} more
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
       </div>
+
+      {!streaming &&
+        detectedQuestion &&
+        (() => {
+          const visibleOptions = showAllDetectedOptions
+            ? detectedQuestion.options
+            : detectedQuestion.options.slice(0, 6);
+          const hiddenCount = Math.max(0, detectedQuestion.options.length - 6);
+
+          return (
+            <div class="detected-question-card">
+              <div class="detected-question-header">
+                <i class="codicon codicon-lightbulb" />
+                <span>Detected choice prompt</span>
+                {onDismissDetectedQuestion && (
+                  <button
+                    class="icon-button detected-question-dismiss"
+                    title="Dismiss"
+                    onClick={() => onDismissDetectedQuestion(message.id)}
+                  >
+                    <i class="codicon codicon-close" />
+                  </button>
+                )}
+              </div>
+              <div class="detected-question-text">
+                {detectedQuestion.prompt}
+              </div>
+              <div class="detected-question-options">
+                {visibleOptions.map((opt) => (
+                  <button
+                    key={`${opt.label}-${opt.payload}`}
+                    class="question-option detected-question-option"
+                    onClick={() => {
+                      onDismissDetectedQuestion?.(message.id);
+                      onDetectedQuestionAnswer?.(opt.payload);
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+                {hiddenCount > 0 && !showAllDetectedOptions && (
+                  <button
+                    class="question-option detected-question-option detected-question-more"
+                    onClick={() => setShowAllDetectedOptions(true)}
+                    type="button"
+                  >
+                    Show {hiddenCount} more
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
       {/* API request inspector */}
       {message.apiRequest && (
@@ -365,6 +386,74 @@ export function MessageBubble({
 }
 
 // Regex to extract [Attached: path] markers from user message content
+function getFinalMarkerMeta(marker: NonNullable<ChatMessage["finalMarker"]>) {
+  switch (marker.status) {
+    case "completed":
+      return { icon: "check", label: "Task complete" };
+    case "waiting_for_user":
+      return { icon: "comment-discussion", label: "Waiting for input" };
+    case "blocked":
+      return { icon: "warning", label: "Blocked" };
+    case "cancelled":
+      return { icon: "debug-stop", label: "Stopped" };
+  }
+}
+
+function FinalMarkerHeader({
+  marker,
+}: {
+  marker: NonNullable<ChatMessage["finalMarker"]>;
+}) {
+  const meta = getFinalMarkerMeta(marker);
+  return (
+    <div class={`final-marker-header final-marker-header-${marker.status}`}>
+      <i class={`codicon codicon-${meta.icon}`} />
+      <span>{meta.label}</span>
+    </div>
+  );
+}
+
+function FinalMarkerActions({
+  marker,
+  onContinue,
+  onOpenFile,
+  onOpenSpecialBlockPanel,
+}: {
+  marker: NonNullable<ChatMessage["finalMarker"]>;
+  onContinue?: (prompt: string) => void;
+  onOpenFile?: (path: string, line?: number) => void;
+  onOpenSpecialBlockPanel?: (block: {
+    kind: "mermaid" | "vega" | "vega-lite";
+    source: string;
+  }) => void;
+}) {
+  const action = marker.continueAction;
+  return (
+    <div class={`final-marker-actions final-marker-actions-${marker.status}`}>
+      {marker.summary && (
+        <div class="final-marker-summary">
+          <StreamingText
+            text={marker.summary}
+            streaming={false}
+            onOpenFile={onOpenFile}
+            onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
+          />
+        </div>
+      )}
+      {action && onContinue && (
+        <button
+          class="final-marker-continue"
+          type="button"
+          title={action.prompt}
+          onClick={() => onContinue(action.prompt)}
+        >
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
 const ATTACHED_FILE_RE = /\[Attached: ([^\]]+)\]\n*/g;
 // Regex to extract [N image(s), N PDF(s) attached] media indicator
 const MEDIA_INDICATOR_RE = /\[([^\]]*attached)\]\n*/;

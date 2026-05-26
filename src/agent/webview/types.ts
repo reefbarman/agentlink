@@ -32,11 +32,13 @@ export interface WebviewModelInfo {
 export interface SlashCommandInfo {
   name: string;
   description: string;
-  source: "builtin" | "project" | "global" | "agentlink";
+  source: "builtin" | "project" | "global" | "agentlink" | "skill";
   /** True if this is a built-in command that executes immediately */
   builtin: boolean;
   /** Body to inject into input (for file-based commands) */
   body?: string;
+  /** Absolute SKILL.md path for generated skill commands. */
+  skillPath?: string;
   /** Codicon name to show next to the command */
   icon?: string;
   /** Value shown right-aligned (e.g. current model name) */
@@ -147,6 +149,11 @@ export type ExtensionMessage =
       totalCacheCreationTokens: number;
     }
   | { type: "agentTodoUpdate"; sessionId: string; todos: TodoItem[] }
+  | {
+      type: "agentFinalMarker";
+      sessionId: string;
+      marker: import("../../shared/finalStatus.js").FinalMessageMarker | null;
+    }
   | {
       type: "agentCheckpointCreated";
       sessionId: string;
@@ -510,7 +517,6 @@ export interface ChatState {
     safetyBufferTokens: number;
     softThresholdBudget: number;
     hardBudget: number;
-    basis: "input" | "total";
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
 }
@@ -653,6 +659,8 @@ export interface ChatMessage {
    * checkpoint snapshot.
    */
   checkpointId?: string;
+  /** Final-turn status marker rendered on the last assistant response. */
+  finalMarker?: import("../../shared/finalStatus.js").FinalMessageMarker;
   error?: {
     message: string;
     retryable: boolean;

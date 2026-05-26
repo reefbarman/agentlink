@@ -8,6 +8,10 @@ import {
   type BrowserGatewayInstanceRecord,
 } from "../browserGatewayRegistry.js";
 import {
+  BAKED_BROWSER_GATEWAY_THEME,
+  readBrowserGatewayThemeCache,
+} from "../browserGatewayThemeCache.js";
+import {
   BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
   type BrowserGatewayClientLeaseRequest,
   type BrowserGatewayClientReleaseRequest,
@@ -22,6 +26,7 @@ import {
   type BrowserGatewayPairingCreateResponse,
   type BrowserGatewayPairingStatusResponse,
 } from "../protocol.js";
+import type { BrowserGatewayThemeSnapshot } from "../../shared/types.js";
 import {
   clearBrowserGatewayHelperDiscovery,
   writeBrowserGatewayHelperDiscovery,
@@ -193,6 +198,31 @@ function htmlEscape(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function cssValueEscape(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "")
+    .replace(/}/g, "")
+    .replace(/<\//g, "<\\/");
+}
+
+function renderThemeStyleTag(theme: BrowserGatewayThemeSnapshot): string {
+  const declarations = Object.entries(theme.cssVariables)
+    .filter(
+      ([key, value]) =>
+        /^--vscode-[A-Za-z0-9_.-]+$/.test(key) &&
+        value.trim() &&
+        !/url\s*\(/i.test(value),
+    )
+    .map(([key, value]) => `    ${key}: ${cssValueEscape(value.trim())};`);
+  const colorScheme =
+    theme.colorScheme === "light" || theme.colorScheme === "hc-light"
+      ? "light"
+      : "dark";
+  declarations.unshift(`    color-scheme: ${colorScheme};`);
+  return `<style id="agentlink-initial-theme">\n  :root {\n${declarations.join("\n")}\n  }\n</style>`;
 }
 
 function isLoopbackAddress(addr: string | undefined): boolean {
@@ -515,6 +545,7 @@ export class BrowserGatewayHelper {
         this.renderIndexHtml(
           selectedInstance?.instanceId ?? "",
           selectedInstance?.workspaceName ?? "No Workspace",
+          await this.resolveInitialTheme(selectedInstance),
         ),
         { "Set-Cookie": this.buildBootstrapCookie() },
       );
@@ -541,6 +572,7 @@ export class BrowserGatewayHelper {
       this.renderIndexHtml(
         selectedInstance?.instanceId ?? "",
         selectedInstance?.workspaceName ?? "No Workspace",
+        await this.resolveInitialTheme(selectedInstance),
       ),
     );
     void this.recordDeviceActivity(auth);
@@ -590,6 +622,15 @@ export class BrowserGatewayHelper {
     }
 
     await this.proxyToInstance(req, res, requestUrl, instance);
+  }
+
+  private async resolveInitialTheme(
+    selectedInstance: BrowserGatewayInstanceRecord | null,
+  ): Promise<BrowserGatewayThemeSnapshot> {
+    if (selectedInstance?.theme) return selectedInstance.theme;
+    return (
+      (await readBrowserGatewayThemeCache()) ?? BAKED_BROWSER_GATEWAY_THEME
+    );
   }
 
   private selectInstance(
@@ -1134,6 +1175,7 @@ export class BrowserGatewayHelper {
   private renderIndexHtml(
     currentInstanceId: string,
     workspaceName: string,
+    initialTheme: BrowserGatewayThemeSnapshot,
   ): string {
     return `<!doctype html>
 <html lang="en">
@@ -1141,6 +1183,7 @@ export class BrowserGatewayHelper {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AgentLink Browser Gateway</title>
+  ${renderThemeStyleTag(initialTheme)}
   <link rel="stylesheet" href="/codicon.css">
   <link rel="stylesheet" href="/browser-gateway.css">
 </head>
@@ -1151,7 +1194,8 @@ export class BrowserGatewayHelper {
       authToken: "",
       currentInstanceId: ${JSON.stringify(currentInstanceId)},
       workspaceName: ${JSON.stringify(workspaceName)},
-      routeByInstance: true
+      routeByInstance: true,
+      initialTheme: ${JSON.stringify(initialTheme)}
     };
   </script>
   <script type="module" src="/browser-gateway.js"></script>

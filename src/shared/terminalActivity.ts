@@ -21,6 +21,7 @@ export interface TerminalActivityEntry {
   status: TerminalActivityStatus;
   exitCode?: number | null;
   output?: string;
+  rawOutput?: string;
   durationMs?: number;
 }
 
@@ -32,12 +33,22 @@ export interface TerminalBufferLine {
   status?: TerminalActivityStatus;
 }
 
+export interface TerminalBufferChunk {
+  id: string;
+  kind: "raw";
+  text: string;
+  command?: string;
+  prompt?: string;
+  status?: TerminalActivityStatus;
+}
+
 export interface TerminalBuffer {
   id: string;
   label: string;
   terminalId?: string;
   cwd?: string;
   lines: TerminalBufferLine[];
+  chunks?: TerminalBufferChunk[];
   lastStatus?: TerminalActivityStatus;
   lastUpdatedIndex: number;
 }
@@ -164,6 +175,10 @@ function toEntry(
       exitCode: result ? numericOrNull(result.exit_code) : undefined,
       output:
         result && typeof result.output === "string" ? result.output : undefined,
+      rawOutput:
+        result && typeof result.terminal_raw_output === "string"
+          ? result.terminal_raw_output
+          : undefined,
       durationMs: block.durationMs,
     };
   }
@@ -182,6 +197,10 @@ function toEntry(
     exitCode: result ? numericOrNull(result.exit_code) : undefined,
     output:
       result && typeof result.output === "string" ? result.output : undefined,
+    rawOutput:
+      result && typeof result.terminal_raw_output === "string"
+        ? result.terminal_raw_output
+        : undefined,
     durationMs: block.durationMs,
   };
 }
@@ -205,8 +224,9 @@ function shouldKeepEntryForKnownTerminals(
   entry: TerminalActivityEntry,
   terminals: KnownTerminalInfo[],
 ): boolean {
-  if (terminals.length === 0 || !entry.terminalId) return true;
+  if (terminals.length === 0) return true;
   if (entry.status === "running") return true;
+  if (!entry.terminalId) return false;
   return terminals.some((terminal) => terminal.id === entry.terminalId);
 }
 
@@ -249,7 +269,7 @@ function formatPrompt(
 ): string {
   const base = basename(cwd) ?? options.workspaceName?.trim() ?? "agentlink";
   const branch = options.gitBranch?.trim() || "main";
-  return `➜  ${base} git:(${branch})${(options.dirty ?? true) ? " ✗" : ""}`;
+  return `➜  ${base} git:(${branch})${options.dirty === true ? " ✗" : ""}`;
 }
 
 function derivePrompt(
@@ -268,6 +288,25 @@ function splitOutputLines(output: string): string[] {
 function hasObviousFailureText(output: string | undefined): boolean {
   if (!output) return false;
   return /\b(error|failed|exit code|command failed)\b/i.test(output);
+}
+
+function entryChunkText(entry: TerminalActivityEntry): string {
+  if (entry.rawOutput) return entry.rawOutput;
+  const parts: string[] = [];
+  if (entry.output) parts.push(entry.output);
+  if (entry.status === "running") {
+    parts.push("running…");
+  } else if (
+    (entry.status === "warning" || entry.status === "error") &&
+    !hasObviousFailureText(entry.output)
+  ) {
+    parts.push(
+      typeof entry.exitCode === "number"
+        ? `exit code ${entry.exitCode}`
+        : entry.status,
+    );
+  }
+  return parts.join("\n");
 }
 
 function createIdleBuffer(
@@ -316,6 +355,23 @@ export function deriveTerminalBuffers(
       lines: [],
       lastUpdatedIndex: entryIndex,
     };
+
+    if (
+      entry.command ||
+      entry.rawOutput ||
+      entry.output ||
+      entry.status === "running"
+    ) {
+      buffer.chunks = buffer.chunks ?? [];
+      buffer.chunks.push({
+        id: `${entry.id}:chunk`,
+        kind: "raw",
+        text: entryChunkText(entry),
+        command: entry.command,
+        prompt: derivePrompt(entry, options),
+        status: entry.status,
+      });
+    }
 
     buffer.label = terminal?.name ?? entry.terminalName ?? buffer.label;
     buffer.cwd = entry.cwd ?? buffer.cwd;

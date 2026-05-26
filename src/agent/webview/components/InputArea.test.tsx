@@ -1,8 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/preact";
+// @vitest-environment jsdom
+
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render } from "@testing-library/preact";
 
 import { InputArea } from "./InputArea";
 import type { SlashCommandInfo } from "../types";
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
+afterEach(() => {
+  cleanup();
+});
 
 function renderInputArea(slashCommands: SlashCommandInfo[]) {
   return render(

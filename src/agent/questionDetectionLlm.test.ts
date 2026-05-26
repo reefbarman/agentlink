@@ -118,12 +118,31 @@ describe("detectQuestion", () => {
     expect(result.detected?.prompt).toBe("Proceed with the next task?");
   });
 
+  it("skips LLM detection for acknowledgement text mentioning a continue button", async () => {
+    const fetchMock = vi.fn();
+    const result = await detectQuestion(
+      "Acknowledged — the final-status continue button works with the updated subtle rendering.",
+      {
+        mode: "openai",
+        endpoint: BASE_ENDPOINT,
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      },
+    );
+
+    expect(result).toEqual({
+      detected: null,
+      fallback: false,
+      mode: "openai",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("omits model field when config.model is empty", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(buildChatResponse(JSON.stringify({ kind: "none" })));
 
-    await detectQuestion("Nothing much here.", {
+    await detectQuestion("Should I continue?", {
       mode: "openai",
       endpoint: { ...BASE_ENDPOINT, model: "" },
       fetchImpl: fetchMock as unknown as typeof fetch,
@@ -192,7 +211,7 @@ describe("detectQuestion", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(buildChatResponse(JSON.stringify({ kind: "none" })));
-    const result = await detectQuestion("Status update with no question.", {
+    const result = await detectQuestion("Should I continue?", {
       mode: "openai",
       endpoint: BASE_ENDPOINT,
       fetchImpl: fetchMock as unknown as typeof fetch,

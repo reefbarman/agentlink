@@ -1,5 +1,6 @@
 import * as os from "os";
 import * as path from "path";
+
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
@@ -153,6 +154,37 @@ describe("handleReadFile outside-workspace approval ordering", () => {
 
     expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
   });
+
+  it.runIf(process.platform === "darwin")(
+    "skips outside-workspace approval when terminal output temp paths are canonicalized on macOS",
+    async () => {
+      const emittedTmpPath =
+        "/var/folders/_1/fdgqf2bj3zg17zyvfpmy9y1h0000gn/T/agentlink-output-abc123/output.txt";
+      const canonicalTmpPath = `/private${emittedTmpPath}`;
+      resolveAndValidatePathMock.mockReturnValue({
+        absolutePath: canonicalTmpPath,
+        inWorkspace: false,
+      });
+
+      readFileMock.mockResolvedValue("stashed output");
+      statMock.mockResolvedValue({ size: 14 });
+
+      const approvalManager = {
+        isPathTrusted: vi.fn(() => false),
+      } as unknown as ApprovalManager;
+
+      const approvalPanel = {} as ApprovalPanelProvider;
+
+      await handleReadFile(
+        { path: emittedTmpPath, include_symbols: false },
+        approvalManager,
+        approvalPanel,
+        sessionId,
+      );
+
+      expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("skips outside-workspace approval for trusted paths and returns file-not-found", async () => {
     resolveAndValidatePathMock.mockReturnValue({

@@ -1,11 +1,12 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 
-import { resolveAndValidatePath } from "../util/paths.js";
-import { getRipgrepBinPath, execRipgrepFiles } from "../util/ripgrep.js";
+import { execRipgrepFiles, getRipgrepBinPath } from "../util/ripgrep.js";
+
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
+import { resolveAndValidatePath } from "../util/paths.js";
 import { semanticFileList } from "../services/semanticSearch.js";
 
 const MAX_ENTRIES = 500;
@@ -70,7 +71,9 @@ export async function handleListFiles(
 
     // Semantic file search: query the index and return files ranked by relevance
     if (params.query) {
-      const result = await semanticFileList(dirPath, params.query);
+      const result = await semanticFileList(dirPath, params.query, undefined, {
+        includeAllWorkspaceRoots: !params.path,
+      });
       if (result?.error) {
         return {
           content: [

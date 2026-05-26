@@ -99,7 +99,7 @@ export interface BrowserGatewayThemeSnapshot {
   cssVariables: Record<string, string>;
   colorScheme?: "light" | "dark" | "hc" | "hc-light";
   themeLabel?: string;
-  source?: "webview-dom" | "vscode-theme-api";
+  source?: "webview-dom" | "vscode-theme-api" | "baked-default";
 }
 
 export interface BgSessionInfo {

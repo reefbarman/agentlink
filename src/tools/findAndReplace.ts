@@ -7,7 +7,10 @@ import {
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { decisionToScope, applyInlineTrustScope } from "./writeApprovalUI.js";
+import {
+  saveInlineWriteTrustRules,
+  saveWriteTrustRules,
+} from "./writeApprovalUI.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 import { FindReplacePreviewPanel } from "../findReplace/FindReplacePreviewPanel.js";
 import type {
@@ -300,7 +303,7 @@ export async function handleFindAndReplace(
               `${f.path} (${f.changes} change${f.changes !== 1 ? "s" : ""})`,
           )
           .join("\n");
-        const decision = await onApprovalRequest(
+        const approvalResponse = await onApprovalRequest(
           {
             kind: "rename",
             title: `Replace \`${findStr}\` → \`${replaceStr}\`?`,
@@ -312,6 +315,14 @@ export async function handleFindAndReplace(
           },
           sessionId,
         );
+        const decision =
+          typeof approvalResponse === "string"
+            ? approvalResponse
+            : approvalResponse.decision;
+        followUp =
+          typeof approvalResponse === "string"
+            ? undefined
+            : approvalResponse.followUp;
         if (decision === "reject") {
           previewPanel.close();
           previewPanel = undefined;
@@ -328,6 +339,13 @@ export async function handleFindAndReplace(
             ],
           };
         }
+        saveInlineWriteTrustRules({
+          response: approvalResponse,
+          approvalManager,
+          sessionId,
+          relPath:
+            filesPreview.length > 0 ? filesPreview[0].path : "find-and-replace",
+        });
         acceptedIds = previewPanel.getAcceptedMatchIds();
         previewPanel.close();
         previewPanel = undefined;
@@ -366,19 +384,14 @@ export async function handleFindAndReplace(
         previewPanel.close();
         previewPanel = undefined;
 
-        // Save trust rules
-        const scope = decisionToScope(response.decision);
-        if (scope && response.trustScope) {
-          const repPath =
-            filesPreview.length > 0 ? filesPreview[0].path : "find-and-replace";
-          applyInlineTrustScope(
-            response,
-            approvalManager,
-            sessionId,
-            scope,
-            repPath,
-          );
-        }
+        saveWriteTrustRules({
+          panelResponse: response,
+          approvalManager,
+          sessionId,
+          relPath:
+            filesPreview.length > 0 ? filesPreview[0].path : "find-and-replace",
+          inWorkspace: true,
+        });
       }
     }
 

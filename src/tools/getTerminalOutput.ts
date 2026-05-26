@@ -138,15 +138,25 @@ export async function handleGetTerminalOutput(params: {
   }
 
   if (state.output_captured && state.output) {
-    const { filtered, totalLines, linesShown } = filterOutput(state.output, {
+    const filterOptions = {
       output_head: params.output_head,
       output_tail: params.output_tail,
       output_offset: params.output_offset,
       output_grep: params.output_grep,
       output_grep_context: params.output_grep_context,
-    });
+    };
+    const { filtered, totalLines, linesShown } = filterOutput(
+      state.output,
+      filterOptions,
+    );
 
     result.output = filtered;
+    if (state.terminal_raw_output) {
+      result.terminal_raw_output = filterOutput(
+        state.terminal_raw_output,
+        filterOptions,
+      ).filtered;
+    }
     result.total_lines = totalLines;
     result.lines_shown = linesShown;
 

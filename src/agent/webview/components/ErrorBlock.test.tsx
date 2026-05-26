@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/preact";
+// @vitest-environment jsdom
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import { ErrorBlock } from "./ErrorBlock";
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("ErrorBlock", () => {
   it("shows sign-in-another-account and retry for oauth usage-limit exhausted errors", () => {

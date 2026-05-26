@@ -1,7 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as vscode from "vscode";
 
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expandQuery,
+  extractKeywords,
+  rerankResults,
+  rrfMerge,
+  semanticFileList,
+  semanticSearch,
+} from "./semanticSearch.js";
+
 vi.mock("vscode", () => ({
+  Uri: {
+    file: (fsPath: string) => ({ fsPath }),
+  },
   workspace: {
     getConfiguration: vi.fn(() => ({
       get: vi.fn((key: string, fallback?: unknown) => {
@@ -10,7 +22,15 @@ vi.mock("vscode", () => ({
         return fallback;
       }),
     })),
-    workspaceFolders: [{ uri: { fsPath: "/workspace" } }],
+    workspaceFolders: [{ name: "workspace", uri: { fsPath: "/workspace" } }],
+    getWorkspaceFolder: vi.fn((uri: { fsPath: string }) => {
+      const folders = (vscode.workspace.workspaceFolders ??
+        []) as unknown as Array<{
+        name?: string;
+        uri: { fsPath: string };
+      }>;
+      return folders.find((folder) => uri.fsPath === folder.uri.fsPath);
+    }),
   },
 }));
 
@@ -45,15 +65,6 @@ vi.mock("../util/ripgrep.js", async () => {
 });
 
 global.fetch = fetchMock as typeof fetch;
-
-import {
-  extractKeywords,
-  expandQuery,
-  rrfMerge,
-  rerankResults,
-  semanticFileList,
-  semanticSearch,
-} from "./semanticSearch.js";
 
 // --- extractKeywords ---
 
@@ -452,6 +463,117 @@ describe("semantic search auth", () => {
       "OpenAI API key not configured",
     );
     expect(Array.isArray(payload.next_steps)).toBe(true);
+  });
+
+  it("fans out unscoped search across all workspace roots and prefixes results", async () => {
+    const workspace = vscode.workspace as unknown as {
+      workspaceFolders: Array<{ name: string; uri: { fsPath: string } }>;
+    };
+    const originalFolders = workspace.workspaceFolders;
+    workspace.workspaceFolders = [
+      { name: "api", uri: { fsPath: "/workspace/api" } },
+      { name: "web", uri: { fsPath: "/workspace/web" } },
+    ];
+
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+
+    const collectionResponses = [
+      [
+        {
+          id: "api-hit",
+          score: 0.8,
+          payload: {
+            filePath: "src/server.ts",
+            codeChunk: "api code",
+            startLine: 1,
+            endLine: 2,
+          },
+        },
+      ],
+      [
+        {
+          id: "web-hit",
+          score: 0.9,
+          payload: {
+            filePath: "src/App.tsx",
+            codeChunk: "web code",
+            startLine: 3,
+            endLine: 4,
+          },
+        },
+      ],
+    ];
+    const pointsByCollection = new Map<string, unknown[]>();
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === "https://api.openai.com/v1/embeddings") {
+        return {
+          ok: true,
+          json: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+        };
+      }
+
+      const collection = url.match(/\/collections\/([^/]+)\//)?.[1] ?? url;
+      if (!pointsByCollection.has(collection)) {
+        pointsByCollection.set(
+          collection,
+          collectionResponses[pointsByCollection.size] ?? [],
+        );
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          result: { points: pointsByCollection.get(collection) ?? [] },
+        }),
+      };
+    });
+
+    try {
+      const result = await semanticSearch(
+        "/workspace/api",
+        "workspace search",
+        5,
+        undefined,
+        { includeAllWorkspaceRoots: true },
+      );
+
+      const first = result.content[0];
+      expect(first?.type).toBe("text");
+      if (!first || first.type !== "text") {
+        throw new Error("Expected text response");
+      }
+      const payload = JSON.parse(first.text);
+      expect(payload.results).toContain("web/src/App.tsx");
+      expect(payload.results).toContain("api/src/server.ts");
+      expect(payload.results.indexOf("web/src/App.tsx")).toBeLessThan(
+        payload.results.indexOf("api/src/server.ts"),
+      );
+
+      const qdrantCalls = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes("/collections/al-"),
+      );
+      expect(qdrantCalls).toHaveLength(4);
+      const collections = new Set(
+        qdrantCalls.map(
+          ([url]) => String(url).match(/\/collections\/([^/]+)\//)?.[1],
+        ),
+      );
+      expect(collections.size).toBe(2);
+      const requestBodies = qdrantCalls.map(([, init]) =>
+        JSON.parse(String(init?.body)),
+      );
+      expect(
+        requestBodies.every(
+          (body) => !JSON.stringify(body.filter).includes("pathSegments"),
+        ),
+      ).toBe(true);
+    } finally {
+      workspace.workspaceFolders = originalFolders;
+    }
   });
 
   it("uses the resolved bearer token for embeddings", async () => {

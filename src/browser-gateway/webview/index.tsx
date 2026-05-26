@@ -3,6 +3,7 @@ import "../../agent/webview/styles/chat.css";
 import "./styles.css";
 
 import { BrowserGatewayApp } from "./BrowserGatewayApp";
+import type { BrowserGatewayThemeSnapshot } from "../../shared/types";
 import { render } from "preact";
 
 declare global {
@@ -12,6 +13,7 @@ declare global {
       currentInstanceId: string;
       workspaceName: string;
       routeByInstance?: boolean;
+      initialTheme?: BrowserGatewayThemeSnapshot;
     };
   }
 }
@@ -28,6 +30,7 @@ render(
     currentInstanceId={config.currentInstanceId}
     workspaceName={config.workspaceName}
     routeByInstance={config.routeByInstance === true}
+    initialTheme={config.initialTheme}
   />,
   document.getElementById("root")!,
 );

@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render } from "@testing-library/preact";
 
 import { SkillLoadBlock } from "./SkillLoadBlock";
-import { render } from "@testing-library/preact";
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("SkillLoadBlock", () => {
   it("renders stopped results as warning", () => {

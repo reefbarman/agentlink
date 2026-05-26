@@ -1,6 +1,6 @@
-import * as vscode from "vscode";
-import * as path from "path";
 import * as fs from "fs";
+import * as path from "path";
+import * as vscode from "vscode";
 
 export function getWorkspaceRoots(): string[] {
   const folders = vscode.workspace.workspaceFolders;
@@ -38,6 +38,30 @@ export function getFirstWorkspaceRoot(): string {
 export function tryGetFirstWorkspaceRoot(): string | undefined {
   const roots = getWorkspaceRoots();
   return roots.length > 0 ? roots[0] : undefined;
+}
+
+/**
+ * Return the workspace root that owns an absolute path.
+ *
+ * In multi-root workspaces, choose the longest matching root so nested
+ * workspace folders are routed to their most specific index/cache.
+ */
+export function getWorkspaceRootForPath(
+  absolutePath: string,
+): string | undefined {
+  const roots = getWorkspaceRoots();
+  const resolvedPath = path.resolve(absolutePath);
+  let bestRoot: string | undefined;
+
+  for (const root of roots) {
+    if (pathsEqual(resolvedPath, root) || pathStartsWith(resolvedPath, root)) {
+      if (!bestRoot || root.length > bestRoot.length) {
+        bestRoot = root;
+      }
+    }
+  }
+
+  return bestRoot;
 }
 
 export interface ResolvedPath {

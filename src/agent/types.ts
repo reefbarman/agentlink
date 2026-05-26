@@ -1,5 +1,6 @@
 import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
 
+import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { MessageParam } from "./providers/types.js";
 import type { TodoItem } from "./todoTool.js";
 
@@ -51,6 +52,7 @@ export type AgentMessage = MessageParam & {
       errorMessage?: string;
       condensing?: boolean;
     };
+    finalMarker?: FinalMessageMarker;
   };
 };
 
@@ -77,6 +79,7 @@ export type AgentEvent =
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
     }
   | { type: "todo_update"; todos: TodoItem[] }
+  | { type: "final_marker"; marker: FinalMessageMarker | null }
   | {
       type: "checkpoint_created";
       checkpointId: string;

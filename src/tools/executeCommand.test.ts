@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   tryGetFirstWorkspaceRoot,
@@ -75,6 +75,38 @@ describe("handleExecuteCommand", () => {
       command: "go test ./...",
       env: { CI: "1", GOFLAGS: "-count=1" },
     });
+  });
+
+  it("filters terminal raw output with the same output window", async () => {
+    executeCommand.mockResolvedValue({
+      exit_code: 0,
+      output: "one\ntwo\nthree",
+      terminal_raw_output:
+        "\u001b[31mone\u001b[0m\n\u001b[32mtwo\u001b[0m\n\u001b[33mthree\u001b[0m",
+      output_captured: true,
+      terminal_id: "term_1",
+    });
+
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const result = await handleExecuteCommand(
+      {
+        command: "printf lines",
+        output_tail: 2,
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-raw",
+    );
+
+    const textItem = result.content[0];
+    expect(textItem.type).toBe("text");
+    if (textItem.type !== "text") throw new Error("Expected text result");
+
+    const payload = JSON.parse(textItem.text);
+    expect(payload.output).toBe("two\nthree");
+    expect(payload.terminal_raw_output).toBe(
+      "\u001b[32mtwo\u001b[0m\n\u001b[33mthree\u001b[0m",
+    );
   });
 
   it("returns actionable newline regex hint on ripgrep newline error", async () => {

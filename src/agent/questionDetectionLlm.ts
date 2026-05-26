@@ -40,10 +40,7 @@ export function getQuestionDetectionMode(): QuestionDetectionMode {
     return explicitMode;
   }
 
-  const legacyEnabled = cfg.get<boolean>(
-    "questionDetection.llmEnabled",
-    false,
-  );
+  const legacyEnabled = cfg.get<boolean>("questionDetection.llmEnabled", false);
   if (legacyEnabled) return "openai";
 
   return "heuristic";
@@ -70,6 +67,17 @@ export interface DetectQuestionOutcome {
   mode: QuestionDetectionMode;
 }
 
+function hasQuestionDetectionSignal(assistantText: string): boolean {
+  const normalized = assistantText.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalized) return false;
+
+  if (normalized.includes("?")) return true;
+
+  return /\b(choose|pick|select|reply with|which do you want|which would you prefer|how do you want to address it|want me to|should i|shall i|would you like me to|do you want me to|if you want|if you'd like|let me know if|just say the word|happy to|apply this|use this approach|yes\/no|option a|option b)\b/i.test(
+    normalized,
+  );
+}
+
 export async function detectQuestion(
   assistantText: string,
   options: DetectQuestionOptions = {},
@@ -81,6 +89,10 @@ export async function detectQuestion(
   }
 
   if (!assistantText.trim()) {
+    return { detected: null, fallback: false, mode };
+  }
+
+  if (!hasQuestionDetectionSignal(assistantText)) {
     return { detected: null, fallback: false, mode };
   }
 

@@ -447,6 +447,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         case "agentTodoUpdate":
           dispatch({ type: "TODO_UPDATE", todos: msg.todos });
           break;
+        case "agentFinalMarker":
+          dispatch({
+            type: "SET_FINAL_MARKER",
+            marker: msg.marker,
+          });
+          break;
         case "agentDone": {
           flushDeltasNow();
           streamingRef.current = false;
@@ -1100,6 +1106,14 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
+  const handleFinalMarkerContinue = useCallback(
+    (prompt: string) => {
+      dispatch({ type: "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS" });
+      handleSend(prompt);
+    },
+    [handleSend],
+  );
+
   const handleOpenBgTranscript = useCallback(
     (sessionId: string) => {
       vscodeApi.postMessage({ command: "openBgTranscript", sessionId });
@@ -1217,6 +1231,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             reasoningEffort: "none",
             thinkingEnabled: false,
           });
+          break;
+        case "skills":
+          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
           break;
         case "mcp":
           vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
@@ -1708,6 +1725,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           bgSessions={bgSessions}
           onStopBackground={handleStopBackground}
           onOpenTranscript={handleOpenBgTranscript}
+          onFinalMarkerContinue={handleFinalMarkerContinue}
         />
         {state.messageQueue.length > 0 && (
           <div class="queue-panel">
@@ -1845,7 +1863,6 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                   currentModel?.maxInputTokens
                 }
                 usedInputTokens={state.chatState.contextBudget?.usedInputTokens}
-                budgetBasis={state.chatState.contextBudget?.basis}
                 outputReservation={
                   state.chatState.contextBudget?.outputReservation
                 }

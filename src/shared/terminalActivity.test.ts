@@ -289,6 +289,89 @@ describe("deriveTerminalBuffers", () => {
     expect(buffers[1].id).toBe("terminal:term_2");
   });
 
+  it("preserves raw terminal output chunks when present", () => {
+    const messages: ChatMessage[] = [
+      assistantMessage([
+        {
+          type: "tool_call",
+          id: "tool-raw",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: JSON.stringify({
+            terminal_id: "term_1",
+            output: "green plain",
+            terminal_raw_output: "\u001b[32mgreen\u001b[0m\rplain",
+          }),
+          complete: true,
+        },
+      ]),
+    ];
+
+    const [buffer] = deriveTerminalBuffers(messages, {
+      workspaceName: "agentlink",
+    });
+
+    expect(buffer.chunks).toEqual([
+      expect.objectContaining({
+        id: "assistant-1:tool-raw:chunk",
+        kind: "raw",
+        text: "\u001b[32mgreen\u001b[0m\rplain",
+        command: "npm test",
+        prompt: "➜  agentlink git:(main)",
+      }),
+    ]);
+    expect(buffer.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "command", text: "npm test" }),
+        expect.objectContaining({ kind: "output", text: "green plain" }),
+      ]),
+    );
+  });
+
+  it("creates chunks for mixed raw and clean terminal output entries", () => {
+    const messages: ChatMessage[] = [
+      assistantMessage([
+        {
+          type: "tool_call",
+          id: "tool-old",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "echo old" }),
+          result: JSON.stringify({ terminal_id: "term_1", output: "old" }),
+          complete: true,
+        },
+        {
+          type: "tool_call",
+          id: "tool-new",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "echo new" }),
+          result: JSON.stringify({
+            terminal_id: "term_1",
+            output: "new",
+            terminal_raw_output: "\u001b[32mnew\u001b[0m",
+          }),
+          complete: true,
+        },
+      ]),
+    ];
+
+    const [buffer] = deriveTerminalBuffers(messages, {
+      workspaceName: "agentlink",
+    });
+
+    expect(buffer.chunks).toEqual([
+      expect.objectContaining({
+        id: "assistant-1:tool-old:chunk",
+        command: "echo old",
+        text: "old",
+      }),
+      expect.objectContaining({
+        id: "assistant-1:tool-new:chunk",
+        command: "echo new",
+        text: "\u001b[32mnew\u001b[0m",
+      }),
+    ]);
+  });
+
   it("filters completed closed-terminal history when known terminals are available", () => {
     const messages: ChatMessage[] = [
       assistantMessage([
@@ -345,6 +428,31 @@ describe("deriveTerminalBuffers", () => {
         expect.objectContaining({ kind: "command", text: "echo open one" }),
       ]),
     );
+  });
+
+  it("filters completed unassigned history when known terminals are available", () => {
+    const messages: ChatMessage[] = [
+      assistantMessage([
+        {
+          type: "tool_call",
+          id: "tool-unassigned",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "echo old" }),
+          result: JSON.stringify({ output: "old" }),
+          complete: true,
+        },
+      ]),
+    ];
+
+    const buffers = deriveTerminalBuffers(messages, {
+      workspaceName: "agentlink",
+      terminals: [{ id: "term_open", name: "AgentLink", busy: false }],
+    });
+
+    expect(buffers.map((buffer) => buffer.id)).toEqual(["terminal:term_open"]);
+    expect(buffers[0].lines).toEqual([
+      expect.objectContaining({ kind: "cursor" }),
+    ]);
   });
 
   it("keeps running closed-terminal entries until completion to avoid hiding active work", () => {

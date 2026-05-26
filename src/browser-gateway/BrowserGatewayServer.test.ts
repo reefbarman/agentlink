@@ -206,7 +206,6 @@ describe("BrowserGatewayServer", () => {
           safetyBufferTokens: 4096,
           softThresholdBudget: 150000,
           hardBudget: 180000,
-          basis: "input",
         },
         condenseThreshold: 0.8,
       }),
@@ -367,6 +366,7 @@ describe("BrowserGatewayServer", () => {
           },
         ],
         terminals: [],
+        repository: null,
         foreground: {
           sessionId: "session-1",
           title: "Test Session",
@@ -410,7 +410,6 @@ describe("BrowserGatewayServer", () => {
             safetyBufferTokens: 4096,
             softThresholdBudget: 150000,
             hardBudget: 180000,
-            basis: "input",
           },
           condenseThreshold: 0.8,
           agentWriteApproval: "prompt",

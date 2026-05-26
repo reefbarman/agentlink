@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 
+import { cleanTerminalOutput, cleanTerminalRawOutput } from "../util/ansi.js";
+
 import { buildAgentExecutionEnv } from "../process/agentExecutionPolicy.js";
-import { cleanTerminalOutput } from "../util/ansi.js";
 
 let terminalIconPath: vscode.Uri | undefined;
 
@@ -64,7 +65,7 @@ interface ManagedTerminal {
   stale?: boolean;
   /** Timestamp when the last foreground command completed — used for reuse cooldown */
   lastCommandEndedAt: number;
-  /** Accumulated output from the current shell integration execution */
+  /** Accumulated raw output from the current shell integration execution */
   outputBuffer: string;
   /** True while a background command is actively running */
   backgroundRunning: boolean;
@@ -91,6 +92,7 @@ export interface CommandResult {
   terminal_name?: string;
   output_file?: string;
   output_warning?: string;
+  terminal_raw_output?: string;
   total_lines?: number;
   lines_shown?: number;
   command?: string;
@@ -847,8 +849,8 @@ export class TerminalManager {
       managed.outputBuffer = leftover.stripped;
     }
 
-    // Clean up the output
-    managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
+    const rawOutput = cleanTerminalRawOutput(managed.outputBuffer);
+    const cleanOutput = cleanTerminalOutput(managed.outputBuffer);
 
     // Bounded wait for exit code: if the promise hasn't resolved yet (e.g.
     // stream finished but exit event is delayed), give it a short grace
@@ -875,7 +877,8 @@ export class TerminalManager {
 
     const result: CommandResult = {
       exit_code: exitCode ?? null,
-      output: managed.outputBuffer,
+      output: cleanOutput,
+      ...(rawOutput && { terminal_raw_output: rawOutput }),
       ...(actualCwd && { cwd: actualCwd }),
       output_captured: true,
       terminal_id: managed.id,
@@ -887,7 +890,11 @@ export class TerminalManager {
     if (timedOut) {
       this.transitionToBackground(managed);
       result.timed_out = true;
-      result.output += `\n[Timed out after ${timeout! / 1000}s — command may still be running. Use get_terminal_output with terminal_id "${managed.id}" to check on progress, or add kill: true to stop it.]`;
+      const timeoutMessage = `[Timed out after ${timeout! / 1000}s — command may still be running. Use get_terminal_output with terminal_id "${managed.id}" to check on progress, or add kill: true to stop it.]`;
+      result.output += `\n${timeoutMessage}`;
+      if (result.terminal_raw_output !== undefined) {
+        result.terminal_raw_output += `\r\n${timeoutMessage}`;
+      }
     }
 
     logDiag("RETURNING_RESULT");
@@ -975,7 +982,7 @@ export class TerminalManager {
     const finalize = (source: string) => {
       if (!managed.backgroundRunning) return;
       managed.backgroundRunning = false;
-      managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
+      managed.outputBuffer = cleanTerminalRawOutput(managed.outputBuffer);
       clearInterval(markerPoll);
       for (const d of managed.backgroundDisposables) d.dispose();
       managed.backgroundDisposables = [];
@@ -1062,7 +1069,7 @@ export class TerminalManager {
     const finalize = (source: string) => {
       if (!managed.backgroundRunning) return; // already finalized
       managed.backgroundRunning = false;
-      managed.outputBuffer = cleanTerminalOutput(managed.outputBuffer);
+      managed.outputBuffer = cleanTerminalRawOutput(managed.outputBuffer);
       clearInterval(markerPoll);
       for (const d of managed.backgroundDisposables) d.dispose();
       managed.backgroundDisposables = [];
@@ -1250,6 +1257,7 @@ export class TerminalManager {
         exit_code: number | null;
         output: string;
         output_captured: boolean;
+        terminal_raw_output?: string;
       }
     | undefined {
     const managed = this.terminals.find((t) => t.id === terminalId);
@@ -1257,10 +1265,11 @@ export class TerminalManager {
     return {
       is_running: managed.backgroundRunning,
       exit_code: managed.backgroundExitCode,
-      output: managed.backgroundRunning
-        ? cleanTerminalOutput(managed.outputBuffer)
-        : managed.outputBuffer,
+      output: cleanTerminalOutput(managed.outputBuffer),
       output_captured: managed.backgroundOutputCaptured,
+      ...(managed.backgroundOutputCaptured && {
+        terminal_raw_output: cleanTerminalRawOutput(managed.outputBuffer),
+      }),
     };
   }
 

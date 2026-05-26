@@ -45,6 +45,30 @@ import type { BrowserGatewayInstanceStatusSummary } from "../protocol";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const THEME_CACHE_KEY = "agentlink.browserGateway.themeSnapshot.v1";
+const TAB_FLASH_INTERVAL_MS = 1_000;
+const TAB_FLASH_TITLE = "⚠ Action needed — AgentLink";
+
+function hideFinalMarkerContinueActions(
+  messages: ChatMessage[],
+  hiddenMessageIds: ReadonlySet<string>,
+): ChatMessage[] {
+  if (hiddenMessageIds.size === 0) return messages;
+
+  let changed = false;
+  const next = messages.map((message) => {
+    if (message.role !== "assistant" || !message.finalMarker?.continueAction) {
+      return message;
+    }
+    if (!hiddenMessageIds.has(message.id)) return message;
+
+    changed = true;
+    const { continueAction: _continueAction, ...finalMarker } =
+      message.finalMarker;
+    return { ...message, finalMarker };
+  });
+
+  return changed ? next : messages;
+}
 
 const DEFAULT_BROWSER_MODES: ModeInfo[] = [
   { slug: "code", name: "Code", icon: "symbol-misc" },
@@ -85,6 +109,10 @@ type GatewaySnapshot = {
       busy: boolean;
       stale?: boolean;
     }>;
+    repository: {
+      branch?: string;
+      dirty?: boolean;
+    } | null;
     sessions: Array<{
       id: string;
       mode: string;
@@ -137,7 +165,6 @@ type GatewaySnapshot = {
         safetyBufferTokens: number;
         softThresholdBudget: number;
         hardBudget: number;
-        basis: "input" | "total";
       };
       condenseThreshold?: number;
       agentWriteApproval: "prompt" | "session" | "project" | "global";
@@ -171,6 +198,7 @@ interface BrowserGatewayAppProps {
   currentInstanceId: string;
   workspaceName: string;
   routeByInstance?: boolean;
+  initialTheme?: BrowserGatewayThemeSnapshot;
 }
 
 function readCachedTheme(): BrowserGatewayThemeSnapshot | null {
@@ -228,6 +256,7 @@ export function BrowserGatewayApp({
   currentInstanceId,
   workspaceName,
   routeByInstance = false,
+  initialTheme,
 }: BrowserGatewayAppProps) {
   const [snapshot, setSnapshot] = useState<GatewaySnapshot | null>(null);
   const [instanceOptions, setInstanceOptions] = useState<
@@ -241,6 +270,7 @@ export function BrowserGatewayApp({
   >([]);
   const [selectedInstanceId, setSelectedInstanceId] =
     useState(currentInstanceId);
+  const userSelectedInstanceRef = useRef(false);
 
   function buildApiPath(pathname: string): string {
     if (!routeByInstance || !selectedInstanceId.trim()) {
@@ -270,6 +300,8 @@ export function BrowserGatewayApp({
   const [localDismissedApprovalId, setLocalDismissedApprovalId] = useState<
     string | null
   >(null);
+  const [hiddenFinalContinueMessageIds, setHiddenFinalContinueMessageIds] =
+    useState<ReadonlySet<string>>(() => new Set());
   const [approvalPanelHeight, setApprovalPanelHeight] = useState(360);
   const [approvalResizing, setApprovalResizing] = useState(false);
   const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
@@ -280,43 +312,109 @@ export function BrowserGatewayApp({
   );
 
   useEffect(() => {
-    void fetchInstances();
-    const instanceRefreshTimer = setInterval(() => {
-      void fetchInstances();
-    }, 5_000);
+    let closed = false;
+    let eventSource: EventSource | undefined;
+    let instanceRefreshTimer: ReturnType<typeof setInterval> | undefined;
+    let fallbackSnapshotTimer: ReturnType<typeof setInterval> | undefined;
 
-    void fetchSnapshot();
-    void fetchSlashCommands();
-    void fetchModes();
-    void fetchModels();
-    void fetchSessions();
-    void fetchDebugInfo();
+    const stopFallbackSnapshotPolling = () => {
+      if (!fallbackSnapshotTimer) return;
+      clearInterval(fallbackSnapshotTimer);
+      fallbackSnapshotTimer = undefined;
+    };
 
-    const eventSource = new EventSource(buildApiPath("/events"));
-    eventSource.onopen = () => {
-      setStatus("Connected");
+    const fetchFallbackSnapshot = async () => {
+      try {
+        const response = await fetch(buildApiPath("/api/ui-state"));
+        if (!response.ok) {
+          if (!closed) {
+            setStatus(
+              `Realtime stream disconnected — snapshot failed: ${response.status}`,
+            );
+          }
+          return;
+        }
+        const data = (await response.json()) as GatewaySnapshot;
+        if (!closed) {
+          setSnapshot(data);
+          setStatus("Connected (fallback polling)");
+        }
+      } catch (err) {
+        if (!closed) {
+          setStatus(
+            `Realtime stream disconnected — retrying… (${String(err)})`,
+          );
+        }
+      }
+    };
+
+    const startFallbackSnapshotPolling = () => {
+      if (fallbackSnapshotTimer) return;
+      void fetchFallbackSnapshot();
+      fallbackSnapshotTimer = setInterval(() => {
+        void fetchFallbackSnapshot();
+      }, 2_000);
+    };
+
+    const startRealtimeStream = () => {
+      eventSource = new EventSource(buildApiPath("/events"));
+      eventSource.onopen = () => {
+        stopFallbackSnapshotPolling();
+        setStatus("Connected");
+      };
+      eventSource.onerror = () => {
+        setStatus("Realtime stream disconnected — retrying…");
+        startFallbackSnapshotPolling();
+      };
+      eventSource.addEventListener("snapshot", applySnapshotEvent);
+      eventSource.addEventListener("update", applySnapshotEvent);
     };
 
     const applySnapshotEvent = (event: MessageEvent<string>) => {
       try {
         const next = JSON.parse(event.data) as GatewaySnapshot;
+        stopFallbackSnapshotPolling();
         setSnapshot(next);
+        setStatus("Connected");
       } catch (err) {
         setStatus(`Stream parse error: ${String(err)}`);
       }
     };
 
-    eventSource.addEventListener("snapshot", applySnapshotEvent);
-    eventSource.addEventListener("update", applySnapshotEvent);
-    eventSource.onerror = () => {
-      setStatus("Realtime stream disconnected — retrying…");
-    };
+    void (async () => {
+      const resolvedInstanceId = await fetchInstances();
+      if (closed) return;
+
+      instanceRefreshTimer = setInterval(() => {
+        void fetchInstances();
+      }, 5_000);
+
+      if (routeByInstance && !resolvedInstanceId) {
+        setStatus("Waiting for active VS Code session…");
+        return;
+      }
+      if (routeByInstance && resolvedInstanceId !== selectedInstanceId) {
+        return;
+      }
+
+      void fetchSnapshot();
+      void fetchSlashCommands();
+      void fetchModes();
+      void fetchModels();
+      void fetchSessions();
+      void fetchDebugInfo();
+      startRealtimeStream();
+    })();
 
     return () => {
-      clearInterval(instanceRefreshTimer);
-      eventSource.removeEventListener("snapshot", applySnapshotEvent);
-      eventSource.removeEventListener("update", applySnapshotEvent);
-      eventSource.close();
+      closed = true;
+      if (instanceRefreshTimer) {
+        clearInterval(instanceRefreshTimer);
+      }
+      stopFallbackSnapshotPolling();
+      eventSource?.removeEventListener("snapshot", applySnapshotEvent);
+      eventSource?.removeEventListener("update", applySnapshotEvent);
+      eventSource?.close();
     };
   }, [selectedInstanceId, routeByInstance]);
 
@@ -334,15 +432,26 @@ export function BrowserGatewayApp({
   }, [selectedDiffId, snapshot]);
 
   const messages = useMemo<ChatMessage[]>(() => {
-    return snapshot?.session.foreground?.projectedMessages ?? [];
-  }, [snapshot]);
+    return hideFinalMarkerContinueActions(
+      snapshot?.session.foreground?.projectedMessages ?? [],
+      hiddenFinalContinueMessageIds,
+    );
+  }, [hiddenFinalContinueMessageIds, snapshot]);
 
   const terminalBuffers = useMemo(() => {
     return deriveTerminalBuffers(messages, {
       workspaceName,
+      gitBranch: snapshot?.session.repository?.branch,
+      dirty: snapshot?.session.repository?.dirty,
       terminals: snapshot?.session.terminals ?? [],
     });
-  }, [messages, snapshot?.session.terminals, workspaceName]);
+  }, [
+    messages,
+    snapshot?.session.repository?.branch,
+    snapshot?.session.repository?.dirty,
+    snapshot?.session.terminals,
+    workspaceName,
+  ]);
 
   const foreground = snapshot?.session.foreground ?? null;
   const reasoningEffort: ReasoningEffort = foreground
@@ -363,6 +472,14 @@ export function BrowserGatewayApp({
     pendingApproval && pendingApproval.id !== localDismissedApprovalId
       ? pendingApproval
       : null;
+  const awaitingUserInput = Boolean(
+    visibleApproval ||
+    pendingQuestion ||
+    foreground?.status === "awaiting_approval" ||
+    instanceOptions.some(
+      (instance) => instance.status?.kind === "awaiting_approval",
+    ),
+  );
   const snapshotQuestionProgress = snapshot?.ui.questionProgress ?? null;
   const remoteQuestionProgress =
     snapshotQuestionProgress &&
@@ -398,13 +515,35 @@ export function BrowserGatewayApp({
   }, [pendingApproval, localDismissedApprovalId]);
 
   useEffect(() => {
+    const originalTitle = document.title;
+    if (!awaitingUserInput) {
+      return;
+    }
+
+    let showAttentionTitle = true;
+    const renderTitle = () => {
+      document.title = showAttentionTitle ? TAB_FLASH_TITLE : originalTitle;
+      showAttentionTitle = !showAttentionTitle;
+    };
+
+    renderTitle();
+    const timer = window.setInterval(renderTitle, TAB_FLASH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(timer);
+      document.title = originalTitle;
+    };
+  }, [awaitingUserInput]);
+
+  useEffect(() => {
     const cachedTheme = readCachedTheme();
-    if (!cachedTheme) return;
+    const theme = cachedTheme ?? initialTheme;
+    if (!theme) return;
     appliedThemeKeysRef.current = applyRuntimeTheme(
-      cachedTheme,
+      theme,
       appliedThemeKeysRef.current,
     );
-  }, []);
+  }, [initialTheme]);
 
   useEffect(() => {
     const theme = snapshot?.theme;
@@ -495,12 +634,46 @@ export function BrowserGatewayApp({
     }
   }
 
-  async function fetchInstances(): Promise<void> {
+  function selectPreferredInstanceId(
+    instances: Array<{
+      instanceId: string;
+      status?: BrowserGatewayInstanceStatusSummary;
+    }>,
+    currentServerInstanceId: string,
+  ): string {
+    const selectedInstanceStillExists = instances.some(
+      (instance) => instance.instanceId === selectedInstanceId,
+    );
+    if (
+      userSelectedInstanceRef.current &&
+      selectedInstanceId.trim() &&
+      selectedInstanceStillExists
+    ) {
+      return selectedInstanceId;
+    }
+
+    const activeInstance = instances.find(
+      (instance) =>
+        instance.status?.kind === "awaiting_approval" ||
+        instance.status?.kind === "working" ||
+        instance.status?.kind === "error",
+    );
+
+    if (activeInstance) {
+      return activeInstance.instanceId;
+    }
+    if (selectedInstanceId.trim() && selectedInstanceStillExists) {
+      return selectedInstanceId;
+    }
+    return currentServerInstanceId || instances[0]?.instanceId || "";
+  }
+
+  async function fetchInstances(): Promise<string | null> {
     try {
       const response = await fetch(buildApiPath("/api/instances"));
       if (!response.ok) {
         setStatus(`Instance list failed: ${response.status}`);
-        return;
+        return null;
       }
       const data = (await response.json()) as {
         currentInstanceId: string;
@@ -513,20 +686,16 @@ export function BrowserGatewayApp({
         }>;
       };
       setInstanceOptions(data.instances);
-      const selectedInstanceStillExists = data.instances.some(
-        (instance) => instance.instanceId === selectedInstanceId,
-      );
-      if (
-        !routeByInstance ||
-        !selectedInstanceId.trim() ||
-        !selectedInstanceStillExists
-      ) {
-        setSelectedInstanceId(
-          data.currentInstanceId || data.instances[0]?.instanceId || "",
-        );
+      const nextSelectedInstanceId = routeByInstance
+        ? selectPreferredInstanceId(data.instances, data.currentInstanceId)
+        : data.currentInstanceId || data.instances[0]?.instanceId || "";
+      if (nextSelectedInstanceId !== selectedInstanceId) {
+        setSelectedInstanceId(nextSelectedInstanceId);
       }
+      return nextSelectedInstanceId;
     } catch (err) {
       setStatus(`Instance list error: ${String(err)}`);
+      return null;
     }
   }
 
@@ -1665,7 +1834,10 @@ export function BrowserGatewayApp({
               aria-selected={active}
               class={`instance-tab instance-tab-${instanceStatus.kind}${active ? " active" : ""}`}
               id={`instance-tab-${instance.instanceId}`}
-              onClick={() => setSelectedInstanceId(instance.instanceId)}
+              onClick={() => {
+                userSelectedInstanceRef.current = true;
+                setSelectedInstanceId(instance.instanceId);
+              }}
               role="tab"
               title={`${instance.workspaceName} · ${instanceStatus.label}${instanceStatus.detail ? ` · ${instanceStatus.detail}` : ""}`}
               type="button"
@@ -1831,6 +2003,21 @@ export function BrowserGatewayApp({
                   bgSessions={background}
                   onStopBackground={handleStopBackground}
                   onOpenTranscript={handleOpenBgTranscript}
+                  onFinalMarkerContinue={(prompt) => {
+                    setHiddenFinalContinueMessageIds((prev) => {
+                      const next = new Set(prev);
+                      for (const message of messages) {
+                        if (
+                          message.role === "assistant" &&
+                          message.finalMarker?.continueAction?.prompt === prompt
+                        ) {
+                          next.add(message.id);
+                        }
+                      }
+                      return next;
+                    });
+                    void handleSend(prompt, []);
+                  }}
                   onRevertCheckpoint={handleRevertCheckpoint}
                   onViewCheckpointDiff={handleViewCheckpointDiff}
                 />
@@ -1871,7 +2058,6 @@ export function BrowserGatewayApp({
                         usedInputTokens={
                           foreground?.contextBudget?.usedInputTokens
                         }
-                        budgetBasis={foreground?.contextBudget?.basis}
                         outputReservation={
                           foreground?.contextBudget?.outputReservation
                         }

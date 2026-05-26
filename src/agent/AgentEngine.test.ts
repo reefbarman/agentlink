@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentEngine } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
+import { ToolCallTracker } from "../server/ToolCallTracker.js";
 import type { ToolDispatchContext } from "./toolAdapter.js";
 
 const mocks = vi.hoisted(() => ({
@@ -525,6 +526,288 @@ describe("AgentEngine", () => {
       expect(skippedText).toContain('"skipped_by":"mode_switch"');
 
       expect(events.at(-1)).toMatchObject({ type: "done" });
+
+      dispatchSpy.mockRestore();
+    });
+
+    it("registers queued write tools in the tracker before read-only tools finish", async () => {
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        callCount += 1;
+        if (callCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+              {
+                type: "tool_use",
+                id: "call_write",
+                name: "write_file",
+                input: { path: "src/x.ts", content: "x" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("read then write");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const tracker = new ToolCallTracker();
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+        toolCallTracker: tracker,
+      };
+      engine.setToolContext(toolCtx);
+
+      let releaseRead!: () => void;
+      const readCanFinish = new Promise<void>((release) => {
+        releaseRead = release;
+      });
+      const toolAdapter = await import("./toolAdapter.js");
+      const dispatchSpy = vi.spyOn(toolAdapter, "dispatchToolCall");
+      const readStarted = new Promise<void>((resolve) => {
+        dispatchSpy.mockImplementation(async (name) => {
+          if (name === "read_file") {
+            resolve();
+            await readCanFinish;
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ ok: true, read: true }),
+                },
+              ],
+            };
+          }
+          if (name === "write_file") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ ok: true, write: true }),
+                },
+              ],
+            };
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          };
+        });
+      });
+
+      const runPromise = collectEvents(engine.run(session));
+      await readStarted;
+
+      expect(tracker.getActiveCalls().map((c) => c.toolName)).toEqual([
+        "read_file",
+        "write_file",
+      ]);
+
+      releaseRead();
+      const events = await runPromise;
+
+      expect(
+        tracker.getActiveCalls().filter((c) => c.status === "active"),
+      ).toHaveLength(0);
+      expect(
+        events
+          .filter(
+            (e): e is Extract<AgentEvent, { type: "tool_result" }> =>
+              e.type === "tool_result",
+          )
+          .map((e) => e.toolName),
+      ).toEqual(["read_file", "write_file"]);
+
+      dispatchSpy.mockRestore();
+    });
+
+    it("clears pre-registered tracker calls when a run is aborted", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_read",
+              name: "read_file",
+              input: { path: "src/a.ts" },
+            },
+            {
+              type: "tool_use",
+              id: "call_write",
+              name: "write_file",
+              input: { path: "src/x.ts", content: "x" },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("read then stop");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const tracker = new ToolCallTracker();
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+        toolCallTracker: tracker,
+      };
+      engine.setToolContext(toolCtx);
+
+      const toolAdapter = await import("./toolAdapter.js");
+      const dispatchSpy = vi.spyOn(toolAdapter, "dispatchToolCall");
+      dispatchSpy.mockImplementation(async (name) => {
+        if (name === "read_file") {
+          session.abort();
+          return {
+            content: [
+              { type: "text", text: JSON.stringify({ ok: true, read: true }) },
+            ],
+          };
+        }
+        if (name === "write_file") {
+          throw new Error("write_file should not execute after abort");
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        };
+      });
+
+      const events = await collectEvents(engine.run(session));
+      tracker.clearAgentCalls(session.id);
+
+      expect(
+        tracker.getActiveCalls().filter((c) => c.status === "active"),
+      ).toHaveLength(0);
+      expect(
+        events
+          .filter(
+            (e): e is Extract<AgentEvent, { type: "tool_result" }> =>
+              e.type === "tool_result",
+          )
+          .map((e) => e.toolName),
+      ).toEqual([]);
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+
+      dispatchSpy.mockRestore();
+    });
+
+    it("stops turn and skips trailing tools after set_task_status", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            { type: "text", text: "Ready to implement." },
+            {
+              type: "tool_use",
+              id: "call_final",
+              name: "set_task_status",
+              input: {
+                status: "waiting_for_user",
+                continueLabel: "Implement this",
+                continuePrompt: "Please implement this plan.",
+              },
+            },
+            {
+              type: "tool_use",
+              id: "call_write",
+              name: "write_file",
+              input: { path: "src/x.ts", content: "x" },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("plan");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const writeSpy = vi
+        .fn()
+        .mockResolvedValue({ content: [{ type: "text", text: "write ok" }] });
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      };
+      engine.setToolContext(toolCtx);
+
+      const dispatchSpy = vi
+        .spyOn(await import("./toolAdapter.js"), "dispatchToolCall")
+        .mockImplementation(async (name, input, ctx) => {
+          if (name === "set_task_status") {
+            ctx.onFinalStatus?.({
+              status: "waiting_for_user",
+              source: "tool",
+              continueAction: {
+                label: "Implement this",
+                prompt: "Please implement this plan.",
+              },
+            });
+            return {
+              content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+            };
+          }
+          if (name === "write_file") return await writeSpy(name, input);
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          };
+        });
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(writeSpy).not.toHaveBeenCalled();
+      const markerEvent = events.find((e) => e.type === "final_marker");
+      expect(markerEvent).toMatchObject({
+        type: "final_marker",
+        marker: {
+          status: "waiting_for_user",
+          source: "tool",
+          continueAction: {
+            label: "Implement this",
+            prompt: "Please implement this plan.",
+          },
+        },
+      });
+      const toolResults = events.filter(
+        (e): e is Extract<AgentEvent, { type: "tool_result" }> =>
+          e.type === "tool_result",
+      );
+      expect(toolResults.map((r) => r.toolName)).toEqual([
+        "set_task_status",
+        "write_file",
+      ]);
+      const skippedText = toolResults[1].result
+        .map((c) => (c.type === "text" ? c.text : ""))
+        .join("\n");
+      expect(skippedText).toContain('"skipped_by":"set_task_status"');
+      expect(
+        session.getAllMessages().at(-2)?.uiHint?.finalMarker,
+      ).toMatchObject({
+        status: "waiting_for_user",
+        source: "tool",
+      });
 
       dispatchSpy.mockRestore();
     });

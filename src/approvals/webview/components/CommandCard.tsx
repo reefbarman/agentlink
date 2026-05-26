@@ -1,14 +1,15 @@
+import type { ApprovalRequest, DecisionMessage, RuleEntry } from "../types.js";
 import {
-  useState,
-  useRef,
-  useEffect,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
+  useState,
 } from "preact/hooks";
-import type { RefObject } from "preact";
-import type { ApprovalRequest, RuleEntry, DecisionMessage } from "../types.js";
-import { RuleRow } from "./RuleRow.js";
+
 import { ApprovalLayout } from "./ApprovalLayout.js";
+import type { RefObject } from "preact";
+import { RuleRow } from "./RuleRow.js";
 
 interface CommandCardProps {
   request: ApprovalRequest;
@@ -28,6 +29,7 @@ interface CommandCardProps {
 interface SuggestState {
   status: "idle" | "loading" | "error";
   error?: string;
+  pattern?: string;
 }
 
 export function CommandCard({
@@ -159,6 +161,13 @@ export function CommandCard({
   const handleSuggestRegex = useCallback(
     (index: number, subCommand: string) => {
       if (!onSuggestRegex) return;
+      const current = rules[index];
+      if (!current) return;
+      updateRule(index, {
+        ...current,
+        mode: "regex",
+        scope: current.scope === "skip" ? "session" : current.scope,
+      });
       setSuggestStates((prev) => ({ ...prev, [index]: { status: "loading" } }));
       void (async () => {
         try {
@@ -168,19 +177,10 @@ export function CommandCard({
           });
           const trimmed = pattern.trim();
           if (!trimmed) throw new Error("Empty suggestion");
-          setRules((prev) => {
-            const next = [...prev];
-            const current = next[index];
-            if (!current) return prev;
-            next[index] = {
-              ...current,
-              pattern: trimmed,
-              mode: "regex",
-              scope: current.scope === "skip" ? "session" : current.scope,
-            };
-            return next;
-          });
-          setSuggestStates((prev) => ({ ...prev, [index]: { status: "idle" } }));
+          setSuggestStates((prev) => ({
+            ...prev,
+            [index]: { status: "idle", pattern: trimmed },
+          }));
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           setSuggestStates((prev) => ({
@@ -190,7 +190,7 @@ export function CommandCard({
         }
       })();
     },
-    [onSuggestRegex, originalCommand],
+    [onSuggestRegex, originalCommand, rules, updateRule],
   );
 
   const rulesJsx =
@@ -198,16 +198,37 @@ export function CommandCard({
       <>
         {subCommands.map((entry, i) => {
           const state = suggestStates[i] ?? { status: "idle" };
+          const rule = rules[i];
+          if (!rule) return null;
           return (
             <RuleRow
               key={i}
               entry={entry}
-              value={rules[i]}
+              value={rule}
+              modeGroupName={`mode-${i}-${entry.command}`}
               onChange={(v) => updateRule(i, v)}
               onSuggestRegex={
                 onSuggestRegex
                   ? () => handleSuggestRegex(i, entry.command)
                   : undefined
+              }
+              suggestedPattern={state.pattern}
+              onAcceptSuggestion={
+                state.pattern
+                  ? () => {
+                      updateRule(i, { ...rule, pattern: state.pattern! });
+                      setSuggestStates((prev) => ({
+                        ...prev,
+                        [i]: { status: "idle" },
+                      }));
+                    }
+                  : undefined
+              }
+              onDismissSuggestion={() =>
+                setSuggestStates((prev) => ({
+                  ...prev,
+                  [i]: { status: "idle" },
+                }))
               }
               suggestStatus={state.status}
               suggestError={state.error}

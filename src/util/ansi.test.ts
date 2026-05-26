@@ -1,19 +1,38 @@
-import { describe, it, expect } from "vitest";
 import {
-  removeShellIntegrationSequences,
-  removeCursorSequences,
-  removeAnsiColors,
-  stripAnsi,
   cleanTerminalOutput,
+  cleanTerminalRawOutput,
+  removeAnsiColors,
+  removeCursorSequences,
+  removeShellIntegrationSequences,
+  stripAnsi,
 } from "./ansi.js";
+import { describe, expect, it } from "vitest";
+
+describe("cleanTerminalRawOutput", () => {
+  it("preserves ANSI and cursor sequences while removing shell integration markers", () => {
+    expect(
+      cleanTerminalRawOutput("\x1B]633;A\x07\x1B[32mgreen\x1B[0m\rspin\x1B[K"),
+    ).toBe("\x1B[32mgreen\x1B[0m\rspin\x1B[K");
+  });
+
+  it("preserves non-shell-integration OSC sequences for xterm rendering", () => {
+    expect(
+      cleanTerminalRawOutput("\x1B]8;;https://example.com\x07link\x1B]8;;\x07"),
+    ).toBe("\x1B]8;;https://example.com\x07link\x1B]8;;\x07");
+  });
+});
 
 describe("removeShellIntegrationSequences", () => {
   it("removes OSC 633 sequences (BEL terminated)", () => {
-    expect(removeShellIntegrationSequences("\x1B]633;A\x07hello")).toBe("hello");
+    expect(removeShellIntegrationSequences("\x1B]633;A\x07hello")).toBe(
+      "hello",
+    );
   });
 
   it("removes OSC 633 sequences (ST terminated)", () => {
-    expect(removeShellIntegrationSequences("\x1B]633;C\x1B\\hello")).toBe("hello");
+    expect(removeShellIntegrationSequences("\x1B]633;C\x1B\\hello")).toBe(
+      "hello",
+    );
   });
 
   it("removes OSC 133 sequences", () => {
@@ -21,7 +40,9 @@ describe("removeShellIntegrationSequences", () => {
   });
 
   it("removes generic OSC sequences", () => {
-    expect(removeShellIntegrationSequences("\x1B]0;title\x07content")).toBe("content");
+    expect(removeShellIntegrationSequences("\x1B]0;title\x07content")).toBe(
+      "content",
+    );
   });
 
   it("leaves plain text untouched", () => {

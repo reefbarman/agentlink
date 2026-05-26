@@ -5,12 +5,19 @@
  * Adapted from Roo Code's TerminalProcess.ts patterns.
  */
 
-/** Remove VS Code shell integration OSC sequences (633, 133, etc.) */
-export function removeShellIntegrationSequences(text: string): string {
+/** Remove VS Code shell integration OSC sequences while preserving other renderable OSC sequences. */
+export function removeVsCodeShellIntegrationSequences(text: string): string {
   return text
     .replace(/\x1B\]633;[^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
-    .replace(/\x1B\]133;[^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
-    .replace(/\x1B\][0-9]+;[^\x07\x1B]*(?:\x07|\x1B\\)/g, "");
+    .replace(/\x1B\]133;[^\x07\x1B]*(?:\x07|\x1B\\)/g, "");
+}
+
+/** Remove VS Code shell integration OSC sequences and other OSC metadata from clean text output. */
+export function removeShellIntegrationSequences(text: string): string {
+  return removeVsCodeShellIntegrationSequences(text).replace(
+    /\x1B\][0-9]+;[^\x07\x1B]*(?:\x07|\x1B\\)/g,
+    "",
+  );
 }
 
 /** Remove cursor movement and screen control sequences */
@@ -36,6 +43,11 @@ export function stripAnsi(text: string): string {
   // Remove any remaining CSI sequences
   result = result.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
   return result;
+}
+
+/** Preserve terminal-renderable output while removing VS Code shell integration protocol markers. */
+export function cleanTerminalRawOutput(text: string): string {
+  return removeVsCodeShellIntegrationSequences(text);
 }
 
 /** Normalize terminal output: strip ANSI, trailing %, normalize line endings */

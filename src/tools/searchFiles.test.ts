@@ -1,5 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import * as os from "os";
 import * as path from "path";
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expandSimpleBraceGlob,
+  getEscapingHint,
+  handleSearchFiles,
+  needsMultiline,
+  resolveFilePatternAsPath,
+  sanitizeRegex,
+} from "./searchFiles.js";
 
 const {
   execRipgrepSearch,
@@ -7,12 +17,14 @@ const {
   semanticSearch,
   resolveAndValidatePath,
   tryGetFirstWorkspaceRoot,
+  approveOutsideWorkspaceAccess,
 } = vi.hoisted(() => ({
   execRipgrepSearch: vi.fn(),
   getRipgrepBinPath: vi.fn(),
   semanticSearch: vi.fn(),
   resolveAndValidatePath: vi.fn(),
   tryGetFirstWorkspaceRoot: vi.fn(),
+  approveOutsideWorkspaceAccess: vi.fn(),
 }));
 
 vi.mock("../util/ripgrep.js", async () => {
@@ -36,14 +48,9 @@ vi.mock("../util/paths.js", () => ({
   tryGetFirstWorkspaceRoot,
 }));
 
-import {
-  sanitizeRegex,
-  getEscapingHint,
-  needsMultiline,
-  resolveFilePatternAsPath,
-  expandSimpleBraceGlob,
-  handleSearchFiles,
-} from "./searchFiles.js";
+vi.mock("./pathAccessUI.js", () => ({
+  approveOutsideWorkspaceAccess,
+}));
 
 describe("handleSearchFiles ripgrep args", () => {
   beforeEach(() => {
@@ -177,6 +184,34 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(firstContent).toBeDefined();
     const payload = JSON.parse((firstContent as { text: string }).text);
     expect(payload.error).toContain("file_pattern must be omitted");
+  });
+
+  it("skips outside-workspace approval for agentlink tmp artifacts", async () => {
+    const tmpArtifactPath = path.join(
+      os.tmpdir(),
+      "agentlink-output-abc123",
+      "output.txt",
+    );
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: tmpArtifactPath,
+      inWorkspace: false,
+    });
+
+    await handleSearchFiles(
+      {
+        path: tmpArtifactPath,
+        regex: "error",
+        semantic: false,
+      },
+      {
+        isPathTrusted: () => false,
+      } as never,
+      {} as never,
+      "session-tmp-artifact",
+    );
+
+    expect(approveOutsideWorkspaceAccess).not.toHaveBeenCalled();
+    expect(execRipgrepSearch).not.toHaveBeenCalled();
   });
 
   it("uses parent directory for semantic search when path is a file", async () => {

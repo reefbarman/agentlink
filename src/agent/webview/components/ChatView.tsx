@@ -35,6 +35,7 @@ interface ChatViewProps {
   bgSessions?: BgSessionInfoProps[];
   onStopBackground?: (sessionId: string) => void;
   onOpenTranscript?: (sessionId: string) => void;
+  onFinalMarkerContinue?: (prompt: string) => void;
 }
 
 export function ChatView({
@@ -56,6 +57,7 @@ export function ChatView({
   bgSessions,
   onStopBackground,
   onOpenTranscript,
+  onFinalMarkerContinue,
 }: ChatViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
@@ -201,6 +203,7 @@ export function ChatView({
           bgSessions={bgSessions}
           onStopBackground={onStopBackground}
           onOpenTranscript={onOpenTranscript}
+          onFinalMarkerContinue={onFinalMarkerContinue}
           onRevertCheckpoint={onRevertCheckpoint}
           onViewCheckpointDiff={onViewCheckpointDiff}
         />

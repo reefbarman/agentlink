@@ -3,6 +3,7 @@ import * as os from "os";
 import * as path from "path";
 
 import type { BrowserGatewayDiscoveryRecord } from "./browserGatewayDiscovery.js";
+import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 
 const REGISTRY_DIR = path.join(os.homedir(), ".agentlink");
 const REGISTRY_PATH = path.join(REGISTRY_DIR, "browser-gateways.json");
@@ -11,6 +12,7 @@ export interface BrowserGatewayInstanceRecord extends BrowserGatewayDiscoveryRec
   instanceId: string;
   workspaceName: string;
   workspacePath: string;
+  theme?: BrowserGatewayThemeSnapshot;
 }
 
 export function getBrowserGatewayRegistryPath(): string {
@@ -37,6 +39,35 @@ async function writeRegistry(
     mode: 0o600,
   });
   await fs.rename(tmpPath, REGISTRY_PATH);
+}
+
+function isSameRegistryRecord(
+  a: BrowserGatewayInstanceRecord,
+  b: BrowserGatewayInstanceRecord,
+): boolean {
+  // These fields identify a specific running registration. Metadata like theme
+  // or workspace name can change without making a stale cleanup target safer to
+  // remove.
+  return (
+    a.instanceId === b.instanceId &&
+    a.pid === b.pid &&
+    a.port === b.port &&
+    a.url === b.url &&
+    a.startedAt === b.startedAt
+  );
+}
+
+async function removeExactBrowserGatewayInstances(
+  staleRecords: BrowserGatewayInstanceRecord[],
+): Promise<void> {
+  if (staleRecords.length === 0) return;
+  const currentRecords = await readRegistry();
+  const next = currentRecords.filter(
+    (record) =>
+      !staleRecords.some((stale) => isSameRegistryRecord(record, stale)),
+  );
+  if (next.length === currentRecords.length) return;
+  await writeRegistry(next);
 }
 
 export async function upsertBrowserGatewayInstance(
@@ -106,9 +137,7 @@ export async function listHealthyBrowserGatewayInstances(): Promise<
     })),
   );
   const healthy = checks.filter((c) => c.healthy).map((c) => c.record);
-  const staleRemoved = healthy.length !== records.length;
-  if (staleRemoved) {
-    await writeRegistry(healthy);
-  }
+  const stale = checks.filter((c) => !c.healthy).map((c) => c.record);
+  await removeExactBrowserGatewayInstances(stale);
   return healthy;
 }

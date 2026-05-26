@@ -71,7 +71,7 @@ flowchart LR
 - **Inline approvals in chat** — command, write, rename, MCP, and mode-switch approvals render in the built-in chat UI. The separate approval panel is mainly for external MCP agents.
 - **Session history and restore** — chat sessions are persisted and restored across VS Code reloads/startup.
 - **Checkpoints and revert** — create workspace checkpoints and revert later. Checkpoints are stored in AgentLink’s own shadow git repo under `.agentlink/checkpoints/`, separate from your project’s real git history.
-- **Slash commands** — built-ins include `/new`, `/mode`, `/model`, `/condense`, `/checkpoint`, `/revert`, `/help`, `/mcp`, `/mcp-config`, `/mcp-refresh`, and `/btw`.
+- **Slash commands** — built-ins include `/new`, `/mode`, `/model`, `/condense`, `/checkpoint`, `/revert`, `/help`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, and `/btw`.
 - **Background agents** — spawn parallel sub-agents for review and research, then inspect their result/transcript from the foreground session.
 - **Auto-condense** — when context fills up, AgentLink can condense the conversation and continue without losing task continuity.
 - **Model picker + auth-aware UX** — model selection is built into the chat UI and can prompt for Anthropic or OpenAI/Codex auth as needed.
@@ -214,6 +214,8 @@ Later files override earlier ones for the same mode slug. Custom modes can also 
 - `.agentlink/commands/`
 
 This lets you define reusable prompts/workflows for the built-in agent while keeping project-specific commands in the repo.
+
+Detected skills are also exposed as slash commands in the built-in chat. Skills loaded from `~/.agents/skills/`, `~/.claude/skills/`, `~/.agentlink/skills/`, `.agents/skills/`, `.claude/skills/`, `.agentlink/skills/`, and their `skills-<mode>/` variants appear as `/skill:<name>`. Selecting one sends a prompt that asks the agent to load that skill with `load_skill` and follow its instructions. Use `/skills` to open the AgentLink output channel with the skills detected for the current mode, including their resolved `SKILL.md` paths.
 
 ### Use AgentLink with external MCP agents
 

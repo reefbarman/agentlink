@@ -6,7 +6,7 @@ interface TerminalInstanceListProps {
   onSelectBuffer: (id: string) => void;
 }
 
-function statusIcon(status: TerminalBuffer["lastStatus"]): string {
+function statusBadgeIcon(status: TerminalBuffer["lastStatus"]): string {
   switch (status) {
     case "running":
       return "codicon-loading codicon-modifier-spin";
@@ -15,7 +15,7 @@ function statusIcon(status: TerminalBuffer["lastStatus"]): string {
     case "error":
       return "codicon-error";
     default:
-      return "codicon-terminal";
+      return "codicon-check";
   }
 }
 
@@ -38,13 +38,11 @@ export function TerminalInstanceList({
             onClick={() => onSelectBuffer(buffer.id)}
             title={buffer.terminalId ?? buffer.label}
           >
-            <i
-              class={`terminal-instance-icon codicon ${statusIcon(buffer.lastStatus)}`}
-            />
+            <i class="terminal-instance-icon codicon codicon-terminal" />
             <span class="terminal-instance-label">{buffer.label}</span>
-            {buffer.lastStatus === "warning" && (
-              <i class="terminal-instance-warning codicon codicon-warning" />
-            )}
+            <i
+              class={`terminal-instance-badge codicon ${statusBadgeIcon(buffer.lastStatus)}`}
+            />
           </button>
         );
       })}

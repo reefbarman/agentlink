@@ -4,8 +4,10 @@ import type {
   ApprovalManager,
   PathRule,
 } from "../approvals/ApprovalManager.js";
-import type { WriteApprovalResponse } from "../approvals/ApprovalPanelProvider.js";
+
 import type { DiffDecision } from "../integrations/DiffViewProvider.js";
+import type { OnApprovalRequest } from "../shared/types.js";
+import type { WriteApprovalResponse } from "../approvals/ApprovalPanelProvider.js";
 
 export type WriteApprovalScopeChoice =
   | "this-file"
@@ -14,10 +16,21 @@ export type WriteApprovalScopeChoice =
   | null;
 export type RuleScope = "session" | "project" | "global";
 
+type WriteTrustApprovalResponse = {
+  decision: DiffDecision | string | undefined;
+  trustScope?: WriteApprovalResponse["trustScope"];
+  rulePattern?: string;
+  ruleMode?: WriteApprovalResponse["ruleMode"];
+};
+
+type RawInlineApprovalResponse = Awaited<ReturnType<OnApprovalRequest>>;
+
 /**
  * Map a DiffDecision to a rule scope. Returns null for non-scoped decisions (accept/reject).
  */
-export function decisionToScope(decision: DiffDecision): RuleScope | null {
+export function decisionToScope(
+  decision: DiffDecision | string | undefined,
+): RuleScope | null {
   switch (decision) {
     case "accept-session":
       return "session";
@@ -36,21 +49,17 @@ export function decisionToScope(decision: DiffDecision): RuleScope | null {
  * Otherwise falls back to QuickPick dialogs (for diff view decisions).
  */
 export function saveWriteTrustRules(opts: {
-  panelResponse: WriteApprovalResponse | undefined;
+  panelResponse: WriteTrustApprovalResponse | undefined;
   approvalManager: ApprovalManager;
   sessionId: string;
-  scope: RuleScope;
+  scope?: RuleScope;
   relPath: string;
   inWorkspace: boolean;
 }): void {
-  const {
-    panelResponse,
-    approvalManager,
-    sessionId,
-    scope,
-    relPath,
-    inWorkspace,
-  } = opts;
+  const { panelResponse, approvalManager, sessionId, relPath, inWorkspace } =
+    opts;
+  const scope = opts.scope ?? decisionToScope(panelResponse?.decision);
+  if (!scope) return;
 
   if (panelResponse?.trustScope) {
     applyInlineTrustScope(
@@ -62,10 +71,58 @@ export function saveWriteTrustRules(opts: {
       inWorkspace,
     );
   } else {
-    // Title bar / QuickPick acceptance — no trust scope UI was shown,
+    // Title bar / legacy inline acceptance — no trust scope UI was shown,
     // so default to blanket "all-files" write approval at the chosen scope.
     approvalManager.setAgentWriteApproval(sessionId, scope);
   }
+}
+
+export function saveInlineWriteTrustRules(opts: {
+  response: RawInlineApprovalResponse;
+  approvalManager: ApprovalManager;
+  sessionId: string;
+  relPath: string;
+  inWorkspace?: boolean;
+}): void {
+  if (typeof opts.response === "string") {
+    saveWriteTrustRules({
+      panelResponse: { decision: opts.response },
+      approvalManager: opts.approvalManager,
+      sessionId: opts.sessionId,
+      relPath: opts.relPath,
+      inWorkspace: opts.inWorkspace ?? true,
+    });
+    return;
+  }
+
+  saveWriteTrustRules({
+    panelResponse: {
+      decision: opts.response.decision,
+      trustScope: isWriteTrustScope(opts.response.trustScope)
+        ? opts.response.trustScope
+        : undefined,
+      rulePattern: opts.response.rulePattern,
+      ruleMode: isWriteRuleMode(opts.response.ruleMode)
+        ? opts.response.ruleMode
+        : undefined,
+    },
+    approvalManager: opts.approvalManager,
+    sessionId: opts.sessionId,
+    relPath: opts.relPath,
+    inWorkspace: opts.inWorkspace ?? true,
+  });
+}
+
+function isWriteTrustScope(
+  value: unknown,
+): value is WriteTrustApprovalResponse["trustScope"] {
+  return value === "all-files" || value === "this-file" || value === "pattern";
+}
+
+function isWriteRuleMode(
+  value: unknown,
+): value is WriteTrustApprovalResponse["ruleMode"] {
+  return value === "glob" || value === "prefix" || value === "exact";
 }
 
 /**
@@ -73,7 +130,7 @@ export function saveWriteTrustRules(opts: {
  * Used by both diff view writes and rename symbol.
  */
 export function applyInlineTrustScope(
-  panelResponse: WriteApprovalResponse,
+  panelResponse: WriteTrustApprovalResponse,
   approvalManager: ApprovalManager,
   sessionId: string,
   scope: RuleScope,

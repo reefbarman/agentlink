@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/preact";
+// @vitest-environment jsdom
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import type { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("MessageBubble slash-command rendering", () => {
   it("renders standalone slash command as a tool-call-style block with args", () => {
@@ -23,7 +29,9 @@ describe("MessageBubble slash-command rendering", () => {
     expect(container.querySelector(".tool-call-block")).toBeTruthy();
     expect(screen.getByText("/review")).toBeTruthy();
     expect(screen.getByText("src/agent/webview/App.tsx")).toBeTruthy();
-    expect(container.querySelector(".slash-tool-call-args")).toBeTruthy();
+    expect(
+      container.querySelector(".slash-standalone-command-args"),
+    ).toBeTruthy();
     expect(container.querySelector(".user-content")).toBeNull();
   });
 
@@ -212,6 +220,214 @@ describe("MessageBubble slash-command rendering", () => {
     expect(screen.getByRole("button", { name: "Seven" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Eight" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Show 2 more" })).toBeNull();
+  });
+
+  it("renders final marker UI for completed historical messages", () => {
+    const message: ChatMessage = {
+      id: "assistant-final-historical",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [{ type: "text", text: "Earlier completed response." }],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    expect(screen.getByText("Earlier completed response.")).toBeTruthy();
+    expect(screen.getByText("Task complete")).toBeTruthy();
+    expect(container.querySelector(".assistant-final-region")).toBeTruthy();
+    expect(container.querySelector(".assistant-message-final")).toBeNull();
+  });
+
+  it("does not show the empty response fallback for marker-only final messages", () => {
+    const message: ChatMessage = {
+      id: "assistant-final-marker-only",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "Completed with no text body.",
+      },
+    };
+
+    render(<MessageBubble message={message} streaming={false} />);
+
+    expect(screen.getByText("Task complete")).toBeTruthy();
+    expect(screen.getByText("Completed with no text body.")).toBeTruthy();
+    expect(screen.queryByText("(No response)")).toBeNull();
+  });
+
+  it("renders final marker CTA below the marker text when visible", () => {
+    const message: ChatMessage = {
+      id: "assistant-final-visible",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [{ type: "text", text: "Latest completed response." }],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "Ready for the next step.",
+        continueAction: {
+          label: "Continue",
+          prompt: "Please continue.",
+        },
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onFinalMarkerContinue={vi.fn()}
+      />,
+    );
+
+    const finalRegion = container.querySelector(".assistant-final-region");
+    const header = container.querySelector(".final-marker-header");
+    const actions = container.querySelector(".final-marker-actions");
+    expect(finalRegion).toBeTruthy();
+    expect(container.querySelector(".assistant-message-final")).toBeNull();
+    expect(header).toBeTruthy();
+    expect(header?.textContent).toContain("Task complete");
+    expect(actions).toBeTruthy();
+    expect(actions?.textContent).toContain("Ready for the next step.");
+    expect(actions?.querySelector(".final-marker-continue")?.tagName).toBe(
+      "BUTTON",
+    );
+    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+    expect(finalRegion?.textContent).not.toContain(
+      "Latest completed response.",
+    );
+  });
+
+  it("renders final marker summaries with normal markdown and file links", () => {
+    const onOpenFile = vi.fn();
+    const message: ChatMessage = {
+      id: "assistant-final-markdown",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary:
+          "Implemented **markdown summaries** and validated `MessageBubble`. See @src/agent/webview/components/MessageBubble.tsx:424.",
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const finalRegion = container.querySelector(".assistant-final-region");
+    const summary = finalRegion?.querySelector(".final-marker-summary");
+    expect(summary?.querySelector(".markdown-body")).toBeTruthy();
+    expect(summary?.querySelector("strong")?.textContent).toBe(
+      "markdown summaries",
+    );
+
+    const fileLink = summary?.querySelector(
+      ".file-path-link",
+    ) as HTMLAnchorElement | null;
+    expect(fileLink?.textContent).toBe(
+      "@src/agent/webview/components/MessageBubble.tsx:424",
+    );
+
+    fireEvent.click(fileLink as HTMLAnchorElement);
+    expect(onOpenFile).toHaveBeenCalledWith(
+      "src/agent/webview/components/MessageBubble.tsx",
+      424,
+    );
+  });
+
+  it("wires final marker special block popouts to the normal special block handler", () => {
+    const onOpenSpecialBlockPanel = vi.fn();
+    const message: ChatMessage = {
+      id: "assistant-final-special-block",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "```mermaid\ngraph TD\n  A --> B\n```",
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
+      />,
+    );
+
+    const popout = container.querySelector(
+      ".final-marker-summary .special-block-popout",
+    ) as HTMLButtonElement | null;
+    expect(popout).toBeTruthy();
+
+    fireEvent.click(popout as HTMLButtonElement);
+    expect(onOpenSpecialBlockPanel).toHaveBeenCalledWith({
+      kind: "mermaid",
+      source: "graph TD\n  A --> B",
+    });
+  });
+
+  it("scopes final marker highlighting to the final marker region", () => {
+    const message: ChatMessage = {
+      id: "assistant-final-with-prior-blocks",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        { type: "text", text: "I will verify this first." },
+        {
+          type: "tool_call",
+          id: "tool-verify",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: JSON.stringify({ ok: true }),
+          complete: true,
+        },
+      ],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "Done — the final summary only should be highlighted.",
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    const finalRegion = container.querySelector(".assistant-final-region");
+    expect(screen.getByText("I will verify this first.")).toBeTruthy();
+    expect(screen.getByText("Task complete")).toBeTruthy();
+    expect(finalRegion).toBeTruthy();
+    expect(finalRegion?.textContent).toContain("Task complete");
+    expect(finalRegion?.textContent).toContain(
+      "Done — the final summary only should be highlighted.",
+    );
+    expect(finalRegion?.textContent).not.toContain("I will verify this first.");
+    expect(finalRegion?.querySelector(".tool-call-block")).toBeNull();
   });
 
   it("renders MCP approval promotion actions for completed tool calls", () => {

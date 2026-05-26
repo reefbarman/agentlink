@@ -12,12 +12,15 @@ import {
 import { BrowserGatewayApp } from "./BrowserGatewayApp";
 import { h } from "preact";
 
+const xtermWrites = vi.hoisted(() => [] as string[]);
+
 vi.mock("@xterm/xterm", () => ({
   Terminal: class MockTerminal {
     loadAddon() {}
     open() {}
     reset() {}
-    write(_text: string, callback?: () => void) {
+    write(text: string, callback?: () => void) {
+      xtermWrites.push(text);
       callback?.();
     }
     scrollToBottom() {}
@@ -56,7 +59,58 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as Response;
 }
 
-function createSnapshot() {
+function createSnapshot(): {
+  ui: {
+    approval: null;
+    question: null;
+    recentEvents: never[];
+    mcpStatusInfos: never[];
+  };
+  session: {
+    terminals: Array<{
+      id: string;
+      name: string;
+      busy: boolean;
+      stale?: boolean;
+    }>;
+    repository: { branch?: string; dirty?: boolean } | null;
+    sessions: never[];
+    foreground: {
+      sessionId: string;
+      title: string;
+      mode: string;
+      model: string;
+      status: string;
+      streaming: boolean;
+      messages: never[];
+      projectedMessages: unknown[];
+      statusOverride: string | null;
+      thinkingEnabled: boolean;
+      lastInputTokens: number;
+      lastOutputTokens: number;
+      lastCacheReadTokens: number;
+      estimatedTotalUsed: number;
+      messageQueue: never[];
+      questionRequest: null;
+      detectedQuestion: null;
+      todos: never[];
+      debugInfo: null;
+      systemPrompt: null;
+      loadedInstructions: null;
+      restoringSession: boolean;
+      condenseThreshold: number;
+      agentWriteApproval: string;
+    };
+  };
+  background: never[];
+  diffs: never[];
+  theme: {
+    cssVariables: Record<string, string>;
+    colorScheme: string;
+    themeLabel: string;
+    source: string;
+  };
+} {
   return {
     ui: {
       approval: null,
@@ -66,6 +120,7 @@ function createSnapshot() {
     },
     session: {
       terminals: [],
+      repository: null,
       sessions: [],
       foreground: {
         sessionId: "session-1",
@@ -76,7 +131,7 @@ function createSnapshot() {
         streaming: false,
         messages: [],
         projectedMessages: [],
-        statusOverride: null,
+        statusOverride: null as string | null,
         thinkingEnabled: true,
         lastInputTokens: 0,
         lastOutputTokens: 0,
@@ -106,6 +161,8 @@ function createSnapshot() {
 }
 
 class MockEventSource {
+  static instances: MockEventSource[] = [];
+
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
 
@@ -113,7 +170,9 @@ class MockEventSource {
   removeEventListener = vi.fn();
   close = vi.fn();
 
-  constructor(_url: string) {}
+  constructor(_url: string) {
+    MockEventSource.instances.push(this);
+  }
 }
 
 function installLocalStorageMock(): Map<string, string> {
@@ -139,6 +198,8 @@ function installLocalStorageMock(): Map<string, string> {
 describe("BrowserGatewayApp /mcp behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    xtermWrites.length = 0;
+    MockEventSource.instances = [];
     installLocalStorageMock();
     document.documentElement.removeAttribute("style");
 
@@ -236,6 +297,33 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     document.documentElement.removeAttribute("style");
   });
 
+  it("applies injected initial theme when no cached theme exists", () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+        initialTheme: {
+          cssVariables: {
+            "--vscode-editor-background": "rgb(9, 8, 7)",
+            "--vscode-foreground": "rgb(6, 5, 4)",
+          },
+          colorScheme: "dark",
+          themeLabel: "Initial Dark",
+          source: "baked-default",
+        },
+      }),
+    );
+
+    expect(
+      document.documentElement.style.getPropertyValue(
+        "--vscode-editor-background",
+      ),
+    ).toBe("rgb(9, 8, 7)");
+    expect(document.documentElement.style.colorScheme).toBe("dark");
+  });
+
   it("applies cached runtime theme variables before the live snapshot arrives", async () => {
     window.localStorage.setItem(
       "agentlink.browserGateway.themeSnapshot.v1",
@@ -275,7 +363,75 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
-  it("renders instance tabs with status and switches selected instance", async () => {
+  it("uses repository metadata from the gateway snapshot for terminal prompts", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const snapshot = createSnapshot();
+    snapshot.session.repository = {
+      branch: "remote-browser-sessions",
+      dirty: true,
+    };
+    snapshot.session.foreground.projectedMessages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        blocks: [
+          {
+            type: "tool_call",
+            id: "tool-exec",
+            name: "execute_command",
+            inputJson: JSON.stringify({ command: "pwd" }),
+            result: JSON.stringify({ output: "/workspace/agentlink" }),
+            complete: true,
+          },
+        ],
+      },
+    ] as never;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) {
+        return jsonResponse({
+          modes: [{ slug: "code", name: "Code", icon: "symbol-misc" }],
+        });
+      }
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      return jsonResponse({ ok: true });
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "agentlink",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(xtermWrites.at(-1)).toContain("git:(remote-browser-sessions)");
+      expect(xtermWrites.at(-1)).toContain(" ✗");
+    });
+  });
+
+  it("renders instance tabs with status and selects an active instance by default", async () => {
     render(
       h(BrowserGatewayApp, {
         authToken: "test-token",
@@ -291,14 +447,15 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     const workspaceTab = screen.getByRole("tab", { name: /Workspace/ });
     const workerTab = screen.getByRole("tab", { name: /Worker/ });
-    expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByText("Idle")).toBeTruthy();
-    expect(screen.getByText("Working")).toBeTruthy();
-
-    fireEvent.click(workerTab);
 
     await waitFor(() => {
       expect(workerTab.getAttribute("aria-selected")).toBe("true");
+    });
+
+    fireEvent.click(workspaceTab);
+
+    await waitFor(() => {
+      expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
     });
   });
 
@@ -321,16 +478,92 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input]) =>
-          String(input).includes("/api/sessions?instanceId=instance-1"),
+          String(input).includes("/api/sessions?instanceId=instance-2"),
         ),
       ).toBe(true);
     });
 
     expect(
-      screen
-        .getByRole("tab", { name: /Workspace/ })
-        .getAttribute("aria-selected"),
+      screen.getByRole("tab", { name: /Worker/ }).getAttribute("aria-selected"),
     ).toBe("true");
+  });
+
+  it("falls back to snapshot polling when the realtime stream errors", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const initialSnapshot = createSnapshot();
+    const recoveredSnapshot = createSnapshot();
+    recoveredSnapshot.session.foreground.status = "streaming";
+    recoveredSnapshot.session.foreground.streaming = true;
+    recoveredSnapshot.session.foreground.statusOverride =
+      "Recovered via fallback";
+    let uiStateCalls = 0;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) {
+        uiStateCalls += 1;
+        return jsonResponse(
+          uiStateCalls === 1 ? initialSnapshot : recoveredSnapshot,
+        );
+      }
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "working", label: "Working" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/modes")) {
+        return jsonResponse({
+          modes: [{ slug: "code", name: "Code", icon: "symbol-misc" }],
+        });
+      }
+      if (url.includes("/api/models")) {
+        return jsonResponse({ models: [] });
+      }
+      if (url.includes("/api/sessions")) {
+        return jsonResponse({ sessions: [] });
+      }
+      if (url.includes("/api/debug/refresh")) {
+        return jsonResponse({ ok: true });
+      }
+      return jsonResponse({ ok: true });
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(MockEventSource.instances.length).toBeGreaterThan(0);
+    });
+
+    MockEventSource.instances[0]?.onerror?.();
+
+    await waitFor(() => {
+      expect(screen.getByText("Recovered via fallback")).toBeTruthy();
+    });
+
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/api/ui-state?instanceId=instance-1"),
+      ),
+    ).toBe(true);
   });
 
   it("opens MCP panel without posting /api/send", async () => {

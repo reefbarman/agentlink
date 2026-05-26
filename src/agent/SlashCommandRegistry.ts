@@ -1,15 +1,19 @@
-import * as os from "os";
 import * as fs from "fs/promises";
+import * as os from "os";
 import * as path from "path";
+
+import { loadSkills } from "./skillLoader.js";
 
 export interface SlashCommand {
   name: string;
   description: string;
-  source: "builtin" | "project" | "global" | "agentlink";
+  source: "builtin" | "project" | "global" | "agentlink" | "skill";
   /** True if this is a built-in that executes immediately (not a prompt template) */
   builtin: boolean;
   /** Body to inject into the input when selected (for file-based commands) */
   body?: string;
+  /** Absolute SKILL.md path for generated skill commands. */
+  skillPath?: string;
 }
 
 /** Parse YAML frontmatter from a markdown file. Returns `{}` if not present. */
@@ -129,6 +133,12 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "skills",
+    description: "Show detected AgentLink skills for the current mode",
+    source: "builtin",
+    builtin: true,
+  },
+  {
     name: "mcp",
     description: "Show MCP server connection status",
     source: "builtin",
@@ -164,9 +174,15 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
 export class SlashCommandRegistry {
   private commands: SlashCommand[] = [...BUILTIN_COMMANDS];
   private cwd: string;
+  private modeSlug: string;
 
-  constructor(cwd: string) {
+  constructor(cwd: string, modeSlug = "code") {
     this.cwd = cwd;
+    this.modeSlug = modeSlug;
+  }
+
+  setMode(modeSlug: string): void {
+    this.modeSlug = modeSlug;
   }
 
   /**
@@ -187,6 +203,8 @@ export class SlashCommandRegistry {
       loadCommandsFromDir(path.join(home, ".claude", "commands"), "global"),
       // Global .agentlink
       loadCommandsFromDir(path.join(home, ".agentlink", "commands"), "global"),
+      // Generated skill commands are lower precedence than explicit project file commands.
+      this.loadSkillCommands(),
       // Project .agents
       loadCommandsFromDir(path.join(cwd, ".agents", "commands"), "project"),
       // Project .claude
@@ -209,8 +227,24 @@ export class SlashCommandRegistry {
     this.commands = [...BUILTIN_COMMANDS, ...Array.from(byName.values())];
   }
 
+  private async loadSkillCommands(): Promise<SlashCommand[]> {
+    const skills = await loadSkills(this.cwd, this.modeSlug);
+    return skills.map((skill) => ({
+      name: `skill:${skill.name}`,
+      description: skill.description || `Use skill ${skill.name}`,
+      source: "skill" as const,
+      builtin: false,
+      body: `Use the skill "${skill.name}" by calling load_skill with path ${JSON.stringify(skill.skillPath)}, then follow its instructions for this request.`,
+      skillPath: skill.skillPath,
+    }));
+  }
+
   getAll(): SlashCommand[] {
     return this.commands;
+  }
+
+  getSkillCommands(): SlashCommand[] {
+    return this.commands.filter((command) => command.source === "skill");
   }
 
   /** Filter commands matching a prefix query (case-insensitive). */

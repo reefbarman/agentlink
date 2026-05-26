@@ -13,6 +13,7 @@ import { getEffectiveHistory, injectSyntheticToolResults } from "./condense.js";
 
 import type { AgentMode } from "./modes.js";
 import { BUILT_IN_MODES } from "./modes.js";
+import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { SkillEntry } from "./skillLoader.js";
 import { buildPromptArtifacts } from "./systemPrompt.js";
 import { buildSessionTitleFromUserText } from "./sessionTitle.js";
@@ -347,6 +348,20 @@ export class AgentSession {
   appendAssistantTurn(content: ContentBlock[]): void {
     this.messages.push({ role: "assistant", content } as AgentMessage);
     this.lastActiveAt = Date.now();
+  }
+
+  applyFinalMarker(marker: FinalMessageMarker): boolean {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const msg = this.messages[i];
+      if (msg.role !== "assistant") continue;
+      msg.uiHint = {
+        ...msg.uiHint,
+        finalMarker: marker,
+      };
+      this.lastActiveAt = Date.now();
+      return true;
+    }
+    return false;
   }
 
   setProviderResponseId(responseId: string | undefined): void {
