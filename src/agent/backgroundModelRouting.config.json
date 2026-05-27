@@ -28,31 +28,49 @@
       "maxApiTurns": 3,
       "toolProfile": "review"
     },
+    "readonly-research": {
+      "preferredMode": "ask",
+      "providerStrategy": "same",
+      "modelTier": "balanced",
+      "maxToolCalls": 15,
+      "maxApiTurns": 6,
+      "toolProfile": "readonly-research"
+    },
     "research": {
       "preferredMode": "ask",
       "providerStrategy": "same",
-      "modelTier": "balanced"
+      "modelTier": "balanced",
+      "maxToolCalls": 15,
+      "maxApiTurns": 6
     },
     "explore": {
       "preferredMode": "architect",
       "providerStrategy": "same",
-      "modelTier": "balanced"
+      "modelTier": "balanced",
+      "maxToolCalls": 18,
+      "maxApiTurns": 7
     },
     "debug": {
       "preferredMode": "debug",
       "providerStrategy": "same",
-      "modelTier": "balanced"
+      "modelTier": "balanced",
+      "maxToolCalls": 18,
+      "maxApiTurns": 7
     },
     "design": {
       "preferredMode": "architect",
       "providerStrategy": "same",
-      "modelTier": "deep_reasoning"
+      "modelTier": "deep_reasoning",
+      "maxToolCalls": 12,
+      "maxApiTurns": 5
     },
     "general": {
       "preferredMode": "code",
       "providerStrategy": "same",
       "modelTier": "balanced",
-      "useForegroundModelByDefault": true
+      "useForegroundModelByDefault": true,
+      "maxToolCalls": 12,
+      "maxApiTurns": 5
     }
   },
   "fallbackProviderOrder": ["anthropic", "codex"]

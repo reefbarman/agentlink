@@ -232,7 +232,7 @@ const MCP_META_TOOLS: ToolDefinition[] = [
 const ASK_USER_TOOL: ToolDefinition = {
   name: "ask_user",
   description:
-    "Ask the user one or more structured questions and wait for their responses before continuing. For multiple_choice and multiple_select questions, always include `recommended`.",
+    "Ask the user one or more structured questions and wait for their responses before continuing. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
   input_schema: {
     type: "object",
     properties: {
@@ -296,6 +296,12 @@ const ASK_USER_TOOL: ToolDefinition = {
               type: "string",
               description: "Label for the high end of the scale",
             },
+            modeSwitch: {
+              type: "object",
+              description:
+                "Maps answer values (option strings) to agent mode slugs. When the user picks a mapped answer, the agent switches mode as part of submission — no separate switch_mode approval is shown. Only valid on multiple_choice questions, and only one question per ask_user call may include modeSwitch. Available modes: code, architect, ask, debug, review (plus any custom modes).",
+              additionalProperties: { type: "string" },
+            },
           },
           required: ["id", "type", "question"],
         },
@@ -331,6 +337,11 @@ const SET_TASK_STATUS_TOOL: ToolDefinition = {
         description:
           "Optional visible user message sent when the continuation button is clicked",
       },
+      suppressContinue: {
+        type: "boolean",
+        description:
+          "Set true when the task is definitely complete and no continuation button or auto-continue action should be offered",
+      },
     },
     required: ["status"],
   },
@@ -362,7 +373,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "spawn_background_agent",
     description:
-      "Spawn a background agent to work in parallel with the current session. Returns immediately with a sessionId. Completed results are often pushed back automatically; call get_background_result only when you explicitly need to wait for the final output.",
+      "Spawn a background agent to work in parallel with the current session. Use proactively for independent research, non-conflicting code/test/docs work, alternate debug hypotheses, tangential checks, and quick or thorough reviews. Returns immediately with a sessionId so the foreground can keep working or coordinate other lanes; call get_background_status for non-blocking progress and get_background_result only when you need the final output.",
     input_schema: {
       type: "object",
       properties: {
@@ -373,7 +384,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         message: {
           type: "string",
           description:
-            "Full instruction for the background agent. Be specific and self-contained.",
+            "Full instruction for the background agent. Be specific and self-contained. For writable work, include explicit owned files/directories, files to avoid, allowed commands/tests, and how to report conflicts.",
         },
         mode: {
           type: "string",
@@ -391,7 +402,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         taskClass: {
           type: "string",
           description:
-            "Task class used for routing policy (e.g. review_code, review_plan, research, debug)",
+            "Task class used for routing policy (e.g. review_code, review_plan, readonly-research, research, explore, debug, design, general). Use readonly-research for pure read-only lookup/exploration; use general or debug for non-conflicting writable lanes (general selects code mode by default).",
         },
         modelTier: {
           type: "string",
@@ -405,7 +416,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_status",
     description:
-      "Non-blocking check on a background agent's progress. Use this when you have other work to do in parallel. If no push-style completion is available for your flow, call get_background_result when you need the final output.",
+      "Non-blocking check on a background agent's progress, including current tool/status and a running preview when available. Use this for coordinator-style progress checks while continuing other work; do not poll in a tight loop. If no push-style completion is available, call get_background_result only when you need the final output.",
     input_schema: {
       type: "object",
       properties: {
@@ -461,10 +472,21 @@ export interface BgStatusResult {
     | "tool_executing"
     | "awaiting_approval"
     | "idle"
+    | "cancelled"
     | "error";
   currentTool?: string;
   /** UI-ready status label derived from heuristics (and later model enrichment). */
   displayStatus?: string;
+  /** Running assistant output preview, useful for non-blocking coordination. */
+  streamingPreview?: string;
+  /** Concise running/completed summary when available. */
+  progressSummary?: string;
+  resolvedMode?: string;
+  resolvedModel?: string;
+  resolvedProvider?: string;
+  taskClass?: string;
+  toolCalls?: number;
+  tokenUsage?: number;
   done: boolean;
   /** Last assistant message text, only present when done=true. */
   partialOutput?: string;
@@ -489,6 +511,38 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "go_to_definition",
     "go_to_implementation",
     "get_type_hierarchy",
+  ]),
+  "readonly-research": new Set([
+    "read_file",
+    "search_files",
+    "codebase_search",
+    "list_files",
+    "get_diagnostics",
+    "get_hover",
+    "get_symbols",
+    "get_references",
+    "go_to_definition",
+    "go_to_implementation",
+    "go_to_type_definition",
+    "get_call_hierarchy",
+    "get_type_hierarchy",
+    "get_inlay_hints",
+  ]),
+  btw: new Set([
+    "read_file",
+    "search_files",
+    "codebase_search",
+    "list_files",
+    "get_diagnostics",
+    "get_hover",
+    "get_symbols",
+    "get_references",
+    "go_to_definition",
+    "go_to_implementation",
+    "go_to_type_definition",
+    "get_call_hierarchy",
+    "get_type_hierarchy",
+    "get_inlay_hints",
   ]),
 };
 
@@ -586,11 +640,22 @@ export interface ToolDispatchContext {
   onModeSwitch?: (
     mode: string,
     reason?: string,
+    /**
+     * When true, perform the mode switch without prompting the user for a
+     * separate approval. Used by ask_user when the user's choice already
+     * represents consent (per-question modeSwitch map).
+     */
+    silent?: boolean,
   ) => Promise<{ approved: boolean; mode: string }>;
   onApprovalRequest?: import("../shared/types.js").OnApprovalRequest;
   onQuestion?: (
     questions: import("../agent/webview/types.js").Question[],
     sessionId: string,
+    /**
+     * When set, indicates the question is from a background agent with this
+     * task name. The UI uses this for attribution on the question card.
+     */
+    backgroundTask?: string,
   ) => Promise<QuestionResponse>;
   /** Called whenever the agent reads a file — used to track files for folded context on condense */
   onFileRead?: (filePath: string) => void;
@@ -816,13 +881,15 @@ export async function dispatchToolCall(
         typeof params.continuePrompt === "string"
           ? params.continuePrompt.trim()
           : "";
+      const suppressContinue = params.suppressContinue === true;
       const marker: FinalMessageMarker = {
         status,
         source: "tool",
         ...(typeof params.summary === "string" && params.summary.trim()
           ? { summary: params.summary.trim() }
           : {}),
-        ...(continueLabel && continuePrompt
+        ...(suppressContinue ? { continueActionSuppressed: true } : {}),
+        ...(!suppressContinue && continueLabel && continuePrompt
           ? { continueAction: { label: continueLabel, prompt: continuePrompt } }
           : {}),
       };
@@ -1097,6 +1164,41 @@ export async function dispatchToolCall(
       }
       const questions =
         params.questions as import("../agent/webview/types.js").Question[];
+
+      // Reject calls that include modeSwitch on more than one question or on
+      // unsupported question types — keeps a single, unambiguous mode change
+      // per ask_user invocation.
+      const modeSwitchQuestions = questions.filter(
+        (q) => q.modeSwitch && Object.keys(q.modeSwitch).length > 0,
+      );
+      if (modeSwitchQuestions.length > 1) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error:
+                  "Only one question per ask_user call may include modeSwitch",
+              }),
+            },
+          ],
+        };
+      }
+      const modeSwitchQuestion = modeSwitchQuestions[0];
+      if (modeSwitchQuestion && modeSwitchQuestion.type !== "multiple_choice") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error:
+                  "modeSwitch is only supported on multiple_choice questions",
+              }),
+            },
+          ],
+        };
+      }
+
       const response = await ctx.onQuestion(questions, ctx.sessionId);
       // Format as a readable responses array so Claude sees question + answer + note together
       const responses = questions.map((q) => {
@@ -1109,8 +1211,40 @@ export async function dispatchToolCall(
         if (note) entry.note = note;
         return entry;
       });
+
+      // If the user picked an answer mapped to a mode, perform the switch
+      // silently (their choice is the consent).
+      let modeSwitched: string | undefined;
+      if (modeSwitchQuestion && ctx.onModeSwitch) {
+        const answer = response.answers[modeSwitchQuestion.id];
+        const mapping = modeSwitchQuestion.modeSwitch;
+        if (mapping && typeof answer === "string") {
+          const targetMode = mapping[answer];
+          if (targetMode) {
+            const note = response.notes[modeSwitchQuestion.id]?.trim();
+            const switchReason = note
+              ? `ask_user: "${answer}" — ${note}`
+              : `ask_user: "${answer}"`;
+            try {
+              const switchResult = await ctx.onModeSwitch(
+                targetMode,
+                switchReason,
+                true,
+              );
+              if (switchResult.approved) {
+                modeSwitched = switchResult.mode;
+              }
+            } catch {
+              // ignore — fall back to no switch; agent can call switch_mode if needed
+            }
+          }
+        }
+      }
+
+      const payload: Record<string, unknown> = { responses };
+      if (modeSwitched) payload.modeSwitched = modeSwitched;
       return {
-        content: [{ type: "text", text: JSON.stringify({ responses }) }],
+        content: [{ type: "text", text: JSON.stringify(payload) }],
       };
     }
 

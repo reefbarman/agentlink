@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { AgentSessionManager } from "./AgentSessionManager.js";
 import type { ToolDispatchContext } from "./toolAdapter.js";
 
 const mocks = vi.hoisted(() => {
@@ -7,7 +9,11 @@ const mocks = vi.hoisted(() => {
     setToolContext: vi.fn(),
     runBehavior: vi.fn<() => AsyncGenerator<unknown>>(),
     resolveBackgroundRoute: vi.fn(
-      async (_registry: unknown, request: any, _foreground: unknown) => ({
+      async (
+        _registry: unknown,
+        request: any,
+        _foreground: unknown,
+      ): Promise<Record<string, unknown>> => ({
         resolvedMode: request.mode ?? "review",
         resolvedModel: request.model ?? "claude-sonnet-4-6",
         resolvedProvider: request.provider ?? "anthropic",
@@ -84,8 +90,6 @@ vi.mock("./AgentSession.js", () => ({
     create: (opts: unknown) => mocks.createSession(opts),
   },
 }));
-
-import { AgentSessionManager } from "./AgentSessionManager.js";
 
 describe("AgentSessionManager background agents", () => {
   const config = {
@@ -350,6 +354,68 @@ describe("AgentSessionManager background agents", () => {
     expect(liveInfo).toBeDefined();
     expect(liveInfo!.displayStatus).toBe("Reviewing code");
     expect(liveInfo!.displayStatusSource).toBe("model");
+  });
+
+  it("getBackgroundStatus returns running progress metadata without waiting", async () => {
+    let release: (() => void) | undefined;
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "ask",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "readonly-research",
+      routingReason: "test route",
+      fallbackUsed: false,
+      maxToolCalls: 15,
+      maxApiTurns: 6,
+      toolProfile: "readonly-research",
+    });
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        yield { type: "text_delta", text: "I found the likely test files" };
+        yield { type: "tool_start", toolCallId: "tc-1", toolName: "read_file" };
+        yield {
+          type: "api_request",
+          requestId: "r1",
+          model: "claude-sonnet-4-6",
+          inputTokens: 100,
+          uncachedInputTokens: 80,
+          outputTokens: 20,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          durationMs: 10,
+          timeToFirstToken: 2,
+        };
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        yield { type: "done" };
+      })(),
+    );
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "research tests",
+      message: "inspect tests",
+      taskClass: "readonly-research",
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    const status = mgr.getBackgroundStatus(spawned.sessionId);
+    expect(status.done).toBe(false);
+    expect(status.streamingPreview).toContain("likely test files");
+    expect(status.progressSummary).toBeDefined();
+    expect(status.resolvedMode).toBe("ask");
+    expect(status.resolvedModel).toBe("claude-sonnet-4-6");
+    expect(status.resolvedProvider).toBe("anthropic");
+    expect(status.taskClass).toBe("readonly-research");
+    expect(status.toolCalls).toBe(1);
+    expect(status.tokenUsage).toBe(100);
+    expect(status.partialOutput).toBeUndefined();
+
+    release?.();
   });
 
   it("prefers heuristic over generic model thinking while tool activity is visible", async () => {

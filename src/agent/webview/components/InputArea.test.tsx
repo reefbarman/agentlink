@@ -14,7 +14,10 @@ afterEach(() => {
   cleanup();
 });
 
-function renderInputArea(slashCommands: SlashCommandInfo[]) {
+function renderInputArea(
+  slashCommands: SlashCommandInfo[],
+  overrides: Partial<Parameters<typeof InputArea>[0]> = {},
+) {
   return render(
     <InputArea
       onSend={vi.fn()}
@@ -28,6 +31,7 @@ function renderInputArea(slashCommands: SlashCommandInfo[]) {
       injection={null}
       onInjectionConsumed={vi.fn()}
       slashCommands={slashCommands}
+      {...overrides}
     />,
   );
 }
@@ -71,5 +75,21 @@ describe("InputArea slash popup", () => {
 
     expect(container.querySelector(".slash-cmd-popup")).toBeTruthy();
     expect(container.querySelectorAll(".slash-cmd-option").length).toBe(3);
+  });
+
+  it("renders and toggles Auto Continue from the toolbar", () => {
+    const onToggleAutoContinue = vi.fn();
+    const { getByRole } = renderInputArea([], {
+      autoContinueEnabled: true,
+      onToggleAutoContinue,
+    });
+
+    const button = getByRole("button", { name: "Auto Continue On" });
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.classList.contains("active")).toBe(true);
+    expect(button.classList.contains("auto-continue-toggle")).toBe(true);
+
+    fireEvent.click(button);
+    expect(onToggleAutoContinue).toHaveBeenCalledWith(false);
   });
 });

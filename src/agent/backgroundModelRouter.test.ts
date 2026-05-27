@@ -1,16 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
-import { ProviderRegistry } from "./providers/index.js";
 import type {
+  CompleteRequest,
+  CompleteResult,
   ModelCapabilities,
   ModelInfo,
   ModelProvider,
-  StreamRequest,
-  CompleteRequest,
-  CompleteResult,
   ProviderStreamEvent,
+  StreamRequest,
 } from "./providers/types.js";
+import { describe, expect, it } from "vitest";
+
+import { ProviderRegistry } from "./providers/index.js";
 import type { SpawnBackgroundRequest } from "./backgroundTypes.js";
+import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
 
 const CAPS: ModelCapabilities = {
   supportsThinking: true,
@@ -293,7 +294,7 @@ describe("resolveBackgroundRoute", () => {
     expect(route.toolProfile).toBe("review");
   });
 
-  it("does not return overrides for general task class", async () => {
+  it("returns soft limits for general task class", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
 
@@ -308,10 +309,58 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.thinkingBudget).toBeUndefined();
-    expect(route.maxToolCalls).toBeUndefined();
-    expect(route.maxApiTurns).toBeUndefined();
+    expect(route.maxToolCalls).toBe(12);
+    expect(route.maxApiTurns).toBe(5);
     expect(route.toolProfile).toBeUndefined();
   });
+
+  it("returns readonly-research profile and soft limits", async () => {
+    const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
+    const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      {
+        task: "Read docs",
+        message: "Research without edits",
+        taskClass: "readonly-research",
+      },
+      { mode: "code", model: "claude-sonnet-4-6" },
+    );
+
+    expect(route.resolvedMode).toBe("ask");
+    expect(route.maxToolCalls).toBe(15);
+    expect(route.maxApiTurns).toBe(6);
+    expect(route.toolProfile).toBe("readonly-research");
+  });
+
+  it.each([
+    ["research", "ask", 15, 6],
+    ["explore", "architect", 18, 7],
+    ["debug", "debug", 18, 7],
+    ["design", "architect", 12, 5],
+  ] as const)(
+    "returns soft limits for %s task class",
+    async (taskClass, expectedMode, expectedToolCalls, expectedApiTurns) => {
+      const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
+      const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
+
+      const route = await resolveBackgroundRoute(
+        registry,
+        {
+          task: `${taskClass} task`,
+          message: "Do background work",
+          taskClass,
+        },
+        { mode: "code", model: "claude-sonnet-4-6" },
+      );
+
+      expect(route.resolvedMode).toBe(expectedMode);
+      expect(route.maxToolCalls).toBe(expectedToolCalls);
+      expect(route.maxApiTurns).toBe(expectedApiTurns);
+      expect(route.toolProfile).toBeUndefined();
+    },
+  );
 
   it("throws for unavailable explicit model", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");

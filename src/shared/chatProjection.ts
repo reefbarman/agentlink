@@ -11,8 +11,11 @@ import type {
 } from "../agent/webview/types.js";
 
 import type { DetectedQuestion } from "./questionDetection.js";
-import type { FinalMessageMarker } from "./finalStatus.js";
 import type { McpApprovalPromotionMeta } from "./types.js";
+import {
+  getFinalMessageContinueAction,
+  type FinalMessageMarker,
+} from "./finalStatus.js";
 
 function parseLoadSkillResult(result: string): {
   skillName?: string;
@@ -85,7 +88,12 @@ export interface AppState {
     images?: Array<{ name: string; mimeType: string; base64: string }>;
     documents?: Array<{ name: string; mimeType: string; base64: string }>;
   }>;
-  questionRequest: { id: string; questions: Question[] } | null;
+  questionRequest: {
+    id: string;
+    questions: Question[];
+    /** When set, the question is from a background agent with this task name. */
+    backgroundTask?: string;
+  } | null;
   detectedQuestion: (DetectedQuestion & { messageId: string }) | null;
   dismissedDetectedQuestionIds: string[];
   /** Temporary status override shown in the streaming spinner (e.g. "Refreshing credentials…") */
@@ -168,6 +176,7 @@ export type AppAction =
     }
   | { type: "SET_FINAL_MARKER"; marker: FinalMessageMarker | null }
   | { type: "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS" }
+  | { type: "MARK_AUTO_CONTINUE_STOPPED"; messageId: string; reason: string }
   | { type: "DONE" }
   | { type: "NEW_SESSION" }
   | { type: "SET_REASONING_EFFORT"; effort: ReasoningEffort }
@@ -195,7 +204,12 @@ export type AppAction =
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
     }
-  | { type: "SET_QUESTION"; id: string; questions: Question[] }
+  | {
+      type: "SET_QUESTION";
+      id: string;
+      questions: Question[];
+      backgroundTask?: string;
+    }
   | { type: "CLEAR_QUESTION" }
   | {
       type: "SET_DETECTED_QUESTION";
@@ -282,12 +296,6 @@ export type AppAction =
       status: "completed" | "error" | "cancelled";
       resultText?: string;
       summary?: string;
-    }
-  | {
-      type: "ADD_BG_QUESTION";
-      bgTask: string;
-      questions: string[];
-      answer: string;
     }
   | { type: "TOKEN_ESTIMATE"; estimatedTotalUsed: number };
 
@@ -724,13 +732,47 @@ function clearFinalMarkerContinueActions(
 ): ChatMessage[] {
   let changed = false;
   const next = messages.map((message) => {
-    if (message.role !== "assistant" || !message.finalMarker?.continueAction) {
+    if (
+      message.role !== "assistant" ||
+      !message.finalMarker ||
+      !getFinalMessageContinueAction(message.finalMarker)
+    ) {
       return message;
     }
     changed = true;
     const { continueAction: _continueAction, ...finalMarker } =
       message.finalMarker;
-    return { ...message, finalMarker };
+    return {
+      ...message,
+      finalMarker: { ...finalMarker, continueActionSuppressed: true },
+    };
+  });
+  return changed ? next : messages;
+}
+
+function markAutoContinueStopped(
+  messages: ChatMessage[],
+  messageId: string,
+  reason: string,
+): ChatMessage[] {
+  let changed = false;
+  const next = messages.map((message) => {
+    if (
+      message.id !== messageId ||
+      message.role !== "assistant" ||
+      !message.finalMarker ||
+      message.finalMarker.autoContinueStopReason === reason
+    ) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      finalMarker: {
+        ...message.finalMarker,
+        autoContinueStopReason: reason,
+      },
+    };
   });
   return changed ? next : messages;
 }
@@ -902,31 +944,6 @@ export function reducer(state: AppState, action: AppAction): AppState {
           },
         ],
       };
-
-    case "ADD_BG_QUESTION": {
-      const bgMsgs = [...state.messages];
-      const bgLast =
-        bgMsgs.length > 0 ? { ...bgMsgs[bgMsgs.length - 1] } : null;
-      const bgBlock = {
-        type: "bg_question" as const,
-        bgTask: action.bgTask,
-        questions: action.questions,
-        answer: action.answer,
-      };
-      if (bgLast && bgLast.role === "assistant") {
-        bgLast.blocks = [...(bgLast.blocks ?? []), bgBlock];
-        bgMsgs[bgMsgs.length - 1] = bgLast;
-        return { ...state, messages: bgMsgs };
-      }
-      bgMsgs.push({
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        blocks: [bgBlock],
-      });
-      return { ...state, messages: bgMsgs };
-    }
 
     case "THINKING_START": {
       const all = ensureAssistant(state.messages);
@@ -1241,6 +1258,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
         messages: clearFinalMarkerContinueActions(state.messages),
       };
 
+    case "MARK_AUTO_CONTINUE_STOPPED":
+      return {
+        ...state,
+        messages: markAutoContinueStopped(
+          state.messages,
+          action.messageId,
+          action.reason,
+        ),
+      };
+
     case "ERROR": {
       const all = ensureAssistant(state.messages);
       const { msgs, last } = cloneLast(all);
@@ -1537,7 +1564,13 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case "SET_QUESTION":
       return {
         ...state,
-        questionRequest: { id: action.id, questions: action.questions },
+        questionRequest: {
+          id: action.id,
+          questions: action.questions,
+          ...(action.backgroundTask
+            ? { backgroundTask: action.backgroundTask }
+            : {}),
+        },
       };
 
     case "CLEAR_QUESTION":

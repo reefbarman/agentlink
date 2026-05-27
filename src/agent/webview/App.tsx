@@ -16,6 +16,10 @@ import {
   shouldDropSessionScopedEvent,
 } from "../../shared/chatProjection.js";
 import {
+  getLatestAutoContinueAction,
+  getLatestFinalMessageMarker,
+} from "../../shared/finalStatus.js";
+import {
   useCallback,
   useEffect,
   useReducer,
@@ -46,6 +50,7 @@ import { detectQuestionFromAssistantText } from "./questionDetection";
 import { getStreamingActivity } from "./components/MessageBubble";
 
 const DEFAULT_MAX_TOKENS = 200_000;
+const AUTO_CONTINUE_MAX_TURNS = 10;
 
 function captureVsCodeThemeSnapshot(): {
   cssVariables: Record<string, string>;
@@ -131,6 +136,13 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const toolInputDeltaBuf = useRef(new Map<string, string>());
   const deltaRafRef = useRef<number | null>(null);
   const [injection, setInjection] = useState<Injection | null>(null);
+  const [autoContinueEnabled, setAutoContinueEnabled] = useState(false);
+  const [autoContinueStatus, setAutoContinueStatus] = useState("");
+  const autoContinuedMessageIdsRef = useRef<Set<string>>(new Set());
+  const autoContinueCountRef = useRef(0);
+  const autoContinueSessionIdRef = useRef<string | null>(
+    state.chatState.sessionId,
+  );
   const [shiftDragOver, setShiftDragOver] = useState(false);
   const dragCounterRef = useRef(0);
   const [mcpStatusInfos, setMcpStatusInfos] = useState<Array<{
@@ -163,6 +175,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [showHistory, setShowHistory] = useState(false);
   const [forwardedApproval, setForwardedApproval] =
     useState<ApprovalRequest | null>(null);
+  const forwardedApprovalRef = useRef<ApprovalRequest | null>(null);
   const [approvalPanelHeight, setApprovalPanelHeight] = useState(360);
   const [approvalResizing, setApprovalResizing] = useState(false);
   const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
@@ -180,12 +193,16 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
   const [editingQueueText, setEditingQueueText] = useState("");
   const [bgSessions, setBgSessions] = useState<BgSessionInfoProps[]>([]);
+  const bgSessionsRef = useRef<BgSessionInfoProps[]>([]);
+  bgSessionsRef.current = bgSessions;
   const [expandedQueueIds, setExpandedQueueIds] = useState<Set<string>>(
     new Set(),
   );
   const [transcriptView, setTranscriptView] = useState<{
+    sessionId: string;
     task: string;
     messages: ChatMessage[];
+    streaming: boolean;
   } | null>(null);
   const [btwState, setBtwState] = useState<BtwState | null>(null);
 
@@ -280,6 +297,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         msg.type === "agentBgThinkingEnd" ||
         msg.type === "agentBgTextDelta" ||
         msg.type === "agentBgToolStart" ||
+        msg.type === "agentBgToolInputDelta" ||
         msg.type === "agentBgToolComplete" ||
         msg.type === "agentBgApiRequest" ||
         msg.type === "agentBgError" ||
@@ -563,9 +581,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           }
           break;
         case "showApproval":
+          forwardedApprovalRef.current = msg.request as ApprovalRequest;
           setForwardedApproval(msg.request as ApprovalRequest);
           break;
         case "idle":
+          forwardedApprovalRef.current = null;
           setForwardedApproval(null);
           break;
 
@@ -750,23 +770,215 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
 
         // Background-only stream events are intentionally not rendered into the
-        // foreground transcript. They only trigger bg session UI refresh.
+        // foreground transcript. When the transcript overlay is open, project the
+        // matching background session through the same reducer used by foreground
+        // chat so rendering stays identical and live.
         case "agentBgThinkingStart":
+          setTranscriptView((prev) =>
+            prev?.sessionId === msg.sessionId
+              ? {
+                  ...prev,
+                  messages: reducer(
+                    {
+                      ...initialState,
+                      messages: prev.messages,
+                      streaming: true,
+                    },
+                    { type: "THINKING_START", thinkingId: msg.thinkingId },
+                  ).messages,
+                  streaming: true,
+                }
+              : prev,
+          );
+          break;
         case "agentBgThinkingDelta":
+          setTranscriptView((prev) =>
+            prev?.sessionId === msg.sessionId
+              ? {
+                  ...prev,
+                  messages: reducer(
+                    {
+                      ...initialState,
+                      messages: prev.messages,
+                      streaming: prev.streaming,
+                    },
+                    {
+                      type: "THINKING_DELTA",
+                      thinkingId: msg.thinkingId,
+                      text: msg.text,
+                    },
+                  ).messages,
+                }
+              : prev,
+          );
+          break;
         case "agentBgThinkingEnd":
+          setTranscriptView((prev) =>
+            prev?.sessionId === msg.sessionId
+              ? {
+                  ...prev,
+                  messages: reducer(
+                    {
+                      ...initialState,
+                      messages: prev.messages,
+                      streaming: prev.streaming,
+                    },
+                    { type: "THINKING_END", thinkingId: msg.thinkingId },
+                  ).messages,
+                }
+              : prev,
+          );
+          break;
         case "agentBgTextDelta":
+          setTranscriptView((prev) =>
+            prev?.sessionId === msg.sessionId
+              ? {
+                  ...prev,
+                  messages: reducer(
+                    {
+                      ...initialState,
+                      messages: prev.messages,
+                      streaming: true,
+                    },
+                    { type: "TEXT_DELTA", text: msg.text },
+                  ).messages,
+                  streaming: true,
+                }
+              : prev,
+          );
+          break;
         case "agentBgToolStart":
+          setTranscriptView((prev) =>
+            prev?.sessionId === msg.sessionId
+              ? {
+                  ...prev,
+                  messages: reducer(
+                    {
+                      ...initialState,
+                      messages: prev.messages,
+                      streaming: true,
+                    },
+                    {
+                      type: "TOOL_START",
+                      toolCallId: msg.toolCallId,
+                      toolName: msg.toolName,
+                    },
+                  ).messages,
+                  streaming: true,
+                }
+              : prev,
+          );
+          break;
+        case "agentBgToolInputDelta":
+          setTranscriptView((prev) =>
+            prev?.sessionId === msg.sessionId
+              ? {
+                  ...prev,
+                  messages: reducer(
+                    {
+                      ...initialState,
+                      messages: prev.messages,
+                      streaming: prev.streaming,
+                    },
+                    {
+                      type: "TOOL_INPUT_DELTA",
+                      toolCallId: msg.toolCallId,
+                      partialJson: msg.partialJson,
+                    },
+                  ).messages,
+                }
+              : prev,
+          );
+          break;
         case "agentBgToolComplete":
+          setTranscriptView((prev) =>
+            prev?.sessionId === msg.sessionId
+              ? {
+                  ...prev,
+                  messages: reducer(
+                    {
+                      ...initialState,
+                      messages: prev.messages,
+                      streaming: prev.streaming,
+                    },
+                    {
+                      type: "TOOL_COMPLETE",
+                      toolCallId: msg.toolCallId,
+                      toolName: msg.toolName,
+                      result: msg.result,
+                      durationMs: msg.durationMs,
+                      input: msg.input,
+                    },
+                  ).messages,
+                }
+              : prev,
+          );
+          break;
         case "agentBgApiRequest":
+          setTranscriptView((prev) =>
+            prev?.sessionId === msg.sessionId
+              ? {
+                  ...prev,
+                  messages: reducer(
+                    {
+                      ...initialState,
+                      messages: prev.messages,
+                      streaming: prev.streaming,
+                    },
+                    {
+                      type: "API_REQUEST",
+                      requestId: msg.requestId,
+                      model: msg.model,
+                      inputTokens: msg.inputTokens,
+                      uncachedInputTokens: msg.uncachedInputTokens,
+                      outputTokens: msg.outputTokens,
+                      cacheReadTokens: msg.cacheReadTokens,
+                      cacheCreationTokens: msg.cacheCreationTokens,
+                      durationMs: msg.durationMs,
+                      timeToFirstToken: msg.timeToFirstToken,
+                      usedPreviousResponseId: msg.usedPreviousResponseId,
+                      previousResponseIdFallback:
+                        msg.previousResponseIdFallback,
+                      promptCacheKey: msg.promptCacheKey,
+                      promptCacheRetention: msg.promptCacheRetention,
+                      storeResponseState: msg.storeResponseState,
+                      providerResponseId: msg.providerResponseId,
+                    },
+                  ).messages,
+                }
+              : prev,
+          );
+          break;
         case "agentBgError":
-          // Bg status updates are sent separately (and throttled) by the extension.
+          setTranscriptView((prev) =>
+            prev?.sessionId === msg.sessionId
+              ? {
+                  ...prev,
+                  messages: reducer(
+                    {
+                      ...initialState,
+                      messages: prev.messages,
+                      streaming: prev.streaming,
+                    },
+                    {
+                      type: "ERROR",
+                      error: msg.error,
+                      retryable: msg.retryable,
+                      code: msg.code,
+                      actions: msg.actions,
+                    },
+                  ).messages,
+                  streaming: false,
+                }
+              : prev,
+          );
           break;
         case "agentBgDone": {
           // Insert a completion notification at the current chat position
           const bgSessionId = msg.sessionId;
           // Find the task name from existing bg_agent blocks in messages
           let bgTask = "Background Agent";
-          for (const m of state.messages) {
+          for (const m of fullStateRef.current.messages) {
             for (const b of m.blocks) {
               if (b.type === "bg_agent" && b.sessionId === bgSessionId) {
                 bgTask = b.task;
@@ -775,13 +987,27 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             }
           }
           // Determine status from bgSessions state
-          const bgInfo = bgSessions.find((s) => s.id === bgSessionId);
+          const bgInfo = bgSessionsRef.current.find(
+            (s) => s.id === bgSessionId,
+          );
           const bgStatus: "completed" | "error" | "cancelled" =
             bgInfo?.status === "error"
               ? "error"
               : bgInfo?.status === "cancelled"
                 ? "cancelled"
                 : "completed";
+          setTranscriptView((prev) => {
+            if (prev?.sessionId !== bgSessionId) return prev;
+            const next = reducer(
+              {
+                ...initialState,
+                messages: prev.messages,
+                streaming: prev.streaming,
+              },
+              { type: "DONE" },
+            );
+            return { ...prev, messages: next.messages, streaming: false };
+          });
           dispatch({
             type: "BG_AGENT_DONE",
             sessionId: bgSessionId,
@@ -790,16 +1016,6 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             resultText:
               (msg.resultText as string | undefined) ?? bgInfo?.resultText,
             summary: msg.resultSummary as string | undefined,
-          });
-          break;
-        }
-
-        case "agentBgQuestion": {
-          dispatch({
-            type: "ADD_BG_QUESTION",
-            bgTask: msg.bgTask,
-            questions: msg.questions,
-            answer: msg.answer,
           });
           break;
         }
@@ -844,10 +1060,19 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
 
         case "showBgTranscript": {
+          const sessionId = msg.sessionId as string;
           const converted = agentMessagesToChatMessages(
             (msg.messages as unknown[]) ?? [],
           );
-          setTranscriptView({ task: msg.task as string, messages: converted });
+          const bgInfo = bgSessionsRef.current.find((s) => s.id === sessionId);
+          setTranscriptView({
+            sessionId,
+            task: msg.task as string,
+            messages: converted,
+            streaming:
+              bgInfo?.status === "streaming" ||
+              bgInfo?.status === "tool_executing",
+          });
           break;
         }
 
@@ -1030,6 +1255,17 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     }
   }, [vscodeApi]);
 
+  const handleToggleAutoContinue = useCallback((enabled: boolean) => {
+    setAutoContinueEnabled(enabled);
+    setAutoContinueStatus(
+      enabled
+        ? `Auto Continue enabled (max ${AUTO_CONTINUE_MAX_TURNS} turns).`
+        : "Auto Continue disabled.",
+    );
+    autoContinuedMessageIdsRef.current.clear();
+    autoContinueCountRef.current = 0;
+  }, []);
+
   const handleDetectedQuestionAnswer = useCallback(
     (payload: string) => {
       handleSend(payload);
@@ -1114,6 +1350,78 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [handleSend],
   );
 
+  useEffect(() => {
+    const sessionId = state.chatState.sessionId;
+    if (autoContinueSessionIdRef.current === sessionId) return;
+    autoContinueSessionIdRef.current = sessionId;
+    autoContinuedMessageIdsRef.current.clear();
+    autoContinueCountRef.current = 0;
+    if (autoContinueEnabled) {
+      setAutoContinueEnabled(false);
+      setAutoContinueStatus("Auto Continue paused after session change.");
+    }
+  }, [autoContinueEnabled, state.chatState.sessionId]);
+
+  useEffect(() => {
+    if (!autoContinueEnabled || state.streaming) return;
+    if (!state.chatState.sessionId) return;
+    if (state.questionRequest || forwardedApproval) return;
+
+    const lastMessage = state.messages[state.messages.length - 1];
+    if (lastMessage?.error) {
+      setAutoContinueEnabled(false);
+      setAutoContinueStatus("Auto Continue paused after an agent error.");
+      return;
+    }
+
+    const action = getLatestAutoContinueAction(state.messages);
+    if (!action) {
+      const latest = getLatestFinalMessageMarker(state.messages);
+      if (!latest || latest.marker.autoContinueStopReason) return;
+      const reason =
+        latest.marker.status === "waiting_for_user"
+          ? "Auto Continue stopped because the agent is waiting for input."
+          : `Auto Continue stopped because the task status is ${latest.marker.status.replaceAll("_", " ")}.`;
+      setAutoContinueEnabled(false);
+      setAutoContinueStatus(reason);
+      dispatch({
+        type: "MARK_AUTO_CONTINUE_STOPPED",
+        messageId: latest.messageId,
+        reason,
+      });
+      return;
+    }
+    if (autoContinuedMessageIdsRef.current.has(action.messageId)) return;
+
+    if (autoContinueCountRef.current >= AUTO_CONTINUE_MAX_TURNS) {
+      const reason = `Auto Continue stopped after ${AUTO_CONTINUE_MAX_TURNS} turns to avoid an infinite loop.`;
+      setAutoContinueEnabled(false);
+      setAutoContinueStatus(reason);
+      dispatch({
+        type: "MARK_AUTO_CONTINUE_STOPPED",
+        messageId: action.messageId,
+        reason,
+      });
+      return;
+    }
+
+    autoContinuedMessageIdsRef.current.add(action.messageId);
+    autoContinueCountRef.current += 1;
+    setAutoContinueStatus(
+      `Auto Continue sent ${autoContinueCountRef.current}/${AUTO_CONTINUE_MAX_TURNS}.`,
+    );
+    dispatch({ type: "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS" });
+    handleSend(action.prompt);
+  }, [
+    autoContinueEnabled,
+    forwardedApproval,
+    handleSend,
+    state.chatState.sessionId,
+    state.messages,
+    state.questionRequest,
+    state.streaming,
+  ]);
+
   const handleOpenBgTranscript = useCallback(
     (sessionId: string) => {
       vscodeApi.postMessage({ command: "openBgTranscript", sessionId });
@@ -1126,6 +1434,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
     dispatch({ type: "NEW_SESSION" });
     setBgSessions([]);
+    setTranscriptView(null);
     vscodeApi.postMessage({
       command: "agentNewSession",
       mode: stateRef.current.mode,
@@ -1145,6 +1454,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
         dispatch({ type: "NEW_SESSION" });
         setBgSessions([]);
+        setTranscriptView(null);
         vscodeApi.postMessage({ command: "agentNewSession", mode: slug });
       }
     },
@@ -1203,6 +1513,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
           dispatch({ type: "NEW_SESSION" });
           setBgSessions([]);
+          setTranscriptView(null);
           vscodeApi.postMessage({
             command: "agentNewSession",
             mode: stateRef.current.mode,
@@ -1289,7 +1600,14 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
   const handleForwardedApprovalSubmit = useCallback(
     (data: Omit<DecisionMessage, "type">) => {
-      setForwardedApproval(null);
+      const submittedApprovalId = data.id;
+      setForwardedApproval((current) => {
+        if (!current || current.id === submittedApprovalId) return null;
+        return current;
+      });
+      if (forwardedApprovalRef.current?.id === submittedApprovalId) {
+        forwardedApprovalRef.current = null;
+      }
       forwardedFollowUpRef.current = "";
       vscodeApi.postMessage({ command: "approvalDecision", ...data });
     },
@@ -1648,6 +1966,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           <TranscriptView
             task={transcriptView.task}
             messages={transcriptView.messages}
+            streaming={transcriptView.streaming}
             onClose={() => setTranscriptView(null)}
           />
         )}
@@ -1977,6 +2296,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           <QuestionCard
             id={state.questionRequest.id}
             questions={state.questionRequest.questions}
+            backgroundTask={state.questionRequest.backgroundTask}
+            modes={state.modes}
             remoteProgress={
               remoteQuestionProgress &&
               remoteQuestionProgress.id === state.questionRequest.id
@@ -2119,6 +2440,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onSwitchMode={handleSwitchMode}
           agentWriteApproval={state.chatState.agentWriteApproval ?? "prompt"}
           onSetAgentWriteApproval={handleSetAgentWriteApproval}
+          autoContinueEnabled={autoContinueEnabled}
+          onToggleAutoContinue={handleToggleAutoContinue}
+          autoContinueStatus={autoContinueStatus}
         />
       </div>
     </>

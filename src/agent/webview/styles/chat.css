@@ -1464,6 +1464,23 @@ body {
   margin-bottom: 0;
 }
 
+.final-marker-auto-continue-stopped {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 10%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 28%, transparent);
+  border-radius: 4px;
+  padding: 3px 7px;
+}
+
+.final-marker-auto-continue-stopped .codicon {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  font-size: 12px;
+}
+
 .final-marker-continue {
   border: 1px solid color-mix(in srgb, #4ec9b0 36%, transparent);
   background: transparent;
@@ -1493,6 +1510,21 @@ body {
 }
 
 /* ── Question Card ── */
+
+.question-bg-attribution {
+  font-size: 11px;
+  opacity: 0.7;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--vscode-badge-background) 18%, transparent);
+  color: var(--vscode-foreground);
+  align-self: flex-start;
+}
+
+.question-bg-attribution strong {
+  font-weight: 600;
+  opacity: 0.95;
+}
 
 .question-card {
   flex-shrink: 0;
@@ -1596,6 +1628,29 @@ body {
   border: 1px solid color-mix(in srgb, #4ec9b0 40%, transparent);
   white-space: nowrap;
   letter-spacing: 0.02em;
+}
+
+.question-mode-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+  color: var(--vscode-descriptionForeground);
+  border: 1px solid
+    color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.question-recommended-badge + .question-mode-badge {
+  margin-left: 6px;
+}
+
+/* If no recommended badge, push the mode badge to the right. */
+.question-option > .question-mode-badge:last-child {
+  margin-left: auto;
 }
 
 .q-checkbox {
@@ -2034,6 +2089,22 @@ body {
 .toolbar-control .codicon {
   font-size: 12px;
   flex-shrink: 0;
+}
+
+.auto-continue-toggle.active {
+  opacity: 1;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border-color: var(--vscode-focusBorder, var(--vscode-button-background));
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder, var(--vscode-button-background));
+}
+
+.auto-continue-toggle.active:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
+
+.auto-continue-toggle.active .codicon {
+  color: var(--vscode-button-foreground);
 }
 
 /* ── Thinking Toggle ── */

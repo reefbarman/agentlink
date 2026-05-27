@@ -9,7 +9,13 @@ import type {
   WebviewModelInfo,
 } from "../../agent/webview/types";
 import type { DetectedQuestion } from "../../shared/questionDetection";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "preact/hooks";
 
 import type {
   ApprovalRequest,
@@ -28,10 +34,16 @@ import { QuestionCard } from "../../agent/webview/components/QuestionCard";
 import { RenameCard } from "../../approvals/webview/components/RenameCard";
 import { SessionHistory } from "../../agent/webview/components/SessionHistory";
 import { TodoPanel } from "../../agent/webview/components/TodoPanel";
+import { TranscriptView } from "../../agent/webview/components/TranscriptView";
 import { WriteCard } from "../../approvals/webview/components/WriteCard";
 import { getStreamingActivity } from "../../agent/webview/components/MessageBubble";
 
 import { agentMessagesToChatMessages } from "../../shared/chatProjection";
+import {
+  getFinalMessageContinueAction,
+  getLatestAutoContinueAction,
+  getLatestFinalMessageMarker,
+} from "../../shared/finalStatus";
 import { MetaGrid, MetaItem, Pill, TitleRow } from "../../shared/ui/Meta";
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 
@@ -44,26 +56,39 @@ import type {
 import type { BrowserGatewayInstanceStatusSummary } from "../protocol";
 
 const DEFAULT_MAX_TOKENS = 200_000;
+const AUTO_CONTINUE_MAX_TURNS = 10;
+const AUTO_CONTINUE_BROWSER_SETTLE_MS = 500;
 const THEME_CACHE_KEY = "agentlink.browserGateway.themeSnapshot.v1";
 const TAB_FLASH_INTERVAL_MS = 1_000;
 const TAB_FLASH_TITLE = "⚠ Action needed — AgentLink";
 
-function hideFinalMarkerContinueActions(
+function projectFinalMarkerAutoContinueState(
   messages: ChatMessage[],
   hiddenMessageIds: ReadonlySet<string>,
+  stopReasons: ReadonlyMap<string, string>,
 ): ChatMessage[] {
-  if (hiddenMessageIds.size === 0) return messages;
+  if (hiddenMessageIds.size === 0 && stopReasons.size === 0) return messages;
 
   let changed = false;
   const next = messages.map((message) => {
-    if (message.role !== "assistant" || !message.finalMarker?.continueAction) {
-      return message;
-    }
-    if (!hiddenMessageIds.has(message.id)) return message;
+    if (message.role !== "assistant" || !message.finalMarker) return message;
 
+    let finalMarker = message.finalMarker;
+    if (
+      hiddenMessageIds.has(message.id) &&
+      getFinalMessageContinueAction(finalMarker)
+    ) {
+      const { continueAction: _continueAction, ...rest } = finalMarker;
+      finalMarker = { ...rest, continueActionSuppressed: true };
+    }
+
+    const stopReason = stopReasons.get(message.id);
+    if (stopReason && finalMarker.autoContinueStopReason !== stopReason) {
+      finalMarker = { ...finalMarker, autoContinueStopReason: stopReason };
+    }
+
+    if (finalMarker === message.finalMarker) return message;
     changed = true;
-    const { continueAction: _continueAction, ...finalMarker } =
-      message.finalMarker;
     return { ...message, finalMarker };
   });
 
@@ -84,6 +109,7 @@ type GatewaySnapshot = {
     question: {
       id: string;
       questions: Question[];
+      backgroundTask?: string;
     } | null;
     questionProgress: {
       id: string;
@@ -150,7 +176,11 @@ type GatewaySnapshot = {
         images?: Array<{ name: string; mimeType: string; base64: string }>;
         documents?: Array<{ name: string; mimeType: string; base64: string }>;
       }>;
-      questionRequest: { id: string; questions: Question[] } | null;
+      questionRequest: {
+        id: string;
+        questions: Question[];
+        backgroundTask?: string;
+      } | null;
       detectedQuestion: (DetectedQuestion & { messageId: string }) | null;
       todos: TodoItem[];
       debugInfo: Record<string, string | number> | null;
@@ -297,11 +327,25 @@ export function BrowserGatewayApp({
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [showMcpStatus, setShowMcpStatus] = useState(false);
+  const [transcriptView, setTranscriptView] = useState<{
+    sessionId: string;
+    task: string;
+    messages: ChatMessage[];
+    streaming: boolean;
+  } | null>(null);
   const [localDismissedApprovalId, setLocalDismissedApprovalId] = useState<
     string | null
   >(null);
   const [hiddenFinalContinueMessageIds, setHiddenFinalContinueMessageIds] =
     useState<ReadonlySet<string>>(() => new Set());
+  const [autoContinueStopReasons, setAutoContinueStopReasons] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const [autoContinueEnabled, setAutoContinueEnabled] = useState(false);
+  const [autoContinueStatus, setAutoContinueStatus] = useState("");
+  const autoContinuedMessageIdsRef = useRef<Set<string>>(new Set());
+  const autoContinueCountRef = useRef(0);
+  const autoContinueSessionIdRef = useRef<string | null>(null);
   const [approvalPanelHeight, setApprovalPanelHeight] = useState(360);
   const [approvalResizing, setApprovalResizing] = useState(false);
   const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
@@ -432,11 +476,12 @@ export function BrowserGatewayApp({
   }, [selectedDiffId, snapshot]);
 
   const messages = useMemo<ChatMessage[]>(() => {
-    return hideFinalMarkerContinueActions(
+    return projectFinalMarkerAutoContinueState(
       snapshot?.session.foreground?.projectedMessages ?? [],
       hiddenFinalContinueMessageIds,
+      autoContinueStopReasons,
     );
-  }, [hiddenFinalContinueMessageIds, snapshot]);
+  }, [autoContinueStopReasons, hiddenFinalContinueMessageIds, snapshot]);
 
   const terminalBuffers = useMemo(() => {
     return deriveTerminalBuffers(messages, {
@@ -830,6 +875,17 @@ export function BrowserGatewayApp({
       // best effort only
     }
   }
+
+  const handleToggleAutoContinue = useCallback((enabled: boolean): void => {
+    setAutoContinueEnabled(enabled);
+    setAutoContinueStatus(
+      enabled
+        ? `Auto Continue enabled (max ${AUTO_CONTINUE_MAX_TURNS} turns).`
+        : "Auto Continue disabled.",
+    );
+    autoContinuedMessageIdsRef.current.clear();
+    autoContinueCountRef.current = 0;
+  }, []);
 
   async function handleSend(
     text: string,
@@ -1330,6 +1386,15 @@ export function BrowserGatewayApp({
         }
 
         const converted = agentMessagesToChatMessages(body.transcript.messages);
+        setTranscriptView({
+          sessionId,
+          task: body.transcript.task,
+          messages: converted,
+          // Browser transcript opens from a gateway snapshot. Unlike the VS Code
+          // webview, it does not receive background-agent stream deltas, so avoid
+          // showing a live spinner for frozen content.
+          streaming: false,
+        });
         const assistantBlocks = converted
           .filter((message) => message.role === "assistant")
           .reduce((count, message) => count + message.blocks.length, 0);
@@ -1521,6 +1586,95 @@ export function BrowserGatewayApp({
 
   const streaming = foreground?.streaming === true;
   const statusOverride = foreground?.statusOverride ?? null;
+
+  useEffect(() => {
+    const sessionId = foreground?.sessionId ?? null;
+    if (autoContinueSessionIdRef.current === sessionId) return;
+    autoContinueSessionIdRef.current = sessionId;
+    autoContinuedMessageIdsRef.current.clear();
+    autoContinueCountRef.current = 0;
+    if (autoContinueEnabled) {
+      setAutoContinueEnabled(false);
+      setAutoContinueStatus("Auto Continue paused after session change.");
+    }
+  }, [autoContinueEnabled, foreground?.sessionId]);
+
+  useEffect(() => {
+    if (!autoContinueEnabled || !foreground) return;
+    if (pendingApproval || pendingQuestion) return;
+    if (
+      foreground.streaming ||
+      foreground.status === "streaming" ||
+      foreground.status === "tool_executing" ||
+      foreground.status === "awaiting_approval"
+    ) {
+      return;
+    }
+
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage?.error) {
+      setAutoContinueEnabled(false);
+      setAutoContinueStatus("Auto Continue paused after an agent error.");
+      return;
+    }
+
+    const action = getLatestAutoContinueAction(messages);
+    if (!action) {
+      const latest = getLatestFinalMessageMarker(messages);
+      if (!latest || latest.marker.autoContinueStopReason) return;
+      const reason =
+        latest.marker.status === "waiting_for_user"
+          ? "Auto Continue stopped because the agent is waiting for input."
+          : `Auto Continue stopped because the task status is ${latest.marker.status.replaceAll("_", " ")}.`;
+      setAutoContinueEnabled(false);
+      setAutoContinueStatus(reason);
+      setAutoContinueStopReasons((prev) => {
+        const next = new Map(prev);
+        next.set(latest.messageId, reason);
+        return next;
+      });
+      return;
+    }
+    if (autoContinuedMessageIdsRef.current.has(action.messageId)) return;
+
+    const timer = window.setTimeout(() => {
+      if (autoContinuedMessageIdsRef.current.has(action.messageId)) return;
+      if (autoContinueCountRef.current >= AUTO_CONTINUE_MAX_TURNS) {
+        const reason = `Auto Continue stopped after ${AUTO_CONTINUE_MAX_TURNS} turns to avoid an infinite loop.`;
+        setAutoContinueEnabled(false);
+        setAutoContinueStatus(reason);
+        setAutoContinueStopReasons((prev) => {
+          const next = new Map(prev);
+          next.set(action.messageId, reason);
+          return next;
+        });
+        return;
+      }
+
+      autoContinuedMessageIdsRef.current.add(action.messageId);
+      autoContinueCountRef.current += 1;
+      setAutoContinueStatus(
+        `Auto Continue sent ${autoContinueCountRef.current}/${AUTO_CONTINUE_MAX_TURNS}.`,
+      );
+      setHiddenFinalContinueMessageIds((prev) => {
+        const next = new Set(prev);
+        next.add(action.messageId);
+        return next;
+      });
+      void handleSend(action.prompt, []);
+    }, AUTO_CONTINUE_BROWSER_SETTLE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    autoContinueEnabled,
+    foreground,
+    foreground?.status,
+    foreground?.streaming,
+    handleSend,
+    messages,
+    pendingApproval,
+    pendingQuestion,
+  ]);
 
   const composerModes = modes.length > 0 ? modes : DEFAULT_BROWSER_MODES;
   const composerModels =
@@ -1875,6 +2029,14 @@ export function BrowserGatewayApp({
         <section class="browser-main">
           <PaneCard fill className="chat-pane-card">
             <div class="pane-body browser-chat-pane chat-container">
+              {transcriptView && (
+                <TranscriptView
+                  task={transcriptView.task}
+                  messages={transcriptView.messages}
+                  streaming={transcriptView.streaming}
+                  onClose={() => setTranscriptView(null)}
+                />
+              )}
               <div class="chat-header">
                 <button
                   class="icon-button"
@@ -2008,8 +2170,14 @@ export function BrowserGatewayApp({
                       const next = new Set(prev);
                       for (const message of messages) {
                         if (
-                          message.role === "assistant" &&
-                          message.finalMarker?.continueAction?.prompt === prompt
+                          message.role !== "assistant" ||
+                          !message.finalMarker
+                        ) {
+                          continue;
+                        }
+                        if (
+                          getFinalMessageContinueAction(message.finalMarker)
+                            ?.prompt === prompt
                         ) {
                           next.add(message.id);
                         }
@@ -2165,6 +2333,8 @@ export function BrowserGatewayApp({
                   key={pendingQuestion.id}
                   id={pendingQuestion.id}
                   questions={pendingQuestion.questions}
+                  backgroundTask={pendingQuestion.backgroundTask}
+                  modes={modes}
                   remoteProgress={
                     remoteQuestionProgress &&
                     remoteQuestionProgress.id === pendingQuestion.id
@@ -2294,6 +2464,9 @@ export function BrowserGatewayApp({
                     foreground?.agentWriteApproval ?? "prompt"
                   }
                   onSetAgentWriteApproval={handleSetWriteApproval}
+                  autoContinueEnabled={autoContinueEnabled}
+                  onToggleAutoContinue={handleToggleAutoContinue}
+                  autoContinueStatus={autoContinueStatus}
                   allowAttachments={true}
                   allowMediaPaste={true}
                   allowThinkingToggle={true}

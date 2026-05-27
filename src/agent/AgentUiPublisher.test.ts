@@ -88,6 +88,20 @@ describe("WebviewAgentUiPublisher", () => {
       ],
     ]);
   });
+
+  it("includes backgroundTask attribution when set", () => {
+    const publishMessage = vi.fn();
+    const publisher = new WebviewAgentUiPublisher(publishMessage);
+
+    publisher.publishQuestionRequest("question-bg", [], "review_pr");
+
+    expect(publishMessage).toHaveBeenCalledWith({
+      type: "agentQuestionRequest",
+      id: "question-bg",
+      questions: [],
+      backgroundTask: "review_pr",
+    });
+  });
 });
 
 describe("InMemoryAgentUiEventHub", () => {
@@ -190,6 +204,7 @@ describe("FanoutAgentUiPublisher", () => {
       expect(target.publishQuestionRequest).toHaveBeenCalledWith(
         "question-2",
         [],
+        undefined,
       );
       expect(target.publishQuestionCleared).toHaveBeenCalledWith("question-2");
       expect(target.publishQuestionProgress).toHaveBeenCalledWith({

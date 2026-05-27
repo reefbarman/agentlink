@@ -1030,8 +1030,8 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionId: "agent", // synthetic session ID for the built-in agent
     extensionUri: context.extensionUri,
     mcpHub: chatViewProvider.getMcpHub(),
-    onModeSwitch: (mode, reason) =>
-      chatViewProvider.handleModeSwitch(mode, reason),
+    onModeSwitch: (mode, reason, silent) =>
+      chatViewProvider.handleModeSwitch(mode, reason, silent),
     onApprovalRequest: (request, sessionId) =>
       chatViewProvider.requestApproval(request, sessionId),
     onQuestion: (questions, sessionId) =>

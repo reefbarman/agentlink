@@ -263,7 +263,16 @@ describe("BrowserGatewayService", () => {
 
     expect(service.getUiState()).toMatchObject({
       approval: undefined,
-      question: undefined,
+      question: {
+        id: "question-1",
+        questions: [
+          {
+            id: "q1",
+            type: "yes_no",
+            question: "Continue?",
+          },
+        ],
+      },
     });
 
     service.dispose();

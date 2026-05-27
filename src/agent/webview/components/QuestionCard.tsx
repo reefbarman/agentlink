@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
-import type { Question } from "../types";
+import type { ModeInfo, Question } from "../types";
 
 export interface QuestionProgress {
   step: number;
@@ -20,6 +20,15 @@ interface QuestionCardProps {
   remoteProgress?: QuestionProgress | null;
   /** Fires when the local user advances/edits state so the other surface can mirror. */
   onProgressChange?: (progress: QuestionProgress) => void;
+  /** When set, the question is from a background agent with this task name. */
+  backgroundTask?: string;
+  /** Available agent modes — used to render the display name on modeSwitch badges. */
+  modes?: ModeInfo[];
+}
+
+function getModeDisplayName(slug: string, modes?: ModeInfo[]): string {
+  const m = modes?.find((mode) => mode.slug === slug);
+  return m ? m.name : slug;
 }
 
 function serializeProgress(progress: QuestionProgress): string {
@@ -81,6 +90,8 @@ export function QuestionCard({
   onSubmit,
   remoteProgress,
   onProgressChange,
+  backgroundTask,
+  modes,
 }: QuestionCardProps) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<
@@ -185,6 +196,11 @@ export function QuestionCard({
 
   return (
     <div class="question-card">
+      {backgroundTask && (
+        <div class="question-bg-attribution">
+          From background agent: <strong>{backgroundTask}</strong>
+        </div>
+      )}
       {questions.length > 1 && (
         <div class="question-progress">
           {questions.map((_, i) => (
@@ -201,7 +217,12 @@ export function QuestionCard({
 
       <div class="question-text">{q.question}</div>
 
-      <QuestionInput question={q} value={currentAnswer} onChange={setAnswer} />
+      <QuestionInput
+        question={q}
+        value={currentAnswer}
+        onChange={setAnswer}
+        modes={modes}
+      />
 
       {showNoteInput && (
         <textarea
@@ -262,9 +283,15 @@ interface QuestionInputProps {
   question: Question;
   value: string | string[] | number | boolean | undefined;
   onChange: (v: string | string[] | number | boolean | undefined) => void;
+  modes?: ModeInfo[];
 }
 
-function QuestionInput({ question, value, onChange }: QuestionInputProps) {
+function QuestionInput({
+  question,
+  value,
+  onChange,
+  modes,
+}: QuestionInputProps) {
   const { type, options = [], scale_min = 1, scale_max = 5 } = question;
 
   if (type === "text") {
@@ -368,23 +395,32 @@ function QuestionInput({ question, value, onChange }: QuestionInputProps) {
 
   return (
     <div class="question-options">
-      {options.map((opt) => (
-        <button
-          key={opt}
-          class={`question-option${isSelected(opt) ? " selected" : ""}`}
-          onClick={() => toggle(opt)}
-        >
-          {isMulti && (
-            <span
-              class={`q-checkbox${isSelected(opt) ? " q-checkbox-checked" : ""}`}
-            />
-          )}
-          {opt}
-          {question.recommended === opt && (
-            <span class="question-recommended-badge">Recommended</span>
-          )}
-        </button>
-      ))}
+      {options.map((opt) => {
+        const targetMode =
+          !isMulti && question.modeSwitch ? question.modeSwitch[opt] : undefined;
+        return (
+          <button
+            key={opt}
+            class={`question-option${isSelected(opt) ? " selected" : ""}`}
+            onClick={() => toggle(opt)}
+          >
+            {isMulti && (
+              <span
+                class={`q-checkbox${isSelected(opt) ? " q-checkbox-checked" : ""}`}
+              />
+            )}
+            {opt}
+            {question.recommended === opt && (
+              <span class="question-recommended-badge">Recommended</span>
+            )}
+            {targetMode && (
+              <span class="question-mode-badge">
+                → {getModeDisplayName(targetMode, modes)} mode
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }

@@ -15,6 +15,7 @@ interface ToolbarControlButtonProps {
   className?: string;
   disabled?: boolean;
   title?: string;
+  "aria-pressed"?: boolean;
   type?: "button" | "submit" | "reset";
   onClick?: () => void;
 }

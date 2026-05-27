@@ -291,12 +291,24 @@ function parseToolResultPayload(
 function getSuccessfulModeSwitch(
   result: ToolCallResult,
 ): { mode?: string } | null {
-  if (result.toolName !== "switch_mode") return null;
-  const payload = parseToolResultPayload(result.result);
-  if (!payload || payload.ok !== true) return null;
-  return {
-    mode: typeof payload.mode === "string" ? payload.mode : undefined,
-  };
+  if (result.toolName === "switch_mode") {
+    const payload = parseToolResultPayload(result.result);
+    if (!payload || payload.ok !== true) return null;
+    return {
+      mode: typeof payload.mode === "string" ? payload.mode : undefined,
+    };
+  }
+  // ask_user can also perform a silent mode switch when the user picks an
+  // answer mapped to a mode (per-question `modeSwitch` map). Treat that the
+  // same as a successful switch_mode so the turn ends at the same boundary.
+  if (result.toolName === "ask_user") {
+    const payload = parseToolResultPayload(result.result);
+    if (!payload) return null;
+    const mode = payload.modeSwitched;
+    if (typeof mode !== "string" || mode === "") return null;
+    return { mode };
+  }
+  return null;
 }
 
 function buildModeSwitchSkippedResult(

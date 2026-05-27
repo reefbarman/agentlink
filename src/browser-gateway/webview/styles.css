@@ -374,6 +374,20 @@ textarea {
   cursor: default;
 }
 
+.auto-continue-toggle.active {
+  color: var(--vscode-button-foreground, #ffffff);
+  background: var(--vscode-button-background, var(--ag-accent));
+  border-color: var(--vscode-focusBorder, var(--ag-accent));
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder, var(--ag-accent));
+}
+
+.auto-continue-toggle.active:hover:not(:disabled) {
+  background: var(
+    --vscode-button-hoverBackground,
+    var(--vscode-button-background, var(--ag-accent))
+  );
+}
+
 .toolbar-selector {
   position: relative;
 }
@@ -594,6 +608,23 @@ textarea {
   min-height: 0;
   height: 100%;
   overflow: hidden;
+}
+
+.final-marker-auto-continue-stopped {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ag-muted);
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 10%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 28%, transparent);
+  border-radius: 4px;
+  padding: 3px 7px;
+}
+
+.final-marker-auto-continue-stopped .codicon {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  font-size: 12px;
 }
 
 .browser-chat-composer {

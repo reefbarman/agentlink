@@ -49,6 +49,7 @@ export interface BrowserGatewayUiState {
     | {
         id: string;
         questions: Question[];
+        backgroundTask?: string;
       }
     | undefined;
   questionProgress: QuestionProgressState | undefined;
@@ -60,6 +61,7 @@ export interface BrowserGatewayWireState {
   question: {
     id: string;
     questions: Question[];
+    backgroundTask?: string;
   } | null;
   questionProgress: QuestionProgressState | null;
   recentEvents: AgentUiEvent[];
@@ -100,7 +102,11 @@ export interface BrowserGatewaySessionState {
         lastCacheReadTokens: number;
         estimatedTotalUsed: number;
         messageQueue: AppState["messageQueue"];
-        questionRequest: { id: string; questions: Question[] } | null;
+        questionRequest: {
+          id: string;
+          questions: Question[];
+          backgroundTask?: string;
+        } | null;
         detectedQuestion: AppState["detectedQuestion"];
         todos: TodoItem[];
         debugInfo: AppState["debugInfo"];
@@ -225,6 +231,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     | {
         id: string;
         questions: Question[];
+        backgroundTask?: string;
       }
     | undefined;
   private questionProgress: QuestionProgressState | undefined;
@@ -289,6 +296,9 @@ export class BrowserGatewayService implements vscode.Disposable {
         ? {
             id: this.question.id,
             questions: this.question.questions,
+            ...(this.question.backgroundTask
+              ? { backgroundTask: this.question.backgroundTask }
+              : {}),
           }
         : undefined,
       questionProgress: this.questionProgress
@@ -400,6 +410,9 @@ export class BrowserGatewayService implements vscode.Disposable {
         ? {
             id: this.question.id,
             questions: this.question.questions,
+            ...(this.question.backgroundTask
+              ? { backgroundTask: this.question.backgroundTask }
+              : {}),
           }
         : null,
       questionProgress: this.questionProgress
@@ -558,13 +571,14 @@ export class BrowserGatewayService implements vscode.Disposable {
         break;
       case "idle":
         this.approval = undefined;
-        this.question = undefined;
-        this.questionProgress = undefined;
         break;
       case "agentQuestionRequest":
         this.question = {
           id: event.id,
           questions: event.questions,
+          ...(event.backgroundTask
+            ? { backgroundTask: event.backgroundTask }
+            : {}),
         };
         this.questionProgress = undefined;
         break;

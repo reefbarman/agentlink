@@ -266,7 +266,8 @@ describe("MessageBubble slash-command rendering", () => {
     expect(screen.queryByText("(No response)")).toBeNull();
   });
 
-  it("renders final marker CTA below the marker text when visible", () => {
+  it("renders explicit final marker CTA below the marker text when visible", () => {
+    const onContinue = vi.fn();
     const message: ChatMessage = {
       id: "assistant-final-visible",
       role: "assistant",
@@ -278,8 +279,8 @@ describe("MessageBubble slash-command rendering", () => {
         source: "tool",
         summary: "Ready for the next step.",
         continueAction: {
-          label: "Continue",
-          prompt: "Please continue.",
+          label: "Implement this",
+          prompt: "Please implement this plan.",
         },
       },
     };
@@ -288,7 +289,7 @@ describe("MessageBubble slash-command rendering", () => {
       <MessageBubble
         message={message}
         streaming={false}
-        onFinalMarkerContinue={vi.fn()}
+        onFinalMarkerContinue={onContinue}
       />,
     );
 
@@ -304,10 +305,128 @@ describe("MessageBubble slash-command rendering", () => {
     expect(actions?.querySelector(".final-marker-continue")?.tagName).toBe(
       "BUTTON",
     );
-    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Implement this" });
+    expect(button).toBeTruthy();
+    fireEvent.click(button);
+    expect(onContinue).toHaveBeenCalledWith("Please implement this plan.");
     expect(finalRegion?.textContent).not.toContain(
       "Latest completed response.",
     );
+  });
+
+  it("renders a default Continue CTA for completed final markers without explicit continuation", () => {
+    const onContinue = vi.fn();
+    const message: ChatMessage = {
+      id: "assistant-final-default-continue",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "All requested work is complete.",
+      },
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onFinalMarkerContinue={onContinue}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Continue" });
+    expect(button).toBeTruthy();
+    fireEvent.click(button);
+    expect(onContinue).toHaveBeenCalledWith(
+      "Continue working from where you left off. If there are remaining subtasks, do the next one; if everything is complete, briefly confirm that no further work is needed.",
+    );
+  });
+
+  it("renders an Auto Continue stopped indicator on final markers", () => {
+    const message: ChatMessage = {
+      id: "assistant-final-auto-stopped",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "Still has follow-up context.",
+        autoContinueStopReason:
+          "Auto Continue stopped after 10 turns to avoid an infinite loop.",
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onFinalMarkerContinue={vi.fn()}
+      />,
+    );
+
+    const stopped = container.querySelector(
+      ".final-marker-auto-continue-stopped",
+    );
+    expect(stopped).toBeTruthy();
+    expect(stopped?.textContent).toContain(
+      "Auto Continue stopped after 10 turns to avoid an infinite loop.",
+    );
+  });
+
+  it("does not render a default Continue CTA when completed final marker suppresses continuation", () => {
+    const message: ChatMessage = {
+      id: "assistant-final-suppressed-continue",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "All requested work is complete.",
+        continueActionSuppressed: true,
+      },
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onFinalMarkerContinue={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+  });
+
+  it("does not render a default Continue CTA for blocked final markers", () => {
+    const message: ChatMessage = {
+      id: "assistant-final-blocked-no-default",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "blocked",
+        source: "tool",
+        summary: "Cannot proceed without credentials.",
+      },
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onFinalMarkerContinue={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
   });
 
   it("renders final marker summaries with normal markdown and file links", () => {

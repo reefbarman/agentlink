@@ -42,6 +42,7 @@ import { ModeSelector } from "./ModeSelector";
 import { ModelSelector } from "./ModelSelector";
 import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
 import { SlashCommandPopup } from "./SlashCommandPopup";
+import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
 import { WriteApprovalSelector } from "./WriteApprovalSelector";
 
 /** A pasted image or PDF held in webview state before sending. */
@@ -98,6 +99,9 @@ interface InputAreaProps {
   onSignIn?: (provider: string) => void;
   agentWriteApproval?: string;
   onSetAgentWriteApproval?: (mode: string) => void;
+  autoContinueEnabled?: boolean;
+  onToggleAutoContinue?: (enabled: boolean) => void;
+  autoContinueStatus?: string;
   allowAttachments?: boolean;
   allowMediaPaste?: boolean;
   allowFileMentions?: boolean;
@@ -129,6 +133,9 @@ export function InputArea({
   onSignIn,
   agentWriteApproval = "prompt",
   onSetAgentWriteApproval,
+  autoContinueEnabled = false,
+  onToggleAutoContinue,
+  autoContinueStatus,
   allowAttachments = true,
   allowMediaPaste = true,
   allowFileMentions = true,
@@ -1247,6 +1254,26 @@ export function InputArea({
             current={agentWriteApproval}
             onSelect={onSetAgentWriteApproval}
           />
+        )}
+        {onToggleAutoContinue && (
+          <ToolbarControlButton
+            active={autoContinueEnabled}
+            aria-pressed={autoContinueEnabled}
+            className="auto-continue-toggle"
+            onClick={() => onToggleAutoContinue(!autoContinueEnabled)}
+            title={
+              autoContinueStatus ||
+              (autoContinueEnabled
+                ? "Auto Continue is on. Completed turns will automatically continue until the agent marks the task definitely complete."
+                : "Automatically send Continue after completed turns until the agent marks the task definitely complete.")
+            }
+            type="button"
+          >
+            <i class="codicon codicon-debug-continue" />
+            <span>
+              {autoContinueEnabled ? "Auto Continue On" : "Auto Continue"}
+            </span>
+          </ToolbarControlButton>
         )}
         {allowAttachments && (
           <button

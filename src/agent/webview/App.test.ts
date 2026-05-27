@@ -821,6 +821,33 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
+  it("restores suppressed completed final markers", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "finish this" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        uiHint: {
+          finalMarker: {
+            status: "completed",
+            source: "tool",
+            summary: "All done.",
+            continueActionSuppressed: true,
+          },
+        },
+      },
+    ] as unknown[]);
+
+    expect(restored.at(-1)?.finalMarker).toEqual({
+      status: "completed",
+      source: "tool",
+      summary: "All done.",
+      continueActionSuppressed: true,
+    });
+  });
+
   it("does not add a final marker when projecting messages without explicit marker metadata", async () => {
     const { agentMessagesToChatMessages } = await import("./App");
 
@@ -911,6 +938,41 @@ describe("webview App reducer background agent launch blocks", () => {
       status: "completed",
       source: "tool",
       summary: "Ready to continue.",
+      continueActionSuppressed: true,
+    });
+  });
+
+  it("marks a final marker when Auto Continue stops", () => {
+    const state = reducer(
+      {
+        ...initialState,
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            content: "",
+            timestamp: 1,
+            blocks: [],
+            finalMarker: {
+              status: "completed",
+              source: "tool",
+              summary: "Ready to continue.",
+            },
+          },
+        ],
+      },
+      {
+        type: "MARK_AUTO_CONTINUE_STOPPED",
+        messageId: "a1",
+        reason:
+          "Auto Continue stopped after 10 turns to avoid an infinite loop.",
+      },
+    );
+
+    expect(state.messages[0]?.finalMarker).toMatchObject({
+      status: "completed",
+      autoContinueStopReason:
+        "Auto Continue stopped after 10 turns to avoid an infinite loop.",
     });
   });
 
@@ -944,6 +1006,7 @@ describe("webview App reducer background agent launch blocks", () => {
       status: "completed",
       source: "tool",
       summary: "Ready to continue.",
+      continueActionSuppressed: true,
     });
     expect(state.messages.at(-2)).toMatchObject({
       role: "user",

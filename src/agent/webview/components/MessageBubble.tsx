@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "preact/hooks";
 import { ApiRequestBlock } from "./ApiRequestBlock";
 import { BgAgentBlock } from "./BgAgentBlock";
 import { BgAgentResultBlock } from "./BgAgentResultBlock";
-import { BgQuestionBlock } from "./BgQuestionBlock";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ComponentChild } from "preact";
 import type { DetectedQuestion } from "../questionDetection";
@@ -15,6 +14,7 @@ import { SkillLoadBlock } from "./SkillLoadBlock";
 import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallBlock } from "./ToolCallBlock";
+import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
 import { matchFilePaths } from "./filePathLinks";
 
 /**
@@ -241,15 +241,6 @@ export function MessageBubble({
                   onOpenTranscript={onOpenTranscript}
                 />
               );
-            case "bg_question":
-              return (
-                <BgQuestionBlock
-                  key={`bgq-${block.bgTask}-${i}`}
-                  bgTask={block.bgTask}
-                  questions={block.questions}
-                  answer={block.answer}
-                />
-              );
             case "question_answer":
               return <QuestionAnswerBlock key={`qa-${i}`} block={block} />;
             case "pairing_code":
@@ -288,7 +279,8 @@ export function MessageBubble({
           <div class={finalRegionClass}>
             <FinalMarkerHeader marker={finalMarker} />
             {(finalMarker.summary ||
-              (finalMarker.continueAction && onFinalMarkerContinue)) && (
+              (getFinalMessageContinueAction(finalMarker) &&
+                onFinalMarkerContinue)) && (
               <FinalMarkerActions
                 marker={finalMarker}
                 onContinue={onFinalMarkerContinue}
@@ -427,7 +419,7 @@ function FinalMarkerActions({
     source: string;
   }) => void;
 }) {
-  const action = marker.continueAction;
+  const action = getFinalMessageContinueAction(marker);
   return (
     <div class={`final-marker-actions final-marker-actions-${marker.status}`}>
       {marker.summary && (
@@ -438,6 +430,12 @@ function FinalMarkerActions({
             onOpenFile={onOpenFile}
             onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
           />
+        </div>
+      )}
+      {marker.autoContinueStopReason && (
+        <div class="final-marker-auto-continue-stopped">
+          <i class="codicon codicon-debug-pause" />
+          <span>{marker.autoContinueStopReason}</span>
         </div>
       )}
       {action && onContinue && (

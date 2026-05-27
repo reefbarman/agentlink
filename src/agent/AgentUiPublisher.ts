@@ -6,7 +6,13 @@ import type { Question } from "./webview/types.js";
 export type AgentUiEvent =
   | { type: "showApproval"; request: ApprovalRequest }
   | { type: "idle" }
-  | { type: "agentQuestionRequest"; id: string; questions: Question[] }
+  | {
+      type: "agentQuestionRequest";
+      id: string;
+      questions: Question[];
+      /** When set, the question is from a background agent with this task name. */
+      backgroundTask?: string;
+    }
   | { type: "agentQuestionCleared"; id: string }
   | {
       type: "agentQuestionProgress";
@@ -20,7 +26,11 @@ export type AgentUiEvent =
 export interface AgentUiPublisher {
   publishApproval(request: ApprovalRequest): void;
   publishApprovalIdle(): void;
-  publishQuestionRequest(id: string, questions: Question[]): void;
+  publishQuestionRequest(
+    id: string,
+    questions: Question[],
+    backgroundTask?: string,
+  ): void;
   publishQuestionCleared(id: string): void;
   publishQuestionProgress(progress: {
     id: string;
@@ -59,10 +69,14 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
     }
   }
 
-  publishQuestionRequest(id: string, questions: Question[]): void {
+  publishQuestionRequest(
+    id: string,
+    questions: Question[],
+    backgroundTask?: string,
+  ): void {
     for (const publisher of this.publishers) {
       try {
-        publisher.publishQuestionRequest(id, questions);
+        publisher.publishQuestionRequest(id, questions, backgroundTask);
       } catch {
         // Keep other sinks alive even if one publisher fails.
       }
@@ -109,8 +123,17 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
     this.publishMessage({ type: "idle" });
   }
 
-  publishQuestionRequest(id: string, questions: Question[]): void {
-    this.publishMessage({ type: "agentQuestionRequest", id, questions });
+  publishQuestionRequest(
+    id: string,
+    questions: Question[],
+    backgroundTask?: string,
+  ): void {
+    this.publishMessage({
+      type: "agentQuestionRequest",
+      id,
+      questions,
+      ...(backgroundTask ? { backgroundTask } : {}),
+    });
   }
 
   publishQuestionCleared(id: string): void {
@@ -148,8 +171,17 @@ export class InMemoryAgentUiEventHub
     this.publish({ type: "idle" });
   }
 
-  publishQuestionRequest(id: string, questions: Question[]): void {
-    this.publish({ type: "agentQuestionRequest", id, questions });
+  publishQuestionRequest(
+    id: string,
+    questions: Question[],
+    backgroundTask?: string,
+  ): void {
+    this.publish({
+      type: "agentQuestionRequest",
+      id,
+      questions,
+      ...(backgroundTask ? { backgroundTask } : {}),
+    });
   }
 
   publishQuestionCleared(id: string): void {

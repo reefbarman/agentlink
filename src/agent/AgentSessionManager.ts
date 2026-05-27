@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
 import { hasPendingTodos, todoTool, type TodoItem } from "./todoTool.js";
@@ -10,9 +9,7 @@ import {
   getAgentTools,
   type ToolDispatchContext,
   type BgStatusResult,
-  type QuestionResponse,
 } from "./toolAdapter.js";
-import type { Question } from "./webview/types.js";
 import type { SessionStore, SessionSummary } from "./SessionStore.js";
 import type { BgSessionInfo } from "../shared/types.js";
 import {
@@ -49,6 +46,14 @@ import type {
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
 } from "./backgroundTypes.js";
+
+export interface BtwQuestionResult {
+  answer: string;
+  toolCalls: Array<{ toolName: string; durationMs?: number }>;
+  warnings: string[];
+  inputTokens: number;
+  outputTokens: number;
+}
 
 export class AgentSessionManager {
   private sessions = new Map<string, AgentSession>();
@@ -108,6 +113,8 @@ export class AgentSessionManager {
   >();
   /** Current heuristic phase bucket per background session. */
   private bgPhase = new Map<string, string>();
+  /** True while a transient /btw side question is running. */
+  private btwInFlight = false;
   /** Background summary state keyed by session id. */
   private bgSummary = new Map<
     string,
@@ -128,14 +135,6 @@ export class AgentSessionManager {
 
   /** Callback invoked with each event from the running agent */
   onEvent?: (sessionId: string, event: AgentEvent) => void;
-
-  /** Callback when a background agent's question is answered by the foreground agent */
-  onBgQuestionAnswered?: (
-    fgSessionId: string,
-    bgTask: string,
-    questions: Question[],
-    answer: string,
-  ) => void;
 
   /** Callback when session list changes */
   onSessionsChanged?: () => void;
@@ -348,6 +347,120 @@ export class AgentSessionManager {
       createdAt: s.createdAt,
       lastActiveAt: s.lastActiveAt,
     }));
+  }
+
+  async runBtwQuestion(question: string): Promise<BtwQuestionResult> {
+    const trimmed = question.trim();
+    if (!trimmed) throw new Error("/btw requires a question");
+    if (!this.toolCtx) throw new Error("No tool context — cannot run /btw");
+    if (this.btwInFlight) {
+      throw new Error("Another /btw question is already running");
+    }
+
+    const fg = this.getForegroundSession();
+
+    const mode = fg?.mode ?? "code";
+    const model = fg?.model ?? this.config.model;
+    const providerId =
+      fg?.providerId ?? providerRegistry.tryResolveProvider(model)?.id;
+    const config: AgentConfig = fg
+      ? {
+          ...this.buildConfigForModel(model),
+          maxTokens: fg.maxTokens,
+          thinkingBudget: fg.thinkingBudget,
+          autoCondense: fg.autoCondense,
+          autoCondenseThreshold: fg.autoCondenseThreshold,
+          codexStatefulResponses: fg.codexStatefulResponses,
+          codexStoreResponses: fg.codexStoreResponses,
+        }
+      : this.buildConfigForModel(model);
+
+    const session = await AgentSession.create({
+      mode,
+      agentMode: fg?.agentMode,
+      config,
+      cwd: this.cwd,
+      devMode: this.devMode,
+      activeFilePath: fg?.activeFilePath,
+      providerId,
+    });
+
+    session.title = `/btw ${trimmed}`.slice(0, 80);
+    session.reasoningEffort = fg?.reasoningEffort ?? session.reasoningEffort;
+    if (fg) {
+      session.systemPrompt = fg.systemPrompt;
+      session.replaceMessages(
+        structuredClone(fg.getMessages()) as AgentMessage[],
+      );
+    }
+    session.addUserMessage(trimmed, {
+      displayText: `/btw ${trimmed}`,
+      isSlashCommand: true,
+      slashCommandLabel: "/btw",
+    });
+    session.status = "streaming";
+
+    const sideCtx: ToolDispatchContext = {
+      ...this.toolCtx,
+      sessionId: session.id,
+      mode: session.agentMode.slug,
+      onModeSwitch: undefined,
+      onApprovalRequest: undefined,
+      onQuestion: undefined,
+      onSpawnBackground: undefined,
+      onGetBackgroundStatus: undefined,
+      onGetBackgroundResult: undefined,
+      onKillBackground: undefined,
+      onFinalStatus: undefined,
+      onFileRead: (filePath) => {
+        session.trackFileRead(filePath);
+      },
+      getAdvertisedSkills: () => session.getAdvertisedSkills(),
+      onSkillLoad: (skillName) => session.trackLoadedSkill(skillName),
+    };
+
+    const engine = new AgentEngine(providerRegistry, this.log);
+    engine.setToolContext(sideCtx);
+
+    let answer = "";
+    const toolCalls: BtwQuestionResult["toolCalls"] = [];
+    const warnings: string[] = [];
+
+    this.btwInFlight = true;
+    try {
+      for await (const event of engine.run(session, {
+        toolProfile: "btw",
+        maxApiTurns: 5,
+        maxToolCalls: 10,
+      })) {
+        switch (event.type) {
+          case "text_delta":
+            answer += event.text;
+            break;
+          case "tool_result":
+            toolCalls.push({
+              toolName: event.toolName,
+              durationMs: event.durationMs,
+            });
+            break;
+          case "warning":
+            warnings.push(event.message);
+            break;
+          case "error":
+            throw new Error(event.error);
+        }
+      }
+    } finally {
+      this.btwInFlight = false;
+    }
+
+    return {
+      answer: session.getLastAssistantText() ?? answer,
+      toolCalls,
+      warnings,
+      inputTokens: session.totalInputTokens,
+      outputTokens: session.totalOutputTokens,
+    };
   }
 
   async sendMessage(
@@ -1143,171 +1256,6 @@ export class AgentSessionManager {
   // ---------------------------------------------------------------------------
 
   /**
-   * Answer a background agent's ask_user call by routing it through the
-   * foreground agent instead of directly to the user. The foreground agent
-   * sees the question as an injected user message and can answer autonomously
-   * or use its own ask_user to forward the question to the actual user.
-   *
-   * When the foreground is mid-turn (streaming/tool_executing), the question is
-   * injected as an interjection so it gets answered within the current turn —
-   * avoiding the overhead of waiting for idle then starting a new full turn.
-   * Falls back to a dedicated sendMessage call when the foreground is idle or
-   * the interjection slot is already occupied.
-   */
-  private async askForegroundAgent(
-    bgTask: string,
-    questions: Question[],
-    _bgSessionId: string,
-  ): Promise<QuestionResponse> {
-    const fg = this.getForegroundSession();
-
-    // If no foreground session exists or no engine is running, fall back to
-    // the base onQuestion (which goes to the user directly).
-    if (!fg || !this.toolCtx?.onQuestion) {
-      if (this.toolCtx?.onQuestion) {
-        return this.toolCtx.onQuestion(questions, _bgSessionId);
-      }
-      const fallback: QuestionResponse = {
-        answers: Object.fromEntries(
-          questions.map((q) => [q.id, "(no foreground agent available)"]),
-        ),
-        notes: {},
-      };
-      return fallback;
-    }
-
-    // Format the background agent's questions as a user message.
-    const questionLines = questions
-      .map((q, i) => `${i + 1}. ${q.question}`)
-      .join("\n");
-    const prompt =
-      `[Background agent "${bgTask}" is asking]\n\n${questionLines}\n\n` +
-      `Please answer these questions. You can use ask_user if you need input from the user.`;
-
-    const fgId = fg.id;
-    const fgMode = fg.mode;
-    const isBusy =
-      fg.status === "streaming" ||
-      fg.status === "tool_executing" ||
-      fg.status === "awaiting_approval";
-
-    if (isBusy) {
-      // Try the interjection fast-path: inject the question into the running
-      // turn so the engine picks it up between tool batches or before the next
-      // API call. If the slot is already occupied (user queued a message),
-      // fall through to the wait-then-sendMessage path.
-      const queueId = `bg-q-${randomUUID()}`;
-      const accepted = fg.setPendingInterjection(prompt, queueId);
-
-      if (accepted) {
-        // Wait for the foreground turn to complete (event-driven, up to 2 min).
-        const reachedIdle = await this.waitForForegroundIdle(fg, 120_000);
-
-        if (fg.hasPendingInterjection(queueId)) {
-          // Race condition: foreground went idle between our isBusy check and
-          // the engine consuming the interjection. Clear it and fall back to
-          // a dedicated turn so the question isn't lost.
-          fg.clearPendingInterjectionIf(queueId);
-          await this.sendFgQuestionTurn(fgId, fgMode, prompt);
-        } else if (!reachedIdle) {
-          // Timeout — foreground is still busy. Don't start a concurrent run.
-          // Return a timeout notice so the bg agent knows to retry or proceed.
-          this.log?.(
-            `[bg-q] timeout waiting for fg to finish (task="${bgTask}")`,
-          );
-          const timeoutResponse = "(foreground agent timed out answering)";
-          return {
-            answers: Object.fromEntries(
-              questions.map((q) => [q.id, timeoutResponse]),
-            ),
-            notes: {},
-          };
-        }
-        // else: interjection was consumed and fg finished — answer is in the response
-      } else {
-        // Slot occupied — wait for idle (event-driven), then sendMessage.
-        const reachedIdle = await this.waitForForegroundIdle(fg, 120_000);
-        if (!reachedIdle) {
-          const timeoutResponse = "(foreground agent timed out answering)";
-          return {
-            answers: Object.fromEntries(
-              questions.map((q) => [q.id, timeoutResponse]),
-            ),
-            notes: {},
-          };
-        }
-        await this.sendFgQuestionTurn(fgId, fgMode, prompt);
-      }
-    } else {
-      // Foreground is idle — run a dedicated turn with event suppression.
-      await this.sendFgQuestionTurn(fgId, fgMode, prompt);
-    }
-
-    // Build a QuestionResponse from the foreground's last text reply.
-    const responseText =
-      this.getForegroundSession()?.getLastAssistantText() ??
-      "(no response from foreground agent)";
-
-    // Notify the UI so it can render a collapsible Q&A block.
-    this.onBgQuestionAnswered?.(fgId, bgTask, questions, responseText);
-
-    return {
-      answers: Object.fromEntries(questions.map((q) => [q.id, responseText])),
-      notes: {},
-    };
-  }
-
-  /**
-   * Wait for the foreground session to become idle, using event-driven
-   * notification instead of polling.
-   * Returns true if idle was reached, false on timeout.
-   */
-  private async waitForForegroundIdle(
-    fg: AgentSession,
-    timeoutMs: number,
-  ): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    while (
-      fg.status === "streaming" ||
-      fg.status === "tool_executing" ||
-      fg.status === "awaiting_approval"
-    ) {
-      if (Date.now() >= deadline) return false;
-      // Use an AbortController so the listener is cleaned up when the
-      // timeout wins the race — prevents listener accumulation.
-      const ac = new AbortController();
-      const remaining = deadline - Date.now();
-      const guard = Math.min(remaining, 5_000);
-      await Promise.race([
-        fg.waitForStatusChange(ac.signal),
-        new Promise<void>((r) => setTimeout(r, guard)),
-      ]);
-      ac.abort();
-    }
-    return true;
-  }
-
-  /**
-   * Run a foreground turn to answer a bg question, with event suppression
-   * so it renders as a collapsible Q&A block instead of inline chat.
-   */
-  private async sendFgQuestionTurn(
-    fgId: string,
-    fgMode: string,
-    prompt: string,
-  ): Promise<void> {
-    const savedOnEvent = this.onEvent;
-    this.onEvent = (sessionId, event) => {
-      if (sessionId !== fgId) savedOnEvent?.(sessionId, event);
-    };
-    try {
-      await this.sendMessage(fgId, prompt, fgMode);
-    } finally {
-      this.onEvent = savedOnEvent;
-    }
-  }
-
-  /**
    * Spawn a background agent session and return the resolved routing metadata.
    */
   async spawnBackground(
@@ -1405,9 +1353,9 @@ export class AgentSessionManager {
     this.onSessionsChanged?.();
 
     // Build a bg-specific tool context: inherit base but block nested spawning,
-    // wrap onApprovalRequest to include background task attribution, and prevent
-    // background agents from switching the foreground session's mode.
-    // Route ask_user through the foreground agent instead of directly to the user.
+    // wrap onApprovalRequest / onQuestion to attribute the request to the
+    // background task, and prevent background agents from switching the
+    // foreground session's mode.
     const baseCtx = this.toolCtx;
     const bgCtx: ToolDispatchContext = {
       ...baseCtx,
@@ -1420,8 +1368,10 @@ export class AgentSessionManager {
       onGetBackgroundStatus: undefined,
       onGetBackgroundResult: undefined,
       onKillBackground: undefined,
-      onQuestion: (questions, bgSessionId) =>
-        this.askForegroundAgent(task, questions, bgSessionId),
+      onQuestion: baseCtx.onQuestion
+        ? (questions, bgSessionId) =>
+            baseCtx.onQuestion!(questions, bgSessionId, task)
+        : undefined,
     };
 
     const bgEngine = new AgentEngine(providerRegistry, this.log);
@@ -2112,12 +2062,16 @@ export class AgentSessionManager {
         displayStatus: "Error",
       };
     }
+    const isCancelled = this.bgCancelled.has(sessionId);
     const done = session.status === "idle" || session.status === "error";
-    const status = session.status as BgStatusResult["status"];
+    const status = (
+      isCancelled && session.status === "idle" ? "cancelled" : session.status
+    ) as BgStatusResult["status"];
+    const streamingText = this.bgStreamingText.get(sessionId);
     const heuristicStatus = this.inferBgDisplayStatus({
       status: status as BgSessionInfo["status"],
       currentTool: session.currentTool,
-      streamingText: this.bgStreamingText.get(sessionId),
+      streamingText,
       resultText: done ? session.getLastAssistantText() : undefined,
       errorMessage: this.bgErrors.get(sessionId),
       statusDetail: this.bgStatusDetail.get(sessionId),
@@ -2129,12 +2083,23 @@ export class AgentSessionManager {
       summary,
     });
 
+    const meta = this.bgMeta.get(sessionId);
+    const progressSummary = summary.shortStatus?.trim() || picked.displayStatus;
+
     return {
       status,
       currentTool: session.currentTool,
       done,
       partialOutput: done ? session.getLastAssistantText() : undefined,
       displayStatus: picked.displayStatus,
+      streamingPreview: streamingText,
+      progressSummary,
+      resolvedMode: meta?.resolvedMode,
+      resolvedModel: meta?.resolvedModel,
+      resolvedProvider: meta?.resolvedProvider,
+      taskClass: meta?.taskClass,
+      toolCalls: meta?.toolCalls,
+      tokenUsage: meta?.tokenUsage,
     };
   }
 

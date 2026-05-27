@@ -67,6 +67,14 @@ export interface Question {
   scale_max?: number;
   scale_min_label?: string;
   scale_max_label?: string;
+  /**
+   * Maps answer values to agent mode slugs. When the user picks an answer
+   * with a mapped mode, the agent switches to that mode as part of the
+   * answer submission — no separate switch_mode approval is shown.
+   * Only supported on `multiple_choice` questions. At most one question per
+   * ask_user call may carry modeSwitch.
+   */
+  modeSwitch?: Record<string, string>;
 }
 
 /** Messages from extension to webview */
@@ -284,7 +292,13 @@ export type ExtensionMessage =
       pattern?: string;
       error?: string;
     }
-  | { type: "agentQuestionRequest"; id: string; questions: Question[] }
+  | {
+      type: "agentQuestionRequest";
+      id: string;
+      questions: Question[];
+      /** When set, the question is from a background agent with this task name. */
+      backgroundTask?: string;
+    }
   | { type: "agentQuestionCleared"; id: string }
   | {
       type: "agentQuestionProgress";
@@ -406,6 +420,12 @@ export type ExtensionMessage =
       toolName: string;
     }
   | {
+      type: "agentBgToolInputDelta";
+      sessionId: string;
+      toolCallId: string;
+      partialJson: string;
+    }
+  | {
       type: "agentBgToolComplete";
       sessionId: string;
       toolCallId: string;
@@ -455,17 +475,6 @@ export type ExtensionMessage =
       resultText?: string;
       /** Concise summary for collapsed background-result UI */
       resultSummary?: string;
-    }
-  | {
-      type: "agentBgQuestion";
-      /** Foreground session that answered the question */
-      sessionId: string;
-      /** The background agent's task label */
-      bgTask: string;
-      /** Questions asked by the background agent */
-      questions: string[];
-      /** The foreground agent's answer */
-      answer: string;
     }
   | ShowBgTranscriptMessage
   | { type: "agentBtwLoading"; requestId: string; question: string }
@@ -605,15 +614,6 @@ export type ContentBlock =
       resultText?: string;
       /** Optional concise summary for collapsed rendering */
       summary?: string;
-    }
-  | {
-      type: "bg_question";
-      /** The background agent's task label */
-      bgTask: string;
-      /** Questions asked by the background agent */
-      questions: string[];
-      /** The foreground agent's answer */
-      answer: string;
     }
   | {
       type: "question_answer";

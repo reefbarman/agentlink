@@ -112,7 +112,6 @@ describe("ChatViewProvider session state sync", () => {
       getSessionInfos: vi.fn(() => []),
       getBgSessionInfos: vi.fn(() => []),
       onEvent: undefined,
-      onBgQuestionAnswered: undefined,
       onSessionsChanged: undefined,
     };
 
@@ -212,7 +211,6 @@ describe("ChatViewProvider session state sync", () => {
       getSessionInfos: vi.fn(() => []),
       getBgSessionInfos: vi.fn(() => []),
       onEvent: undefined,
-      onBgQuestionAnswered: undefined,
       onSessionsChanged: undefined,
     };
 
@@ -325,7 +323,6 @@ describe("ChatViewProvider session state sync", () => {
         return newSession;
       }),
       onEvent: undefined,
-      onBgQuestionAnswered: undefined,
       onSessionsChanged: undefined,
     };
 
@@ -409,7 +406,6 @@ describe("ChatViewProvider session state sync", () => {
       }>;
       getBgSessionInfos: () => unknown[];
       onEvent?: unknown;
-      onBgQuestionAnswered?: unknown;
       onSessionsChanged?: () => void;
     } = {
       getForegroundSession: vi.fn(() => foreground),
@@ -429,7 +425,6 @@ describe("ChatViewProvider session state sync", () => {
       ]),
       getBgSessionInfos: vi.fn(() => []),
       onEvent: undefined,
-      onBgQuestionAnswered: undefined,
       onSessionsChanged: undefined,
     };
 
@@ -566,23 +561,152 @@ describe("ChatViewProvider session state sync", () => {
     ).uiPublisher;
     const publishApprovalIdleSpy = vi.spyOn(uiPublisher, "publishApprovalIdle");
 
-    const pendingApprovals = (
-      provider as unknown as {
-        pendingApprovals: Map<string, (result: unknown) => void>;
-      }
-    ).pendingApprovals;
-    const resolveSpy = vi.fn();
-    pendingApprovals.set("approval-inline", resolveSpy);
+    const approvalPromise = provider.requestApproval({
+      id: "approval-inline",
+      kind: "write",
+      title: "Modify `src/file.ts`?",
+      choices: [
+        { label: "Accept", value: "accept", isPrimary: true },
+        { label: "Reject", value: "reject", isDanger: true },
+      ],
+    });
 
     const ok = provider.submitBrowserApprovalDecision({
       id: "approval-inline",
       decision: "accept",
     });
 
+    await expect(approvalPromise).resolves.toMatchObject({
+      decision: "accept",
+    });
     expect(ok).toBe(true);
-    expect(resolveSpy).toHaveBeenCalledOnce();
     expect(publishApprovalIdleSpy).toHaveBeenCalledOnce();
-    expect(pendingApprovals.has("approval-inline")).toBe(false);
+  });
+
+  it("restores an older forwarded approval after resolving an overlapping newer inline approval", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const uiPublisher = (
+      provider as unknown as {
+        uiPublisher: {
+          publishApproval: (request: unknown) => void;
+          publishApprovalIdle: () => void;
+        };
+      }
+    ).uiPublisher;
+    const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
+    const publishApprovalIdleSpy = vi.spyOn(uiPublisher, "publishApprovalIdle");
+
+    const forwardedRespond = vi.fn();
+    provider.forwardApproval(
+      {
+        kind: "command",
+        id: "background-command",
+        command: "npm test",
+        subCommands: [],
+      },
+      forwardedRespond,
+    );
+
+    const foregroundPromise = provider.requestApproval({
+      id: "foreground-write",
+      kind: "write",
+      title: "Modify `src/file.ts`?",
+      choices: [
+        { label: "Accept", value: "accept", isPrimary: true },
+        { label: "Reject", value: "reject", isDanger: true },
+      ],
+    });
+
+    expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "foreground-write" }),
+    );
+
+    const ok = provider.submitBrowserApprovalDecision({
+      id: "foreground-write",
+      decision: "accept",
+    });
+
+    await expect(foregroundPromise).resolves.toMatchObject({
+      decision: "accept",
+    });
+    expect(ok).toBe(true);
+    expect(forwardedRespond).not.toHaveBeenCalled();
+    expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "background-command" }),
+    );
+    expect(publishApprovalIdleSpy).not.toHaveBeenCalled();
+  });
+
+  it("restores an older inline approval after resolving an overlapping newer forwarded approval", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const uiPublisher = (
+      provider as unknown as {
+        uiPublisher: {
+          publishApproval: (request: unknown) => void;
+          publishApprovalIdle: () => void;
+        };
+      }
+    ).uiPublisher;
+    const publishApprovalSpy = vi.spyOn(uiPublisher, "publishApproval");
+    const publishApprovalIdleSpy = vi.spyOn(uiPublisher, "publishApprovalIdle");
+
+    const foregroundPromise = provider.requestApproval({
+      id: "foreground-write",
+      kind: "write",
+      title: "Modify `src/file.ts`?",
+      choices: [
+        { label: "Accept", value: "accept", isPrimary: true },
+        { label: "Reject", value: "reject", isDanger: true },
+      ],
+    });
+    const forwardedRespond = vi.fn();
+    provider.forwardApproval(
+      {
+        kind: "command",
+        id: "background-command",
+        command: "npm test",
+        subCommands: [],
+      },
+      forwardedRespond,
+    );
+
+    expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "background-command" }),
+    );
+
+    const ok = provider.submitBrowserApprovalDecision({
+      id: "background-command",
+      decision: "accept",
+    });
+
+    expect(ok).toBe(true);
+    expect(forwardedRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "background-command", decision: "accept" }),
+    );
+    expect(publishApprovalSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "foreground-write" }),
+    );
+    expect(publishApprovalIdleSpy).not.toHaveBeenCalled();
+
+    provider.submitBrowserApprovalDecision({
+      id: "foreground-write",
+      decision: "reject",
+    });
+    await expect(foregroundPromise).resolves.toMatchObject({
+      decision: "reject",
+    });
   });
 
   it("publishes question cleared after resolving a browser question response", async () => {

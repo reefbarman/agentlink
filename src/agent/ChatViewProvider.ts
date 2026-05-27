@@ -381,6 +381,12 @@ export type ExtensionToWebview =
       toolName: string;
     }
   | {
+      type: "agentBgToolInputDelta";
+      sessionId: string;
+      toolCallId: string;
+      partialJson: string;
+    }
+  | {
       type: "agentBgToolComplete";
       sessionId: string;
       toolCallId: string;
@@ -449,13 +455,6 @@ export type ExtensionToWebview =
       info: Record<string, string | number>;
       systemPrompt?: string;
       loadedInstructions?: Array<{ source: string; chars: number }>;
-    }
-  | {
-      type: "agentBgQuestion";
-      sessionId: string;
-      bgTask: string;
-      questions: string[];
-      answer: string;
     }
   | {
       type: "showBgTranscript";
@@ -642,6 +641,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     string,
     (msg: DecisionMessage) => void
   >();
+  private activeApprovalRequests = new Map<string, ApprovalRequest>();
+  private activeApprovalOrder: string[] = [];
+  private visibleApprovalId: string | null = null;
   private pendingQuestions = new Map<
     string,
     (response: {
@@ -773,8 +775,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   dispose(): void {
     // Reject all pending promises so any awaiting tool calls/question handlers
     // don't stay suspended across view lifecycle.
-    for (const resolve of this.pendingQuestions.values()) {
+    for (const [id, resolve] of this.pendingQuestions) {
       resolve({ answers: {}, notes: {} });
+      this.uiPublisher.publishQuestionCleared(id);
     }
     this.pendingQuestions.clear();
     this.questionSessionIndex.clear();
@@ -785,15 +788,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.pendingApprovals.clear();
     this.approvalSessionIndex.clear();
 
-    for (const resolve of this.pendingForwardedApprovals.values()) {
+    for (const [id, resolve] of this.pendingForwardedApprovals) {
       // Send a synthetic rejection so the approval chain unblocks.
       resolve({
         type: "decision",
-        id: "",
+        id,
         decision: "reject",
       } as import("../approvals/webview/types.js").DecisionMessage);
     }
     this.pendingForwardedApprovals.clear();
+    this.activeApprovalRequests.clear();
+    this.activeApprovalOrder = [];
+    this.visibleApprovalId = null;
 
     for (const { cancel } of this.pendingElicitations.values()) {
       cancel();
@@ -1113,78 +1119,80 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async handleModeSwitch(
     mode: string,
     reason?: string,
+    silent?: boolean,
   ): Promise<{ approved: boolean; mode: string }> {
     const requestedBy =
       reason && reason.trim().length > 0 ? reason.trim() : "agent";
 
-    try {
-      const approval = await this.requestApproval({
-        id: `mode-switch-${randomUUID()}`,
-        kind: "mode-switch",
-        title: `Switch to "${mode}" mode`,
-        detail: requestedBy,
-        choices: [
-          { label: "Allow", value: "run-once", isPrimary: true },
-          { label: "Reject", value: "reject", isDanger: true },
-        ],
-      });
+    let followUp: string | undefined;
 
-      const decision =
-        typeof approval === "string" ? approval : approval.decision;
-      const rejectionReason =
-        typeof approval === "string" ? undefined : approval.rejectionReason;
-      const followUp =
-        typeof approval === "string" ? undefined : approval.followUp;
-
-      if (decision === "reject") {
-        const reasonText = rejectionReason?.trim() || "No reason provided";
-        this.log(`[mode] denied switch to ${mode}: ${reasonText}`);
-        this.postMessage({
-          type: "agentUserAnnotation",
-          sessionId: this.sessionManager?.getForegroundSession()?.id ?? "agent",
-          text: `Mode switch to "${mode}" denied: ${reasonText}`,
-          badge: "rejection",
+    if (!silent) {
+      try {
+        const approval = await this.requestApproval({
+          id: `mode-switch-${randomUUID()}`,
+          kind: "mode-switch",
+          title: `Switch to "${mode}" mode`,
+          detail: requestedBy,
+          choices: [
+            { label: "Allow", value: "run-once", isPrimary: true },
+            { label: "Reject", value: "reject", isDanger: true },
+          ],
         });
+
+        const decision =
+          typeof approval === "string" ? approval : approval.decision;
+        const rejectionReason =
+          typeof approval === "string" ? undefined : approval.rejectionReason;
+        followUp = typeof approval === "string" ? undefined : approval.followUp;
+
+        if (decision === "reject") {
+          const reasonText = rejectionReason?.trim() || "No reason provided";
+          this.log(`[mode] denied switch to ${mode}: ${reasonText}`);
+          this.postMessage({
+            type: "agentUserAnnotation",
+            sessionId:
+              this.sessionManager?.getForegroundSession()?.id ?? "agent",
+            text: `Mode switch to "${mode}" denied: ${reasonText}`,
+            badge: "rejection",
+          });
+          return { approved: false, mode };
+        }
+      } catch (err) {
+        this.log(`[mode] approval flow failed for switch to ${mode}: ${err}`);
         return { approved: false, mode };
       }
+    }
 
-      if (!this.sessionManager) {
+    if (!this.sessionManager) {
+      this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
+      return { approved: true, mode };
+    }
+
+    try {
+      const session = await this.sessionManager.switchForegroundMode(mode);
+      if (!session) {
+        // No active session yet — fall back to creating a new session in target mode.
         this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
         return { approved: true, mode };
       }
-
-      try {
-        const session = await this.sessionManager.switchForegroundMode(mode);
-        if (!session) {
-          // No active session yet — fall back to creating a new session in target mode.
-          this.postMessage({
-            type: "agentModeSwitchRequest",
-            mode,
-            reason,
-          });
-          return { approved: true, mode };
-        }
-        // Reset session-level write approval when switching modes — "session"
-        // approval was granted for the previous mode, not the new one.
-        this.approvalManager?.resetSessionAgentWriteApproval(session.id);
-        this.sessionManager.queueModeSwitchResume(session.id, mode, {
-          reason,
-          followUp,
-        });
-        this.sendInitialState();
-        const suffix = followUp?.trim() ? ` | ${followUp.trim()}` : "";
-        this.log(
-          `[mode] switched foreground session ${session.id} to ${mode}${suffix}`,
-        );
-        return { approved: true, mode };
-      } catch (err) {
-        this.log(`[mode] failed to switch mode in-place: ${err}`);
-        this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
-        return { approved: true, mode };
-      }
+      // Reset session-level write approval when switching modes — "session"
+      // approval was granted for the previous mode, not the new one.
+      this.approvalManager?.resetSessionAgentWriteApproval(session.id);
+      this.sessionManager.queueModeSwitchResume(session.id, mode, {
+        reason,
+        followUp,
+      });
+      this.sendInitialState();
+      const suffix = followUp?.trim() ? ` | ${followUp.trim()}` : "";
+      const tag = silent ? " (silent)" : "";
+      this.log(
+        `[mode] switched foreground session ${session.id} to ${mode}${tag}${suffix}`,
+      );
+      return { approved: true, mode };
     } catch (err) {
-      this.log(`[mode] approval flow failed for switch to ${mode}: ${err}`);
-      return { approved: false, mode };
+      this.log(`[mode] failed to switch mode in-place: ${err}`);
+      this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
+      return { approved: true, mode };
     }
   }
 
@@ -1197,13 +1205,51 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     respond: (msg: DecisionMessage) => void,
   ): void {
     this.pendingForwardedApprovals.set(request.id, respond);
-    this.uiPublisher.publishApproval(request);
+    this.showApprovalRequest(request);
   }
 
   /**
-   * Notify the chat webview that the approval queue is empty (clear any shown card).
+   * Notify the chat webview that the forwarded approval queue is empty.
+   *
+   * Foreground and background approvals share one rendered card. A forwarded
+   * queue becoming idle must not blindly clear an unrelated inline approval
+   * that was shown while the queue was active.
    */
   public sendApprovalIdle(): void {
+    this.publishVisibleApprovalOrIdle();
+  }
+
+  private showApprovalRequest(request: ApprovalRequest): void {
+    if (!this.activeApprovalRequests.has(request.id)) {
+      this.activeApprovalOrder.push(request.id);
+    }
+    this.activeApprovalRequests.set(request.id, request);
+    this.visibleApprovalId = request.id;
+    this.uiPublisher.publishApproval(request);
+  }
+
+  private clearApprovalRequest(id: string): void {
+    if (!this.activeApprovalRequests.delete(id)) return;
+    this.activeApprovalOrder = this.activeApprovalOrder.filter(
+      (approvalId) => approvalId !== id,
+    );
+    if (this.visibleApprovalId === id) {
+      this.visibleApprovalId = null;
+      this.publishVisibleApprovalOrIdle();
+    }
+  }
+
+  private publishVisibleApprovalOrIdle(): void {
+    for (let i = this.activeApprovalOrder.length - 1; i >= 0; i -= 1) {
+      const id = this.activeApprovalOrder[i];
+      const request = this.activeApprovalRequests.get(id);
+      if (!request) continue;
+      this.visibleApprovalId = id;
+      this.uiPublisher.publishApproval(request);
+      return;
+    }
+
+    this.visibleApprovalId = null;
     this.uiPublisher.publishApprovalIdle();
   }
 
@@ -1337,12 +1383,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     return new Promise((resolve) => {
       this.pendingApprovals.set(id, (result) => {
+        this.clearApprovalRequest(id);
         if (sessionId) {
           this.approvalSessionIndex.get(sessionId)?.delete(id);
         }
         resolve(result);
       });
-      this.uiPublisher.publishApproval(approvalRequest);
+      this.showApprovalRequest(approvalRequest);
     });
   }
 
@@ -1464,6 +1511,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public requestQuestion(
     questions: import("./webview/types.js").Question[],
     sessionId: string,
+    backgroundTask?: string,
   ): Promise<import("./toolAdapter.js").QuestionResponse> {
     const { randomUUID } = require("crypto") as typeof import("crypto");
     const id = randomUUID();
@@ -1480,7 +1528,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           notes: (raw.notes as Record<string, string>) ?? {},
         });
       });
-      this.uiPublisher.publishQuestionRequest(id, questions);
+      this.uiPublisher.publishQuestionRequest(id, questions, backgroundTask);
     });
   }
 
@@ -1507,16 +1555,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         rulePattern: msg.rulePattern ?? undefined,
         ruleMode: msg.ruleMode ?? undefined,
       });
-      // Inline (built-in agent) approvals don't flow through ApprovalPanelProvider's
-      // queue, so no onQueueEmpty fires after resolve. Publish idle directly so both
-      // the extension webview and the browser gateway dismiss the card.
-      this.uiPublisher.publishApprovalIdle();
       return true;
     }
 
     const respond = this.pendingForwardedApprovals.get(id);
     if (!respond) return false;
     this.pendingForwardedApprovals.delete(id);
+    this.clearApprovalRequest(id);
     const decision: DecisionMessage = {
       type: "decision",
       id,
@@ -2229,16 +2274,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.handleAgentEvent(sessionId, event);
     };
 
-    manager.onBgQuestionAnswered = (fgSessionId, bgTask, questions, answer) => {
-      this.postMessage({
-        type: "agentBgQuestion",
-        sessionId: fgSessionId,
-        bgTask,
-        questions: questions.map((q) => q.question),
-        answer,
-      } as ExtensionToWebview);
-    };
-
     manager.onSessionsChanged = () => {
       // Session status can change outside the foreground event stream (for example
       // when a tracked tool is force-cancelled/completed from the sidebar). Push a
@@ -2295,9 +2330,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.thinkingDeltaBuffer.clear();
     for (const [sessionId, byId] of this.toolInputDeltaBuffer) {
+      const isBackground = Boolean(
+        this.sessionManager?.getSession(sessionId)?.background,
+      );
       for (const [toolCallId, partialJson] of byId) {
         this.postMessage({
-          type: "agentToolInputDelta",
+          type: isBackground ? "agentBgToolInputDelta" : "agentToolInputDelta",
           sessionId,
           toolCallId,
           partialJson,
@@ -2558,6 +2596,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               if (resolve) {
                 this.pendingQuestions.delete(id);
                 resolve({ answers: {}, notes: {} });
+                this.uiPublisher.publishQuestionCleared(id);
               }
             }
             this.questionSessionIndex.delete(sessionId);
@@ -2571,6 +2610,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               if (resolve) {
                 this.pendingApprovals.delete(id);
                 resolve("reject");
+              } else {
+                this.clearApprovalRequest(id);
               }
             }
             this.approvalSessionIndex.delete(sessionId);
@@ -3611,6 +3652,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       extMsg.type === "agentBgThinkingEnd" ||
       extMsg.type === "agentBgTextDelta" ||
       extMsg.type === "agentBgToolStart" ||
+      extMsg.type === "agentBgToolInputDelta" ||
       extMsg.type === "agentBgToolComplete" ||
       extMsg.type === "agentBgApiRequest" ||
       extMsg.type === "agentBgError" ||
@@ -3842,6 +3884,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           type: "SET_QUESTION",
           id: extMsg.id,
           questions: extMsg.questions,
+          ...(extMsg.backgroundTask
+            ? { backgroundTask: extMsg.backgroundTask }
+            : {}),
         });
         break;
 
@@ -3972,15 +4017,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
-      case "agentBgQuestion":
-        this.applyProjectedAction({
-          type: "ADD_BG_QUESTION",
-          bgTask: extMsg.bgTask,
-          questions: extMsg.questions,
-          answer: extMsg.answer,
-        });
-        break;
-
       default:
         break;
     }
@@ -4051,6 +4087,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               this.projectedForegroundState.questionRequest.questions.map(
                 (question) => ({ ...question }),
               ),
+            ...(this.projectedForegroundState.questionRequest.backgroundTask
+              ? {
+                  backgroundTask:
+                    this.projectedForegroundState.questionRequest
+                      .backgroundTask,
+                }
+              : {}),
           }
         : null,
       detectedQuestion: this.projectedForegroundState.detectedQuestion
@@ -4414,19 +4457,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "user_interjection":
         this.log(`[agent] user_interjection queueId=${event.queueId}`);
-        // Suppress interjection UI for bg question injections — these are
-        // rendered as collapsible Q&A blocks via onBgQuestionAnswered instead.
-        if (!event.queueId.startsWith("bg-q-")) {
-          this.postMessage({
-            type: "agentInterjection",
-            sessionId,
-            text: event.text,
-            queueId: event.queueId,
-            displayText: event.displayText,
-            isSlashCommand: event.isSlashCommand,
-            slashCommandLabel: event.slashCommandLabel,
-          });
-        }
+        this.postMessage({
+          type: "agentInterjection",
+          sessionId,
+          text: event.text,
+          queueId: event.queueId,
+          displayText: event.displayText,
+          isSlashCommand: event.isSlashCommand,
+          slashCommandLabel: event.slashCommandLabel,
+        });
         break;
 
       case "done":
@@ -4804,39 +4843,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       question,
     } as ExtensionToWebview);
 
-    const fg = this.sessionManager?.getForegroundSession();
-    const systemPrompt = fg?.systemPrompt ?? "";
-    const model =
-      fg?.model ??
-      this.sessionManager?.getConfig().model ??
-      "claude-sonnet-4-6";
-
-    // Build provider-safe messages: use the effective API history (already
-    // filtered for condense) and append the side question.
-    const sessionMessages = fg?.getMessages() ?? [];
-    const messages: import("./providers/types.js").MessageParam[] = [
-      ...sessionMessages,
-      { role: "user", content: question },
-    ];
-
     try {
-      const provider = providerRegistry.resolveProvider(model);
-      const result = await provider.complete({
-        model,
-        systemPrompt,
-        messages,
-        maxTokens: 4096,
-      });
+      const result = await this.sessionManager?.runBtwQuestion(question);
+      if (!result) {
+        throw new Error("No active agent session manager");
+      }
 
       this.postMessage({
         type: "agentBtwResponse",
         requestId,
         question,
-        answer: result.text,
+        answer: result.answer,
       } as ExtensionToWebview);
 
+      const toolSummary =
+        result.toolCalls.length > 0
+          ? ` tools=${result.toolCalls.map((t) => t.toolName).join(",")}`
+          : "";
       this.log(
-        `[btw] answered (${result.usage?.inputTokens ?? "?"}in/${result.usage?.outputTokens ?? "?"}out)`,
+        `[btw] answered (${result.inputTokens}in/${result.outputTokens}out${toolSummary})`,
       );
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);

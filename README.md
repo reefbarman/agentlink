@@ -727,20 +727,26 @@ Use this proactively to clean up dedicated terminals you created for background/
 
 ### spawn_background_agent
 
-Spawn a background agent that runs in parallel with the current session. Use this for independent tasks like reviews, research, diagnostics, or alternative approaches.
+Spawn a background agent that runs in parallel with the current session. Use this for independent research, non-conflicting code/test/docs work, diagnostics, alternative approaches, and quick or thorough reviews.
 
-| Parameter        | Type    | Description                                                            |
-| ---------------- | ------- | ---------------------------------------------------------------------- |
-| `task`           | string  | Short label shown in UI                                                |
-| `message`        | string  | Full instruction for the background agent                              |
-| `mode`           | string? | Optional mode override (`code`, `architect`, `ask`, `debug`, `review`) |
-| `model`          | string? | Optional explicit model override                                       |
-| `provider`       | string? | Optional provider preference/constraint                                |
-| `taskClass`      | string? | Routing profile key (e.g. `review_code`, `review_plan`, `research`)    |
-| `modelTier`      | string? | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`) |
-| `timeoutSeconds` | number? | Per-session timeout budget                                             |
-| `tokenBudget`    | number? | Total token budget cap for background run                              |
-| `maxToolCalls`   | number? | Max tool-call budget for background run                                |
+Good examples:
+
+- foreground implements production code while a background agent owns separate test files
+- foreground follows the leading debug hypothesis while a background agent checks an alternate hypothesis
+- foreground edits the core change while a background agent checks docs/browser parity/downstream call chains
+- foreground coordinates multiple independent lanes, then integrates completed results
+
+For writable background work, include explicit ownership boundaries in `message`: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts.
+
+| Parameter   | Type    | Description                                                                                       |
+| ----------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `task`      | string  | Short label shown in UI                                                                           |
+| `message`   | string  | Full instruction for the background agent, including scope boundaries for writable work           |
+| `mode`      | string? | Optional mode override (`code`, `architect`, `ask`, `debug`, `review`)                            |
+| `model`     | string? | Optional explicit model override                                                                  |
+| `provider`  | string? | Optional provider preference/constraint                                                           |
+| `taskClass` | string? | Routing profile key (e.g. `review_code`, `review_plan`, `readonly-research`, `research`, `debug`) |
+| `modelTier` | string? | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`)                            |
 
 Returns structured JSON including:
 
@@ -758,7 +764,13 @@ Non-blocking status check for a background session.
 | ----------- | ------ | --------------------------------------- |
 | `sessionId` | string | Background session id from spawn result |
 
-Returns JSON with `status`, `currentTool`, `done`, and optional `partialOutput`.
+Returns JSON with:
+
+- `status`, `currentTool`, `displayStatus`, `done`
+- `streamingPreview` and `progressSummary` for running sessions when available
+- `resolvedMode`, `resolvedModel`, `resolvedProvider`, `taskClass`
+- `toolCalls`, `tokenUsage`
+- `partialOutput` only when `done=true`
 
 ### get_background_result
 
@@ -852,6 +864,9 @@ Supported clients do this automatically; it mainly matters when integrating Agen
 AgentLink includes static routing policy for background agents (`src/agent/backgroundModelRouting.config.json`) with explainable outcomes.
 
 - **Default behavior**: non-review tasks stay on the foreground model when policy says `useForegroundModelByDefault`.
+- **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and `get_background_result` only when ready to integrate.
+- **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Use explicit owned/forbidden paths in the spawn message.
+- **Read-only lanes**: `readonly-research` routes to ask mode with the `readonly-research` tool profile for pure lookup/exploration.
 - **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available.
 - **Review complexity**: review spawns can explicitly set `modelTier`; otherwise review routing defaults to `balanced` for routine reviews and upgrades to `deep_reasoning` for complex reviews based on task/message heuristics.
 - **Fallback behavior**: deterministic fallback order is used when preferred candidates are unavailable or unauthenticated.
@@ -862,11 +877,11 @@ AgentLink includes static routing policy for background agents (`src/agent/backg
 Background runs enforce explicit safety limits:
 
 - Max concurrent background sessions (spawn rejection with deterministic error)
-- Per-session timeout (`timeoutSeconds`)
-- Token budget cap (`tokenBudget`)
-- Tool-call cap (`maxToolCalls`)
+- Task-class soft `maxToolCalls` / `maxApiTurns` routing policy where configured
+- Tool profiles such as `review` and `readonly-research` for constrained read-only work
+- Foreground cancellation via `kill_background_agent`
 
-Guardrail events are logged as `[bg-guard]` and surfaced in UI metadata.
+When a soft tool-call/API-turn limit is reached, the agent is asked to wrap up with the information it has instead of continuing to dispatch tools. Guardrail events are logged as `[bg-guard]` or emitted as background warnings where applicable.
 
 ### Review mode
 

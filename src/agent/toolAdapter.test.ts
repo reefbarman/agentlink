@@ -239,6 +239,32 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("ask_user");
   });
 
+  it("restricts tools when toolProfile is set to 'readonly-research'", () => {
+    const tools = getAgentTools(
+      undefined,
+      undefined,
+      true,
+      "readonly-research",
+    );
+    const names = tools.map((t) => t.name);
+
+    expect(names).toContain("read_file");
+    expect(names).toContain("search_files");
+    expect(names).toContain("codebase_search");
+    expect(names).toContain("get_diagnostics");
+    expect(names).toContain("go_to_type_definition");
+    expect(names).toContain("get_call_hierarchy");
+    expect(names).toContain("get_inlay_hints");
+
+    expect(names).not.toContain("write_file");
+    expect(names).not.toContain("apply_diff");
+    expect(names).not.toContain("execute_command");
+    expect(names).not.toContain("rename_symbol");
+    expect(names).not.toContain("apply_code_action");
+    expect(names).not.toContain("ask_user");
+    expect(names).not.toContain("spawn_background_agent");
+  });
+
   it("does not restrict tools when toolProfile is undefined", () => {
     const allTools = getAgentTools(undefined, undefined, true);
     const reviewTools = getAgentTools(undefined, undefined, true, "review");
@@ -282,6 +308,8 @@ describe("spawn_background_agent tool", () => {
     expect(props.provider).toBeDefined();
     expect(props.taskClass).toBeDefined();
     expect(props.modelTier).toBeDefined();
+    expect(JSON.stringify(spawnTool)).toContain("readonly-research");
+    expect(JSON.stringify(spawnTool)).toContain("non-conflicting");
     // Guardrail params removed — background agents run without limits
     expect(props.timeoutSeconds).toBeUndefined();
     expect(props.tokenBudget).toBeUndefined();
@@ -345,6 +373,38 @@ describe("spawn_background_agent tool", () => {
     expect(props.reason).toBeDefined();
   });
 
+  it("dispatches get_background_status to onGetBackgroundStatus callback", async () => {
+    const onGetBackgroundStatus = vi.fn().mockReturnValue({
+      status: "streaming",
+      currentTool: "read_file",
+      done: false,
+      displayStatus: "Reading code",
+      streamingPreview: "inspecting tests",
+      progressSummary: "Reading code",
+      taskClass: "readonly-research",
+      toolCalls: 1,
+      tokenUsage: 100,
+    });
+
+    const result = await dispatchToolCall(
+      "get_background_status",
+      { sessionId: "bg-456" },
+      { ...mockCtx, onGetBackgroundStatus },
+    );
+
+    expect(onGetBackgroundStatus).toHaveBeenCalledWith("bg-456");
+    const text = (result.content[0] as { type: string; text: string }).text;
+    expect(JSON.parse(text)).toMatchObject({
+      status: "streaming",
+      currentTool: "read_file",
+      done: false,
+      streamingPreview: "inspecting tests",
+      taskClass: "readonly-research",
+      toolCalls: 1,
+      tokenUsage: 100,
+    });
+  });
+
   it("dispatches kill_background_agent to onKillBackground callback", async () => {
     const onKillBackground = vi.fn().mockReturnValue({
       killed: true,
@@ -401,6 +461,52 @@ describe("dispatchToolCall", () => {
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: JSON.stringify({ ok: true }),
+    });
+  });
+
+  it("records suppressed final task status continuation", async () => {
+    const onFinalStatus = vi.fn();
+    const result = await dispatchToolCall(
+      "set_task_status",
+      {
+        status: "completed",
+        summary: "All done",
+        suppressContinue: true,
+      },
+      { ...mockCtx, onFinalStatus },
+    );
+
+    expect(onFinalStatus).toHaveBeenCalledWith({
+      status: "completed",
+      source: "tool",
+      summary: "All done",
+      continueActionSuppressed: true,
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: JSON.stringify({ ok: true }),
+    });
+  });
+
+  it("suppressed final task status ignores custom continuation", async () => {
+    const onFinalStatus = vi.fn();
+    await dispatchToolCall(
+      "set_task_status",
+      {
+        status: "completed",
+        summary: "All done",
+        continueLabel: "Continue anyway",
+        continuePrompt: "Please continue anyway.",
+        suppressContinue: true,
+      },
+      { ...mockCtx, onFinalStatus },
+    );
+
+    expect(onFinalStatus).toHaveBeenCalledWith({
+      status: "completed",
+      source: "tool",
+      summary: "All done",
+      continueActionSuppressed: true,
     });
   });
 
@@ -508,6 +614,152 @@ describe("dispatchToolCall", () => {
       mockCtx,
     );
     expect(handleGetTerminalOutput).toHaveBeenCalledWith({ terminal_id: "t1" });
+  });
+
+  describe("ask_user", () => {
+    it("performs a silent mode switch when the user's answer is mapped", async () => {
+      const onQuestion = vi.fn().mockResolvedValue({
+        answers: { choice: "Plan first" },
+        notes: {},
+      });
+      const onModeSwitch = vi
+        .fn()
+        .mockResolvedValue({ approved: true, mode: "architect" });
+
+      const ctx: ToolDispatchContext = {
+        ...mockCtx,
+        onQuestion,
+        onModeSwitch,
+      };
+
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              question: "How should we proceed?",
+              options: ["Plan first", "Just implement"],
+              recommended: "Plan first",
+              modeSwitch: {
+                "Plan first": "architect",
+                "Just implement": "code",
+              },
+            },
+          ],
+        },
+        ctx,
+      );
+
+      // Mode switch was triggered silently (third arg `true`)
+      expect(onModeSwitch).toHaveBeenCalledWith(
+        "architect",
+        expect.stringContaining("Plan first"),
+        true,
+      );
+
+      const text = (result.content[0] as { type: "text"; text: string }).text;
+      const parsed = JSON.parse(text);
+      expect(parsed.modeSwitched).toBe("architect");
+      expect(parsed.responses).toEqual([
+        { question: "How should we proceed?", answer: "Plan first" },
+      ]);
+    });
+
+    it("omits modeSwitched when the chosen answer has no mapping", async () => {
+      const onQuestion = vi.fn().mockResolvedValue({
+        answers: { choice: "Just implement" },
+        notes: {},
+      });
+      const onModeSwitch = vi.fn();
+
+      const ctx: ToolDispatchContext = {
+        ...mockCtx,
+        onQuestion,
+        onModeSwitch,
+      };
+
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              question: "How should we proceed?",
+              options: ["Plan first", "Just implement"],
+              modeSwitch: { "Plan first": "architect" },
+            },
+          ],
+        },
+        ctx,
+      );
+
+      expect(onModeSwitch).not.toHaveBeenCalled();
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed.modeSwitched).toBeUndefined();
+    });
+
+    it("rejects ask_user calls with multiple modeSwitch questions", async () => {
+      const onQuestion = vi.fn();
+      const ctx: ToolDispatchContext = { ...mockCtx, onQuestion };
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          questions: [
+            {
+              id: "a",
+              type: "multiple_choice",
+              question: "A?",
+              options: ["x", "y"],
+              modeSwitch: { x: "code" },
+            },
+            {
+              id: "b",
+              type: "multiple_choice",
+              question: "B?",
+              options: ["x", "y"],
+              modeSwitch: { y: "architect" },
+            },
+          ],
+        },
+        ctx,
+      );
+
+      expect(onQuestion).not.toHaveBeenCalled();
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed.error).toContain("Only one question");
+    });
+
+    it("rejects modeSwitch on non-multiple_choice questions", async () => {
+      const onQuestion = vi.fn();
+      const ctx: ToolDispatchContext = { ...mockCtx, onQuestion };
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          questions: [
+            {
+              id: "a",
+              type: "yes_no",
+              question: "Plan first?",
+              modeSwitch: { true: "architect" },
+            },
+          ],
+        },
+        ctx,
+      );
+
+      expect(onQuestion).not.toHaveBeenCalled();
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed.error).toContain("multiple_choice");
+    });
   });
 
   it("attaches MCP approval promotion metadata after allow-once approvals", async () => {
