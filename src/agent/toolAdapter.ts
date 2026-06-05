@@ -315,7 +315,7 @@ const ASK_USER_TOOL: ToolDefinition = {
 const SET_TASK_STATUS_TOOL: ToolDefinition = {
   name: "set_task_status",
   description:
-    "Mark the current turn's final status. Use when your response is final: completed, waiting_for_user, blocked, or cancelled. Include an informative but concise summary of what was accomplished or why the task is pausing. Optionally include a short continuation button label and prompt when the user can safely continue with one click.",
+    "Mark the current turn's final status. Use only when your response is final: completed, waiting_for_user, blocked, or cancelled. Do not call before ask_user or for intermediate progress updates. The summary is the user-facing final response itself, not a meta-description of what you did — never write 'Explained X', 'Answered Y', or similar past-tense recaps; put the actual explanation/answer there (or in a preceding text message). For code-modifying work, structure the summary around what changed, why it matters, validation run or skipped, and concrete follow-up. Optionally include a short continuation button label and prompt when the user can safely continue with one click.",
   input_schema: {
     type: "object",
     properties: {
@@ -326,7 +326,7 @@ const SET_TASK_STATUS_TOOL: ToolDefinition = {
       summary: {
         type: "string",
         description:
-          "Informative but concise status summary shown with the marker. Markdown is rendered. For completed work, summarize what changed and any validation run; usually a few sentences or 1-2 short paragraphs is enough.",
+          "The user-facing final response itself, shown with the marker. Markdown is rendered. Must contain the actual substance the user asked for — the answer, explanation, findings, or result — not a meta-description of what you did. Never write 'Explained X', 'Answered Y', 'Reviewed Z', or similar past-tense recaps; either put the content here directly, or write it as a preceding text message and keep the summary brief. For non-trivial code-modifying work, structure as what changed (key files/behavior), why it matters, validation run, validation skipped with reasons, and concrete follow-up. Use 3-6 bullets or 1-2 short paragraphs for non-trivial work; do not reduce meaningful work to 'Done' or 'All set'. Keep it final and avoid open-ended questions or generic offers for further assistance.",
       },
       continueLabel: {
         type: "string",

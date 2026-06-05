@@ -1,7 +1,7 @@
 import * as os from "os";
-import { randomBytes } from "crypto";
 
 import makeMdns from "multicast-dns";
+import { randomBytes } from "crypto";
 
 type MulticastDNSInstance = ReturnType<typeof makeMdns>;
 
@@ -57,6 +57,10 @@ type MdnsTransport = {
   iface?: string;
 };
 
+function formatTransportLabel(transport: MdnsTransport): string {
+  return transport.iface ? ` on ${transport.iface}` : "";
+}
+
 export interface MdnsAdvertiserOptions {
   /** Desired hostname (without ".local"), e.g. "agentlink". */
   desiredName: string;
@@ -73,7 +77,10 @@ export interface MdnsAdvertiserState {
 }
 
 function sanitizeDesiredName(raw: string): string {
-  const trimmed = raw.trim().toLowerCase().replace(/\.local\.?$/i, "");
+  const trimmed = raw
+    .trim()
+    .toLowerCase()
+    .replace(/\.local\.?$/i, "");
   const cleaned = trimmed.replace(/[^a-z0-9-]+/g, "-").replace(/-+/g, "-");
   const compact = cleaned.replace(/^-+|-+$/g, "");
   return compact.length > 0 ? compact : "agentlink";
@@ -88,20 +95,6 @@ function listLanIpv4Addresses(): string[] {
       if (entry.family !== "IPv4") continue;
       if (entry.internal) continue;
       addrs.push(entry.address);
-    }
-  }
-  return addrs;
-}
-
-function listLanIpv4Interfaces(): Array<{ name: string; address: string }> {
-  const addrs: Array<{ name: string; address: string }> = [];
-  const ifaces = os.networkInterfaces();
-  for (const [name, list] of Object.entries(ifaces)) {
-    if (!list) continue;
-    for (const entry of list) {
-      if (entry.family !== "IPv4") continue;
-      if (entry.internal) continue;
-      addrs.push({ name, address: entry.address });
     }
   }
   return addrs;
@@ -157,6 +150,19 @@ export class MdnsAdvertiser {
     for (let attempt = 0; attempt < 5 && !this.stopped; attempt++) {
       const fqdn = `${attemptName}.local`;
       const transports = await this.createTransports();
+      let startupError: unknown = null;
+      for (const transport of transports) {
+        transport.mdns.on("error", (err: unknown) => {
+          // Until these transports are promoted to this.transports, any error
+          // is part of startup and should trigger the caller's IP-only fallback.
+          if (this.transports !== transports) {
+            startupError = err;
+          }
+          this.log(
+            `[mdns] transport error${formatTransportLabel(transport)}: ${String(err)}`,
+          );
+        });
+      }
 
       try {
         await Promise.all(
@@ -168,6 +174,10 @@ export class MdnsAdvertiser {
       }
 
       const conflictDetected = await this.probeForConflict(transports, fqdn);
+      if (startupError) {
+        await this.destroyTransports(transports);
+        throw new Error(`mdns_bind_failed: ${String(startupError)}`);
+      }
       if (conflictDetected) {
         this.log(
           `[mdns] name ${fqdn} is already in use on the network — rotating suffix`,
@@ -190,11 +200,6 @@ export class MdnsAdvertiser {
         transport.mdns.on("response", (response) =>
           this.handleResponse(response as MdnsPacket),
         );
-        transport.mdns.on("error", (err: unknown) => {
-          this.log(
-            `[mdns] transport error${transport.iface ? ` on ${transport.iface}` : ""}: ${String(err)}`,
-          );
-        });
       }
 
       this.announceAll();
@@ -249,14 +254,7 @@ export class MdnsAdvertiser {
   }
 
   private async createTransports(): Promise<MdnsTransport[]> {
-    const ifaces = listLanIpv4Interfaces();
-    if (os.platform() !== "darwin" || ifaces.length === 0) {
-      return [{ mdns: makeMdns() }];
-    }
-    return ifaces.map((iface) => ({
-      mdns: makeMdns({ interface: iface.address }),
-      iface: `${iface.name}/${iface.address}`,
-    }));
+    return [{ mdns: makeMdns() }];
   }
 
   private async destroyTransports(transports: MdnsTransport[]): Promise<void> {
@@ -362,7 +360,7 @@ export class MdnsAdvertiser {
         }
       } catch (err) {
         this.log(
-          `[mdns] respond failed${transport.iface ? ` on ${transport.iface}` : ""}: ${String(err)}`,
+          `[mdns] respond failed${formatTransportLabel(transport)}: ${String(err)}`,
         );
       }
     }

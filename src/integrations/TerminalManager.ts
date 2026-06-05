@@ -83,6 +83,53 @@ interface ClosedTerminalSnapshot {
   closedAt: number;
 }
 
+export interface ManagedTerminalMetadataEvent {
+  id: string;
+  name: string;
+  cwd?: string;
+  busy: boolean;
+  stale?: boolean;
+}
+
+export interface ManagedTerminalCommandEvent {
+  terminalId: string;
+  commandId: string;
+  command: string;
+  timestamp: number;
+  captureLevel:
+    | "full-agent-managed"
+    | "shell-integration-output"
+    | "command-sent-only";
+}
+
+export interface ManagedTerminalDataEvent {
+  terminalId: string;
+  commandId?: string;
+  text: string;
+  timestamp: number;
+}
+
+export interface ManagedTerminalCommandEndEvent {
+  terminalId: string;
+  commandId: string;
+  timestamp: number;
+  exitCode: number | null;
+}
+
+export interface ManagedTerminalEvents {
+  open: ManagedTerminalMetadataEvent;
+  close: ManagedTerminalMetadataEvent;
+  state: ManagedTerminalMetadataEvent;
+  commandStart: ManagedTerminalCommandEvent;
+  data: ManagedTerminalDataEvent;
+  commandEnd: ManagedTerminalCommandEndEvent;
+}
+
+type ManagedTerminalEventName = keyof ManagedTerminalEvents;
+type ManagedTerminalListener<T extends ManagedTerminalEventName> = (
+  event: ManagedTerminalEvents[T],
+) => void;
+
 export interface CommandResult {
   exit_code: number | null;
   output: string;
@@ -154,6 +201,10 @@ export class TerminalManager {
   private terminals: ManagedTerminal[] = [];
   private disposables: vscode.Disposable[] = [];
   private recentlyClosed: ClosedTerminalSnapshot[] = [];
+  private readonly eventListeners = new Map<
+    ManagedTerminalEventName,
+    Set<ManagedTerminalListener<ManagedTerminalEventName>>
+  >();
   log?: (message: string) => void;
 
   /**
@@ -172,6 +223,57 @@ export class TerminalManager {
    */
   private static readonly REUSE_COOLDOWN_MS = 500;
   private static readonly MAX_RECENTLY_CLOSED = 20;
+
+  onTerminalEvent<T extends ManagedTerminalEventName>(
+    eventName: T,
+    listener: ManagedTerminalListener<T>,
+  ): vscode.Disposable {
+    const listeners = this.eventListeners.get(eventName) ?? new Set();
+    listeners.add(
+      listener as ManagedTerminalListener<ManagedTerminalEventName>,
+    );
+    this.eventListeners.set(eventName, listeners);
+    return {
+      dispose: () => {
+        listeners.delete(
+          listener as ManagedTerminalListener<ManagedTerminalEventName>,
+        );
+      },
+    };
+  }
+
+  private emitTerminalEvent<T extends ManagedTerminalEventName>(
+    eventName: T,
+    event: ManagedTerminalEvents[T],
+  ): void {
+    const listeners = this.eventListeners.get(eventName);
+    if (!listeners) return;
+    for (const listener of listeners) {
+      listener(event);
+    }
+  }
+
+  getManagedTerminalMetadataForTerminal(
+    terminal: vscode.Terminal,
+  ): ManagedTerminalMetadataEvent | undefined {
+    this.syncTerminalRegistry();
+    const managed = this.terminals.find(
+      (candidate) => candidate.terminal === terminal,
+    );
+    return managed ? this.terminalMetadataEvent(managed) : undefined;
+  }
+
+  private terminalMetadataEvent(
+    managed: ManagedTerminal,
+  ): ManagedTerminalMetadataEvent {
+    return {
+      id: managed.id,
+      name: managed.name,
+      ...(managed.cwd && { cwd: managed.cwd }),
+      busy: managed.busy || managed.backgroundRunning,
+      ...(managed.stale && { stale: true }),
+    };
+  }
 
   private buildEnvKey(env?: Record<string, string>): string | undefined {
     if (!env || Object.keys(env).length === 0) return undefined;
@@ -205,7 +307,7 @@ export class TerminalManager {
       if (this.terminals.some((managed) => managed.terminal === terminal))
         continue;
       const cwd = terminal.shellIntegration?.cwd?.fsPath ?? "";
-      this.terminals.push({
+      const managed: ManagedTerminal = {
         id: `term_${nextTerminalId++}`,
         terminal,
         name: terminal.name,
@@ -218,7 +320,9 @@ export class TerminalManager {
         backgroundExitCode: null,
         backgroundOutputCaptured: false,
         backgroundDisposables: [],
-      });
+      };
+      this.terminals.push(managed);
+      this.emitTerminalEvent("open", this.terminalMetadataEvent(managed));
     }
   }
 
@@ -226,6 +330,7 @@ export class TerminalManager {
     this.rememberClosedTerminal(managed);
     for (const d of managed.backgroundDisposables) d.dispose();
     managed.backgroundDisposables = [];
+    this.emitTerminalEvent("close", this.terminalMetadataEvent(managed));
   }
 
   private syncTerminalRegistry(): void {
@@ -338,6 +443,7 @@ export class TerminalManager {
     } finally {
       managed.lastCommandEndedAt = Date.now();
       managed.busy = false;
+      this.emitTerminalEvent("state", this.terminalMetadataEvent(managed));
     }
   }
 
@@ -540,6 +646,7 @@ export class TerminalManager {
       backgroundDisposables: [],
     };
     this.terminals.push(managed);
+    this.emitTerminalEvent("open", this.terminalMetadataEvent(managed));
     return managed;
   }
 
@@ -737,8 +844,16 @@ export class TerminalManager {
 
     // Execute the command — record timestamp so we can measure startup latency
     const executeCalledAt = Date.now();
+    const commandId = `${managed.id}:${executeCalledAt}`;
     logDiag("CALLING_EXECUTE_COMMAND");
     const execution = shellIntegration.executeCommand(command);
+    this.emitTerminalEvent("commandStart", {
+      terminalId: managed.id,
+      commandId,
+      command,
+      timestamp: executeCalledAt,
+      captureLevel: "full-agent-managed",
+    });
     logDiag("EXECUTE_COMMAND_RETURNED");
 
     // Collect output from the stream (stored on managed terminal for external access)
@@ -806,6 +921,12 @@ export class TerminalManager {
         }
         diag.lastActivityAt = Date.now();
         managed.outputBuffer += data;
+        this.emitTerminalEvent("data", {
+          terminalId: managed.id,
+          commandId,
+          text: data,
+          timestamp: diag.lastActivityAt,
+        });
         if (checkForMarker("stream")) break;
       }
       diag.streamDone = true;
@@ -865,6 +986,14 @@ export class TerminalManager {
     ]);
 
     logDiag(`EXIT_CODE=${exitCode ?? "null"}`);
+    if (!timedOut) {
+      this.emitTerminalEvent("commandEnd", {
+        terminalId: managed.id,
+        commandId,
+        timestamp: Date.now(),
+        exitCode: exitCode ?? null,
+      });
+    }
 
     // Clean up all listeners
     for (const d of disposables) d.dispose();
@@ -888,7 +1017,7 @@ export class TerminalManager {
     };
 
     if (timedOut) {
-      this.transitionToBackground(managed);
+      this.transitionToBackground(managed, commandId);
       result.timed_out = true;
       const timeoutMessage = `[Timed out after ${timeout! / 1000}s — command may still be running. Use get_terminal_output with terminal_id "${managed.id}" to check on progress, or add kill: true to stop it.]`;
       result.output += `\n${timeoutMessage}`;
@@ -914,11 +1043,19 @@ export class TerminalManager {
     managed.backgroundRunning = true;
     managed.backgroundOutputCaptured = false;
     managed.backgroundExitCode = null;
+    const timestamp = Date.now();
+    const commandId = `${managed.id}:${timestamp}`;
 
     const finalize = () => {
       if (!managed.backgroundRunning) return;
       managed.backgroundRunning = false;
       managed.lastCommandEndedAt = Date.now();
+      this.emitTerminalEvent("commandEnd", {
+        terminalId: managed.id,
+        commandId,
+        timestamp: managed.lastCommandEndedAt,
+        exitCode: managed.backgroundExitCode,
+      });
       for (const d of managed.backgroundDisposables) d.dispose();
       managed.backgroundDisposables = [];
     };
@@ -937,6 +1074,13 @@ export class TerminalManager {
     });
 
     managed.backgroundDisposables.push(exitDisposable, closeDisposable);
+    this.emitTerminalEvent("commandStart", {
+      terminalId: managed.id,
+      commandId,
+      command,
+      timestamp,
+      captureLevel: "command-sent-only",
+    });
     managed.terminal.sendText(command, true);
 
     return {
@@ -960,7 +1104,10 @@ export class TerminalManager {
    * The stream async generator from executeWithShellIntegration continues
    * pumping data into managed.outputBuffer independently.
    */
-  private transitionToBackground(managed: ManagedTerminal): void {
+  private transitionToBackground(
+    managed: ManagedTerminal,
+    commandId: string,
+  ): void {
     // Clean up any stale background state
     for (const d of managed.backgroundDisposables) d.dispose();
     managed.backgroundDisposables = [];
@@ -983,6 +1130,12 @@ export class TerminalManager {
       if (!managed.backgroundRunning) return;
       managed.backgroundRunning = false;
       managed.outputBuffer = cleanTerminalRawOutput(managed.outputBuffer);
+      this.emitTerminalEvent("commandEnd", {
+        terminalId: managed.id,
+        commandId,
+        timestamp: Date.now(),
+        exitCode: managed.backgroundExitCode,
+      });
       clearInterval(markerPoll);
       for (const d of managed.backgroundDisposables) d.dispose();
       managed.backgroundDisposables = [];
@@ -1055,6 +1208,7 @@ export class TerminalManager {
     managed.outputBuffer = "";
 
     const execTag = `bg:${managed.id}:${Date.now()}`;
+    const commandId = execTag;
     const startTime = Date.now();
     const logBg = (event: string) => {
       const elapsed = Date.now() - startTime;
@@ -1070,6 +1224,12 @@ export class TerminalManager {
       if (!managed.backgroundRunning) return; // already finalized
       managed.backgroundRunning = false;
       managed.outputBuffer = cleanTerminalRawOutput(managed.outputBuffer);
+      this.emitTerminalEvent("commandEnd", {
+        terminalId: managed.id,
+        commandId: execTag,
+        timestamp: Date.now(),
+        exitCode: managed.backgroundExitCode,
+      });
       clearInterval(markerPoll);
       for (const d of managed.backgroundDisposables) d.dispose();
       managed.backgroundDisposables = [];
@@ -1147,6 +1307,13 @@ export class TerminalManager {
       logBg(`EXEC_START cmd="${command.slice(0, 120)}" mode=shellIntegration`);
 
       const execution = shellIntegration.executeCommand(command);
+      this.emitTerminalEvent("commandStart", {
+        terminalId: managed.id,
+        commandId,
+        command,
+        timestamp: startTime,
+        captureLevel: "full-agent-managed",
+      });
       const stream = execution.read();
 
       // Read stream asynchronously — don't await, let it run in background
@@ -1156,6 +1323,12 @@ export class TerminalManager {
           chunks++;
           if (chunks === 1) logBg(`STREAM_FIRST_DATA len=${data.length}`);
           managed.outputBuffer += data;
+          this.emitTerminalEvent("data", {
+            terminalId: managed.id,
+            commandId,
+            text: data,
+            timestamp: Date.now(),
+          });
           if (checkForMarker()) break;
         }
         logBg(`STREAM_DONE chunks=${chunks}`);
@@ -1170,6 +1343,13 @@ export class TerminalManager {
       // sendText fallback — shell integration not available
       managed.backgroundOutputCaptured = false;
       logBg(`EXEC_START cmd="${command.slice(0, 120)}" mode=sendText`);
+      this.emitTerminalEvent("commandStart", {
+        terminalId: managed.id,
+        commandId,
+        command,
+        timestamp: startTime,
+        captureLevel: "command-sent-only",
+      });
       managed.terminal.sendText(command, true);
       // Note: exit/close listeners are already registered above.
       // If shell integration activates after sendText, the exit listener

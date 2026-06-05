@@ -1,9 +1,11 @@
 import * as fs from "fs/promises";
+import * as http from "http";
 import * as path from "path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bootstrapBrowserGatewayHelper,
+  discoveryMatchesDesiredConfig,
   fetchHelperHealth,
   resolveHealthyDiscoveredHelper,
 } from "./bootstrapHelper.js";
@@ -20,9 +22,53 @@ afterEach(async () => {
 });
 
 describe("browser gateway helper bootstrap", () => {
+  it("accepts LAN helpers that fell back to direct IP URLs when mDNS is unavailable", () => {
+    expect(
+      discoveryMatchesDesiredConfig(
+        {
+          pid: process.pid,
+          port: 47137,
+          url: "http://127.0.0.1:47137",
+          protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+          startedAt: new Date().toISOString(),
+          lastHeartbeatAt: new Date().toISOString(),
+          helperVersion: "test-version",
+          browserBootstrapToken: "token",
+          clientSharedSecret: "secret",
+          lanAccess: true,
+          lanUrls: ["http://192.168.50.178:47137"],
+        },
+        { lanAccess: true, mdnsName: "agentlink" },
+      ),
+    ).toBe(true);
+  });
+
+  it.each([undefined, []])(
+    "rejects LAN helpers without mDNS or direct IP URLs (%s)",
+    (lanUrls) => {
+      expect(
+        discoveryMatchesDesiredConfig(
+          {
+            pid: process.pid,
+            port: 47137,
+            url: "http://127.0.0.1:47137",
+            protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+            startedAt: new Date().toISOString(),
+            lastHeartbeatAt: new Date().toISOString(),
+            helperVersion: "test-version",
+            browserBootstrapToken: "token",
+            clientSharedSecret: "secret",
+            lanAccess: true,
+            lanUrls,
+          },
+          { lanAccess: true, mdnsName: "agentlink" },
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("returns null when no discovery exists", async () => {
     const resolved = await resolveHealthyDiscoveredHelper(47137, {
-      helperVersion: "test-version",
       lanAccess: false,
     });
     expect(resolved).toBeNull();
@@ -42,14 +88,13 @@ describe("browser gateway helper bootstrap", () => {
     });
 
     const resolved = await resolveHealthyDiscoveredHelper(47137, {
-      helperVersion: "test-version",
       lanAccess: false,
     });
     expect(resolved).toBeNull();
   });
 
   it("returns health payload for running helper", async () => {
-    const server = (await import("http")).createServer((req, res) => {
+    const server = http.createServer((req, res) => {
       if (req.url === "/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
@@ -85,6 +130,55 @@ describe("browser gateway helper bootstrap", () => {
       BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
     );
 
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("accepts a healthy helper from a different extension version when protocol matches", async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+            helperVersion: "older-extension-version",
+            startedAt: new Date().toISOString(),
+            now: new Date().toISOString(),
+            uptimeMs: 123,
+            activeClientLeases: 1,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const discovery = {
+      pid: process.pid,
+      port,
+      url: `http://127.0.0.1:${port}`,
+      protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+      startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+      helperVersion: "older-extension-version",
+      browserBootstrapToken: "token",
+      clientSharedSecret: "secret",
+      lanAccess: false,
+    };
+    await writeBrowserGatewayHelperDiscovery(discovery);
+
+    const resolved = await resolveHealthyDiscoveredHelper(port, {
+      lanAccess: false,
+    });
+
+    expect(resolved).toEqual(discovery);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 

@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
 import { hasPendingTodos, todoTool, type TodoItem } from "./todoTool.js";
 import { AgentSession } from "./AgentSession.js";
+import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
 import type { AgentMode } from "./modes.js";
@@ -170,6 +171,18 @@ export class AgentSessionManager {
     });
   }
 
+  /**
+   * Snapshot the open workspace folders so the agent's system prompt can list
+   * where each project lives (multi-root workspaces). Read fresh each time so
+   * folder add/remove is reflected on the next session create or prompt rebuild.
+   */
+  private getWorkspaceFolders(): WorkspaceFolderInfo[] {
+    return (vscode.workspace.workspaceFolders ?? []).map((f) => ({
+      name: f.name,
+      path: f.uri.fsPath,
+    }));
+  }
+
   setToolContext(ctx: ToolDispatchContext): void {
     this.toolCtx = ctx;
     if (this.engine) {
@@ -250,6 +263,7 @@ export class AgentSessionManager {
       mode,
       config,
       cwd: this.cwd,
+      workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       activeFilePath: opts?.activeFilePath,
       providerId,
@@ -267,7 +281,10 @@ export class AgentSessionManager {
   async rebuildSystemPrompts(): Promise<void> {
     const fg = this.getForegroundSession();
     if (!fg) return;
-    await fg.rebuildSystemPrompt({ devMode: this.devMode });
+    await fg.rebuildSystemPrompt({
+      devMode: this.devMode,
+      workspaceFolders: this.getWorkspaceFolders(),
+    });
   }
 
   /**
@@ -289,7 +306,10 @@ export class AgentSessionManager {
     const newProviderId = providerRegistry.tryResolveProvider(model)?.id;
     if (newProviderId !== fg.providerId) {
       fg.providerId = newProviderId;
-      await fg.rebuildSystemPrompt({ devMode: this.devMode });
+      await fg.rebuildSystemPrompt({
+      devMode: this.devMode,
+      workspaceFolders: this.getWorkspaceFolders(),
+    });
     }
     await this.maybeAutoCondenseForegroundSession();
   }
@@ -380,6 +400,7 @@ export class AgentSessionManager {
       agentMode: fg?.agentMode,
       config,
       cwd: this.cwd,
+      workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       activeFilePath: fg?.activeFilePath,
       providerId,
@@ -1151,6 +1172,7 @@ export class AgentSessionManager {
       mode: summary.mode,
       config: this.buildConfigForModel(summary.model),
       cwd: this.cwd,
+      workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       providerId,
     });
@@ -1172,7 +1194,10 @@ export class AgentSessionManager {
       loadedSkills: metadata?.loadedSkills ?? [],
       messages,
     });
-    await session.rebuildSystemPrompt({ devMode: this.devMode });
+    await session.rebuildSystemPrompt({
+      devMode: this.devMode,
+      workspaceFolders: this.getWorkspaceFolders(),
+    });
 
     this.sessions.set(sessionId, session);
     this.foregroundId = sessionId;
@@ -1321,6 +1346,7 @@ export class AgentSessionManager {
       mode: route.resolvedMode,
       config: bgConfig,
       cwd: this.cwd,
+      workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       background: true,
       isBackground: true,

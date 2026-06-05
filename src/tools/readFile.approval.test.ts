@@ -158,8 +158,17 @@ describe("handleReadFile outside-workspace approval ordering", () => {
   it.runIf(process.platform === "darwin")(
     "skips outside-workspace approval when terminal output temp paths are canonicalized on macOS",
     async () => {
-      const emittedTmpPath =
-        "/var/folders/_1/fdgqf2bj3zg17zyvfpmy9y1h0000gn/T/agentlink-output-abc123/output.txt";
+      // Derive from the real tmpdir so the emitted/canonical prefixes match
+      // this machine (the folder hash differs per machine).
+      const base = os.tmpdir();
+      const varBase = base.startsWith("/private/")
+        ? base.slice("/private".length)
+        : base;
+      const emittedTmpPath = path.join(
+        varBase,
+        "agentlink-output-abc123",
+        "output.txt",
+      );
       const canonicalTmpPath = `/private${emittedTmpPath}`;
       resolveAndValidatePathMock.mockReturnValue({
         absolutePath: canonicalTmpPath,

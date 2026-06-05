@@ -330,6 +330,7 @@ export type ExtensionToWebview =
       sessionId: string;
       title: string;
       mode: string;
+      model: string;
       messages: import("./types.js").AgentMessage[];
       lastInputTokens: number;
       lastOutputTokens: number;
@@ -1081,11 +1082,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.mcpHub;
   }
 
-  private async refreshMcpConnections(): Promise<void> {
+  private async refreshMcpConnections(options?: {
+    interactiveForNewServers?: boolean;
+  }): Promise<void> {
     if (!this.mcpHub || !this.cwd) return;
     try {
       const configs = await loadMcpConfigs(this.cwd);
-      await this.mcpHub.connect(configs);
+      await this.mcpHub.connect(configs, {
+        interactiveForNewServers: options?.interactiveForNewServers,
+      });
       this.log(`[mcp] connected ${configs.length} server(s)`);
     } catch (err) {
       this.log(`[mcp] connection error: ${err}`);
@@ -1828,7 +1833,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       tailTurns: 0,
     });
     this.sendInitialState();
-    this.log(`New session created from browser (${nextMode})`);
+    this.log(
+      `New session created from browser (${nextMode}, model: ${session.model})`,
+    );
     return { ok: true };
   }
 
@@ -1935,7 +1942,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const providerId = model
           ? providerRegistry.tryResolveProvider(model)?.id
           : undefined;
-        systemPrompt = await buildSystemPrompt(mode, this.cwd, { providerId });
+        systemPrompt = await buildSystemPrompt(mode, this.cwd, {
+          providerId,
+          workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
+            (f) => ({ name: f.name, path: f.uri.fsPath }),
+          ),
+        });
       } catch (err) {
         this.log(`[warn] Failed to build debug system prompt: ${err}`);
       }
@@ -2026,6 +2038,88 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return {
       files: uris.map((u) => getRelativePath(u.fsPath)),
     };
+  }
+
+  /**
+   * Stop a running session and clear any pending UI prompts (questions,
+   * approvals, elicitations) that belong to it, then notify the webview so it
+   * exits streaming state. Shared by the VS Code webview "agentStop" message
+   * and the browser gateway stop endpoint.
+   */
+  private stopSessionFromUi(sessionId: string): void {
+    if (!this.sessionManager) return;
+    const session = this.sessionManager.getSession(sessionId);
+    this.sessionManager.stopSession(sessionId);
+    // Clear any active agent tool calls from the sidebar tracker
+    this.toolCallTracker?.clearAgentCalls(sessionId);
+    // Resolve only the pending questions belonging to this session so their
+    // promises unblock without cancelling unrelated sessions' question flows.
+    const questionIds = this.questionSessionIndex.get(sessionId);
+    if (questionIds) {
+      for (const id of questionIds) {
+        const resolve = this.pendingQuestions.get(id);
+        if (resolve) {
+          this.pendingQuestions.delete(id);
+          resolve({ answers: {}, notes: {} });
+          this.uiPublisher.publishQuestionCleared(id);
+        }
+      }
+      this.questionSessionIndex.delete(sessionId);
+    }
+
+    // Reject only the pending approvals belonging to this session.
+    const approvalIds = this.approvalSessionIndex.get(sessionId);
+    if (approvalIds) {
+      for (const id of approvalIds) {
+        const resolve = this.pendingApprovals.get(id);
+        if (resolve) {
+          this.pendingApprovals.delete(id);
+          resolve("reject");
+        } else {
+          this.clearApprovalRequest(id);
+        }
+      }
+      this.approvalSessionIndex.delete(sessionId);
+    }
+
+    // Cancel only the pending elicitation prompts belonging to this session.
+    const elicitationIds = this.elicitationSessionIndex.get(sessionId);
+    if (elicitationIds) {
+      for (const id of elicitationIds) {
+        const pending = this.pendingElicitations.get(id);
+        if (pending) {
+          this.pendingElicitations.delete(id);
+          pending.cancel();
+        }
+      }
+      this.elicitationSessionIndex.delete(sessionId);
+    }
+    // Immediately notify the webview so it exits streaming state
+    this.postMessage({
+      type: "agentDone",
+      sessionId,
+      totalInputTokens: session?.totalInputTokens ?? 0,
+      totalOutputTokens: session?.totalOutputTokens ?? 0,
+      totalCacheReadTokens: session?.totalCacheReadTokens ?? 0,
+      totalCacheCreationTokens: session?.totalCacheCreationTokens ?? 0,
+    });
+    // If this was a bg session, push updated status so the strip/block
+    // shows the cancelled state immediately.
+    if (session?.background) {
+      this.sendBgSessionsUpdate();
+    }
+  }
+
+  /**
+   * Stop the foreground/streaming session from the browser gateway. Mirrors the
+   * VS Code webview's "agentStop" handling so the browser stop button works.
+   */
+  public submitBrowserStop(sessionId: string): { ok: boolean } {
+    if (!sessionId || !this.sessionManager) return { ok: false };
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) return { ok: false };
+    this.stopSessionFromUi(sessionId);
+    return { ok: true };
   }
 
   public submitBrowserStopBackground(sessionId: string): { ok: boolean } {
@@ -2145,7 +2239,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       vscode.workspace.createFileSystemWatcher(configPattern);
     const reloadConfig = () => {
       this.slashRegistry?.reload().then(() => this.sendSlashCommands());
-      this.refreshMcpConnections();
+      this.refreshMcpConnections({ interactiveForNewServers: true });
       void this.sendModesUpdate();
     };
     configWatcher.onDidChange(reloadConfig);
@@ -2583,66 +2677,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentStop": {
         const sessionId = msg.sessionId as string;
         if (sessionId) {
-          const session = this.sessionManager.getSession(sessionId);
-          this.sessionManager.stopSession(sessionId);
-          // Clear any active agent tool calls from the sidebar tracker
-          this.toolCallTracker?.clearAgentCalls(sessionId);
-          // Resolve only the pending questions belonging to this session so their
-          // promises unblock without cancelling unrelated sessions' question flows.
-          const questionIds = this.questionSessionIndex.get(sessionId);
-          if (questionIds) {
-            for (const id of questionIds) {
-              const resolve = this.pendingQuestions.get(id);
-              if (resolve) {
-                this.pendingQuestions.delete(id);
-                resolve({ answers: {}, notes: {} });
-                this.uiPublisher.publishQuestionCleared(id);
-              }
-            }
-            this.questionSessionIndex.delete(sessionId);
-          }
-
-          // Reject only the pending approvals belonging to this session.
-          const approvalIds = this.approvalSessionIndex.get(sessionId);
-          if (approvalIds) {
-            for (const id of approvalIds) {
-              const resolve = this.pendingApprovals.get(id);
-              if (resolve) {
-                this.pendingApprovals.delete(id);
-                resolve("reject");
-              } else {
-                this.clearApprovalRequest(id);
-              }
-            }
-            this.approvalSessionIndex.delete(sessionId);
-          }
-
-          // Cancel only the pending elicitation prompts belonging to this session.
-          const elicitationIds = this.elicitationSessionIndex.get(sessionId);
-          if (elicitationIds) {
-            for (const id of elicitationIds) {
-              const pending = this.pendingElicitations.get(id);
-              if (pending) {
-                this.pendingElicitations.delete(id);
-                pending.cancel();
-              }
-            }
-            this.elicitationSessionIndex.delete(sessionId);
-          }
-          // Immediately notify the webview so it exits streaming state
-          this.postMessage({
-            type: "agentDone",
-            sessionId,
-            totalInputTokens: session?.totalInputTokens ?? 0,
-            totalOutputTokens: session?.totalOutputTokens ?? 0,
-            totalCacheReadTokens: session?.totalCacheReadTokens ?? 0,
-            totalCacheCreationTokens: session?.totalCacheCreationTokens ?? 0,
-          });
-          // If this was a bg session, push updated status so the strip/block
-          // shows the cancelled state immediately.
-          if (session?.background) {
-            this.sendBgSessionsUpdate();
-          }
+          this.stopSessionFromUi(sessionId);
         }
         break;
       }
@@ -2692,7 +2727,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             tailTurns: 0,
           });
           this.sendInitialState();
-          this.log(`New session created: ${session.id}`);
+          this.log(
+            `New session created: ${session.id} (model: ${session.model})`,
+          );
         });
         break;
       }
@@ -3597,6 +3634,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       sessionId: session.id,
       title: session.title,
       mode: session.mode,
+      model: session.model,
       messages: agentMessagesToChatMessages(allMessages),
       lastInputTokens: session.lastInputTokens,
       lastOutputTokens: session.lastOutputTokens,
@@ -3916,6 +3954,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           sessionId: extMsg.sessionId,
           title: extMsg.title,
           mode: extMsg.mode,
+          model: extMsg.model,
           messages: agentMessagesToChatMessages(extMsg.messages as unknown[]),
           lastInputTokens: extMsg.lastInputTokens,
           lastOutputTokens: extMsg.lastOutputTokens,
@@ -5022,7 +5061,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const providerId = model
           ? providerRegistry.tryResolveProvider(model)?.id
           : undefined;
-        systemPrompt = await buildSystemPrompt(mode, this.cwd, { providerId });
+        systemPrompt = await buildSystemPrompt(mode, this.cwd, {
+          providerId,
+          workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
+            (f) => ({ name: f.name, path: f.uri.fsPath }),
+          ),
+        });
       } catch (err) {
         this.log(`[warn] Failed to build debug system prompt: ${err}`);
       }
@@ -5335,6 +5379,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       sessionId: session.id,
       title: session.title,
       mode: session.mode,
+      model: session.model,
       messages: tail.chunk,
       lastInputTokens: session.lastInputTokens,
       // lastOutputTokens is the per-last-request output count used for

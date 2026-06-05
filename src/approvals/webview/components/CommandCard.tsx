@@ -30,6 +30,54 @@ interface SuggestState {
   status: "idle" | "loading" | "error";
   error?: string;
   pattern?: string;
+  kind?: "regex" | "prefix";
+}
+
+/**
+ * Break a command into whitespace-delimited tokens (respecting quotes), each
+ * paired with the cumulative prefix up to and including it. The prefixes are
+ * true substrings of the trimmed command, so any of them is a valid prefix
+ * rule. e.g. `git commit -m "x"` → git / git commit / git commit -m / git commit -m "x".
+ */
+function commandTokenPrefixes(
+  command: string,
+): Array<{ token: string; prefix: string }> {
+  const cmd = command.trim();
+  const result: Array<{ token: string; prefix: string }> = [];
+  let tokenStart = -1;
+  let inSingle = false;
+  let inDouble = false;
+  const flush = (end: number) => {
+    if (tokenStart >= 0) {
+      result.push({ token: cmd.slice(tokenStart, end), prefix: cmd.slice(0, end) });
+      tokenStart = -1;
+    }
+  };
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (ch === "\\" && i + 1 < cmd.length && !inSingle) {
+      if (tokenStart < 0) tokenStart = i;
+      i++;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      if (tokenStart < 0) tokenStart = i;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      if (tokenStart < 0) tokenStart = i;
+      continue;
+    }
+    if (/\s/.test(ch) && !inSingle && !inDouble) {
+      flush(i);
+      continue;
+    }
+    if (tokenStart < 0) tokenStart = i;
+  }
+  flush(cmd.length);
+  return result;
 }
 
 export function CommandCard({
@@ -179,7 +227,7 @@ export function CommandCard({
           if (!trimmed) throw new Error("Empty suggestion");
           setSuggestStates((prev) => ({
             ...prev,
-            [index]: { status: "idle", pattern: trimmed },
+            [index]: { status: "idle", pattern: trimmed, kind: "regex" },
           }));
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -193,6 +241,31 @@ export function CommandCard({
     [onSuggestRegex, originalCommand, rules, updateRule],
   );
 
+  const handleSuggestPrefix = useCallback(
+    (index: number, prefix: string) => {
+      const current = rules[index];
+      if (!current) return;
+      updateRule(index, {
+        ...current,
+        mode: "prefix",
+        scope: current.scope === "skip" ? "session" : current.scope,
+      });
+      setSuggestStates((prev) => ({
+        ...prev,
+        [index]: { status: "idle", pattern: prefix, kind: "prefix" },
+      }));
+    },
+    [rules, updateRule],
+  );
+
+  const handleSelectPrefix = useCallback((index: number, prefix: string) => {
+    setSuggestStates((prev) => {
+      const current = prev[index];
+      if (!current) return prev;
+      return { ...prev, [index]: { ...current, pattern: prefix } };
+    });
+  }, []);
+
   const rulesJsx =
     subCommands.length > 0 ? (
       <>
@@ -200,6 +273,14 @@ export function CommandCard({
           const state = suggestStates[i] ?? { status: "idle" };
           const rule = rules[i];
           if (!rule) return null;
+          // Suggest a broader prefix for new rules whose command has more than
+          // the leading token, and let the user pick the boundary (command vs.
+          // sub-command vs. …) from the command's tokens.
+          const tokenPrefixes = entry.existingRule
+            ? []
+            : commandTokenPrefixes(entry.command);
+          const canSuggestPrefix = tokenPrefixes.length > 1;
+          const prefixSuggestion = tokenPrefixes[0]?.prefix ?? "";
           return (
             <RuleRow
               key={i}
@@ -212,6 +293,15 @@ export function CommandCard({
                   ? () => handleSuggestRegex(i, entry.command)
                   : undefined
               }
+              onSuggestPrefix={
+                canSuggestPrefix
+                  ? () => handleSuggestPrefix(i, prefixSuggestion)
+                  : undefined
+              }
+              prefixSuggestion={canSuggestPrefix ? prefixSuggestion : undefined}
+              prefixTokens={canSuggestPrefix ? tokenPrefixes : undefined}
+              onSelectPrefix={(p) => handleSelectPrefix(i, p)}
+              suggestKind={state.kind}
               suggestedPattern={state.pattern}
               onAcceptSuggestion={
                 state.pattern
@@ -266,6 +356,12 @@ export function CommandCard({
           {isEdited && (
             <span class="edited-badge">
               <span class="codicon codicon-edit" /> modified
+            </span>
+          )}
+          {request.cwd && (
+            <span class="terminal-cwd" title={request.cwd}>
+              <span class="codicon codicon-folder" />
+              <span class="terminal-cwd-path">{request.cwd}</span>
             </span>
           )}
         </div>

@@ -516,6 +516,7 @@ describe("webview App reducer background agent launch blocks", () => {
       sessionId: "session-1",
       title: "Checkpoint session",
       mode: "code",
+      model: "gpt-5.3-codex",
       messages: state.messages.map(
         ({ checkpointId: _checkpointId, ...message }) => message,
       ),
@@ -524,6 +525,7 @@ describe("webview App reducer background agent launch blocks", () => {
       lastOutputTokens: 0,
     });
 
+    expect(restored.chatState.model).toBe("gpt-5.3-codex");
     expect(restored.messages[0]).toMatchObject({
       role: "user",
       content: "first prompt",
@@ -568,6 +570,7 @@ describe("webview App reducer background agent launch blocks", () => {
       sessionId: "session-1",
       title: "Chunked session",
       mode: "code",
+      model: "gpt-5.3-codex",
       messages: [
         {
           id: "assistant-tail",

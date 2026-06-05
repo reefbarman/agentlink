@@ -85,6 +85,8 @@ interface InternalRequest {
   subCommands?: SubCommandEntry[];
   /** Agent-provided reason for running a command */
   reason?: string;
+  /** Working directory a command will run in */
+  cwd?: string;
   writeOperation?: "create" | "modify";
   outsideWorkspace?: boolean;
   oldName?: string;
@@ -172,7 +174,7 @@ export class ApprovalPanelProvider
   enqueueCommandApproval(
     command: string,
     fullCommand: string,
-    options?: { subCommands?: SubCommandEntry[]; reason?: string },
+    options?: { subCommands?: SubCommandEntry[]; reason?: string; cwd?: string },
   ): { promise: Promise<CommandApprovalResponse>; id: string } {
     const id = randomUUID();
     const promise = this.enqueue({
@@ -182,6 +184,7 @@ export class ApprovalPanelProvider
       fullCommand,
       subCommands: options?.subCommands,
       reason: options?.reason,
+      cwd: options?.cwd,
     }) as Promise<CommandApprovalResponse>;
     return { promise, id };
   }
@@ -332,6 +335,7 @@ export class ApprovalPanelProvider
         command: request.command,
         subCommands: request.subCommands,
         reason: request.reason,
+        cwd: request.cwd,
         filePath: request.filePath,
         writeOperation: request.writeOperation,
         outsideWorkspace: request.outsideWorkspace,
@@ -391,6 +395,7 @@ export class ApprovalPanelProvider
       command: request.command,
       subCommands: request.subCommands,
       reason: request.reason,
+      cwd: request.cwd,
       filePath: request.filePath,
       writeOperation: request.writeOperation,
       outsideWorkspace: request.outsideWorkspace,

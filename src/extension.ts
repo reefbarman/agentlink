@@ -58,11 +58,17 @@ import { CodexOAuthFlowError } from "./agent/providers/codex/CodexOAuthManager.j
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
 import { BrowserGatewayServer } from "./browser-gateway/BrowserGatewayServer.js";
 import { diffSnapshotHub } from "./browser-gateway/DiffSnapshotHub.js";
-import { bootstrapBrowserGatewayHelper } from "./browser-gateway/helper/bootstrapHelper.js";
+import {
+  bootstrapBrowserGatewayHelper,
+  resolveHealthyDiscoveredHelper,
+} from "./browser-gateway/helper/bootstrapHelper.js";
+import { readBrowserGatewayHelperDiscovery } from "./browser-gateway/browserGatewayHelperDiscovery.js";
 import { BrowserGatewayHelperAdminClient } from "./browser-gateway/helper/BrowserGatewayHelperAdminClient.js";
 import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
+import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
 
 export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
+const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
 
 let outputChannel: vscode.OutputChannel;
 let httpServer: http.Server | null = null;
@@ -867,17 +873,23 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(browserGatewayService);
   browserGatewayAuthToken = randomUUID();
-  const browserGatewayInstanceId =
+  const browserGatewayWorkspaceInstanceId =
     context.workspaceState.get<string>("browserGatewayInstanceId") ??
     randomUUID();
   void context.workspaceState.update(
     "browserGatewayInstanceId",
-    browserGatewayInstanceId,
+    browserGatewayWorkspaceInstanceId,
   );
+  const browserGatewayWindowId = randomUUID();
+  const browserGatewayInstanceId = `${browserGatewayWorkspaceInstanceId}:${browserGatewayWindowId}`;
   const firstWorkspace = vscode.workspace.workspaceFolders?.[0];
   const browserWorkspaceName =
     firstWorkspace?.name ?? path.basename(workspaceCwd);
   const browserWorkspacePath = firstWorkspace?.uri.fsPath ?? workspaceCwd;
+  setBrowserGatewayRegistryLogger(log);
+  log(
+    `[browser-gateway] activation identity instanceId=${browserGatewayInstanceId} workspaceSeed=${browserGatewayWorkspaceInstanceId} windowId=${browserGatewayWindowId} pid=${process.pid} workspace=${JSON.stringify(browserWorkspaceName)} path=${JSON.stringify(browserWorkspacePath)}`,
+  );
   browserGatewayServer = new BrowserGatewayServer(
     browserGatewayService,
     chatViewProvider,
@@ -888,28 +900,34 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
   );
   context.subscriptions.push(browserGatewayServer);
-  browserGatewayServer.start(0).catch((err) => {
-    log(`[browser-gateway] failed to start: ${err}`);
-  });
-
   const browserGatewayPort = getConfig<number>("browserGatewayPort") || 47137;
   const helperVersion =
     (context.extension.packageJSON as { version?: string })?.version ??
     "unknown";
-  const helperClientId =
-    context.globalState.get<string>("browserGatewayHelperClientId") ??
-    randomUUID();
-  void context.globalState.update(
-    "browserGatewayHelperClientId",
-    helperClientId,
-  );
+  const helperClientId = browserGatewayInstanceId;
 
   let browserGatewayActivationDisposed = false;
   let browserGatewayHelperBootstrapPromise: Promise<string> | null = null;
+  let browserGatewayBridgeStartPromise: Promise<number> | null = null;
+  let browserGatewayRuntimeEnsurePromise: Promise<void> | null = null;
+  let browserGatewayRestartInProgress = false;
+  let browserGatewayHealthCheckTimer: NodeJS.Timeout | undefined;
   context.subscriptions.push({
     dispose: () => {
+      log(
+        `[browser-gateway] disposing instanceId=${browserGatewayInstanceId} pid=${process.pid}`,
+      );
       browserGatewayActivationDisposed = true;
       browserGatewayHelperBootstrapPromise = null;
+      browserGatewayBridgeStartPromise = null;
+      browserGatewayRuntimeEnsurePromise = null;
+      browserGatewayRestartInProgress = false;
+      browserGatewayHelperLeaseClient?.dispose();
+      browserGatewayHelperLeaseClient = null;
+      if (browserGatewayHealthCheckTimer) {
+        clearInterval(browserGatewayHealthCheckTimer);
+        browserGatewayHealthCheckTimer = undefined;
+      }
     },
   });
 
@@ -927,21 +945,80 @@ export function activate(context: vscode.ExtensionContext): void {
     return `AgentLink browser gateway helper failed to start: ${message}`;
   };
 
+  const getDesiredBrowserGatewayHelperConfig = () => ({
+    lanAccess: getConfig<boolean>("browserGatewayLanAccess") === true,
+    mdnsName:
+      getConfig<string>("browserGatewayMdnsName")?.trim() || "agentlink",
+  });
+
+  const isBrowserGatewayBridgeHealthy = async (
+    url: string,
+  ): Promise<boolean> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2_000);
+    try {
+      const response = await fetch(`${url}/health`, {
+        signal: controller.signal,
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const ensureBrowserGatewayBridgeReady = async (): Promise<number> => {
+    if (browserGatewayBridgeStartPromise) {
+      return await browserGatewayBridgeStartPromise;
+    }
+
+    browserGatewayBridgeStartPromise = (async () => {
+      if (browserGatewayActivationDisposed) {
+        throw new Error("browser_gateway_activation_disposed");
+      }
+      if (!browserGatewayServer) {
+        throw new Error("browser_gateway_bridge_unavailable");
+      }
+
+      const existingUrl = browserGatewayServer.getUrl();
+      if (existingUrl && (await isBrowserGatewayBridgeHealthy(existingUrl))) {
+        return Number(new URL(existingUrl).port);
+      }
+      if (existingUrl) {
+        log(
+          `[browser-gateway] bridge health check failed for ${existingUrl}; restarting bridge`,
+        );
+        await browserGatewayServer.stop();
+      }
+
+      return await browserGatewayServer.start(0).catch((err) => {
+        log(`[browser-gateway] failed to start: ${err}`);
+        throw err;
+      });
+    })().finally(() => {
+      browserGatewayBridgeStartPromise = null;
+    });
+
+    return await browserGatewayBridgeStartPromise;
+  };
+
   const ensureBrowserGatewayHelperReady = async (): Promise<string> => {
     if (browserGatewayHelperBootstrapPromise) {
       return await browserGatewayHelperBootstrapPromise;
     }
+    if (browserGatewayActivationDisposed) {
+      throw new Error("browser_gateway_activation_disposed");
+    }
 
     browserGatewayHelperBootstrapPromise = (async () => {
-      const lanAccess = getConfig<boolean>("browserGatewayLanAccess") === true;
-      const mdnsName =
-        getConfig<string>("browserGatewayMdnsName")?.trim() || "agentlink";
+      const desired = getDesiredBrowserGatewayHelperConfig();
       const result = await bootstrapBrowserGatewayHelper({
         extensionRootPath: context.extensionUri.fsPath,
         browserGatewayPort,
         helperVersion,
-        lanAccess,
-        mdnsName,
+        lanAccess: desired.lanAccess,
+        mdnsName: desired.mdnsName,
         log,
       });
 
@@ -952,9 +1029,7 @@ export function activate(context: vscode.ExtensionContext): void {
       browserGatewayHelperDiscovery = result.discovery;
       const discovered = result.discovery;
       const externalUrl =
-        discovered.mdnsUrl ??
-        discovered.lanUrls?.[0] ??
-        discovered.url;
+        discovered.mdnsUrl ?? discovered.lanUrls?.[0] ?? discovered.url;
       log(
         `[browser-gateway-helper] ready (${result.source}) loopback=${discovered.url} external=${externalUrl} mdns=${discovered.mdnsUrl ?? "off"}`,
       );
@@ -966,7 +1041,6 @@ export function activate(context: vscode.ExtensionContext): void {
         clientSharedSecret: result.discovery.clientSharedSecret,
         log,
       });
-      context.subscriptions.push(browserGatewayHelperLeaseClient);
       await browserGatewayHelperLeaseClient.start();
 
       if (browserGatewayHelperAdminClient) {
@@ -1001,8 +1075,150 @@ export function activate(context: vscode.ExtensionContext): void {
     return await browserGatewayHelperBootstrapPromise;
   };
 
-  void ensureBrowserGatewayHelperReady().catch(() => {
-    // logged above
+  const isCurrentBrowserGatewayHelperHealthy = async (): Promise<boolean> => {
+    const current = browserGatewayHelperDiscovery;
+    if (!current) return false;
+
+    const healthy = await resolveHealthyDiscoveredHelper(
+      browserGatewayPort,
+      getDesiredBrowserGatewayHelperConfig(),
+    );
+    if (!healthy) return false;
+
+    if (
+      healthy.pid !== current.pid ||
+      healthy.url !== current.url ||
+      healthy.clientSharedSecret !== current.clientSharedSecret
+    ) {
+      return false;
+    }
+
+    return true;
+  };
+
+  const ensureBrowserGatewayRuntimeReady = async (): Promise<void> => {
+    if (browserGatewayRuntimeEnsurePromise) {
+      return await browserGatewayRuntimeEnsurePromise;
+    }
+
+    browserGatewayRuntimeEnsurePromise = (async () => {
+      await ensureBrowserGatewayBridgeReady();
+      if (!(await isCurrentBrowserGatewayHelperHealthy())) {
+        await ensureBrowserGatewayHelperReady();
+      }
+    })().finally(() => {
+      browserGatewayRuntimeEnsurePromise = null;
+    });
+
+    return await browserGatewayRuntimeEnsurePromise;
+  };
+
+  const waitForBrowserGatewayHelperShutdown = async (
+    helperUrl: string,
+    pid: number,
+  ): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 250);
+      try {
+        const response = await fetch(`${helperUrl}/health`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (!response.ok) return;
+      } catch {
+        clearTimeout(timer);
+        return;
+      }
+
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    throw new Error("helper_shutdown_timeout");
+  };
+
+  const forceRestartBrowserGateway = async (): Promise<void> => {
+    const previousDiscovery =
+      browserGatewayHelperDiscovery ??
+      (await readBrowserGatewayHelperDiscovery().catch(() => null));
+    log(
+      `[browser-gateway] force restart requested previousPid=${previousDiscovery?.pid ?? "none"} previousUrl=${previousDiscovery?.url ?? "none"}`,
+    );
+
+    browserGatewayRestartInProgress = true;
+    try {
+      const previousLeaseClient = browserGatewayHelperLeaseClient;
+      browserGatewayHelperLeaseClient = null;
+      if (previousLeaseClient) {
+        await previousLeaseClient.stop();
+      }
+
+      if (previousDiscovery) {
+        const adminClient =
+          browserGatewayHelperAdminClient ??
+          new BrowserGatewayHelperAdminClient({
+            helperUrl: previousDiscovery.url,
+            clientSharedSecret: previousDiscovery.clientSharedSecret,
+            log,
+          });
+        try {
+          await adminClient.shutdown();
+          await waitForBrowserGatewayHelperShutdown(
+            previousDiscovery.url,
+            previousDiscovery.pid,
+          );
+        } catch (err) {
+          log(
+            `[browser-gateway] helper admin shutdown failed; falling back to SIGTERM: ${String(err)}`,
+          );
+          try {
+            process.kill(previousDiscovery.pid, "SIGTERM");
+          } catch (killErr) {
+            log(`[browser-gateway] helper SIGTERM failed: ${String(killErr)}`);
+          }
+          await waitForBrowserGatewayHelperShutdown(
+            previousDiscovery.url,
+            previousDiscovery.pid,
+          );
+        }
+      }
+
+      browserGatewayHelperDiscovery = null;
+
+      if (browserGatewayServer?.getUrl()) {
+        await browserGatewayServer.stop();
+      }
+
+      browserGatewayRuntimeEnsurePromise = null;
+      browserGatewayHelperBootstrapPromise = null;
+      browserGatewayBridgeStartPromise = null;
+
+      await ensureBrowserGatewayRuntimeReady();
+    } finally {
+      browserGatewayRestartInProgress = false;
+    }
+  };
+
+  browserGatewayHealthCheckTimer = setInterval(() => {
+    if (browserGatewayRestartInProgress) return;
+    void ensureBrowserGatewayRuntimeReady().catch((err) => {
+      if (!browserGatewayActivationDisposed) {
+        log(`[browser-gateway] periodic health check failed: ${err}`);
+      }
+    });
+  }, BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS);
+
+  void ensureBrowserGatewayRuntimeReady().catch((err) => {
+    if (!browserGatewayActivationDisposed) {
+      log(`[browser-gateway] activation auto-start failed: ${err}`);
+    }
   });
 
   // Initialize modes, slash commands, MCP hub, and file watchers
@@ -1139,10 +1355,34 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showInformationMessage("All session approvals cleared.");
     }),
     vscode.commands.registerCommand(
+      "agentlink.restartBrowserGateway",
+      async () => {
+        try {
+          await forceRestartBrowserGateway();
+        } catch (err) {
+          vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
+          return;
+        }
+
+        const discovery = browserGatewayHelperDiscovery;
+        const message = discovery
+          ? `AgentLink browser gateway restarted (helperVersion ${discovery.helperVersion}, extension ${helperVersion}). Refresh the browser tab to load the latest assets. If you are testing local workspace changes, reload/reinstall the extension first so the helper serves the rebuilt dist assets.`
+          : "AgentLink browser gateway restarted. Refresh the browser tab to load the latest assets. If you are testing local workspace changes, reload/reinstall the extension first so the helper serves the rebuilt dist assets.";
+        const action = await vscode.window.showInformationMessage(
+          message,
+          "Open Browser Gateway",
+        );
+        if (action === "Open Browser Gateway" && discovery) {
+          const [url] = collectGatewayUrls(discovery);
+          await vscode.env.openExternal(vscode.Uri.parse(url));
+        }
+      },
+    ),
+    vscode.commands.registerCommand(
       "agentlink.openBrowserGateway",
       async () => {
         try {
-          await ensureBrowserGatewayHelperReady();
+          await ensureBrowserGatewayRuntimeReady();
         } catch (err) {
           vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
           return;
@@ -1188,7 +1428,7 @@ export function activate(context: vscode.ExtensionContext): void {
       "agentlink.showBrowserGatewayStatus",
       async () => {
         try {
-          await ensureBrowserGatewayHelperReady();
+          await ensureBrowserGatewayRuntimeReady();
         } catch (err) {
           vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
           return;
@@ -1230,23 +1470,20 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       },
     ),
-    vscode.commands.registerCommand(
-      "agentlink.pairBrowserDevice",
-      async () => {
-        try {
-          await ensureBrowserGatewayHelperReady();
-        } catch (err) {
-          vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
-          return;
-        }
-        await chatViewProvider.handlePairCommand();
-      },
-    ),
+    vscode.commands.registerCommand("agentlink.pairBrowserDevice", async () => {
+      try {
+        await ensureBrowserGatewayRuntimeReady();
+      } catch (err) {
+        vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
+        return;
+      }
+      await chatViewProvider.handlePairCommand();
+    }),
     vscode.commands.registerCommand(
       "agentlink.managePairedDevices",
       async () => {
         try {
-          await ensureBrowserGatewayHelperReady();
+          await ensureBrowserGatewayRuntimeReady();
         } catch (err) {
           vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
           return;

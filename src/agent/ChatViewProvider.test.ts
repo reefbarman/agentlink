@@ -130,6 +130,7 @@ describe("ChatViewProvider session state sync", () => {
       sessionId: "session-1",
       title: "Session 1",
       mode: "code",
+      model: "claude-sonnet-4-6",
       messages: [
         {
           role: "assistant",
@@ -229,6 +230,7 @@ describe("ChatViewProvider session state sync", () => {
       sessionId: "session-1",
       title: "Session 1",
       mode: "code",
+      model: "claude-sonnet-4-6",
       messages: [
         {
           role: "assistant",
@@ -337,6 +339,7 @@ describe("ChatViewProvider session state sync", () => {
       sessionId: oldSession.id,
       title: oldSession.title,
       mode: oldSession.mode,
+      model: oldSession.model,
       messages: oldSession.getAllMessages(),
       lastInputTokens: 0,
       lastOutputTokens: 0,

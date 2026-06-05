@@ -262,6 +262,7 @@ export type AppAction =
       sessionId: string;
       title: string;
       mode: string;
+      model: string;
       messages: ChatMessage[];
       lastInputTokens?: number;
       lastOutputTokens?: number;
@@ -1821,6 +1822,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           ...state.chatState,
           sessionId: action.sessionId,
           mode: action.mode,
+          model: action.model,
           streaming: false,
         },
       };

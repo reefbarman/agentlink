@@ -37,6 +37,8 @@ export interface ApprovalRequest {
   queueTotal?: number;
   /** For commands: agent-provided reason for running this command */
   reason?: string;
+  /** For commands: the working directory the command will run in */
+  cwd?: string;
   /** For MCP: detail text (input preview) */
   mcpDetail?: string;
   /** For MCP: approval choices */

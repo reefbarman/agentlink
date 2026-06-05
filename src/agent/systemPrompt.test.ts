@@ -224,6 +224,30 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("System Information");
   });
 
+  it("lists workspace folders for multi-root workspaces", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      workspaceFolders: [
+        { name: "api", path: "/work/api" },
+        { name: "web", path: "/work/web" },
+      ],
+    });
+    expect(result).toContain("Workspace Folders");
+    expect(result).toContain("api: /work/api");
+    expect(result).toContain("web: /work/web");
+  });
+
+  it("omits the workspace folders section for a single root", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      workspaceFolders: [{ name: "api", path: "/work/api" }],
+    });
+    expect(result).not.toContain("Workspace Folders");
+  });
+
+  it("omits the workspace folders section when none provided", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).not.toContain("Workspace Folders");
+  });
+
   it("does not include dev feedback section by default", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).not.toContain("Tool Feedback (Dev Mode)");

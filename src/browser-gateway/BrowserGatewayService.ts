@@ -1,7 +1,5 @@
 import * as vscode from "vscode";
 
-import { getTerminalManager } from "../integrations/TerminalManager.js";
-
 import type { AgentSessionManager } from "../agent/AgentSessionManager.js";
 import type { SessionSummary } from "../agent/SessionStore.js";
 import type { AgentMessage } from "../agent/types.js";
@@ -19,6 +17,7 @@ import type {
   BgSessionInfo,
   BrowserGatewayThemeSnapshot,
 } from "../shared/types.js";
+
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
 import type {
@@ -68,13 +67,6 @@ export interface BrowserGatewayWireState {
   mcpStatusInfos: ReturnType<ChatViewProvider["getBrowserMcpStatusInfos"]>;
 }
 
-export interface BrowserGatewayTerminalInfo {
-  id: string;
-  name: string;
-  busy: boolean;
-  stale?: boolean;
-}
-
 export interface BrowserGatewayRepositoryInfo {
   branch?: string;
   dirty?: boolean;
@@ -82,7 +74,6 @@ export interface BrowserGatewayRepositoryInfo {
 
 export interface BrowserGatewaySessionState {
   sessions: SessionSummary[];
-  terminals: BrowserGatewayTerminalInfo[];
   repository: BrowserGatewayRepositoryInfo | null;
   foreground:
     | {
@@ -121,7 +112,6 @@ export interface BrowserGatewaySessionState {
 
 export interface BrowserGatewayWireSessionState {
   sessions: SessionSummary[];
-  terminals: BrowserGatewayTerminalInfo[];
   repository: BrowserGatewayRepositoryInfo | null;
   foreground: {
     sessionId: string;
@@ -159,14 +149,6 @@ export interface BrowserGatewaySnapshotState {
   background: BgSessionInfo[];
   diffs: DiffSnapshotPreview[];
   theme: BrowserGatewayThemeSnapshot;
-}
-
-function listBrowserGatewayTerminals(): BrowserGatewayTerminalInfo[] {
-  try {
-    return getTerminalManager().listTerminals();
-  } catch {
-    return [];
-  }
 }
 
 function isSameOrNestedPath(pathValue: string, candidateRoot: string): boolean {
@@ -314,7 +296,6 @@ export class BrowserGatewayService implements vscode.Disposable {
     if (!foreground) {
       return {
         sessions,
-        terminals: listBrowserGatewayTerminals(),
         repository: this.getRepositoryInfo(),
         foreground: undefined,
       };
@@ -339,7 +320,6 @@ export class BrowserGatewayService implements vscode.Disposable {
 
     return {
       sessions,
-      terminals: listBrowserGatewayTerminals(),
       repository: this.getRepositoryInfo(),
       foreground: {
         sessionId: foreground.id,
@@ -431,7 +411,6 @@ export class BrowserGatewayService implements vscode.Disposable {
     // not resend large tool/image payloads on every change.
     return {
       sessions: sessionState.sessions,
-      terminals: sessionState.terminals,
       repository: sessionState.repository,
       foreground: sessionState.foreground
         ? {

@@ -182,6 +182,27 @@ body {
 .terminal-header .codicon {
   font-size: 12px;
 }
+.terminal-cwd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+  font-family: var(
+    --vscode-terminal-fontFamily,
+    var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace)
+  );
+}
+.terminal-cwd .codicon {
+  flex-shrink: 0;
+}
+.terminal-cwd-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
 .terminal-body {
   display: flex;
   padding: 10px 12px;
@@ -192,9 +213,9 @@ body {
   color: var(--vscode-terminal-ansiGreen, #4ec9b0);
   font-family: var(
     --vscode-terminal-fontFamily,
-    var(--vscode-editor-font-family)
+    var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace)
   );
-  font-size: var(--vscode-terminal-fontSize, var(--vscode-editor-font-size));
+  font-size: var(--vscode-terminal-fontSize, var(--vscode-editor-font-size, 13px));
   line-height: 1.5;
   user-select: none;
   flex-shrink: 0;
@@ -207,9 +228,9 @@ body {
   color: var(--vscode-terminal-foreground, var(--vscode-foreground));
   font-family: var(
     --vscode-terminal-fontFamily,
-    var(--vscode-editor-font-family)
+    var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace)
   );
-  font-size: var(--vscode-terminal-fontSize, var(--vscode-editor-font-size));
+  font-size: var(--vscode-terminal-fontSize, var(--vscode-editor-font-size, 13px));
   line-height: 1.5;
   resize: none;
   outline: none;
@@ -460,6 +481,34 @@ body {
 .rule-suggest-btn:disabled {
   opacity: 0.65;
   cursor: default;
+}
+.rule-suggest-btn code {
+  font-family: var(--vscode-editor-font-family);
+  font-weight: 600;
+}
+.rule-prefix-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.rule-prefix-token {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-editor-background);
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rule-prefix-token:hover {
+  border-color: color-mix(in srgb, #4ec9b0 55%, transparent);
+}
+.rule-prefix-token.active {
+  background: color-mix(in srgb, #4ec9b0 16%, transparent);
+  border-color: color-mix(in srgb, #4ec9b0 45%, transparent);
+  color: var(--vscode-foreground);
 }
 .rule-row-suggest-error {
   font-size: 11px;

@@ -40,6 +40,10 @@ const webviewBase = {
   sourcemap: true,
   keepNames: true,
   minify: true,
+  assetNames: "[name]",
+  loader: {
+    ".ttf": "file",
+  },
   jsx: "automatic",
   jsxImportSource: "preact",
   define: {
@@ -80,6 +84,33 @@ const browserGatewayOptions = {
   ...webviewBase,
   entryPoints: ["src/browser-gateway/webview/index.tsx"],
   entryNames: "browser-gateway",
+};
+
+// ⚠️ Every output file produced here must also be re-included in `.vscodeignore`
+// (it uses an ignore-all + allowlist model). A new bundle output that isn't listed
+// there builds fine locally but is dropped from the packaged .vsix and 404s for
+// installed users. See the header comment in `.vscodeignore`.
+/** @type {esbuild.BuildOptions} */
+const monacoWorkerOptions = {
+  entryPoints: {
+    "monaco-editor.worker":
+      "node_modules/monaco-editor/esm/vs/editor/editor.worker.js",
+    "monaco-json.worker":
+      "node_modules/monaco-editor/esm/vs/language/json/json.worker.js",
+    "monaco-css.worker":
+      "node_modules/monaco-editor/esm/vs/language/css/css.worker.js",
+    "monaco-html.worker":
+      "node_modules/monaco-editor/esm/vs/language/html/html.worker.js",
+    "monaco-ts.worker":
+      "node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js",
+  },
+  bundle: true,
+  outdir: "dist",
+  format: "esm",
+  platform: "browser",
+  target: "es2022",
+  sourcemap: true,
+  minify: true,
 };
 
 /** @type {esbuild.BuildOptions} */
@@ -129,6 +160,7 @@ if (watch) {
     frCtx,
     chatCtx,
     browserGatewayCtx,
+    monacoWorkerCtx,
     idxCtx,
     helperCtx,
   ] = await Promise.all([
@@ -138,6 +170,7 @@ if (watch) {
     esbuild.context(frPreviewOptions),
     esbuild.context(chatOptions),
     esbuild.context(browserGatewayOptions),
+    esbuild.context(monacoWorkerOptions),
     esbuild.context(indexerOptions),
     esbuild.context(browserGatewayHelperOptions),
   ]);
@@ -148,6 +181,7 @@ if (watch) {
     frCtx.watch(),
     chatCtx.watch(),
     browserGatewayCtx.watch(),
+    monacoWorkerCtx.watch(),
     idxCtx.watch(),
     helperCtx.watch(),
   ]);
@@ -160,6 +194,7 @@ if (watch) {
     esbuild.build(frPreviewOptions),
     esbuild.build(chatOptions),
     esbuild.build(browserGatewayOptions),
+    esbuild.build(monacoWorkerOptions),
     esbuild.build(indexerOptions),
     esbuild.build(browserGatewayHelperOptions),
   ]);

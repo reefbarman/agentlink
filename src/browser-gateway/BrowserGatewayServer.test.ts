@@ -29,6 +29,11 @@ vi.mock("vscode", () => {
 
   return {
     EventEmitter: MockEventEmitter,
+    workspace: {
+      getConfiguration: () => ({
+        get: () => undefined,
+      }),
+    },
   };
 });
 
@@ -121,13 +126,14 @@ function makeChatViewProviderStub() {
         condenseThreshold: 0.8,
       },
     ]),
-    submitBrowserSetModel: vi.fn(async () => ({ ok: true })),
+    submitBrowserSetModel: vi.fn(async (_model: string) => ({ ok: true })),
     submitBrowserSetWriteApproval: vi.fn(() => ({ ok: true })),
     submitBrowserSetThinkingEnabled: vi.fn(() => ({ ok: true })),
     submitBrowserNewSession: vi.fn(async () => ({ ok: true })),
     submitBrowserAttachFile: vi.fn(async () => ({
       files: ["/tmp/from-picker.txt"],
     })),
+    submitBrowserStop: vi.fn(() => ({ ok: true })),
     submitBrowserStopBackground: vi.fn(() => ({ ok: true })),
     getBrowserBgTranscript: vi.fn((sessionId: string) => ({
       ok: true,
@@ -148,6 +154,7 @@ beforeEach(() => {
 
 afterEach(() => {
   diffSnapshotHub.remove("approval-1");
+  diffSnapshotHub.remove("approval-large");
 });
 
 describe("BrowserGatewayServer", () => {
@@ -155,6 +162,17 @@ describe("BrowserGatewayServer", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();
     const chatViewProvider = makeChatViewProviderStub();
+    let projectedModel = "claude-sonnet-4-6";
+    chatViewProvider.submitBrowserSetModel.mockImplementation(
+      async (model: string) => {
+        projectedModel = model;
+        return { ok: true };
+      },
+    );
+    chatViewProvider.submitBrowserNewSession.mockImplementation(async () => {
+      projectedModel = "gpt-5.3-codex";
+      return { ok: true };
+    });
     const service = new BrowserGatewayService(
       hub,
       sessionManager as never,
@@ -172,7 +190,7 @@ describe("BrowserGatewayServer", () => {
       () => ({
         sessionId: "session-1",
         mode: "code",
-        model: "claude-sonnet-4-6",
+        model: projectedModel,
         streaming: false,
         statusOverride: null,
         projectedMessages: [
@@ -244,6 +262,15 @@ describe("BrowserGatewayServer", () => {
       proposedContent: "after",
       outsideWorkspace: false,
       createdAt: 1,
+    });
+    diffSnapshotHub.upsert({
+      requestId: "approval-large",
+      filePath: "src/large-file.ts",
+      operation: "modify",
+      originalContent: "a".repeat(1_000_001),
+      proposedContent: "b".repeat(1_000_000),
+      outsideWorkspace: false,
+      createdAt: 2,
     });
 
     const instancesResponse = await fetch(`${baseUrl}/api/instances`);
@@ -365,7 +392,6 @@ describe("BrowserGatewayServer", () => {
             lastActiveAt: 2,
           },
         ],
-        terminals: [],
         repository: null,
         foreground: {
           sessionId: "session-1",
@@ -435,6 +461,15 @@ describe("BrowserGatewayServer", () => {
           outsideWorkspace: false,
           createdAt: 1,
         },
+        {
+          requestId: "approval-large",
+          filePath: "src/large-file.ts",
+          operation: "modify",
+          originalPreview: "a".repeat(600),
+          proposedPreview: "b".repeat(600),
+          outsideWorkspace: false,
+          createdAt: 2,
+        },
       ],
       theme: {
         cssVariables: {
@@ -446,7 +481,17 @@ describe("BrowserGatewayServer", () => {
       },
     });
 
-    const diffDetailResponse = await fetch(`${baseUrl}/api/diff/approval-1`);
+    const unauthorizedDiffDetailResponse = await fetch(
+      `${baseUrl}/api/diff/approval-1`,
+    );
+    expect(unauthorizedDiffDetailResponse.status).toBe(401);
+    expect(await unauthorizedDiffDetailResponse.json()).toEqual({
+      error: "unauthorized",
+    });
+
+    const diffDetailResponse = await fetch(`${baseUrl}/api/diff/approval-1`, {
+      headers: { Authorization: "Bearer test-token" },
+    });
     expect(diffDetailResponse.ok).toBe(true);
     expect(await diffDetailResponse.json()).toEqual({
       requestId: "approval-1",
@@ -458,9 +503,29 @@ describe("BrowserGatewayServer", () => {
       proposedContent: "after",
     });
 
-    const missingDiffResponse = await fetch(`${baseUrl}/api/diff/missing`);
+    const missingDiffResponse = await fetch(`${baseUrl}/api/diff/missing`, {
+      headers: { Authorization: "Bearer test-token" },
+    });
     expect(missingDiffResponse.status).toBe(404);
     expect(await missingDiffResponse.json()).toEqual({ error: "not_found" });
+
+    const largeDiffResponse = await fetch(
+      `${baseUrl}/api/diff/approval-large`,
+      {
+        headers: { Authorization: "Bearer test-token" },
+      },
+    );
+    expect(largeDiffResponse.status).toBe(413);
+    expect(await largeDiffResponse.json()).toEqual({
+      error: "diff_too_large",
+      maxChars: 2_000_000,
+      totalChars: 2_000_001,
+      requestId: "approval-large",
+      filePath: "src/large-file.ts",
+      operation: "modify",
+      outsideWorkspace: false,
+      createdAt: 2,
+    });
 
     const sseResponse = await fetch(`${baseUrl}/events`, {
       headers: { Accept: "text/event-stream" },
@@ -728,12 +793,22 @@ describe("BrowserGatewayServer", () => {
         "Content-Type": "application/json",
         Authorization: "Bearer test-token",
       },
-      body: JSON.stringify({ model: "claude-sonnet-4-6" }),
+      body: JSON.stringify({ model: "claude-opus-4-6" }),
     });
     expect(authorizedModelSwitch.status).toBe(200);
-    expect(await authorizedModelSwitch.json()).toEqual({ ok: true });
+    const modelSwitchJson = await authorizedModelSwitch.json();
+    expect(modelSwitchJson).toMatchObject({
+      ok: true,
+      snapshot: {
+        session: {
+          foreground: {
+            model: "claude-opus-4-6",
+          },
+        },
+      },
+    });
     expect(chatViewProvider.submitBrowserSetModel).toHaveBeenCalledWith(
-      "claude-sonnet-4-6",
+      "claude-opus-4-6",
     );
 
     const authorizedWriteApproval = await fetch(
@@ -788,9 +863,32 @@ describe("BrowserGatewayServer", () => {
       body: JSON.stringify({ mode: "code" }),
     });
     expect(authorizedNewSession.status).toBe(200);
-    expect(await authorizedNewSession.json()).toEqual({ ok: true });
+    await expect(authorizedNewSession.json()).resolves.toMatchObject({
+      ok: true,
+      snapshot: {
+        session: {
+          foreground: {
+            model: "gpt-5.3-codex",
+          },
+        },
+      },
+    });
     expect(chatViewProvider.submitBrowserNewSession).toHaveBeenCalledWith(
       "code",
+    );
+
+    const authorizedStop = await fetch(`${baseUrl}/api/stop`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ sessionId: "session-1" }),
+    });
+    expect(authorizedStop.status).toBe(200);
+    expect(await authorizedStop.json()).toEqual({ ok: true });
+    expect(chatViewProvider.submitBrowserStop).toHaveBeenCalledWith(
+      "session-1",
     );
 
     const authorizedBgStop = await fetch(`${baseUrl}/api/background/stop`, {

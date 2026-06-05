@@ -4,6 +4,7 @@ import type {
   BrowserGatewayPairingCancelResponse,
   BrowserGatewayPairingCreateResponse,
   BrowserGatewayPairingStatusResponse,
+  BrowserGatewayShutdownResponse,
 } from "../protocol.js";
 
 export interface BrowserGatewayHelperAdminClientOptions {
@@ -19,7 +20,9 @@ export interface BrowserGatewayHelperAdminClientOptions {
  * per-helper clientSharedSecret (captured from the discovery record).
  */
 export class BrowserGatewayHelperAdminClient {
-  constructor(private readonly options: BrowserGatewayHelperAdminClientOptions) {}
+  constructor(
+    private readonly options: BrowserGatewayHelperAdminClientOptions,
+  ) {}
 
   setHelperUrl(url: string): void {
     this.options.helperUrl = url;
@@ -70,6 +73,13 @@ export class BrowserGatewayHelperAdminClient {
     return await this.postJson<BrowserGatewayDeviceRevokeResponse>(
       "/internal/devices/revoke",
       body,
+    );
+  }
+
+  async shutdown(): Promise<BrowserGatewayShutdownResponse> {
+    return await this.postJson<BrowserGatewayShutdownResponse>(
+      "/internal/shutdown",
+      "{}",
     );
   }
 

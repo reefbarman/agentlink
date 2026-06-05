@@ -15,9 +15,18 @@ interface RuleRowProps {
   modeGroupName: string;
   onChange: (value: RuleEntry) => void;
   onSuggestRegex?: () => void;
+  onSuggestPrefix?: () => void;
+  /** Suggested prefix value (the initial command) shown in the prefix button. */
+  prefixSuggestion?: string;
+  /** Command broken into tokens with their cumulative prefixes, for the picker. */
+  prefixTokens?: Array<{ token: string; prefix: string }>;
+  /** Select a different prefix boundary (command vs. sub-command vs. …). */
+  onSelectPrefix?: (prefix: string) => void;
   onAcceptSuggestion?: () => void;
   onDismissSuggestion?: () => void;
   suggestedPattern?: string;
+  /** Which kind of suggestion `suggestedPattern` is, for labelling the block. */
+  suggestKind?: "regex" | "prefix";
   suggestStatus?: "idle" | "loading" | "error";
   suggestError?: string;
 }
@@ -28,15 +37,21 @@ export function RuleRow({
   modeGroupName,
   onChange,
   onSuggestRegex,
+  onSuggestPrefix,
+  prefixSuggestion,
+  prefixTokens,
+  onSelectPrefix,
   onAcceptSuggestion,
   onDismissSuggestion,
   suggestedPattern,
+  suggestKind = "regex",
   suggestStatus = "idle",
   suggestError,
 }: RuleRowProps) {
   const hasExisting = !!entry.existingRule;
   const isSkipped = value.scope === "skip";
   const canSuggest = !!onSuggestRegex;
+  const canSuggestPrefix = !!onSuggestPrefix && !!prefixSuggestion;
   const isSuggesting = suggestStatus === "loading";
 
   return (
@@ -90,6 +105,19 @@ export function RuleRow({
                   <span>{isSuggesting ? "Suggesting…" : "Safe regex"}</span>
                 </button>
               )}
+              {mode === "prefix" && canSuggestPrefix && (
+                <button
+                  type="button"
+                  class="rule-suggest-btn"
+                  onClick={onSuggestPrefix}
+                  title="Match just the initial command, so any command starting with it is approved"
+                >
+                  <span class="codicon codicon-lightbulb" />
+                  <span>
+                    Just <code>{prefixSuggestion}</code>
+                  </span>
+                </button>
+              )}
             </label>
           ))}
         </div>
@@ -101,7 +129,15 @@ export function RuleRow({
         <div class="rule-row-suggestion">
           <div class="rule-row-suggestion-header">
             <span class="rule-row-suggestion-title">
-              <span class="codicon codicon-sparkle" /> AI suggested regex
+              {suggestKind === "prefix" ? (
+                <>
+                  <span class="codicon codicon-lightbulb" /> Suggested prefix
+                </>
+              ) : (
+                <>
+                  <span class="codicon codicon-sparkle" /> AI suggested regex
+                </>
+              )}
             </span>
             <button
               type="button"
@@ -112,7 +148,26 @@ export function RuleRow({
               <span class="codicon codicon-close" />
             </button>
           </div>
-          <code>{suggestedPattern}</code>
+          {suggestKind === "prefix" && prefixTokens && prefixTokens.length > 0 ? (
+            <>
+              <div class="rule-prefix-tokens">
+                {prefixTokens.map((t) => (
+                  <button
+                    type="button"
+                    key={t.prefix}
+                    class={`rule-prefix-token ${t.prefix.length <= (suggestedPattern?.length ?? 0) ? "active" : ""}`}
+                    onClick={() => onSelectPrefix?.(t.prefix)}
+                    title={`Approve commands starting with “${t.prefix}”`}
+                  >
+                    {t.token}
+                  </button>
+                ))}
+              </div>
+              <code>{suggestedPattern}</code>
+            </>
+          ) : (
+            <code>{suggestedPattern}</code>
+          )}
           <div class="rule-row-suggestion-actions">
             <button
               type="button"

@@ -7,6 +7,25 @@ import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 
 const REGISTRY_DIR = path.join(os.homedir(), ".agentlink");
 const REGISTRY_PATH = path.join(REGISTRY_DIR, "browser-gateways.json");
+const REGISTRY_LOCK_DIR = `${REGISTRY_PATH}.lock`;
+const REGISTRY_LOCK_TIMEOUT_MS = 20_000;
+const REGISTRY_STALE_LOCK_MS = 10_000;
+
+let registryLog: ((message: string) => void) | undefined;
+
+export function setBrowserGatewayRegistryLogger(
+  log: ((message: string) => void) | undefined,
+): void {
+  registryLog = log;
+}
+
+function logRegistry(message: string): void {
+  registryLog?.(`[browser-gateway-registry] ${message}`);
+}
+
+function summarizeRecord(record: BrowserGatewayInstanceRecord): string {
+  return `${record.instanceId} pid=${record.pid} port=${record.port} workspace=${JSON.stringify(record.workspaceName)} path=${JSON.stringify(record.workspacePath)}`;
+}
 
 export interface BrowserGatewayInstanceRecord extends BrowserGatewayDiscoveryRecord {
   instanceId: string;
@@ -41,6 +60,79 @@ async function writeRegistry(
   await fs.rename(tmpPath, REGISTRY_PATH);
 }
 
+function isAlreadyExistsError(err: unknown): boolean {
+  return (
+    err !== null &&
+    typeof err === "object" &&
+    "code" in err &&
+    String((err as { code?: unknown }).code) === "EEXIST"
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withRegistryLock<T>(operation: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  const deadline = startedAt + REGISTRY_LOCK_TIMEOUT_MS;
+  let acquired = false;
+  let loggedContention = false;
+
+  await fs.mkdir(REGISTRY_DIR, { recursive: true });
+  while (!acquired) {
+    try {
+      await fs.mkdir(REGISTRY_LOCK_DIR);
+      acquired = true;
+      const waitedMs = Date.now() - startedAt;
+      if (waitedMs > 0 || loggedContention) {
+        logRegistry(
+          `lock acquired path=${REGISTRY_LOCK_DIR} waitedMs=${waitedMs}`,
+        );
+      }
+    } catch (err) {
+      if (!isAlreadyExistsError(err)) throw err;
+
+      try {
+        const stat = await fs.stat(REGISTRY_LOCK_DIR);
+        const ageMs = Date.now() - stat.mtimeMs;
+        if (!loggedContention) {
+          loggedContention = true;
+          logRegistry(
+            `lock contention path=${REGISTRY_LOCK_DIR} ageMs=${Math.round(ageMs)} timeoutMs=${REGISTRY_LOCK_TIMEOUT_MS} staleMs=${REGISTRY_STALE_LOCK_MS}`,
+          );
+        }
+        if (ageMs > REGISTRY_STALE_LOCK_MS) {
+          // Best-effort stale lock recovery. Registry operations are small
+          // read/filter/write transactions, so a 10s lock age strongly implies
+          // the owning extension host died rather than a live writer being slow.
+          logRegistry(
+            `removing stale lock path=${REGISTRY_LOCK_DIR} ageMs=${Math.round(ageMs)}`,
+          );
+          await fs.rm(REGISTRY_LOCK_DIR, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        // The lock disappeared between mkdir/stat/rm attempts. Retry below.
+      }
+
+      if (Date.now() >= deadline) {
+        logRegistry(
+          `lock timeout path=${REGISTRY_LOCK_DIR} waitedMs=${Date.now() - startedAt}`,
+        );
+        throw new Error("browser_gateway_registry_lock_timeout");
+      }
+      await sleep(50);
+    }
+  }
+
+  try {
+    return await operation();
+  } finally {
+    await fs.rm(REGISTRY_LOCK_DIR, { recursive: true, force: true });
+  }
+}
+
 function isSameRegistryRecord(
   a: BrowserGatewayInstanceRecord,
   b: BrowserGatewayInstanceRecord,
@@ -61,32 +153,51 @@ async function removeExactBrowserGatewayInstances(
   staleRecords: BrowserGatewayInstanceRecord[],
 ): Promise<void> {
   if (staleRecords.length === 0) return;
-  const currentRecords = await readRegistry();
-  const next = currentRecords.filter(
-    (record) =>
-      !staleRecords.some((stale) => isSameRegistryRecord(record, stale)),
-  );
-  if (next.length === currentRecords.length) return;
-  await writeRegistry(next);
+  await withRegistryLock(async () => {
+    const currentRecords = await readRegistry();
+    const next = currentRecords.filter(
+      (record) =>
+        !staleRecords.some((stale) => isSameRegistryRecord(record, stale)),
+    );
+    if (next.length === currentRecords.length) return;
+    await writeRegistry(next);
+  });
 }
 
 export async function upsertBrowserGatewayInstance(
   record: BrowserGatewayInstanceRecord,
 ): Promise<void> {
-  const records = await readRegistry();
-  const next = records.filter((r) => r.instanceId !== record.instanceId);
-  next.push(record);
-  next.sort((a, b) => a.workspaceName.localeCompare(b.workspaceName));
-  await writeRegistry(next);
+  await withRegistryLock(async () => {
+    const records = await readRegistry();
+    const replaced = records.filter((r) => r.instanceId === record.instanceId);
+    const next = records.filter((r) => r.instanceId !== record.instanceId);
+    next.push(record);
+    next.sort((a, b) => a.workspaceName.localeCompare(b.workspaceName));
+    await writeRegistry(next);
+    logRegistry(
+      `upsert path=${REGISTRY_PATH} record=${summarizeRecord(record)} previousCount=${records.length} nextCount=${next.length} replaced=${replaced.map(summarizeRecord).join(" | ") || "none"}`,
+    );
+  });
 }
 
 export async function removeBrowserGatewayInstance(
   instanceId: string,
 ): Promise<void> {
-  const records = await readRegistry();
-  const next = records.filter((r) => r.instanceId !== instanceId);
-  if (next.length === records.length) return;
-  await writeRegistry(next);
+  await withRegistryLock(async () => {
+    const records = await readRegistry();
+    const removed = records.filter((r) => r.instanceId === instanceId);
+    const next = records.filter((r) => r.instanceId !== instanceId);
+    if (next.length === records.length) {
+      logRegistry(
+        `remove path=${REGISTRY_PATH} instanceId=${instanceId} previousCount=${records.length} removed=none`,
+      );
+      return;
+    }
+    await writeRegistry(next);
+    logRegistry(
+      `remove path=${REGISTRY_PATH} instanceId=${instanceId} previousCount=${records.length} nextCount=${next.length} removed=${removed.map(summarizeRecord).join(" | ")}`,
+    );
+  });
 }
 
 function isPidLikelyAlive(pid: number): boolean {
@@ -103,20 +214,23 @@ function isPidLikelyAlive(pid: number): boolean {
   }
 }
 
-async function isInstanceReachable(
+type InstanceHealth = "healthy" | "unreachable" | "dead";
+
+async function checkInstanceHealth(
   instance: BrowserGatewayInstanceRecord,
-): Promise<boolean> {
-  if (!isPidLikelyAlive(instance.pid)) return false;
+): Promise<InstanceHealth> {
+  if (!isPidLikelyAlive(instance.pid)) return "dead";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 750);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 750);
     const response = await fetch(`${instance.url}/health`, {
       signal: controller.signal,
     });
-    clearTimeout(timer);
-    return response.ok;
+    return response.ok ? "healthy" : "unreachable";
   } catch {
-    return false;
+    return "unreachable";
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -126,18 +240,42 @@ export async function listBrowserGatewayInstances(): Promise<
   return await readRegistry();
 }
 
-export async function listHealthyBrowserGatewayInstances(): Promise<
-  BrowserGatewayInstanceRecord[]
-> {
+export async function listCheckedBrowserGatewayInstances(): Promise<{
+  healthy: BrowserGatewayInstanceRecord[];
+  registered: BrowserGatewayInstanceRecord[];
+}> {
   const records = await readRegistry();
   const checks = await Promise.all(
     records.map(async (record) => ({
       record,
-      healthy: await isInstanceReachable(record),
+      health: await checkInstanceHealth(record),
     })),
   );
-  const healthy = checks.filter((c) => c.healthy).map((c) => c.record);
-  const stale = checks.filter((c) => !c.healthy).map((c) => c.record);
+  const healthy = checks
+    .filter((c) => c.health === "healthy")
+    .map((c) => c.record);
+  const registered = checks
+    .filter((c) => c.health !== "dead")
+    .map((c) => c.record);
+  const stale = checks.filter((c) => c.health === "dead").map((c) => c.record);
+  const summary = checks
+    .map((c) => `${c.health}:${summarizeRecord(c.record)}`)
+    .join(" | ");
+  logRegistry(
+    `listChecked path=${REGISTRY_PATH} records=${records.length} healthy=${healthy.length} registered=${registered.length} stale=${stale.length} checks=${summary || "none"}`,
+  );
   await removeExactBrowserGatewayInstances(stale);
-  return healthy;
+  return { healthy, registered };
+}
+
+export async function listRegisteredBrowserGatewayInstances(): Promise<
+  BrowserGatewayInstanceRecord[]
+> {
+  return (await listCheckedBrowserGatewayInstances()).registered;
+}
+
+export async function listHealthyBrowserGatewayInstances(): Promise<
+  BrowserGatewayInstanceRecord[]
+> {
+  return (await listCheckedBrowserGatewayInstances()).healthy;
 }

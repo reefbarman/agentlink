@@ -64,7 +64,6 @@ export async function fetchHelperHealth(
 }
 
 export interface DesiredHelperConfig {
-  helperVersion: string;
   lanAccess: boolean;
   mdnsName?: string;
 }
@@ -76,8 +75,12 @@ export function discoveryMatchesDesiredConfig(
   const discoveredLanAccess = Boolean(discovery.lanAccess);
   if (discoveredLanAccess !== desired.lanAccess) return false;
   if (desired.lanAccess) {
-    const wantName = (desired.mdnsName ?? "agentlink").trim() || "agentlink";
     const gotName = (discovery.mdnsHostName ?? "").trim();
+    if (!gotName) {
+      return (discovery.lanUrls?.length ?? 0) > 0;
+    }
+
+    const wantName = (desired.mdnsName ?? "agentlink").trim() || "agentlink";
     // The helper may have rotated the suffix (e.g. "agentlink" → "agentlink-3f20")
     // on conflict. Accept either exact match or suffix-rotated variant of the
     // desired base name.
@@ -102,9 +105,11 @@ export async function resolveHealthyDiscoveredHelper(
   if (health.protocolVersion !== BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION) {
     return null;
   }
-  if (health.helperVersion !== desired.helperVersion) {
-    return null;
-  }
+  // `helperVersion` is build metadata, not a wire-compatibility boundary.
+  // Multiple VS Code windows can run different AgentLink extension versions
+  // while sharing the same stable helper port; rejecting a healthy helper here
+  // causes newer/older windows to terminate each other's browser gateway.
+  // `protocolVersion` above is the compatibility gate.
   if (!discoveryMatchesDesiredConfig(discovery, desired)) {
     return null;
   }
@@ -136,7 +141,7 @@ export async function waitForHelperReady(
 }
 
 /**
- * When the discovered helper doesn't match what we want (wrong version,
+ * When the discovered helper doesn't match what we want (wrong protocol,
  * wrong lanAccess flag, different mDNS name) we have to replace it. The old
  * process is still bound to the port, so spawn-then-listen would fail with
  * EADDRINUSE. SIGTERM the stale pid and wait for the socket to actually close.
@@ -182,7 +187,6 @@ export async function bootstrapBrowserGatewayHelper(
   const startupTimeoutMs =
     options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
   const desired: DesiredHelperConfig = {
-    helperVersion: options.helperVersion,
     lanAccess: Boolean(options.lanAccess),
     mdnsName: options.mdnsName,
   };
@@ -210,8 +214,8 @@ export async function bootstrapBrowserGatewayHelper(
     throw new Error(`helper_bundle_missing:${helperPath}`);
   }
 
-  // A helper is present but mismatched (version or lanAccess changed). Before
-  // spawning, terminate the stale process so the port is free.
+  // A helper is present but mismatched (protocol, lanAccess, or mDNS config
+  // changed). Before spawning, terminate the stale process so the port is free.
   await terminateStaleHelper(options.log);
 
   const args = [

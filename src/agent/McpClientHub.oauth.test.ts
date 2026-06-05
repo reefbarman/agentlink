@@ -1,5 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import type * as vscode from "vscode";
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { McpClientHub } from "./McpClientHub.js";
+import { McpOAuthError } from "./McpOAuthProvider.js";
+import type { McpServerConfig } from "./mcpConfig.js";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 
 const mocks = vi.hoisted(() => ({
   showWarningMessage: vi.fn(
@@ -64,8 +70,8 @@ vi.mock("vscode", async () => {
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: class MockClient {
-    async connect(_transport: unknown): Promise<void> {
-      return mocks.createTransportConnect();
+    async connect(transport: unknown): Promise<void> {
+      return mocks.createTransportConnect.call(transport);
     }
 
     async close(): Promise<void> {
@@ -111,12 +117,32 @@ vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
 vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: class MockSSEClientTransport {
     onclose?: () => void;
+    authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+
+    constructor(
+      _url: URL,
+      options?: {
+        authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+      },
+    ) {
+      this.authProvider = options?.authProvider;
+    }
   },
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: class MockStreamableHttpClientTransport {
     onclose?: () => void;
+    authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+
+    constructor(
+      _url: URL,
+      options?: {
+        authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+      },
+    ) {
+      this.authProvider = options?.authProvider;
+    }
   },
 }));
 
@@ -129,6 +155,8 @@ vi.mock("./McpOAuthProvider.js", async () => {
     McpOAuthProvider: class MockMcpOAuthProvider {
       onLog?: (message: string) => void;
       onBeforeAuthorizationOpen?: () => boolean | Promise<boolean>;
+      allowInteractiveAuth = true;
+      suppressRefreshTokenReauthPrompt = false;
 
       constructor(
         _serverName: string,
@@ -168,10 +196,6 @@ vi.mock("./McpOAuthProvider.js", async () => {
     },
   };
 });
-
-import { McpOAuthError } from "./McpOAuthProvider.js";
-import { McpClientHub } from "./McpClientHub.js";
-import type { McpServerConfig } from "./mcpConfig.js";
 
 class FakeMemento implements vscode.Memento {
   private store = new Map<string, unknown>();
@@ -290,6 +314,87 @@ describe("McpClientHub OAuth recovery", () => {
         );
       }),
     ).toBe(true);
+  });
+
+  it("defers interactive reauth prompt when startup refresh-token fallback needs manual auth", async () => {
+    mocks.createTransportConnect.mockImplementationOnce(async function (this: {
+      authProvider?: { suppressRefreshTokenReauthPrompt?: boolean };
+    }) {
+      if (!this.authProvider?.suppressRefreshTokenReauthPrompt) {
+        await mocks.showWarningMessage(
+          'AgentLink: Automatic token refresh failed for "notion". Reauthenticate to continue.',
+          "Reauthenticate now",
+        );
+      }
+      throw new McpOAuthError(
+        "authorization_error",
+        'OAuth authorization blocked for "notion": manual reauthentication required after refresh token failure',
+      );
+    });
+
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([notionCfg]);
+
+    expect(mocks.showWarningMessage).not.toHaveBeenCalledWith(
+      'AgentLink: Automatic token refresh failed for "notion". Reauthenticate to continue.',
+      "Reauthenticate now",
+    );
+    expect(hub.getServerInfos().find((s) => s.name === "notion")?.status).toBe(
+      "error",
+    );
+    expect(
+      hub.getServerInfos().find((s) => s.name === "notion")?.error,
+    ).toContain("Use Reauthenticate to try again");
+  });
+
+  it("keeps startup after-auth retry non-interactive when saved tokens are rejected", async () => {
+    mocks.providerTokens.mockResolvedValue({
+      access_token: "fresh",
+      refresh_token: "refresh",
+      token_type: "bearer",
+    });
+    mocks.createTransportConnect
+      .mockRejectedValueOnce(new UnauthorizedError())
+      .mockImplementationOnce(async function (this: {
+        authProvider?: {
+          allowInteractiveAuth?: boolean;
+          suppressRefreshTokenReauthPrompt?: boolean;
+        };
+      }) {
+        expect(this.authProvider?.allowInteractiveAuth).toBe(false);
+        expect(this.authProvider?.suppressRefreshTokenReauthPrompt).toBe(false);
+        throw new McpOAuthError(
+          "authorization_error",
+          'OAuth authorization blocked for "notion": manual reauthentication required after refresh token failure',
+        );
+      });
+
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([notionCfg]);
+
+    expect(mocks.createTransportConnect).toHaveBeenCalledTimes(2);
+    expect(mocks.showErrorMessage).toHaveBeenCalledWith(
+      "AgentLink: Authentication is in manual reauthenticate mode for 'notion'. Use Reauthenticate to try again.",
+    );
+    expect(mocks.showWarningMessage).not.toHaveBeenCalledWith(
+      'AgentLink: Automatic token refresh failed for "notion". Reauthenticate to continue.',
+      "Reauthenticate now",
+    );
+  });
+
+  it("allows interactive auth for newly added MCP servers when requested", async () => {
+    mocks.createTransportConnect.mockImplementationOnce(async function (this: {
+      authProvider?: { allowInteractiveAuth?: boolean };
+    }) {
+      expect(this.authProvider?.allowInteractiveAuth).toBe(true);
+    });
+
+    const hub = new McpClientHub(new FakeMemento());
+    await hub.connect([notionCfg], { interactiveForNewServers: true });
+
+    expect(hub.getServerInfos().find((s) => s.name === "notion")?.status).toBe(
+      "connected",
+    );
   });
 
   it("enters manual reauth-required state when runtime auth indicates deferred refresh-token fallback", async () => {

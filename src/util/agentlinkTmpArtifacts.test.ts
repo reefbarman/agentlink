@@ -19,8 +19,13 @@ describe("isAgentlinkTmpArtifact", () => {
   it.runIf(process.platform === "darwin")(
     "recognizes macOS /var and /private/var aliases for terminal output files",
     () => {
-      const varPath =
-        "/var/folders/_1/fdgqf2bj3zg17zyvfpmy9y1h0000gn/T/agentlink-output-abc123/output.txt";
+      // Derive from the real tmpdir so the test matches this machine's prefix
+      // (the folder hash differs per machine), not a hardcoded one.
+      const base = os.tmpdir();
+      const varBase = base.startsWith("/private/")
+        ? base.slice("/private".length)
+        : base;
+      const varPath = path.join(varBase, "agentlink-output-abc123", "output.txt");
       const privateVarPath = `/private${varPath}`;
 
       expect(isAgentlinkTmpArtifact(varPath)).toBe(true);

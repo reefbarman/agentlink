@@ -1,21 +1,23 @@
 import * as vscode from "vscode";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+
 import {
-  ElicitRequestSchema,
   CreateMessageRequestSchema,
+  ElicitRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { ToolDefinition, JsonSchema } from "./providers/types.js";
-import type { McpServerConfig } from "./mcpConfig.js";
-import type { ToolResult } from "../shared/types.js";
+import type { JsonSchema, ToolDefinition } from "./providers/types.js";
 import { McpOAuthError, McpOAuthProvider } from "./McpOAuthProvider.js";
 import {
   buildAgentExecutionEnv,
   inheritProcessEnv,
 } from "../process/agentExecutionPolicy.js";
+
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { McpServerConfig } from "./mcpConfig.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { ToolResult } from "../shared/types.js";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 
 export type McpServerStatus =
   | "connecting"
@@ -65,6 +67,14 @@ export interface ElicitRequest {
   required: string[];
 }
 
+type McpConnectAuthMode = "interactive" | "noninteractive";
+
+interface ConnectServerOptions {
+  retryCount?: number;
+  afterAuth?: boolean;
+  authMode?: McpConnectAuthMode;
+}
+
 interface ConnectedServer {
   name: string;
   config: McpServerConfig;
@@ -92,6 +102,7 @@ export class McpClientHub {
   private invalidRedirectRecoveryAttempted = new Set<string>();
   private manualReauthRequired = new Set<string>();
   private runtimeReconnectPending = new Set<string>();
+  private interactiveAuthUseCounts = new Map<string, number>();
   private static readonly MAX_AUTH_RETRIES = 3;
 
   constructor(globalState?: vscode.Memento) {
@@ -238,20 +249,63 @@ export class McpClientHub {
   }) => Promise<{ role: "assistant"; content: string }>;
 
   /** Connect to all configured servers, replacing existing connections. */
-  async connect(configs: McpServerConfig[]): Promise<void> {
+  async connect(
+    configs: McpServerConfig[],
+    options: { interactiveForNewServers?: boolean } = {},
+  ): Promise<void> {
+    const existingNames = new Set(this.servers.keys());
     const newNames = new Set(configs.map((c) => c.name));
     for (const name of this.servers.keys()) {
       if (!newNames.has(name)) await this.disconnectServer(name);
     }
-    await Promise.all(configs.map((cfg) => this.connectServer(cfg)));
+    await Promise.all(
+      configs.map((cfg) =>
+        this.connectServer(cfg, {
+          authMode:
+            options.interactiveForNewServers && !existingNames.has(cfg.name)
+              ? "interactive"
+              : "noninteractive",
+        }),
+      ),
+    );
     this.onStatusChange?.(this.getServerInfos());
+  }
+
+  private shouldAllowInteractiveAuth(
+    cfg: McpServerConfig,
+    authMode: McpConnectAuthMode,
+  ): boolean {
+    return (
+      authMode === "interactive" ||
+      (this.interactiveAuthUseCounts.get(cfg.name) ?? 0) > 0
+    );
+  }
+
+  private async withInteractiveAuthForUse<T>(
+    serverName: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const current = this.interactiveAuthUseCounts.get(serverName) ?? 0;
+    this.interactiveAuthUseCounts.set(serverName, current + 1);
+    try {
+      return await fn();
+    } finally {
+      const next = (this.interactiveAuthUseCounts.get(serverName) ?? 1) - 1;
+      if (next > 0) {
+        this.interactiveAuthUseCounts.set(serverName, next);
+      } else {
+        this.interactiveAuthUseCounts.delete(serverName);
+      }
+    }
   }
 
   private async connectServer(
     cfg: McpServerConfig,
-    retryCount = 0,
-    afterAuth = false,
+    options: ConnectServerOptions = {},
   ): Promise<void> {
+    const retryCount = options.retryCount ?? 0;
+    const afterAuth = options.afterAuth ?? false;
+    const authMode = options.authMode ?? "noninteractive";
     const existing = this.servers.get(cfg.name);
     if (existing?.status === "connected") return;
     if (existing?.status === "connecting") {
@@ -288,6 +342,11 @@ export class McpClientHub {
           this.onBeforeAuthorizationOpen(cfg.name);
         this.oauthProviders.set(cfg.name, oauthProvider);
       }
+      oauthProvider.allowInteractiveAuth = this.shouldAllowInteractiveAuth(
+        cfg,
+        authMode,
+      );
+      oauthProvider.suppressRefreshTokenReauthPrompt = !afterAuth;
       await oauthProvider.start();
     }
 
@@ -425,7 +484,7 @@ export class McpClientHub {
       );
 
       this.log(
-        `[mcp:${cfg.name}] connect start type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth}`,
+        `[mcp:${cfg.name}] connect start type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} authMode=${authMode} allowInteractiveAuth=${oauthProvider?.allowInteractiveAuth ?? false}`,
       );
       await entry.client.connect(transport);
       this.log(`[mcp:${cfg.name}] connect succeeded`);
@@ -465,6 +524,9 @@ export class McpClientHub {
         arguments: p.arguments,
       }));
 
+      if (oauthProvider) {
+        oauthProvider.suppressRefreshTokenReauthPrompt = false;
+      }
       entry.status = "connected";
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -474,7 +536,7 @@ export class McpClientHub {
         `[mcp:${cfg.name}] connect exception details: ${this.describeError(err)}`,
       );
       this.log(
-        `[mcp:${cfg.name}] connect exception context type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} manualReauthRequired=${this.manualReauthRequired.has(cfg.name)} authFailureCount=${this.authFailureCounts.get(cfg.name) ?? 0} oauthDialogOpenCount=${this.oauthDialogOpenCounts.get(cfg.name) ?? 0} hasSavedTokens=${hasSavedTokens}`,
+        `[mcp:${cfg.name}] connect exception context type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} authMode=${authMode} allowInteractiveAuth=${oauthProvider?.allowInteractiveAuth ?? false} manualReauthRequired=${this.manualReauthRequired.has(cfg.name)} authFailureCount=${this.authFailureCounts.get(cfg.name) ?? 0} oauthDialogOpenCount=${this.oauthDialogOpenCounts.get(cfg.name) ?? 0} hasSavedTokens=${hasSavedTokens}`,
       );
 
       // After a 401, the SDK opens the browser via redirectToAuthorization (which
@@ -530,7 +592,12 @@ export class McpClientHub {
           this.invalidRedirectRecoveryAttempted.delete(cfg.name);
           await this.disconnectServer(cfg.name);
           this.onStatusChange?.(this.getServerInfos());
-          await this.connectServer(cfg, 0, true /* afterAuth */);
+          // Preserve the original caller intent: startup/reload retries stay
+          // noninteractive, while explicit/manual/tool-use paths stay interactive.
+          await this.connectServer(cfg, {
+            afterAuth: true,
+            authMode,
+          });
           return;
         }
 
@@ -640,7 +707,7 @@ export class McpClientHub {
     void (async () => {
       try {
         await this.disconnectServer(cfg.name);
-        await this.connectServer(cfg, 0);
+        await this.connectServer(cfg, { authMode: "interactive" });
       } catch (reconnectErr) {
         this.log(
           `[mcp:${cfg.name}] runtime auth recovery reconnect failed: ${this.describeError(reconnectErr)}`,
@@ -752,7 +819,10 @@ export class McpClientHub {
       `[mcp:${cfg.name}] scheduling reconnect reason=${reason} attempt=${attempt} delayMs=${delay}`,
     );
     entry.retryTimer = setTimeout(() => {
-      this.connectServer(cfg, attempt);
+      this.connectServer(cfg, {
+        retryCount: attempt,
+        authMode: "noninteractive",
+      });
     }, delay);
   }
 
@@ -853,7 +923,7 @@ export class McpClientHub {
     this.manualReauthRequired.delete(name);
     this.runtimeReconnectPending.delete(name);
     await this.disconnectServer(name);
-    await this.connectServer(cfg, 0);
+    await this.connectServer(cfg, { authMode: "noninteractive" });
     this.onStatusChange?.(this.getServerInfos());
   }
 
@@ -897,7 +967,10 @@ export class McpClientHub {
     }
 
     try {
-      await this.connectServer(cfg, 0);
+      // forceReauth already completed an explicit browser flow. If the freshly
+      // saved tokens are still rejected during reconnect, suppress another
+      // automatic fallback prompt and enter manual reauth mode instead.
+      await this.connectServer(cfg, { authMode: "interactive" });
     } finally {
       const current = this.servers.get(cfg.name);
       if (!current || current.status !== "connected") {
@@ -1006,10 +1079,12 @@ export class McpClientHub {
     }
 
     try {
-      const result = await server.client.callTool({
-        name: toolName,
-        arguments: input,
-      });
+      const result = await this.withInteractiveAuthForUse(serverName, () =>
+        server.client.callTool({
+          name: toolName,
+          arguments: input,
+        }),
+      );
       const contentItems = result.content as Array<{
         type: string;
         text?: string;
@@ -1090,7 +1165,9 @@ export class McpClientHub {
       };
     }
     try {
-      const result = await server.client.readResource({ uri });
+      const result = await this.withInteractiveAuthForUse(serverName, () =>
+        server.client.readResource({ uri }),
+      );
       const parts: ToolResult["content"] = [];
       for (const c of result.contents) {
         if ("text" in c && c.text !== undefined) {
@@ -1135,10 +1212,12 @@ export class McpClientHub {
       };
     }
     try {
-      const result = await server.client.getPrompt({
-        name: promptName,
-        arguments: args,
-      });
+      const result = await this.withInteractiveAuthForUse(serverName, () =>
+        server.client.getPrompt({
+          name: promptName,
+          arguments: args,
+        }),
+      );
       const text = result.messages
         .map((m) => {
           const content =

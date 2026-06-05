@@ -125,6 +125,10 @@ export interface BrowserGatewayDeviceRevokeResponse {
   removed: boolean;
 }
 
+export interface BrowserGatewayShutdownResponse {
+  ok: true;
+}
+
 export interface BrowserGatewayMdnsState {
   enabled: boolean;
   /** The hostname actually advertised after conflict-resolution (e.g. "agentlink" or "agentlink-3f20") */

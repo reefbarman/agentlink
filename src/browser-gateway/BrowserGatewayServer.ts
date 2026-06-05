@@ -6,7 +6,9 @@ import {
   writeBrowserGatewayDiscovery,
 } from "./browserGatewayDiscovery.js";
 import {
-  listHealthyBrowserGatewayInstances,
+  getBrowserGatewayRegistryPath,
+  listCheckedBrowserGatewayInstances,
+  listRegisteredBrowserGatewayInstances,
   removeBrowserGatewayInstance,
   upsertBrowserGatewayInstance,
 } from "./browserGatewayRegistry.js";
@@ -23,13 +25,15 @@ export type BrowserGatewaySnapshot = ReturnType<
 >;
 
 export type BrowserGatewayInstanceListItem = Omit<
-  Awaited<ReturnType<typeof listHealthyBrowserGatewayInstances>>[number],
+  Awaited<ReturnType<typeof listRegisteredBrowserGatewayInstances>>[number],
   "authToken"
 > & {
   status?: BrowserGatewayInstanceStatusSummary;
 };
 
 const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
+const REGISTRY_HEARTBEAT_INTERVAL_MS = 10_000;
+const MAX_BROWSER_DIFF_DETAIL_CHARS = 2_000_000;
 
 export class BrowserGatewayServer implements vscode.Disposable {
   private server: http.Server | null = null;
@@ -40,6 +44,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
     NodeJS.Timeout
   >();
   private readonly disposables: vscode.Disposable[] = [];
+  private registryHeartbeatTimer: NodeJS.Timeout | undefined;
   private startedAtIso: string | null = null;
   private lastPersistedThemeSnapshot = "";
 
@@ -108,19 +113,11 @@ export class BrowserGatewayServer implements vscode.Disposable {
     await writeBrowserGatewayThemeCache(theme).catch((err: unknown) => {
       this.log(`[browser-gateway] failed to write theme cache: ${err}`);
     });
-    await upsertBrowserGatewayInstance({
-      instanceId: this.instanceId,
-      workspaceName: this.workspaceName,
-      workspacePath: this.workspacePath,
-      pid: process.pid,
-      port: this.port,
-      url,
-      protocolVersion: 1,
-      startedAt,
-      authToken: this.authToken,
-      theme,
-    });
-    this.log(`[browser-gateway] listening on ${url}`);
+    await this.upsertCurrentRegistryRecord(theme);
+    this.startRegistryHeartbeat();
+    this.log(
+      `[browser-gateway] listening on ${url} instanceId=${this.instanceId} pid=${process.pid} workspace=${JSON.stringify(this.workspaceName)} path=${JSON.stringify(this.workspacePath)} registry=${getBrowserGatewayRegistryPath()}`,
+    );
     return this.port;
   }
 
@@ -133,6 +130,39 @@ export class BrowserGatewayServer implements vscode.Disposable {
     return this.gatewayService.getSerializableSnapshotState();
   }
 
+  private async upsertCurrentRegistryRecord(
+    theme = this.gatewayService.getCurrentThemeSnapshot(),
+  ): Promise<void> {
+    if (this.port === null) return;
+    const url = `http://127.0.0.1:${this.port}`;
+    await upsertBrowserGatewayInstance({
+      instanceId: this.instanceId,
+      workspaceName: this.workspaceName,
+      workspacePath: this.workspacePath,
+      pid: process.pid,
+      port: this.port,
+      url,
+      protocolVersion: 1,
+      startedAt: this.startedAtIso ?? new Date().toISOString(),
+      authToken: this.authToken,
+      theme,
+    });
+    this.log(
+      `[browser-gateway] registry heartbeat instanceId=${this.instanceId} pid=${process.pid} port=${this.port} url=${url}`,
+    );
+  }
+
+  private startRegistryHeartbeat(): void {
+    if (this.registryHeartbeatTimer) return;
+    this.registryHeartbeatTimer = setInterval(() => {
+      void this.upsertCurrentRegistryRecord().catch((err: unknown) => {
+        this.log(
+          `[browser-gateway] failed to refresh registry heartbeat: ${err}`,
+        );
+      });
+    }, REGISTRY_HEARTBEAT_INTERVAL_MS);
+  }
+
   private async persistCurrentThemeSnapshot(): Promise<void> {
     if (this.port === null) return;
     const theme = this.gatewayService.getCurrentThemeSnapshot();
@@ -142,24 +172,17 @@ export class BrowserGatewayServer implements vscode.Disposable {
     await writeBrowserGatewayThemeCache(theme).catch((err: unknown) => {
       this.log(`[browser-gateway] failed to write theme cache: ${err}`);
     });
-    await upsertBrowserGatewayInstance({
-      instanceId: this.instanceId,
-      workspaceName: this.workspaceName,
-      workspacePath: this.workspacePath,
-      pid: process.pid,
-      port: this.port,
-      url: `http://127.0.0.1:${this.port}`,
-      protocolVersion: 1,
-      startedAt: this.startedAtIso ?? new Date().toISOString(),
-      authToken: this.authToken,
-      theme,
-    }).catch((err: unknown) => {
+    await this.upsertCurrentRegistryRecord(theme).catch((err: unknown) => {
       this.log(`[browser-gateway] failed to update theme registry: ${err}`);
     });
   }
 
   async stop(): Promise<void> {
     await clearBrowserGatewayDiscovery();
+    if (this.registryHeartbeatTimer) {
+      clearInterval(this.registryHeartbeatTimer);
+      this.registryHeartbeatTimer = undefined;
+    }
     await removeBrowserGatewayInstance(this.instanceId);
     for (const disposable of this.disposables) {
       disposable.dispose();
@@ -218,7 +241,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
     }
 
     if (method === "GET" && url.startsWith("/api/diff/")) {
-      this.handleDiffDetailRequest(url, res);
+      this.handleDiffDetailRequest(req, url, res);
       return;
     }
 
@@ -593,6 +616,25 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
+    if (method === "POST" && url === "/api/stop") {
+      void this.handleStopAction(req, res).catch((err) => {
+        this.log(`[browser-gateway] stop action failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
     if (method === "POST" && url === "/api/background/stop") {
       void this.handleBackgroundStopAction(req, res).catch((err) => {
         this.log(`[browser-gateway] background stop action failed: ${err}`);
@@ -714,25 +756,56 @@ export class BrowserGatewayServer implements vscode.Disposable {
   private async handleInstancesRequest(
     res: http.ServerResponse,
   ): Promise<void> {
-    const instances = await listHealthyBrowserGatewayInstances();
+    const { registered: registeredInstances, healthy: healthyInstances } =
+      await listCheckedBrowserGatewayInstances();
+    this.log(
+      `[browser-gateway] /api/instances currentInstanceId=${this.instanceId} registered=${registeredInstances.length} healthy=${healthyInstances.length} registeredIds=${registeredInstances.map((instance) => instance.instanceId).join(",") || "none"}`,
+    );
     this.writeJson(res, 200, {
       currentInstanceId: this.instanceId,
-      instances: instances.map(({ authToken: _authToken, ...instance }) => ({
-        ...instance,
-        status:
-          instance.instanceId === this.instanceId
-            ? this.gatewayService.getInstanceStatusSummary()
-            : undefined,
-      })),
+      instances: registeredInstances.map(
+        ({ authToken: _authToken, ...instance }) => ({
+          ...instance,
+          status:
+            instance.instanceId === this.instanceId
+              ? this.gatewayService.getInstanceStatusSummary()
+              : undefined,
+        }),
+      ),
     });
   }
 
-  private handleDiffDetailRequest(url: string, res: http.ServerResponse): void {
+  private handleDiffDetailRequest(
+    req: http.IncomingMessage,
+    url: string,
+    res: http.ServerResponse,
+  ): void {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
     const pathOnly = url.split("?", 1)[0] ?? url;
     const requestId = decodeURIComponent(pathOnly.slice("/api/diff/".length));
     const snapshot = diffSnapshotHub.get(requestId);
     if (!snapshot) {
       this.writeJson(res, 404, { error: "not_found" });
+      return;
+    }
+
+    const totalChars =
+      snapshot.originalContent.length + snapshot.proposedContent.length;
+    if (totalChars > MAX_BROWSER_DIFF_DETAIL_CHARS) {
+      this.writeJson(res, 413, {
+        error: "diff_too_large",
+        maxChars: MAX_BROWSER_DIFF_DETAIL_CHARS,
+        totalChars,
+        requestId: snapshot.requestId,
+        filePath: snapshot.filePath,
+        operation: snapshot.operation,
+        outsideWorkspace: snapshot.outsideWorkspace,
+        createdAt: snapshot.createdAt,
+      });
       return;
     }
 
@@ -1072,7 +1145,11 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const result = await this.chatViewProvider.submitBrowserSetModel(
       body.model,
     );
-    this.writeJson(res, result.ok ? 200 : 400, result);
+    this.writeJson(
+      res,
+      result.ok ? 200 : 400,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
   }
 
   private async handleWriteApprovalAction(
@@ -1159,7 +1236,11 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const result = await this.chatViewProvider.submitBrowserNewSession(
       body?.mode,
     );
-    this.writeJson(res, result.ok ? 200 : 400, result);
+    this.writeJson(
+      res,
+      result.ok ? 200 : 400,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
   }
 
   private async handleSessionLoadAction(
@@ -1296,6 +1377,27 @@ export class BrowserGatewayServer implements vscode.Disposable {
       body.action,
     );
     this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private async handleStopAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await this.readJsonBody(req)) as {
+      sessionId?: string;
+    };
+    if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+
+    const result = this.chatViewProvider.submitBrowserStop(body.sessionId);
+    this.writeJson(res, result.ok ? 200 : 404, result);
   }
 
   private async handleBackgroundStopAction(

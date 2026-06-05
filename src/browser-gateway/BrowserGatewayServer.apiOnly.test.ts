@@ -28,6 +28,9 @@ vi.mock("vscode", () => {
 
   return {
     EventEmitter: MockEventEmitter,
+    workspace: {
+      getConfiguration: vi.fn(() => ({ get: vi.fn(() => undefined) })),
+    },
   };
 });
 

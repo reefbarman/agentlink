@@ -1,4 +1,3 @@
-import "@xterm/xterm/css/xterm.css";
 import "../../agent/webview/styles/chat.css";
 import "./styles.css";
 

@@ -689,6 +689,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             sessionId: msg.sessionId,
             title: msg.title,
             mode: msg.mode,
+            model: msg.model,
             messages: agentMessagesToChatMessages(msg.messages as unknown[]),
             lastInputTokens: msg.lastInputTokens,
             lastOutputTokens: msg.lastOutputTokens,
@@ -1169,7 +1170,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           );
         if (documents.length > 0)
           indicators.push(
-            `${documents.length} PDF${documents.length > 1 ? "s" : ""}`,
+            `${documents.length} file${documents.length > 1 ? "s" : ""}`,
           );
         displayWithMedia =
           `[${indicators.join(", ")} attached]\n` + displayWithMedia;

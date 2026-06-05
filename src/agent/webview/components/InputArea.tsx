@@ -29,12 +29,14 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "preact/hooks";
 
 import { ComposerBox } from "../../../shared/ui/ComposerBox";
+import { randomId } from "../../../shared/randomId";
 import { EmojiPopup } from "./EmojiPopup";
 import { FilePicker } from "./FilePicker";
 import type { Injection } from "../App";
@@ -45,7 +47,7 @@ import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
 import { WriteApprovalSelector } from "./WriteApprovalSelector";
 
-/** A pasted image or PDF held in webview state before sending. */
+/** A pasted or dropped file held in webview state before sending. */
 export interface MediaAttachment {
   id: string;
   name: string;
@@ -60,9 +62,72 @@ const ACCEPTED_IMAGE_TYPES = new Set([
   "image/gif",
   "image/webp",
 ]);
-const ACCEPTED_DOC_TYPES = new Set(["application/pdf"]);
+const ACCEPTED_DOC_TYPES = new Set([
+  "application/json",
+  "application/pdf",
+  "application/typescript",
+  "application/xml",
+  "application/x-javascript",
+  "application/x-jsonlines",
+  "application/x-ndjson",
+  "application/x-yaml",
+  "text/css",
+  "text/csv",
+  "text/html",
+  "text/javascript",
+  "text/jsx",
+  "text/markdown",
+  "text/plain",
+  "text/tsx",
+  "text/typescript",
+  "text/xml",
+  "text/yaml",
+]);
+const DOCUMENT_EXTENSION_MIME_TYPES: Record<string, string> = {
+  c: "text/x-c",
+  cc: "text/x-c++src",
+  cpp: "text/x-c++src",
+  cs: "text/x-csharp",
+  css: "text/css",
+  csv: "text/csv",
+  go: "text/x-go",
+  h: "text/x-c",
+  hpp: "text/x-c++hdr",
+  html: "text/html",
+  java: "text/x-java-source",
+  js: "text/javascript",
+  json: "application/json",
+  jsonl: "application/x-jsonlines",
+  jsx: "text/jsx",
+  kt: "text/x-kotlin",
+  log: "text/plain",
+  md: "text/markdown",
+  mjs: "text/javascript",
+  ndjson: "application/x-ndjson",
+  pdf: "application/pdf",
+  php: "text/x-php",
+  py: "text/x-python",
+  rb: "text/x-ruby",
+  rs: "text/x-rust",
+  sh: "text/x-shellscript",
+  sql: "text/x-sql",
+  swift: "text/x-swift",
+  toml: "text/plain",
+  ts: "text/typescript",
+  tsx: "text/tsx",
+  txt: "text/plain",
+  xml: "application/xml",
+  yaml: "text/yaml",
+  yml: "text/yaml",
+};
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_DOC_BYTES = 10 * 1024 * 1024; // 10 MB (conservative for v1)
+
+function getDocumentMimeType(file: File): string | null {
+  if (ACCEPTED_DOC_TYPES.has(file.type)) return file.type;
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  return ext ? (DOCUMENT_EXTENSION_MIME_TYPES[ext] ?? null) : null;
+}
 
 interface InputAreaProps {
   onSend: (
@@ -165,21 +230,21 @@ export function InputArea({
   const inputWrapperRef = useRef<HTMLDivElement>(null);
   const slashPopupRef = useRef<HTMLDivElement>(null);
 
-  // DIAGNOSTIC[input-loop]: instrumentation to identify the cause of the
-  // "replaying last character" bug in chat input. Remove once root-caused.
-  const renderCountRef = useRef(0);
-  renderCountRef.current += 1;
-  const prevTextRef = useRef(text);
-  const inputEventCountRef = useRef(0);
-  useEffect(() => {
-    if (prevTextRef.current !== text) {
-      const domValue = textareaRef.current?.value;
-      const domMatches = domValue === text;
-      console.log(
-        `[agentlink:input-loop] text CHANGED render=${renderCountRef.current} prev=${JSON.stringify(prevTextRef.current)} next=${JSON.stringify(text)} domValue=${JSON.stringify(domValue)} domMatches=${domMatches}`,
-      );
-      prevTextRef.current = text;
-    }
+  // Keep the textarea's DOM value in sync with `text` WITHOUT making it a fully
+  // controlled input. A controlled `value={text}` makes Preact re-apply the prop
+  // to the live DOM on every render; on surfaces that re-render frequently (the
+  // browser gateway polls a snapshot every 150ms), a render carrying a stale
+  // `text` can land between a keystroke's `input` event and its batched setText
+  // commit, reverting the just-typed/deleted character — which manifests as the
+  // composer "replaying" the last keystroke and locking up under fast edits.
+  // Syncing imperatively only when `text` actually changes leaves the live DOM
+  // value untouched during typing (handleInput already mirrors it into state),
+  // so frequent re-renders can no longer clobber in-progress input.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el || el.value === text) return;
+    el.value = text;
+    autosizeTextarea(el);
   }, [text]);
 
   const matchedSlashCommand = useMemo(
@@ -750,31 +815,40 @@ export function InputArea({
       if (!e.clipboardData) return;
 
       const items = Array.from(e.clipboardData.items);
-      const mediaItems: DataTransferItem[] = [];
+      const clipboardFiles = Array.from(e.clipboardData.files);
+      const mediaItems: Array<{
+        file: File;
+        itemType: string;
+        isImage: boolean;
+        docMimeType: string | null;
+      }> = [];
+      const seenFiles = new Set<File>();
+
+      const addClipboardFile = (file: File, itemType = file.type) => {
+        if (seenFiles.has(file)) return;
+        const mimeType = itemType || file.type;
+        const isImage = ACCEPTED_IMAGE_TYPES.has(mimeType);
+        const docMimeType = isImage ? null : getDocumentMimeType(file);
+        if (!isImage && !docMimeType) return;
+        seenFiles.add(file);
+        mediaItems.push({ file, itemType: mimeType, isImage, docMimeType });
+      };
 
       for (const item of items) {
         if (item.kind !== "file") continue;
-        if (
-          ACCEPTED_IMAGE_TYPES.has(item.type) ||
-          ACCEPTED_DOC_TYPES.has(item.type)
-        ) {
-          mediaItems.push(item);
-        }
+        const file = item.getAsFile();
+        if (!file) continue;
+        addClipboardFile(file, item.type || file.type);
+      }
+      for (const file of clipboardFiles) {
+        addClipboardFile(file);
       }
 
       if (mediaItems.length === 0) return; // Let text paste through
 
       e.preventDefault();
 
-      for (const item of mediaItems) {
-        const file = item.getAsFile();
-        if (!file) continue;
-
-        // Capture item properties synchronously — DataTransferItem objects
-        // are cleared after the event handler returns, so reading item.type
-        // inside the async FileReader.onload callback returns "".
-        const itemType = item.type;
-        const isImage = ACCEPTED_IMAGE_TYPES.has(itemType);
+      for (const { file, itemType, isImage, docMimeType } of mediaItems) {
         const maxBytes = isImage ? MAX_IMAGE_BYTES : MAX_DOC_BYTES;
 
         if (file.size > maxBytes) {
@@ -783,14 +857,14 @@ export function InputArea({
           // Post an error to the extension for display
           vscodeApi.postMessage({
             command: "agentToast",
-            message: `File too large (${sizeMB}MB). Max ${limitMB}MB for ${isImage ? "images" : "PDFs"}.`,
+            message: `File too large (${sizeMB}MB). Max ${limitMB}MB for ${isImage ? "images" : "files"}.`,
             level: "error",
           });
           continue;
         }
 
         const fileName =
-          file.name || (isImage ? "pasted-image.png" : "pasted-document.pdf");
+          file.name || (isImage ? "pasted-image.png" : "pasted-file.txt");
         const reader = new FileReader();
         reader.onload = () => {
           const dataUrl = reader.result as string;
@@ -811,12 +885,14 @@ export function InputArea({
               jpeg: "image/jpeg",
               gif: "image/gif",
               webp: "image/webp",
-              pdf: "application/pdf",
             };
-            mimeType = (ext && extMap[ext]) || "image/png";
+            mimeType =
+              (ext && (extMap[ext] || DOCUMENT_EXTENSION_MIME_TYPES[ext])) ||
+              docMimeType ||
+              (isImage ? "image/png" : "text/plain");
           }
           const attachment: MediaAttachment = {
-            id: crypto.randomUUID(),
+            id: randomId(),
             name: fileName,
             mimeType,
             dataUrl,
@@ -835,12 +911,6 @@ export function InputArea({
       const target = e.target as HTMLTextAreaElement;
       const value = target.value;
       const cursor = target.selectionStart ?? value.length;
-      // DIAGNOSTIC[input-loop]: log every onInput firing so we can correlate
-      // user keystrokes with downstream setText calls when the bug reproduces.
-      inputEventCountRef.current += 1;
-      console.log(
-        `[agentlink:input-loop] onInput #${inputEventCountRef.current} render=${renderCountRef.current} stateText=${JSON.stringify(text)} domValue=${JSON.stringify(value)} cursor=${cursor} pickerOpen=${pickerOpen} slashOpen=${slashOpen} emojiOpen=${emojiOpen}`,
-      );
       setText(value);
 
       // Auto-resize textarea
@@ -986,12 +1056,6 @@ export function InputArea({
 
   // Handle injections from extension (code actions, context menus)
   useEffect(() => {
-    // DIAGNOSTIC[input-loop]: surface every effect firing — if the bug is
-    // caused by a stale `injection` object being re-applied on parent renders,
-    // this will show it.
-    console.log(
-      `[agentlink:input-loop] injectionEffect render=${renderCountRef.current} injection=${injection ? injection.type : "null"} stateText=${JSON.stringify(text)}`,
-    );
     if (!injection) return;
     switch (injection.type) {
       case "prompt": {
@@ -1098,12 +1162,13 @@ export function InputArea({
         if (allowMediaPaste) {
           const acceptedFiles = droppedFiles.filter(
             (file) =>
-              ACCEPTED_IMAGE_TYPES.has(file.type) ||
-              ACCEPTED_DOC_TYPES.has(file.type),
+              ACCEPTED_IMAGE_TYPES.has(file.type) || getDocumentMimeType(file),
           );
 
           for (const file of acceptedFiles) {
             const isImage = ACCEPTED_IMAGE_TYPES.has(file.type);
+            const docMimeType = isImage ? null : getDocumentMimeType(file);
+            if (!isImage && !docMimeType) continue;
             const maxBytes = isImage ? MAX_IMAGE_BYTES : MAX_DOC_BYTES;
 
             if (file.size > maxBytes) {
@@ -1111,23 +1176,21 @@ export function InputArea({
               const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
               vscodeApi.postMessage({
                 command: "agentToast",
-                message: `File too large (${sizeMB}MB). Max ${limitMB}MB for ${isImage ? "images" : "PDFs"}.`,
+                message: `File too large (${sizeMB}MB). Max ${limitMB}MB for ${isImage ? "images" : "files"}.`,
                 level: "error",
               });
               continue;
             }
 
             const fileName =
-              file.name ||
-              (isImage ? "dropped-image.png" : "dropped-document.pdf");
+              file.name || (isImage ? "dropped-image.png" : "dropped-file.txt");
             const reader = new FileReader();
             reader.onload = () => {
               const dataUrl = reader.result as string;
               const attachment: MediaAttachment = {
-                id: crypto.randomUUID(),
+                id: randomId(),
                 name: fileName,
-                mimeType:
-                  file.type || (isImage ? "image/png" : "application/pdf"),
+                mimeType: docMimeType || file.type || "text/plain",
                 dataUrl,
                 kind: isImage ? "image" : "document",
               };
@@ -1430,7 +1493,6 @@ export function InputArea({
               ? "Message... (/ for commands, @ to attach files, : for emoji)"
               : "Message... (/ for commands, : for emoji)"
           }
-          value={text}
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}

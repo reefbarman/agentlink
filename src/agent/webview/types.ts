@@ -320,6 +320,7 @@ export type ExtensionMessage =
       sessionId: string;
       title: string;
       mode: string;
+      model: string;
       messages: unknown[];
       lastInputTokens: number;
       lastOutputTokens: number;

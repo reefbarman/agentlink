@@ -453,7 +453,7 @@ function FinalMarkerActions({
 }
 
 const ATTACHED_FILE_RE = /\[Attached: ([^\]]+)\]\n*/g;
-// Regex to extract [N image(s), N PDF(s) attached] media indicator
+// Regex to extract [N image(s), N file(s) attached] media indicator
 const MEDIA_INDICATOR_RE = /\[([^\]]*attached)\]\n*/;
 
 /** Parse attachment markers out of user message text, returning chips + clean text */
@@ -473,7 +473,7 @@ function parseAttachments(content: string): {
   }
   text = text.replace(ATTACHED_FILE_RE, "");
 
-  // Extract media indicator (images/PDFs)
+  // Extract media indicator (images/files)
   let mediaLabel: string | null = null;
   const mediaMatch = MEDIA_INDICATOR_RE.exec(text);
   if (mediaMatch) {

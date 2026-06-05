@@ -4,7 +4,10 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 
 import {
+  getBrowserGatewayRegistryPath,
+  listCheckedBrowserGatewayInstances,
   listHealthyBrowserGatewayInstances,
+  setBrowserGatewayRegistryLogger,
   type BrowserGatewayInstanceRecord,
 } from "../browserGatewayRegistry.js";
 import {
@@ -49,6 +52,10 @@ export interface HelperRuntimeOptions {
 const DEFAULT_IDLE_SHUTDOWN_MS = 60_000;
 const DEFAULT_HELPER_VERSION = "dev";
 const DEFAULT_MDNS_NAME = "agentlink";
+
+function logHelper(message: string): void {
+  process.stderr.write(`[browser-gateway-helper] ${message}\n`);
+}
 
 function parsePort(value: string | undefined): number {
   const parsed = Number(value);
@@ -268,6 +275,10 @@ export class BrowserGatewayHelper {
     this.pairingBroker = injectables.pairingBroker ?? new PairingBroker();
     this.mdnsAdvertiser = injectables.mdnsAdvertiser ?? null;
     this.bindHost = options.lanAccess ? "0.0.0.0" : "127.0.0.1";
+    setBrowserGatewayRegistryLogger(logHelper);
+    logHelper(
+      `constructed pid=${process.pid} port=${options.port} bindHost=${this.bindHost} registry=${getBrowserGatewayRegistryPath()} extensionRoot=${JSON.stringify(options.extensionRootPath)}`,
+    );
     this.server.timeout = 0;
     this.server.keepAliveTimeout = 0;
     this.server.headersTimeout = 0;
@@ -421,6 +432,26 @@ export class BrowserGatewayHelper {
       return;
     }
 
+    if (method === "GET" && pathname.startsWith("/monaco-")) {
+      const assetName = pathname.slice(1);
+      if (/^monaco-[a-z-]+\.worker\.js$/.test(assetName)) {
+        void this.handleStaticAssetRequest(
+          `dist/${assetName}`,
+          "text/javascript; charset=utf-8",
+          res,
+        );
+        return;
+      }
+      if (/^monaco-[a-z-]+\.worker\.js\.map$/.test(assetName)) {
+        void this.handleStaticAssetRequest(
+          `dist/${assetName}`,
+          "application/json; charset=utf-8",
+          res,
+        );
+        return;
+      }
+    }
+
     if (method === "GET" && pathname === "/codicon.css") {
       void this.handleStaticAssetRequest(
         "dist/codicon.css",
@@ -496,6 +527,13 @@ export class BrowserGatewayHelper {
     }
     if (method === "POST" && pathname === "/internal/client/release") {
       await this.handleReleaseRequest(req, res);
+      return;
+    }
+    if (method === "POST" && pathname === "/internal/shutdown") {
+      writeJson(res, 202, { ok: true });
+      setImmediate(() => {
+        void this.stop("admin_shutdown");
+      });
       return;
     }
     if (method === "POST" && pathname === "/internal/pairing/create") {
@@ -582,15 +620,20 @@ export class BrowserGatewayHelper {
     requestUrl: URL,
     res: http.ServerResponse,
   ): Promise<void> {
-    const instances = await listHealthyBrowserGatewayInstances();
+    const { registered: registeredInstances, healthy: healthyInstances } =
+      await listCheckedBrowserGatewayInstances();
     const requestedInstanceId = requestUrl.searchParams
       .get("instanceId")
       ?.trim();
     const selectedInstance = this.selectInstance(
-      instances,
+      healthyInstances,
       requestedInstanceId,
     );
-    const enrichedInstances = await this.buildInstanceListItems(instances);
+    const enrichedInstances =
+      await this.buildInstanceListItems(registeredInstances);
+    logHelper(
+      `/api/instances requestedInstanceId=${requestedInstanceId || "none"} selected=${selectedInstance?.instanceId ?? "none"} registered=${registeredInstances.length} healthy=${healthyInstances.length} registeredIds=${registeredInstances.map((instance) => instance.instanceId).join(",") || "none"}`,
+    );
 
     this.writeInstancesJson(
       res,
@@ -848,6 +891,9 @@ export class BrowserGatewayHelper {
       const clientId = body.clientId.trim();
       this.activeClientLeases.set(clientId, leaseExpiresAtMs);
       this.lastLeaseActivityAtMs = Date.now();
+      logHelper(
+        `lease clientId=${clientId} ttlMs=${ttlMs} activeLeases=${this.getActiveLeaseCount()} expiresAt=${new Date(leaseExpiresAtMs).toISOString()}`,
+      );
 
       await this.writeDiscovery();
 
@@ -877,8 +923,12 @@ export class BrowserGatewayHelper {
         return;
       }
 
-      this.activeClientLeases.delete(body.clientId.trim());
+      const clientId = body.clientId.trim();
+      this.activeClientLeases.delete(clientId);
       this.lastLeaseActivityAtMs = Date.now();
+      logHelper(
+        `release clientId=${clientId} activeLeases=${this.getActiveLeaseCount()}`,
+      );
       await this.writeDiscovery();
 
       writeJson(res, 200, { ok: true });
@@ -1165,7 +1215,12 @@ export class BrowserGatewayHelper {
     try {
       const assetPath = path.join(this.options.extensionRootPath, relativePath);
       const content = await fs.readFile(assetPath);
-      res.writeHead(200, { "Content-Type": contentType });
+      res.writeHead(200, {
+        "Content-Type": contentType,
+        "Cache-Control": "no-cache",
+        ETag: JSON.stringify(`${this.options.helperVersion}:${relativePath}`),
+        "X-AgentLink-Helper-Version": this.options.helperVersion,
+      });
       res.end(content);
     } catch {
       writeJson(res, 404, { error: "not_found" });
@@ -1177,6 +1232,7 @@ export class BrowserGatewayHelper {
     workspaceName: string,
     initialTheme: BrowserGatewayThemeSnapshot,
   ): string {
+    const assetVersion = encodeURIComponent(this.options.helperVersion);
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -1184,8 +1240,8 @@ export class BrowserGatewayHelper {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AgentLink Browser Gateway</title>
   ${renderThemeStyleTag(initialTheme)}
-  <link rel="stylesheet" href="/codicon.css">
-  <link rel="stylesheet" href="/browser-gateway.css">
+  <link rel="stylesheet" href="/codicon.css?v=${assetVersion}">
+  <link rel="stylesheet" href="/browser-gateway.css?v=${assetVersion}">
 </head>
 <body>
   <div id="root"></div>
@@ -1198,7 +1254,7 @@ export class BrowserGatewayHelper {
       initialTheme: ${JSON.stringify(initialTheme)}
     };
   </script>
-  <script type="module" src="/browser-gateway.js"></script>
+  <script type="module" src="/browser-gateway.js?v=${assetVersion}"></script>
 </body>
 </html>`;
   }

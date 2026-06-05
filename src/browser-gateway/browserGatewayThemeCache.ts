@@ -3,6 +3,7 @@ import * as os from "os";
 import * as path from "path";
 
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
+import { randomUUID } from "crypto";
 
 const CACHE_DIR = path.join(os.homedir(), ".agentlink");
 const THEME_CACHE_PATH = path.join(CACHE_DIR, "browser-gateway-theme.json");
@@ -115,7 +116,7 @@ export async function writeBrowserGatewayThemeCache(
 ): Promise<void> {
   if (!isBrowserGatewayThemeSnapshot(theme)) return;
   await fs.mkdir(CACHE_DIR, { recursive: true });
-  const tmpPath = `${THEME_CACHE_PATH}.tmp.${process.pid}`;
+  const tmpPath = `${THEME_CACHE_PATH}.tmp.${process.pid}.${randomUUID()}`;
   await fs.writeFile(tmpPath, JSON.stringify(theme, null, 2) + "\n", {
     encoding: "utf-8",
     mode: 0o600,

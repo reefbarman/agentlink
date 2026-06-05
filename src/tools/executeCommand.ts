@@ -141,6 +141,7 @@ export async function handleExecuteCommand(
           approvalPanel,
           sessionId,
           params.reason,
+          cwd,
         );
 
         if (!approvalResult.approved) {
@@ -277,6 +278,7 @@ async function approveSubCommands(
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
   reason?: string,
+  cwd?: string,
 ): Promise<{
   approved: boolean;
   reason?: string;
@@ -315,7 +317,7 @@ async function approveSubCommands(
   const { promise } = approvalPanel.enqueueCommandApproval(
     fullCommand,
     fullCommand,
-    { subCommands: entries, reason },
+    { subCommands: entries, reason, cwd },
   );
   const response = await promise;
 

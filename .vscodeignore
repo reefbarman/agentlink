@@ -1,3 +1,12 @@
+# ⚠️ ALLOWLIST MODEL: line 1 ignores EVERYTHING, then each `!` line re-includes a
+# specific file in the packaged .vsix. Anything not explicitly re-included here is
+# silently dropped from the published extension (it still works in your dev build
+# from the workspace `dist/`, so the omission is easy to miss).
+#
+# => Whenever you add a new bundle output in esbuild.mjs (a webview entry, a worker,
+#    a css/asset), you MUST add a matching `!dist/<file>` line below, or it will 404
+#    at runtime for installed users. This bit us with the Monaco diff workers
+#    (missing workers => diff editor renders but never computes => no highlighting).
 **/*
 !dist/extension.js
 !dist/extension.js.map
@@ -15,6 +24,16 @@
 !dist/chat.css
 !dist/browser-gateway.js
 !dist/browser-gateway.css
+!dist/monaco-editor.worker.js
+!dist/monaco-editor.worker.js.map
+!dist/monaco-json.worker.js
+!dist/monaco-json.worker.js.map
+!dist/monaco-css.worker.js
+!dist/monaco-css.worker.js.map
+!dist/monaco-html.worker.js
+!dist/monaco-html.worker.js.map
+!dist/monaco-ts.worker.js
+!dist/monaco-ts.worker.js.map
 !dist/codicon.css
 !dist/codicon.ttf
 !package.json

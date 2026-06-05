@@ -65,7 +65,7 @@ export function DocumentAttachmentChip({
 }: DocumentAttachmentChipProps) {
   return (
     <span class="attachment-chip document-attachment-chip" title={name}>
-      <i class="codicon codicon-file-pdf" />
+      <i class="codicon codicon-file" />
       <span class="attachment-chip-name">{name}</span>
       <button
         class="attachment-chip-remove"

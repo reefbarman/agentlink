@@ -22,49 +22,6 @@
     --vscode-textCodeBlock-background,
     var(--vscode-editorWidget-background, #1f232b)
   );
-  --ag-terminal-bg: var(--vscode-terminal-background, #1e1e1e);
-  --ag-terminal-fg: var(--vscode-terminal-foreground, #cccccc);
-  --ag-terminal-muted: var(--vscode-descriptionForeground, #8b949e);
-  --ag-terminal-cursor: var(--vscode-terminalCursor-foreground, #aeafad);
-  --ag-terminal-cursor-accent: var(
-    --vscode-terminalCursor-background,
-    var(--ag-terminal-bg)
-  );
-  --ag-terminal-selection-bg: var(
-    --vscode-terminal-selectionBackground,
-    rgba(255, 255, 255, 0.25)
-  );
-  --ag-terminal-selection-inactive-bg: var(
-    --vscode-terminal-inactiveSelectionBackground,
-    rgba(255, 255, 255, 0.15)
-  );
-  --ag-terminal-black: var(--vscode-terminal-ansiBlack, #000000);
-  --ag-terminal-red: var(--vscode-terminal-ansiRed, #cd3131);
-  --ag-terminal-green: var(--vscode-terminal-ansiGreen, #0dbc79);
-  --ag-terminal-yellow: var(--vscode-terminal-ansiYellow, #e5e510);
-  --ag-terminal-blue: var(--vscode-terminal-ansiBlue, #2472c8);
-  --ag-terminal-magenta: var(--vscode-terminal-ansiMagenta, #bc3fbc);
-  --ag-terminal-cyan: var(--vscode-terminal-ansiCyan, #11a8cd);
-  --ag-terminal-white: var(--vscode-terminal-ansiWhite, #e5e5e5);
-  --ag-terminal-bright-black: var(--vscode-terminal-ansiBrightBlack, #666666);
-  --ag-terminal-bright-red: var(--vscode-terminal-ansiBrightRed, #f14c4c);
-  --ag-terminal-bright-green: var(--vscode-terminal-ansiBrightGreen, #23d18b);
-  --ag-terminal-bright-yellow: var(--vscode-terminal-ansiBrightYellow, #f5f543);
-  --ag-terminal-bright-blue: var(--vscode-terminal-ansiBrightBlue, #3b8eea);
-  --ag-terminal-bright-magenta: var(
-    --vscode-terminal-ansiBrightMagenta,
-    #d670d6
-  );
-  --ag-terminal-bright-cyan: var(--vscode-terminal-ansiBrightCyan, #29b8db);
-  --ag-terminal-bright-white: var(--vscode-terminal-ansiBrightWhite, #ffffff);
-  --ag-terminal-font-family: var(
-    --vscode-terminal-fontFamily,
-    "Cascadia Mono", var(--vscode-editor-font-family, monospace)
-  );
-  --ag-terminal-font-size: var(--vscode-terminal-fontSize, 14px);
-  --ag-terminal-line-height: var(--vscode-terminal-lineHeight, 1);
-  --ag-terminal-font-weight: var(--vscode-terminal-fontWeight, normal);
-  --ag-terminal-letter-spacing: var(--vscode-terminal-letterSpacing, 0px);
 }
 
 * {
@@ -128,7 +85,6 @@ textarea {
   letter-spacing: 0.08em;
 }
 
-.browser-subtitle,
 .browser-status,
 .review-meta,
 .session-meta,
@@ -286,6 +242,30 @@ textarea {
   resize: vertical;
 }
 
+/*
+ * Approval cards are shared Preact components rendered identically in the VS
+ * Code chat webview, where only chat.css's .approval-panel-embed rules apply.
+ * The browser additionally loads this stylesheet, so the global select/textarea
+ * rules above leak into the card form fields (forcing 60px min-heights, extra
+ * padding, full width, inherited button line-height) that VS Code never shows.
+ * Revert those properties inside the embed so the cards fall back to the same
+ * UA defaults VS Code sees; the per-class embed rules still supply intended
+ * values via higher specificity.
+ */
+.approval-panel-embed button,
+.approval-panel-embed select,
+.approval-panel-embed textarea {
+  width: revert;
+  min-height: revert;
+  padding: revert;
+  resize: revert;
+  line-height: revert;
+}
+
+.approval-mobile-review-actions {
+  display: none;
+}
+
 .composer-box {
   display: flex;
   flex-direction: column;
@@ -318,7 +298,6 @@ textarea {
 
 .browser-shell > .browser-header button,
 .browser-side-top:not(.browser-main) button,
-.browser-side-bottom:not(.browser-main) button,
 .mobile-secondary-pane button {
   padding: 8px 10px;
   cursor: pointer;
@@ -329,7 +308,6 @@ textarea {
 
 .browser-shell > .browser-header button:hover:not(:disabled),
 .browser-side-top:not(.browser-main) button:hover:not(:disabled),
-.browser-side-bottom:not(.browser-main) button:hover:not(:disabled),
 .mobile-secondary-pane button:hover:not(:disabled) {
   background: var(--vscode-button-hoverBackground, var(--ag-accent));
 }
@@ -338,7 +316,6 @@ textarea {
 
 .browser-shell > .browser-header button.secondary,
 .browser-side-top:not(.browser-main) button.secondary,
-.browser-side-bottom:not(.browser-main) button.secondary,
 .mobile-secondary-pane button.secondary {
   background: var(--vscode-button-secondaryBackground, var(--ag-panel-2));
   color: var(--vscode-button-secondaryForeground, var(--ag-text));
@@ -451,19 +428,28 @@ textarea {
 }
 
 .browser-layout {
+  --browser-side-width: 36%;
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(300px, 0.95fr) minmax(0, 1.7fr);
-  grid-template-rows: minmax(0, 1fr) minmax(220px, 0.72fr);
+  grid-template-columns:
+    minmax(280px, min(var(--browser-side-width), calc(100% - 420px)))
+    minmax(420px, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 0;
   padding: 0;
   overflow: hidden;
+  position: relative;
+}
+
+.browser-layout-resizing {
+  user-select: none;
+  cursor: col-resize;
 }
 
 .browser-main {
   grid-column: 2;
-  grid-row: 1 / span 2;
+  grid-row: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -479,13 +465,37 @@ textarea {
   overflow: hidden;
 }
 
-.browser-side-bottom {
+.browser-column-resize-handle {
   grid-column: 1;
-  grid-row: 2;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  grid-row: 1;
+  justify-self: end;
+  align-self: stretch;
+  width: 11px;
+  margin-right: -6px;
+  z-index: 8;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+  outline: none;
+}
+
+.browser-column-resize-handle::before {
+  content: "";
+  display: block;
+  width: 1px;
+  height: 100%;
+  margin-left: 5px;
+  background: transparent;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.browser-column-resize-handle:hover::before,
+.browser-column-resize-handle:focus-visible::before,
+.browser-layout-resizing .browser-column-resize-handle::before {
+  background: var(--ag-accent);
+  box-shadow: 0 0 0 1px var(--ag-accent-2);
 }
 
 .pane-card {
@@ -498,13 +508,8 @@ textarea {
   overflow: hidden;
 }
 
-.browser-side-top .pane-card,
-.browser-side-bottom .pane-card {
-  border-right: 1px solid var(--ag-border);
-}
-
 .browser-side-top .pane-card {
-  border-bottom: 1px solid var(--ag-border);
+  border-right: 1px solid var(--ag-border);
 }
 
 .pane-fill {
@@ -573,17 +578,6 @@ textarea {
   gap: 10px;
 }
 
-.mobile-pane-actions {
-  display: none;
-  align-items: center;
-  gap: 6px;
-}
-
-.mobile-pane-toggle.active {
-  border-color: var(--ag-accent);
-  color: var(--ag-text);
-}
-
 .mobile-secondary-pane {
   display: none;
 }
@@ -615,9 +609,17 @@ textarea {
   align-items: center;
   gap: 5px;
   color: var(--ag-muted);
-  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 10%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #cca700) 10%,
+    transparent
+  );
   border: 1px solid
-    color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 28%, transparent);
+    color-mix(
+      in srgb,
+      var(--vscode-editorWarning-foreground, #cca700) 28%,
+      transparent
+    );
   border-radius: 4px;
   padding: 3px 7px;
 }
@@ -634,11 +636,44 @@ textarea {
   overflow: visible;
 }
 
-.stacked-list,
-.diff-list {
+.stacked-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.review-pane-card {
+  background: var(--vscode-editor-background, var(--ag-code-bg));
+}
+
+.review-pane-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  padding: 0;
+  background: var(--vscode-editor-background, var(--ag-code-bg));
+}
+
+
+/* Mirrors `.browser-instance-tabs` so file tabs match the instance tab strip. */
+.diff-list {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 0;
+  min-height: 35px;
+  padding: 0 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--ag-panel-2));
+  border-bottom: 1px solid
+    var(--vscode-editorGroupHeader-tabsBorder, var(--ag-border));
+}
+
+.diff-list::-webkit-scrollbar {
+  display: none;
 }
 
 .review-card,
@@ -652,147 +687,9 @@ textarea {
   gap: 8px;
 }
 
-.browser-terminal-shell {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 170px;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-  background: var(--ag-terminal-bg);
-  color: var(--ag-terminal-fg);
-}
-
-.browser-terminal-viewport {
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-  padding: 0;
-  background: var(--ag-terminal-bg);
-}
-
-.browser-terminal-viewport .xterm {
-  height: 100%;
-  padding: 5px 8px 8px;
-}
-
-.browser-terminal-viewport .xterm-viewport {
-  background: var(--vscode-terminal-background, var(--ag-terminal-bg)) !important;
-}
-
-.browser-terminal-viewport .xterm-screen {
-  min-height: 100%;
-}
-
-.terminal-instance-status-warning .terminal-instance-badge {
-  color: var(
-    --vscode-list-warningForeground,
-    var(--vscode-editorWarning-foreground, var(--ag-terminal-yellow))
-  );
-}
-
-.terminal-instance-status-error .terminal-instance-badge {
-  color: var(--vscode-errorForeground, var(--ag-terminal-red));
-}
-
-.terminal-instance-status-running .terminal-instance-badge {
-  color: var(--vscode-progressBar-background, var(--ag-terminal-blue));
-}
-
-.terminal-instance-status-completed .terminal-instance-badge {
-  color: var(
-    --vscode-testing-iconPassed,
-    var(--vscode-terminal-ansiGreen, var(--ag-terminal-green))
-  );
-}
-
-
-.terminal-instance-list {
-  min-width: 0;
-  border-left: 1px solid var(--ag-border);
-  background: var(--vscode-panel-background, var(--ag-panel));
-  color: var(--vscode-list-foreground, var(--ag-text));
-  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, sans-serif);
-  font-size: var(--vscode-font-size, 13px);
-  line-height: normal;
-  padding: 4px 3px;
-  overflow: auto;
-}
-
-.terminal-instance-list-title {
-  padding: 2px 7px 5px;
-  color: var(--ag-muted);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.terminal-instance-list .terminal-instance-item {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) 16px;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  min-height: 22px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  box-shadow: none;
-}
-
-.terminal-instance-list .terminal-instance-item:hover {
-  background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, 0.31));
-  color: var(--vscode-list-hoverForeground, inherit);
-}
-
-.terminal-instance-list .terminal-instance-item.active {
-  background: var(
-    --vscode-list-activeSelectionBackground,
-    rgba(55, 55, 55, 0.9)
-  );
-  color: var(--vscode-list-activeSelectionForeground, var(--ag-text));
-}
-
-.terminal-instance-list .terminal-instance-item:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder, var(--ag-accent));
-  outline-offset: -1px;
-}
-
-.terminal-instance-item .terminal-instance-icon {
-  font-size: 14px;
-  color: var(--vscode-descriptionForeground, var(--ag-muted));
-}
-
-.terminal-instance-item.active .terminal-instance-icon {
-  color: currentColor;
-}
-
-.terminal-instance-item .terminal-instance-badge {
-  justify-self: end;
-  font-size: 13px;
-  color: var(--vscode-descriptionForeground, var(--ag-terminal-muted));
-}
-
-.terminal-instance-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.review-priority-card {
-  border-color: color-mix(in srgb, var(--ag-accent) 40%, var(--ag-border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ag-accent) 18%, transparent);
-}
-
 .review-kicker,
 .review-section-label,
-.review-meta-label,
-.diff-panel-header {
+.review-meta-label {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -851,39 +748,6 @@ textarea {
   border: 1px solid var(--ag-border);
 }
 
-.question-card-lite {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px;
-  padding: 10px;
-  border-radius: 10px;
-  background: var(--ag-panel);
-  border: 1px solid var(--ag-border);
-}
-
-.question-index {
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  background: color-mix(in srgb, var(--ag-accent) 18%, transparent);
-  color: var(--ag-text);
-}
-
-.question-content {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.question-text {
-  font-size: 14px;
-}
-
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -891,32 +755,237 @@ textarea {
 }
 
 .diff-list-item {
+  position: relative;
+  align-self: stretch;
+  min-width: 150px;
+  max-width: 240px;
+  min-height: 35px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--vscode-tab-border, var(--ag-border));
+  border-radius: 0;
   text-align: left;
-  background: var(--ag-panel);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--vscode-tab-inactiveForeground, var(--ag-muted));
+  background: var(--vscode-tab-inactiveBackground, var(--ag-panel-2));
+  font-size: var(--vscode-font-size, 13px);
+  font-family: var(
+    --vscode-font-family,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif
+  );
+  cursor: pointer;
+  box-shadow: none;
 }
 
-.diff-list-title {
-  font-weight: 600;
+.diff-list-item:first-child {
+  border-left: 1px solid var(--vscode-tab-border, var(--ag-border));
+}
+
+.diff-list-item:hover {
+  color: var(--vscode-tab-hoverForeground, var(--ag-text));
+  background: var(--vscode-tab-hoverBackground, var(--ag-panel));
 }
 
 .diff-list-item.active {
-  border-color: var(--ag-accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ag-accent) 45%, transparent);
+  z-index: 1;
+  color: var(--vscode-tab-activeForeground, var(--ag-text));
+  background: var(--vscode-tab-activeBackground, var(--ag-panel));
 }
 
-.diff-columns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+/* VS Code draws a top accent line on the active tab of the focused group. */
+.diff-list-item.active::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--vscode-tab-activeBorderTop, var(--ag-accent));
 }
 
-.diff-panel {
+.diff-list-item:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--ag-accent));
+  outline-offset: -1px;
+}
+
+.diff-list-item:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.diff-list-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+
+.diff-list-subtitle {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.diff-list-item .codicon {
+  flex-shrink: 0;
+  font-size: 16px;
+  color: var(
+    --vscode-tab-inactiveForeground,
+    var(--vscode-icon-foreground, currentColor)
+  );
+}
+
+.diff-list-item.active .codicon,
+.diff-list-item:hover .codicon {
+  color: currentColor;
+}
+
+.diff-detail-card {
+  min-height: 420px;
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: var(--vscode-editor-background, var(--ag-code-bg));
+}
+
+.browser-diff-viewer {
+  --browser-diff-scrollbar-bg: var(--vscode-scrollbar-background, transparent);
+  --browser-diff-scrollbar-slider: var(
+    --vscode-scrollbarSlider-background,
+    rgba(121, 121, 121, 0.4)
+  );
+  --browser-diff-scrollbar-slider-hover: var(
+    --vscode-scrollbarSlider-hoverBackground,
+    rgba(100, 100, 100, 0.7)
+  );
+  --browser-diff-scrollbar-slider-active: var(
+    --vscode-scrollbarSlider-activeBackground,
+    rgba(191, 191, 191, 0.4)
+  );
+
+  min-height: 420px;
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--vscode-editor-background, var(--ag-code-bg));
+}
+
+.browser-diff-editor-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.browser-diff-editor {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  opacity: 0;
+}
+
+.browser-diff-editor.ready {
+  opacity: 1;
+}
+
+/*
+ * Diff line/char/gutter backgrounds are intentionally left to Monaco's own
+ * diff stylesheet + theme. Monaco maps `.line-insert`/`.line-delete` to
+ * `--vscode-diffEditor-{inserted,removed}LineBackground` with a smart fallback
+ * to the text-background color, and the active theme (defined in
+ * BrowserDiffViewer) writes those variables onto `.monaco-editor`. A previous
+ * `!important` override forced the (often near-transparent) line-background
+ * value and *beat* Monaco's fallback, which made modify/replacement diffs lose
+ * their red/green bands while whole-file additions (rendered via `char-insert`)
+ * still showed. Letting Monaco render natively keeps exact VS Code parity.
+ */
+
+.browser-diff-viewer .monaco-scrollable-element > .scrollbar {
+  background: var(--browser-diff-scrollbar-bg) !important;
+}
+
+.browser-diff-viewer .monaco-scrollable-element > .scrollbar > .slider {
+  background: var(--browser-diff-scrollbar-slider) !important;
+}
+
+.browser-diff-viewer .monaco-scrollable-element > .scrollbar > .slider:hover {
+  background: var(--browser-diff-scrollbar-slider-hover) !important;
+}
+
+.browser-diff-viewer .monaco-scrollable-element > .scrollbar > .slider.active {
+  background: var(--browser-diff-scrollbar-slider-active) !important;
+}
+
+.browser-diff-viewer .monaco-diff-editor .diffOverview,
+.browser-diff-viewer .monaco-diff-editor .diffViewport,
+.browser-diff-viewer .monaco-diff-editor .diffOverviewRuler {
+  display: none !important;
+}
+
+.browser-diff-viewer .monaco-editor .gutter-delete,
+.browser-diff-viewer .monaco-editor .delete-sign {
+  background-color: var(
+    --vscode-diffEditorGutter-removedLineBackground,
+    var(--vscode-diffEditor-removedLineBackground, rgba(248, 81, 73, 0.18))
+  ) !important;
+}
+
+.browser-diff-viewer .monaco-editor .gutter-insert,
+.browser-diff-viewer .monaco-editor .insert-sign {
+  background-color: var(
+    --vscode-diffEditorGutter-insertedLineBackground,
+    var(--vscode-diffEditor-insertedLineBackground, rgba(46, 160, 67, 0.18))
+  ) !important;
+}
+
+.browser-diff-viewer .monaco-editor .delete-sign::before,
+.browser-diff-viewer .monaco-editor .codicon-diff-remove::before {
+  color: var(--vscode-editorGutter-deletedBackground, #f85149) !important;
+  opacity: 0.75;
+}
+
+.browser-diff-viewer .monaco-editor .insert-sign::before,
+.browser-diff-viewer .monaco-editor .codicon-diff-insert::before {
+  color: var(--vscode-editorGutter-addedBackground, #3fb950) !important;
+  opacity: 0.75;
+}
+
+.browser-diff-state {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  color: var(--ag-muted);
+  background: var(--vscode-editor-background, var(--ag-code-bg));
+  text-align: center;
+}
+
+.browser-diff-status {
+  min-height: 24px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--ag-border);
+  color: var(--ag-muted);
+  background: var(--vscode-statusBar-background, var(--ag-panel));
+  font-size: 11px;
 }
 
 pre {
@@ -947,12 +1016,15 @@ pre {
 
   .browser-layout {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, auto) minmax(0, 1fr) minmax(220px, auto);
+    grid-template-rows: minmax(0, auto) minmax(0, 1fr);
+  }
+
+  .browser-column-resize-handle {
+    display: none;
   }
 
   .browser-side-top,
-  .browser-main,
-  .browser-side-bottom {
+  .browser-main {
     grid-column: 1;
   }
 
@@ -964,12 +1036,7 @@ pre {
     grid-row: 2;
   }
 
-  .browser-side-bottom {
-    grid-row: 3;
-  }
-
-  .browser-side-top .pane-card,
-  .browser-side-bottom .pane-card {
+  .browser-side-top .pane-card {
     border-right: 0;
   }
 }
@@ -989,6 +1056,10 @@ pre {
     min-height: 0;
     gap: 0;
     padding: 0;
+  }
+
+  .browser-layout-resizing {
+    cursor: default;
   }
 
   .browser-instance-tabs {
@@ -1018,8 +1089,7 @@ pre {
     overflow: hidden;
   }
 
-  .browser-side-top,
-  .browser-side-bottom {
+  .browser-side-top {
     display: none;
   }
 
@@ -1027,27 +1097,71 @@ pre {
     min-height: 0;
   }
 
-  .mobile-pane-actions {
+  .approval-mobile-review-actions {
+    display: flex;
+    flex-shrink: 0;
+    padding: 8px 10px 0;
+    border-top: 1px solid var(--vscode-panel-border, var(--ag-border));
+    background: var(--vscode-editor-background, var(--ag-panel));
+  }
+
+  .approval-panel-embed .mobile-review-button {
     display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    min-height: 34px;
+    padding: 7px 10px;
+    border: 1px solid var(--ag-border-2);
+    border-radius: 5px;
+    background: var(--vscode-button-secondaryBackground, var(--ag-panel-2));
+    color: var(--vscode-button-secondaryForeground, var(--ag-text));
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .approval-panel-embed .mobile-review-button:hover:not(:disabled) {
+    background: var(
+      --vscode-button-secondaryHoverBackground,
+      var(--ag-hover)
+    );
+  }
+
+  .approval-panel-embed .mobile-review-button.active {
+    border-color: var(--ag-accent);
+    color: var(--ag-text);
+  }
+
+  .approval-panel-embed .mobile-review-button:disabled {
+    cursor: default;
+    opacity: 0.55;
   }
 
   .mobile-secondary-pane {
-    display: block;
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
 
-  .browser-terminal-shell {
-    grid-template-columns: minmax(0, 1fr);
+  .mobile-hidden-while-review {
+    display: none !important;
   }
 
-  .terminal-instance-list {
-    display: none;
+  .mobile-secondary-card {
+    flex: 1;
+    max-height: none;
+    min-height: 0;
   }
 
   .review-meta-grid {
     grid-template-columns: 1fr;
   }
 
-  .diff-columns {
-    grid-template-columns: 1fr;
+  .diff-detail-card,
+  .browser-diff-viewer {
+    flex: 1;
+    min-height: 0;
   }
 }

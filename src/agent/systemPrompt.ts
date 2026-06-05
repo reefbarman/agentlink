@@ -10,6 +10,12 @@ export interface PromptArtifacts {
   skills: SkillEntry[];
 }
 
+/** A workspace folder the agent should know about (multi-root workspaces). */
+export interface WorkspaceFolderInfo {
+  name: string;
+  path: string;
+}
+
 /**
  * Base system prompt — shared across all modes.
  * Defines identity, general behavior, and communication style.
@@ -31,6 +37,7 @@ function getBasePrompt(cwd: string): string {
 
 - The project root directory is: ${cwd}
 - All file paths should be relative to this directory.
+- Create or edit file *contents* with the dedicated diff-review tools (\`write_file\` / \`apply_diff\`), not by echoing or heredoc'ing into the shell. But plain filesystem operations — copying, moving, renaming, deleting, or creating files and directories (\`cp\`, \`mv\`, \`rm\`, \`mkdir\`, \`touch\`, \`chmod\`) — are fine to run via \`execute_command\`. Don't read a file and rewrite it with \`write_file\` just to copy or move it; \`cp\`/\`mv\` are allowed and preferred for that.
 - Consider the type of project (language, framework, build system) when providing suggestions.
 - Always consider the existing codebase context — don't suggest changes that conflict with established patterns.
 - Do not provide time estimates for tasks.
@@ -65,7 +72,23 @@ Keep visualizations focused — show the relevant subset, not everything. A diag
 
 ## Final Response Status
 
-You must call \`set_task_status\` immediately before any final response that completes, pauses, blocks, or cancels the current user ask. This is the only way the UI can render final-status styling; there is no automatic fallback. Use \`completed\` when the ask is satisfied, \`waiting_for_user\` when you need input or permission, \`blocked\` when you cannot proceed, and \`cancelled\` if work was stopped. Include an informative but concise \`summary\` that tells the user what was accomplished, what was validated or skipped, and any important follow-up; a few sentences or 1-2 short paragraphs is appropriate when useful. The summary supports the same markdown and special rendering as normal assistant messages, so use bullets, code spans, links, Mermaid, or Vega/Vega-Lite only when they make the completion clearer. If you are waiting on an obvious next step, include a short \`continueLabel\` and visible \`continuePrompt\` so the user can resume with one click. If everything is definitely complete and no continuation is useful, set \`suppressContinue: true\` so the UI does not offer or auto-send a follow-up Continue action. Do not call this tool before \`ask_user\`; structured questions already show their own waiting UI. Do not call it for intermediate progress updates when you will continue working in the same turn.
+You must call \`set_task_status\` immediately before any final response that completes, pauses, blocks, or cancels the current user ask. This is the only way the UI can render final-status styling; there is no automatic fallback. Use \`completed\` when the ask is satisfied, \`waiting_for_user\` when you need input or permission, \`blocked\` when you cannot proceed, and \`cancelled\` if work was stopped.
+
+The \`summary\` is the user-facing final response itself, not a meta-description of what you did. Never write meta-descriptions like "Explained X", "Answered the question about Y", "Provided the requested information", or "Walked through how Z works" — those describe the response instead of being the response, and the user is left with nothing to read. The actual content the user asked for must appear somewhere visible: either as a normal text message before the \`set_task_status\` call, or fully inside \`summary\` (markdown is rendered there). One of those two slots must carry the substance; the other can be omitted or kept brief. If you find yourself writing a summary that starts with a past-tense verb describing your own action ("Explained…", "Answered…", "Reviewed…", "Investigated…"), stop and put the actual explanation/answer/review/findings there instead.
+
+For turns that modify code or run commands, the summary should usually include:
+
+- **What changed** — key files, behavior, or decisions, with relative paths when useful.
+- **Why it matters** — the bug fixed, feature enabled, or trade-off chosen.
+- **Validation** — tests, lint, build, diagnostics, or manual checks that passed.
+- **Skipped or incomplete validation** — explicitly state anything expected but not run and why.
+- **Follow-up** — only concrete next steps, caveats, or handoff notes that matter.
+
+For pure Q&A, explanation, research, or review turns where you didn't change anything, skip that recipe — the summary (or preceding text) is just the answer/explanation/findings themselves, written for the user to read directly.
+
+Prefer a compact Markdown structure such as 3-6 bullets or 1-2 short paragraphs. For tiny answer-only tasks, one good sentence is enough; for multi-file or non-trivial work, do not compress the summary to “Done” or “All set.” The summary supports the same markdown and special rendering as normal assistant messages, so use bullets, code spans, links, Mermaid, or Vega/Vega-Lite only when they make the completion clearer. Keep the result final: do not end with open-ended questions or generic offers for further assistance.
+
+If you are waiting on an obvious next step, include a short \`continueLabel\` and visible \`continuePrompt\` so the user can resume with one click. Completed markers get a default Continue action unless \`suppressContinue\` is true; blocked, waiting, and cancelled markers do not. If everything is definitely complete and no continuation is useful, set \`suppressContinue: true\` so the UI does not offer or auto-send a follow-up Continue action. Do not call this tool before \`ask_user\`; structured questions already show their own waiting UI. Do not call it for intermediate progress updates when you will continue working in the same turn.
 
 ## Tool Result Instructions
 
@@ -148,7 +171,7 @@ const PROVIDER_PROMPTS: Record<string, string> = {
 - **Terminal reuse by default** — For sequential \`execute_command\` calls, omit \`terminal_name\` and \`terminal_id\` so AgentLink reuses the default terminal. Only create a separate terminal when you intentionally need isolation (parallel/background work or temporary environment changes).
 - **Close dedicated terminals when done** — If you created named/background terminals, use \`close_terminals\` for targeted cleanup instead of leaving stale terminal tabs.
 - **\`output_file\` = STOP** — When \`execute_command\` or \`get_terminal_output\` returns an \`output_file\` field, the full output is already saved to that temp file. **NEVER re-run the command** to see more output or to search with different \`output_grep\` patterns. Instead, call \`read_file(output_file)\` to read the complete output. Re-running slow commands is a costly anti-pattern.
-- **Never write files via the shell** — Do not create or modify files with \`execute_command\` using \`echo > file\`, \`cat <<EOF > file\`, \`tee\`, \`sed -i\`, or inline interpreter scripts (\`node -e\`, \`python -c\`, \`bun -e\`, \`deno eval\`, \`tsx -e\`, \`perl -e\`, \`ruby -e\`, \`osascript -e\`, heredoc piped to an interpreter, etc.) that call file-write APIs. Always use \`write_file\` or \`apply_diff\` so the user sees a diff and the language server provides diagnostics.`,
+- **Never write file *contents* via the shell** — Do not create or modify file contents with \`execute_command\` using \`echo > file\`, \`cat <<EOF > file\`, \`tee\`, \`sed -i\`, or inline interpreter scripts (\`node -e\`, \`python -c\`, \`bun -e\`, \`deno eval\`, \`tsx -e\`, \`perl -e\`, \`ruby -e\`, \`osascript -e\`, heredoc piped to an interpreter, etc.) that call file-write APIs. Always use \`write_file\` or \`apply_diff\` so the user sees a diff and the language server provides diagnostics. This is only about *generating or editing contents* — plain filesystem operations (\`cp\`, \`mv\`, \`rm\`, \`mkdir\`, \`touch\`, \`chmod\`) are fine via \`execute_command\`; use \`cp\`/\`mv\` to copy or move a file rather than reading it and rewriting it with \`write_file\`.`,
 };
 
 /**
@@ -444,7 +467,11 @@ function git(cwd: string, args: string): Promise<string | null> {
 /**
  * Get the system info section with OS/shell/git details.
  */
-async function getSystemInfo(cwd: string, model?: string): Promise<string> {
+async function getSystemInfo(
+  cwd: string,
+  model?: string,
+  workspaceFolders?: WorkspaceFolderInfo[],
+): Promise<string> {
   const platform = os.platform();
   const shell = process.env.SHELL || process.env.COMSPEC || "unknown";
   const arch = os.arch();
@@ -463,12 +490,23 @@ async function getSystemInfo(cwd: string, model?: string): Promise<string> {
 
   const modelLine = model ? `\n- Model: ${model}` : "";
 
+  // List additional workspace folders so the agent knows where each project
+  // lives without having to search for it. Only emitted for multi-root
+  // workspaces — a single root is already covered by the project root line.
+  let foldersSection = "";
+  if (workspaceFolders && workspaceFolders.length > 1) {
+    const items = workspaceFolders
+      .map((f) => `  - ${f.name}: ${f.path}`)
+      .join("\n");
+    foldersSection = `\n\n### Workspace Folders\n\nThis is a multi-root workspace. The following projects are open — use these paths directly instead of searching for them:\n\n${items}`;
+  }
+
   return `
 ## System Information
 
 - OS: ${platform} (${arch})
 - Shell: ${shell}
-- Home: ${os.homedir()}${modelLine}${gitSection}`;
+- Home: ${os.homedir()}${modelLine}${gitSection}${foldersSection}`;
 }
 
 /**
@@ -548,6 +586,7 @@ export async function buildPromptArtifacts(
     model?: string;
     isBackground?: boolean;
     lightweight?: boolean;
+    workspaceFolders?: WorkspaceFolderInfo[];
   },
 ): Promise<PromptArtifacts> {
   // Lightweight path: minimal prompt for background review agents
@@ -560,7 +599,11 @@ export async function buildPromptArtifacts(
   const providerPrompt = options?.providerId
     ? (PROVIDER_PROMPTS[options.providerId] ?? "")
     : "";
-  const systemInfo = await getSystemInfo(cwd, options?.model);
+  const systemInfo = await getSystemInfo(
+    cwd,
+    options?.model,
+    options?.workspaceFolders,
+  );
   const devFeedback = options?.devMode ? getDevFeedbackPrompt() : "";
 
   const [customInstructions, modeRules, skills] = await Promise.all([
@@ -610,6 +653,7 @@ export async function buildSystemPrompt(
     isBackground?: boolean;
     /** When lightweight is true, builds a minimal prompt (used for background reviews). */
     lightweight?: boolean;
+    workspaceFolders?: WorkspaceFolderInfo[];
   },
 ): Promise<string> {
   const artifacts = await buildPromptArtifacts(mode, cwd, options);

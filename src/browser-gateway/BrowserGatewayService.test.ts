@@ -28,6 +28,11 @@ vi.mock("vscode", () => {
 
   return {
     EventEmitter: MockEventEmitter,
+    workspace: {
+      getConfiguration: () => ({
+        get: () => undefined,
+      }),
+    },
   };
 });
 
@@ -162,7 +167,6 @@ describe("BrowserGatewayService", () => {
           title: "Test Session",
         }),
       ],
-      terminals: [],
       repository: null,
       foreground: {
         sessionId: "session-1",

@@ -1,3 +1,4 @@
+import type { JSX } from "preact";
 import type {
   ChatMessage,
   ModeInfo,
@@ -8,6 +9,7 @@ import type {
   TodoItem,
   WebviewModelInfo,
 } from "../../agent/webview/types";
+
 import type { DetectedQuestion } from "../../shared/questionDetection";
 import {
   useCallback,
@@ -26,6 +28,7 @@ import { CommandCard } from "../../approvals/webview/components/CommandCard";
 import { ContextBar } from "../../agent/webview/components/ContextBar";
 import { DebugInfo } from "../../agent/webview/components/DebugInfo";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
+import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
 import { InputArea } from "../../agent/webview/components/InputArea";
 import { McpCard } from "../../approvals/webview/components/McpCard";
 import { ModeSwitchCard } from "../../approvals/webview/components/ModeSwitchCard";
@@ -44,11 +47,9 @@ import {
   getLatestAutoContinueAction,
   getLatestFinalMessageMarker,
 } from "../../shared/finalStatus";
-import { MetaGrid, MetaItem, Pill, TitleRow } from "../../shared/ui/Meta";
+
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 
-import { deriveTerminalBuffers } from "../../shared/terminalActivity";
-import { BrowserTerminalPane } from "./components/BrowserTerminalPane";
 import type {
   BgSessionInfo,
   BrowserGatewayThemeSnapshot,
@@ -59,8 +60,16 @@ const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
 const AUTO_CONTINUE_BROWSER_SETTLE_MS = 500;
 const THEME_CACHE_KEY = "agentlink.browserGateway.themeSnapshot.v1";
+const SIDE_PANE_WIDTH_KEY = "agentlink.browserGateway.sidePaneWidth.v1";
 const TAB_FLASH_INTERVAL_MS = 1_000;
 const TAB_FLASH_TITLE = "⚠ Action needed — AgentLink";
+const DEFAULT_SIDE_PANE_PERCENT = 36;
+const MIN_SIDE_PANE_PERCENT = 22;
+const MAX_SIDE_PANE_PERCENT = 70;
+const MIN_SIDE_PANE_WIDTH = 280;
+const MIN_CHAT_PANE_WIDTH = 420;
+const SIDE_PANE_KEYBOARD_STEP = 32;
+const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 
 function projectFinalMarkerAutoContinueState(
   messages: ChatMessage[],
@@ -129,12 +138,6 @@ type GatewaySnapshot = {
     }>;
   };
   session: {
-    terminals: Array<{
-      id: string;
-      name: string;
-      busy: boolean;
-      stale?: boolean;
-    }>;
     repository: {
       branch?: string;
       dirty?: boolean;
@@ -213,16 +216,6 @@ type GatewaySnapshot = {
   theme: BrowserGatewayThemeSnapshot;
 };
 
-type DiffDetail = {
-  requestId: string;
-  filePath: string;
-  operation: string;
-  outsideWorkspace: boolean;
-  createdAt: number;
-  originalContent: string;
-  proposedContent: string;
-};
-
 interface BrowserGatewayAppProps {
   authToken: string;
   currentInstanceId: string;
@@ -251,6 +244,82 @@ function writeCachedTheme(theme: BrowserGatewayThemeSnapshot): void {
     window.localStorage.setItem(THEME_CACHE_KEY, JSON.stringify(theme));
   } catch {
     // Ignore storage failures; the live theme still applies for this page load.
+  }
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Last path segment, e.g. `plans/foo.md` -> `foo.md`. */
+function basenameOf(filePath: string): string {
+  const normalized = filePath.replace(/[/\\]+$/, "");
+  const lastSlash = Math.max(
+    normalized.lastIndexOf("/"),
+    normalized.lastIndexOf("\\"),
+  );
+  return lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1);
+}
+
+/** Directory portion, e.g. `plans/foo.md` -> `plans`; empty when at root. */
+function dirnameOf(filePath: string): string {
+  const normalized = filePath.replace(/[/\\]+$/, "");
+  const lastSlash = Math.max(
+    normalized.lastIndexOf("/"),
+    normalized.lastIndexOf("\\"),
+  );
+  return lastSlash <= 0 ? "" : normalized.slice(0, lastSlash);
+}
+
+function clampSidePanePercentForWidth(
+  percent: number,
+  totalWidth: number,
+): number {
+  if (!Number.isFinite(totalWidth) || totalWidth <= 0) {
+    return clampNumber(percent, MIN_SIDE_PANE_PERCENT, MAX_SIDE_PANE_PERCENT);
+  }
+
+  const minWidth = Math.min(
+    totalWidth,
+    Math.max(MIN_SIDE_PANE_WIDTH, totalWidth * (MIN_SIDE_PANE_PERCENT / 100)),
+  );
+  const maxWidth = Math.max(
+    minWidth,
+    Math.min(
+      totalWidth - MIN_CHAT_PANE_WIDTH,
+      totalWidth * (MAX_SIDE_PANE_PERCENT / 100),
+    ),
+  );
+  const nextWidth = clampNumber(
+    totalWidth * (percent / 100),
+    minWidth,
+    maxWidth,
+  );
+
+  return clampNumber(
+    (nextWidth / totalWidth) * 100,
+    MIN_SIDE_PANE_PERCENT,
+    MAX_SIDE_PANE_PERCENT,
+  );
+}
+
+function readCachedSidePanePercent(): number {
+  try {
+    const raw = window.localStorage.getItem(SIDE_PANE_WIDTH_KEY);
+    if (!raw) return DEFAULT_SIDE_PANE_PERCENT;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return DEFAULT_SIDE_PANE_PERCENT;
+    return clampNumber(parsed, MIN_SIDE_PANE_PERCENT, MAX_SIDE_PANE_PERCENT);
+  } catch {
+    return DEFAULT_SIDE_PANE_PERCENT;
+  }
+}
+
+function writeCachedSidePanePercent(percent: number): void {
+  try {
+    window.localStorage.setItem(SIDE_PANE_WIDTH_KEY, String(percent));
+  } catch {
+    // Best-effort UI preference only.
   }
 }
 
@@ -300,20 +369,36 @@ export function BrowserGatewayApp({
   >([]);
   const [selectedInstanceId, setSelectedInstanceId] =
     useState(currentInstanceId);
+  const selectedInstanceIdRef = useRef(currentInstanceId);
   const userSelectedInstanceRef = useRef(false);
+  const touchTabPointerRef = useRef<{
+    instanceId: string;
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
 
-  function buildApiPath(pathname: string): string {
-    if (!routeByInstance || !selectedInstanceId.trim()) {
-      return pathname;
+  function selectInstance(instanceId: string, userSelected = false): void {
+    if (userSelected) {
+      userSelectedInstanceRef.current = true;
     }
-    const separator = pathname.includes("?") ? "&" : "?";
-    return `${pathname}${separator}instanceId=${encodeURIComponent(selectedInstanceId)}`;
+    selectedInstanceIdRef.current = instanceId;
+    setSelectedInstanceId(instanceId);
   }
+
+  const buildApiPath = useCallback(
+    (pathname: string): string => {
+      if (!routeByInstance || !selectedInstanceId.trim()) {
+        return pathname;
+      }
+      const separator = pathname.includes("?") ? "&" : "?";
+      return `${pathname}${separator}instanceId=${encodeURIComponent(selectedInstanceId)}`;
+    },
+    [routeByInstance, selectedInstanceId],
+  );
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
-  const [selectedDiff, setSelectedDiff] = useState<DiffDetail | null>(null);
   const [sendStatus, setSendStatus] = useState<string>("");
   const [modeStatus, setModeStatus] = useState<string>("");
-  const [reviewStatus, setReviewStatus] = useState<string>("");
   const [status, setStatus] = useState("Connecting…");
   const [thinkingPending, setThinkingPending] = useState(false);
   const [pendingReasoningEffort, setPendingReasoningEffort] =
@@ -321,9 +406,8 @@ export function BrowserGatewayApp({
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
   const [modes, setModes] = useState<ModeInfo[]>([]);
   const [models, setModels] = useState<WebviewModelInfo[]>([]);
-  const [mobilePane, setMobilePane] = useState<"review" | "terminal" | null>(
-    null,
-  );
+  const [mobileLayout, setMobileLayout] = useState(false);
+  const [mobilePane, setMobilePane] = useState<"review" | null>(null);
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [showMcpStatus, setShowMcpStatus] = useState(false);
@@ -334,6 +418,9 @@ export function BrowserGatewayApp({
     streaming: boolean;
   } | null>(null);
   const [localDismissedApprovalId, setLocalDismissedApprovalId] = useState<
+    string | null
+  >(null);
+  const [localDismissedQuestionId, setLocalDismissedQuestionId] = useState<
     string | null
   >(null);
   const [hiddenFinalContinueMessageIds, setHiddenFinalContinueMessageIds] =
@@ -348,12 +435,61 @@ export function BrowserGatewayApp({
   const autoContinueSessionIdRef = useRef<string | null>(null);
   const [approvalPanelHeight, setApprovalPanelHeight] = useState(360);
   const [approvalResizing, setApprovalResizing] = useState(false);
+  const [sidePanePercent, setSidePanePercent] = useState(() =>
+    readCachedSidePanePercent(),
+  );
+  const [sidePaneResizing, setSidePaneResizing] = useState(false);
+  const browserLayoutRef = useRef<HTMLElement | null>(null);
   const approvalResizeCleanupRef = useRef<(() => void) | null>(null);
+  const sidePaneResizeCleanupRef = useRef<(() => void) | null>(null);
   const forwardedFollowUpRef = useRef("");
+  const lastVisibleApprovalIdRef = useRef<string | null>(null);
   const appliedThemeKeysRef = useRef<Set<string>>(new Set());
   const questionProgressOriginRef = useRef<string>(
     `br-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`,
   );
+
+  useEffect(() => {
+    return () => {
+      approvalResizeCleanupRef.current?.();
+      sidePaneResizeCleanupRef.current?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+
+    const mediaQuery = window.matchMedia(MOBILE_LAYOUT_MEDIA_QUERY);
+    const syncMobilePaneAvailability = () => {
+      const isMobileLayout = mediaQuery.matches;
+      setMobileLayout(isMobileLayout);
+      if (!isMobileLayout) {
+        setMobilePane(null);
+      }
+    };
+    syncMobilePaneAvailability();
+    mediaQuery.addEventListener("change", syncMobilePaneAvailability);
+    return () =>
+      mediaQuery.removeEventListener("change", syncMobilePaneAvailability);
+  }, []);
+
+  useEffect(() => {
+    const syncSidePanePercent = (): void => {
+      const layout = browserLayoutRef.current;
+      if (!layout) return;
+      const totalWidth = layout.getBoundingClientRect().width;
+      setSidePanePercent((current) => {
+        const next = clampSidePanePercentForWidth(current, totalWidth);
+        if (Math.abs(next - current) < 0.1) return current;
+        writeCachedSidePanePercent(next);
+        return next;
+      });
+    };
+
+    syncSidePanePercent();
+    window.addEventListener("resize", syncSidePanePercent);
+    return () => window.removeEventListener("resize", syncSidePanePercent);
+  }, []);
 
   useEffect(() => {
     let closed = false;
@@ -463,17 +599,24 @@ export function BrowserGatewayApp({
   }, [selectedInstanceId, routeByInstance]);
 
   useEffect(() => {
-    if (!selectedDiffId) {
-      setSelectedDiff(null);
+    const currentDiffs = snapshot?.diffs ?? [];
+
+    if (currentDiffs.length === 0) {
+      if (selectedDiffId !== null) {
+        setSelectedDiffId(null);
+      }
       return;
     }
-    if (!snapshot?.diffs.some((diff) => diff.requestId === selectedDiffId)) {
-      setSelectedDiffId(null);
-      setSelectedDiff(null);
+
+    if (
+      selectedDiffId &&
+      currentDiffs.some((diff) => diff.requestId === selectedDiffId)
+    ) {
       return;
     }
-    void fetchDiffDetail(selectedDiffId);
-  }, [selectedDiffId, snapshot]);
+
+    setSelectedDiffId(currentDiffs[0]?.requestId ?? null);
+  }, [selectedDiffId, snapshot?.diffs]);
 
   const messages = useMemo<ChatMessage[]>(() => {
     return projectFinalMarkerAutoContinueState(
@@ -482,21 +625,6 @@ export function BrowserGatewayApp({
       autoContinueStopReasons,
     );
   }, [autoContinueStopReasons, hiddenFinalContinueMessageIds, snapshot]);
-
-  const terminalBuffers = useMemo(() => {
-    return deriveTerminalBuffers(messages, {
-      workspaceName,
-      gitBranch: snapshot?.session.repository?.branch,
-      dirty: snapshot?.session.repository?.dirty,
-      terminals: snapshot?.session.terminals ?? [],
-    });
-  }, [
-    messages,
-    snapshot?.session.repository?.branch,
-    snapshot?.session.repository?.dirty,
-    snapshot?.session.terminals,
-    workspaceName,
-  ]);
 
   const foreground = snapshot?.session.foreground ?? null;
   const reasoningEffort: ReasoningEffort = foreground
@@ -517,9 +645,19 @@ export function BrowserGatewayApp({
     pendingApproval && pendingApproval.id !== localDismissedApprovalId
       ? pendingApproval
       : null;
+  // `pendingQuestion` is derived from two sources (foreground projection and the
+  // UI event snapshot) that clear at slightly different times during a submit
+  // round-trip, so the card can toggle on/off after the user answers. Optimistically
+  // hide it once submitted locally, mirroring `visibleApproval` above.
+  const visibleQuestion =
+    pendingQuestion && pendingQuestion.id !== localDismissedQuestionId
+      ? pendingQuestion
+      : null;
+  const mobileReviewOpen = mobileLayout && mobilePane === "review";
+  const canOpenMobileReview = mobileLayout && diffs.length > 0;
   const awaitingUserInput = Boolean(
     visibleApproval ||
-    pendingQuestion ||
+    visibleQuestion ||
     foreground?.status === "awaiting_approval" ||
     instanceOptions.some(
       (instance) => instance.status?.kind === "awaiting_approval",
@@ -531,6 +669,21 @@ export function BrowserGatewayApp({
     snapshotQuestionProgress.origin !== questionProgressOriginRef.current
       ? snapshotQuestionProgress
       : null;
+
+  useEffect(() => {
+    const previousVisibleApprovalId = lastVisibleApprovalIdRef.current;
+    const currentVisibleApprovalId = visibleApproval?.id ?? null;
+
+    if (
+      previousVisibleApprovalId !== null &&
+      currentVisibleApprovalId === null &&
+      mobilePane === "review"
+    ) {
+      setMobilePane(null);
+    }
+
+    lastVisibleApprovalIdRef.current = currentVisibleApprovalId;
+  }, [mobilePane, visibleApproval?.id]);
 
   useEffect(() => {
     if (!thinkingPending || !foreground || pendingReasoningEffort === null)
@@ -558,6 +711,19 @@ export function BrowserGatewayApp({
       setLocalDismissedApprovalId(null);
     }
   }, [pendingApproval, localDismissedApprovalId]);
+
+  useEffect(() => {
+    // Only clear the optimistic dismiss when a genuinely different question
+    // arrives. Resetting on a transient null (the two question sources clear at
+    // different times) would re-show the card the user just answered.
+    if (
+      localDismissedQuestionId !== null &&
+      pendingQuestion &&
+      pendingQuestion.id !== localDismissedQuestionId
+    ) {
+      setLocalDismissedQuestionId(null);
+    }
+  }, [pendingQuestion, localDismissedQuestionId]);
 
   useEffect(() => {
     const originalTitle = document.title;
@@ -686,15 +852,16 @@ export function BrowserGatewayApp({
     }>,
     currentServerInstanceId: string,
   ): string {
+    const currentSelectedInstanceId = selectedInstanceIdRef.current;
     const selectedInstanceStillExists = instances.some(
-      (instance) => instance.instanceId === selectedInstanceId,
+      (instance) => instance.instanceId === currentSelectedInstanceId,
     );
     if (
       userSelectedInstanceRef.current &&
-      selectedInstanceId.trim() &&
+      currentSelectedInstanceId.trim() &&
       selectedInstanceStillExists
     ) {
-      return selectedInstanceId;
+      return currentSelectedInstanceId;
     }
 
     const activeInstance = instances.find(
@@ -707,8 +874,8 @@ export function BrowserGatewayApp({
     if (activeInstance) {
       return activeInstance.instanceId;
     }
-    if (selectedInstanceId.trim() && selectedInstanceStillExists) {
-      return selectedInstanceId;
+    if (currentSelectedInstanceId.trim() && selectedInstanceStillExists) {
+      return currentSelectedInstanceId;
     }
     return currentServerInstanceId || instances[0]?.instanceId || "";
   }
@@ -734,8 +901,8 @@ export function BrowserGatewayApp({
       const nextSelectedInstanceId = routeByInstance
         ? selectPreferredInstanceId(data.instances, data.currentInstanceId)
         : data.currentInstanceId || data.instances[0]?.instanceId || "";
-      if (nextSelectedInstanceId !== selectedInstanceId) {
-        setSelectedInstanceId(nextSelectedInstanceId);
+      if (nextSelectedInstanceId !== selectedInstanceIdRef.current) {
+        selectInstance(nextSelectedInstanceId);
       }
       return nextSelectedInstanceId;
     } catch (err) {
@@ -845,24 +1012,6 @@ export function BrowserGatewayApp({
     }
   }
 
-  async function fetchDiffDetail(requestId: string): Promise<void> {
-    if (selectedDiff?.requestId === requestId) {
-      return;
-    }
-    try {
-      const response = await fetch(
-        buildApiPath(`/api/diff/${encodeURIComponent(requestId)}`),
-      );
-      if (!response.ok) {
-        setSelectedDiff(null);
-        return;
-      }
-      setSelectedDiff((await response.json()) as DiffDetail);
-    } catch {
-      setSelectedDiff(null);
-    }
-  }
-
   async function fetchDebugInfo(): Promise<void> {
     try {
       await fetch(buildApiPath("/api/debug/refresh"), {
@@ -944,7 +1093,7 @@ export function BrowserGatewayApp({
       }
       if (documents.length > 0) {
         indicators.push(
-          `${documents.length} PDF${documents.length > 1 ? "s" : ""}`,
+          `${documents.length} file${documents.length > 1 ? "s" : ""}`,
         );
       }
       displayWithMedia = `[${indicators.join(", ")} attached]\n${displayWithMedia}`;
@@ -982,7 +1131,75 @@ export function BrowserGatewayApp({
   }
 
   const handleStop = (): void => {
-    // Browser pane remains send-only for now; no remote stop endpoint yet.
+    if (!foreground?.sessionId) return;
+    const sessionId = foreground.sessionId;
+    setSendStatus("Stopping…");
+    void (async () => {
+      try {
+        const response = await fetch(buildApiPath("/api/stop"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ sessionId }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+        };
+        setSendStatus(
+          body.ok ? "Stopped" : `Stop failed: ${body.error ?? response.status}`,
+        );
+      } catch (err) {
+        setSendStatus(`Stop error: ${String(err)}`);
+      }
+    })();
+  };
+
+  const handleInstancePointerDown = (
+    e: PointerEvent,
+    instanceId: string,
+  ): void => {
+    if (e.pointerType !== "touch") {
+      return;
+    }
+    touchTabPointerRef.current = {
+      instanceId,
+      pointerId: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+    };
+  };
+
+  const handleInstancePointerUp = (
+    e: PointerEvent,
+    instanceId: string,
+  ): void => {
+    const touchStart = touchTabPointerRef.current;
+    touchTabPointerRef.current = null;
+    if (
+      e.pointerType !== "touch" ||
+      !touchStart ||
+      touchStart.pointerId !== e.pointerId ||
+      touchStart.instanceId !== instanceId
+    ) {
+      return;
+    }
+
+    const moved = Math.hypot(
+      e.clientX - touchStart.x,
+      e.clientY - touchStart.y,
+    );
+    if (moved <= 8) {
+      selectInstance(instanceId, true);
+    }
+  };
+
+  const handleInstancePointerCancel = (e: PointerEvent): void => {
+    if (touchTabPointerRef.current?.pointerId === e.pointerId) {
+      touchTabPointerRef.current = null;
+    }
   };
 
   const handleSetReasoningEffort = (effort: ReasoningEffort): void => {
@@ -1041,8 +1258,14 @@ export function BrowserGatewayApp({
           },
           body: JSON.stringify({ mode: foreground?.mode ?? "code" }),
         });
-        const body = (await response.json()) as { ok?: boolean };
+        const body = (await response.json()) as {
+          ok?: boolean;
+          snapshot?: GatewaySnapshot;
+        };
         if (body.ok) {
+          if (body.snapshot) {
+            setSnapshot(body.snapshot);
+          }
           setShowHistory(false);
           setShowMcpStatus(false);
           void fetchSessions();
@@ -1163,7 +1386,11 @@ export function BrowserGatewayApp({
         const body = (await response.json()) as {
           ok?: boolean;
           error?: string;
+          snapshot?: GatewaySnapshot;
         };
+        if (body.ok && body.snapshot) {
+          setSnapshot(body.snapshot);
+        }
         setModeStatus(
           body.ok
             ? "Model updated"
@@ -1242,7 +1469,7 @@ export function BrowserGatewayApp({
       const body = (await response.json()) as { ok?: boolean; error?: string };
       if (!body.ok) {
         setLocalDismissedApprovalId(null);
-        setReviewStatus(
+        setModeStatus(
           `Approval action failed: ${body.error ?? response.status}`,
         );
       }
@@ -1273,6 +1500,81 @@ export function BrowserGatewayApp({
       throw new Error(body.error ?? "Failed to suggest regex");
     }
     return body.pattern;
+  };
+
+  const commitSidePanePercent = (percent: number): void => {
+    const layout = browserLayoutRef.current;
+    const totalWidth = layout?.getBoundingClientRect().width ?? 0;
+    const nextPercent = clampSidePanePercentForWidth(percent, totalWidth);
+    setSidePanePercent(nextPercent);
+    writeCachedSidePanePercent(nextPercent);
+  };
+
+  const handleSidePaneResizeStart = (e: MouseEvent): void => {
+    if (e.button !== 0) return;
+    const layout = browserLayoutRef.current;
+    if (!layout) return;
+
+    e.preventDefault();
+    sidePaneResizeCleanupRef.current?.();
+
+    const rect = layout.getBoundingClientRect();
+    let latestPercent = sidePanePercent;
+    setSidePaneResizing(true);
+
+    const updateFromClientX = (clientX: number): void => {
+      const nextWidth = clientX - rect.left;
+      latestPercent = clampSidePanePercentForWidth(
+        (nextWidth / rect.width) * 100,
+        rect.width,
+      );
+      setSidePanePercent(latestPercent);
+    };
+
+    const onMove = (moveEvent: MouseEvent) => {
+      updateFromClientX(moveEvent.clientX);
+    };
+
+    const onUp = () => {
+      setSidePaneResizing(false);
+      writeCachedSidePanePercent(latestPercent);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      sidePaneResizeCleanupRef.current = null;
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    sidePaneResizeCleanupRef.current = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setSidePaneResizing(false);
+    };
+  };
+
+  const handleSidePaneResizeKeyDown = (e: KeyboardEvent): void => {
+    const layout = browserLayoutRef.current;
+    const totalWidth = layout?.getBoundingClientRect().width ?? 0;
+    if (!layout || totalWidth <= 0) return;
+
+    const currentWidth = totalWidth * (sidePanePercent / 100);
+    const step = e.shiftKey
+      ? SIDE_PANE_KEYBOARD_STEP * 2
+      : SIDE_PANE_KEYBOARD_STEP;
+
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      commitSidePanePercent(((currentWidth - step) / totalWidth) * 100);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      commitSidePanePercent(((currentWidth + step) / totalWidth) * 100);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      commitSidePanePercent(MIN_SIDE_PANE_PERCENT);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      commitSidePanePercent(MAX_SIDE_PANE_PERCENT);
+    }
   };
 
   const handleApprovalResizeStart = (e: MouseEvent): void => {
@@ -1344,13 +1646,13 @@ export function BrowserGatewayApp({
           ok?: boolean;
           error?: string;
         };
-        setReviewStatus(
+        setModeStatus(
           body.ok
             ? "Background session stopped"
             : `Stop failed: ${body.error ?? response.status}`,
         );
       } catch (err) {
-        setReviewStatus(`Stop error: ${String(err)}`);
+        setModeStatus(`Stop error: ${String(err)}`);
       }
     })();
   };
@@ -1379,7 +1681,7 @@ export function BrowserGatewayApp({
           };
         };
         if (!body.ok || !body.transcript) {
-          setReviewStatus(
+          setModeStatus(
             `Open transcript failed: ${body.error ?? response.status}`,
           );
           return;
@@ -1398,11 +1700,11 @@ export function BrowserGatewayApp({
         const assistantBlocks = converted
           .filter((message) => message.role === "assistant")
           .reduce((count, message) => count + message.blocks.length, 0);
-        setReviewStatus(
+        setModeStatus(
           `Loaded ${converted.length} messages (${assistantBlocks} assistant blocks) for ${body.transcript.task}`,
         );
       } catch (err) {
-        setReviewStatus(`Open transcript error: ${String(err)}`);
+        setModeStatus(`Open transcript error: ${String(err)}`);
       }
     })();
   };
@@ -1436,153 +1738,49 @@ export function BrowserGatewayApp({
         setShowMcpStatus(true);
         break;
       case "pair":
-        setReviewStatus(
+        setModeStatus(
           "Run /pair in VS Code to add a new browser device — pairing codes can only be generated there.",
         );
         break;
     }
   };
 
-  async function handleQuestionAnswer(): Promise<void> {
-    if (!pendingQuestion) return;
-    try {
-      const missingRecommendation = pendingQuestion.questions.find(
-        (question) => question.recommended === undefined,
-      );
-      if (missingRecommendation) {
-        setReviewStatus(
-          "Cannot auto-answer: one or more questions have no recommended value.",
-        );
-        return;
-      }
-
-      const answers: Record<string, string> = {};
-      for (const question of pendingQuestion.questions) {
-        answers[question.id] = question.recommended ?? "";
-      }
-      setReviewStatus("Answering question…");
-      const response = await fetch(buildApiPath("/api/question"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          id: pendingQuestion.id,
-          answers,
-          notes: {},
-        }),
-      });
-      const body = (await response.json()) as { ok?: boolean };
-      setReviewStatus(body.ok ? "Question answered" : "Question action failed");
-    } catch (err) {
-      setReviewStatus(`Question error: ${String(err)}`);
-    }
-  }
-
-  const reviewPaneContent = pendingQuestion ? (
-    <div class="review-card review-priority-card">
-      <div class="review-kicker">Pending question</div>
-      <TitleRow
-        title={
-          <>
-            {pendingQuestion.questions.length} question
-            {pendingQuestion.questions.length === 1 ? "" : "s"}
-          </>
-        }
-        right={<Pill>Action needed</Pill>}
-      />
-      <div class="stacked-list">
-        {pendingQuestion.questions.map((question, index) => (
-          <div key={question.id} class="question-row question-card-lite">
-            <div class="question-index">{index + 1}</div>
-            <div class="question-content">
-              <div class="question-text">{question.question}</div>
-              <div class="review-meta">
-                Type: {question.type}
-                {question.recommended !== undefined
-                  ? ` · Recommended: ${String(question.recommended)}`
-                  : ""}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div class="button-row">
-        <button onClick={() => void handleQuestionAnswer()}>
-          Answer with recommended values
-        </button>
-      </div>
-      {reviewStatus && <div class="review-meta">{reviewStatus}</div>}
-    </div>
-  ) : diffs.length > 0 ? (
-    <>
-      <div class="review-section-label">Pending diffs</div>
-      <div class="diff-list">
-        {diffs.map((diff) => (
-          <button
-            key={diff.requestId}
-            class={`diff-list-item ${selectedDiffId === diff.requestId ? "active" : ""}`}
-            onClick={() => setSelectedDiffId(diff.requestId)}
-          >
-            <div class="diff-list-title-row">
-              <div class="diff-list-title">{diff.filePath}</div>
-              <Pill subtle>{diff.operation}</Pill>
-            </div>
-            <div class="review-meta">
-              {diff.outsideWorkspace ? "Outside workspace · " : ""}
-              {formatTimestamp(diff.createdAt)}
-            </div>
-          </button>
-        ))}
-      </div>
-      <div class="diff-detail-card">
-        {selectedDiff ? (
-          <>
-            <TitleRow
-              title={selectedDiff.filePath}
-              right={<Pill subtle>{selectedDiff.operation}</Pill>}
-            />
-            <MetaGrid compact>
-              <MetaItem
-                label="Created"
-                value={formatTimestamp(selectedDiff.createdAt)}
-              />
-              <MetaItem
-                label="Workspace"
-                value={
-                  selectedDiff.outsideWorkspace
-                    ? "Outside workspace"
-                    : "Inside workspace"
-                }
-              />
-            </MetaGrid>
-            <div class="diff-columns">
-              <div class="diff-panel">
-                <div class="diff-panel-header">Original</div>
-                <pre>{selectedDiff.originalContent}</pre>
-              </div>
-              <div class="diff-panel">
-                <div class="diff-panel-header">Proposed</div>
-                <pre>{selectedDiff.proposedContent}</pre>
-              </div>
-            </div>
-          </>
-        ) : (
-          <EmptyState>Select a diff to preview it.</EmptyState>
-        )}
-      </div>
-    </>
-  ) : (
-    <EmptyState>No pending approvals, questions, or diffs.</EmptyState>
-  );
-
-  const terminalPaneContent = (
-    <BrowserTerminalPane
-      buffers={terminalBuffers}
-      sessionId={foreground?.sessionId ?? null}
-    />
-  );
+  const reviewPaneContent =
+    diffs.length > 0 ? (
+      <>
+        <div class="diff-list" role="tablist" aria-label="Pending file diffs">
+          {diffs.map((diff) => (
+            <button
+              key={diff.requestId}
+              class={`diff-list-item ${selectedDiffId === diff.requestId ? "active" : ""}`}
+              onClick={() => setSelectedDiffId(diff.requestId)}
+              role="tab"
+              aria-selected={selectedDiffId === diff.requestId}
+              aria-label={diff.filePath}
+              title={`${diff.operation} ${diff.filePath}${diff.outsideWorkspace ? " (outside workspace)" : ""} · ${formatTimestamp(diff.createdAt)}`}
+            >
+              <i class="codicon codicon-file" />
+              <span class="diff-list-title">{basenameOf(diff.filePath)}</span>
+              {dirnameOf(diff.filePath) ? (
+                <span class="diff-list-subtitle">
+                  {dirnameOf(diff.filePath)}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+        <div class="diff-detail-card">
+          <BrowserDiffViewer
+            requestId={selectedDiffId}
+            authToken={authToken}
+            buildApiPath={buildApiPath}
+            theme={snapshot?.theme ?? initialTheme}
+          />
+        </div>
+      </>
+    ) : (
+      <EmptyState>No pending file diffs.</EmptyState>
+    );
 
   const streaming = foreground?.streaming === true;
   const statusOverride = foreground?.statusOverride ?? null;
@@ -1933,15 +2131,9 @@ export function BrowserGatewayApp({
       }
 
       if (command === "agentResolveDroppedFiles") {
-        const pathsRaw = Array.isArray(data.paths)
-          ? (data.paths as unknown[])
-          : [];
-        const files = pathsRaw
-          .map((value) => String(value).trim())
-          .filter((value) => value.length > 0);
         window.postMessage({
           type: "agentDroppedFilesResolved",
-          files,
+          files: [],
         });
       }
     },
@@ -1950,12 +2142,7 @@ export function BrowserGatewayApp({
   return (
     <div class="browser-shell">
       <header class="browser-header">
-        <div>
-          <div class="browser-title">AgentLink Remote</div>
-          <div class="browser-subtitle">
-            {workspaceName} · {selectedInstanceId}
-          </div>
-        </div>
+        <div class="browser-title">AgentLink Remote</div>
         <div class="browser-status-group">
           <span class="browser-status">{status}</span>
           {sendStatus && (
@@ -1988,10 +2175,22 @@ export function BrowserGatewayApp({
               aria-selected={active}
               class={`instance-tab instance-tab-${instanceStatus.kind}${active ? " active" : ""}`}
               id={`instance-tab-${instance.instanceId}`}
-              onClick={() => {
-                userSelectedInstanceRef.current = true;
-                setSelectedInstanceId(instance.instanceId);
-              }}
+              onClick={() => selectInstance(instance.instanceId, true)}
+              onPointerCancel={(e) =>
+                handleInstancePointerCancel(e as unknown as PointerEvent)
+              }
+              onPointerDown={(e) =>
+                handleInstancePointerDown(
+                  e as unknown as PointerEvent,
+                  instance.instanceId,
+                )
+              }
+              onPointerUp={(e) =>
+                handleInstancePointerUp(
+                  e as unknown as PointerEvent,
+                  instance.instanceId,
+                )
+              }
               role="tab"
               title={`${instance.workspaceName} · ${instanceStatus.label}${instanceStatus.detail ? ` · ${instanceStatus.detail}` : ""}`}
               type="button"
@@ -2011,20 +2210,45 @@ export function BrowserGatewayApp({
         })}
       </div>
 
-      {/** Shared sendability rule: text or other attached content. Browser currently has text only. */}
+      {/** Shared sendability rule: text or other attached content. */}
 
       <main
+        ref={browserLayoutRef}
         aria-labelledby={`instance-tab-${selectedInstanceId}`}
-        class="browser-layout"
+        class={`browser-layout${sidePaneResizing ? " browser-layout-resizing" : ""}`}
         id="browser-instance-panel"
         role="tabpanel"
+        style={
+          {
+            "--browser-side-width": `${sidePanePercent}%`,
+          } as unknown as JSX.CSSProperties
+        }
       >
         <section class="browser-side browser-side-top">
-          <PaneCard fill>
-            <PaneHeader title="Review" />
-            <div class="pane-body stacked-list">{reviewPaneContent}</div>
+          <PaneCard fill className="review-pane-card">
+            <div class="pane-body review-pane-body">
+              {mobileLayout ? null : reviewPaneContent}
+            </div>
           </PaneCard>
         </section>
+
+        <div
+          aria-label="Resize chat and review panes"
+          aria-orientation="vertical"
+          aria-valuemax={MAX_SIDE_PANE_PERCENT}
+          aria-valuemin={MIN_SIDE_PANE_PERCENT}
+          aria-valuenow={Math.round(sidePanePercent)}
+          class="browser-column-resize-handle"
+          onKeyDown={(e) =>
+            handleSidePaneResizeKeyDown(e as unknown as KeyboardEvent)
+          }
+          onMouseDown={(e) =>
+            handleSidePaneResizeStart(e as unknown as MouseEvent)
+          }
+          role="separator"
+          tabIndex={0}
+          title="Drag to resize chat and review panes"
+        />
 
         <section class="browser-main">
           <PaneCard fill className="chat-pane-card">
@@ -2065,30 +2289,6 @@ export function BrowserGatewayApp({
                 >
                   <i class="codicon codicon-history" />
                 </button>
-                <div class="mobile-pane-actions">
-                  <button
-                    class={`secondary mobile-pane-toggle ${mobilePane === "review" ? "active" : ""}`}
-                    onClick={() =>
-                      setMobilePane((current) =>
-                        current === "review" ? null : "review",
-                      )
-                    }
-                    type="button"
-                  >
-                    Review
-                  </button>
-                  <button
-                    class={`secondary mobile-pane-toggle ${mobilePane === "terminal" ? "active" : ""}`}
-                    onClick={() =>
-                      setMobilePane((current) =>
-                        current === "terminal" ? null : "terminal",
-                      )
-                    }
-                    type="button"
-                  >
-                    Terminal
-                  </button>
-                </div>
               </div>
               {showHistory && (
                 <SessionHistory
@@ -2110,41 +2310,31 @@ export function BrowserGatewayApp({
                   }
                 />
               )}
-              {mobilePane && (
+              {mobileReviewOpen && (
                 <div class="mobile-secondary-pane">
                   <PaneCard fill className="mobile-secondary-card">
                     <PaneHeader
-                      title={
-                        mobilePane === "review"
-                          ? "Review"
-                          : "Terminal / Activity"
-                      }
+                      title="Review"
                       right={
                         <button
                           class="icon-button"
                           onClick={() => setMobilePane(null)}
-                          title="Close"
+                          title="Close review"
                           type="button"
                         >
                           <i class="codicon codicon-close" />
                         </button>
                       }
                     />
-                    <div class="pane-body stacked-list">
-                      {mobilePane === "review" ? (
-                        reviewPaneContent
-                      ) : (
-                        <BrowserTerminalPane
-                          buffers={terminalBuffers}
-                          sessionId={foreground?.sessionId ?? null}
-                          showInstanceList={false}
-                        />
-                      )}
+                    <div class="pane-body review-pane-body">
+                      {reviewPaneContent}
                     </div>
                   </PaneCard>
                 </div>
               )}
-              <div class="browser-transcript">
+              <div
+                class={`browser-transcript${mobileReviewOpen ? " mobile-hidden-while-review" : ""}`}
+              >
                 <ChatView
                   messages={messages}
                   streaming={Boolean(streaming)}
@@ -2190,22 +2380,25 @@ export function BrowserGatewayApp({
                   onViewCheckpointDiff={handleViewCheckpointDiff}
                 />
               </div>
-              {foreground && foreground.messageQueue.length > 0 && (
-                <div class="queue-panel">
-                  <div class="queue-header">
-                    <i class="codicon codicon-list-ordered" />
-                    <span>Queued ({foreground.messageQueue.length})</span>
-                  </div>
-                  {foreground.messageQueue.map((item) => (
-                    <div key={item.id} class="queue-item">
-                      <span class="queue-item-text">{item.text}</span>
+              {foreground &&
+                foreground.messageQueue.length > 0 &&
+                !mobileReviewOpen && (
+                  <div class="queue-panel">
+                    <div class="queue-header">
+                      <i class="codicon codicon-list-ordered" />
+                      <span>Queued ({foreground.messageQueue.length})</span>
                     </div>
-                  ))}
-                </div>
-              )}
-              {(foreground?.lastInputTokens ?? 0) > 0 ||
-              (foreground?.lastOutputTokens ?? 0) > 0 ||
-              (foreground?.estimatedTotalUsed ?? 0) > 0 ? (
+                    {foreground.messageQueue.map((item) => (
+                      <div key={item.id} class="queue-item">
+                        <span class="queue-item-text">{item.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              {!mobileReviewOpen &&
+              ((foreground?.lastInputTokens ?? 0) > 0 ||
+                (foreground?.lastOutputTokens ?? 0) > 0 ||
+                (foreground?.estimatedTotalUsed ?? 0) > 0) ? (
                 <div class="browser-context-row">
                   {(() => {
                     const currentModel = composerModels.find(
@@ -2243,101 +2436,103 @@ export function BrowserGatewayApp({
                   })()}
                 </div>
               ) : null}
-              {showMcpStatus && snapshot?.ui.mcpStatusInfos && (
-                <div class="mcp-status-panel">
-                  <div class="mcp-status-header">
-                    <i class="codicon codicon-server" />
-                    <span>MCP Servers</span>
-                    <button
-                      class="mcp-status-close icon-button"
-                      onClick={() => setShowMcpStatus(false)}
-                      title="Dismiss"
-                    >
-                      <i class="codicon codicon-close" />
-                    </button>
-                  </div>
-                  {snapshot.ui.mcpStatusInfos.length === 0 ? (
-                    <p class="mcp-status-empty">No MCP servers configured.</p>
-                  ) : (
-                    <ul class="mcp-status-list">
-                      {snapshot.ui.mcpStatusInfos.map((info) => (
-                        <li
-                          key={info.name}
-                          class={`mcp-status-item mcp-status-${info.status}`}
-                        >
-                          <i
-                            class={`codicon ${
-                              info.status === "connected"
-                                ? "codicon-check"
-                                : info.status === "connecting"
-                                  ? "codicon-loading codicon-modifier-spin"
-                                  : "codicon-error"
-                            }`}
-                          />
-                          <span class="mcp-status-name">{info.name}</span>
-                          <span class="mcp-status-detail">
-                            {info.status === "connected"
-                              ? [
-                                  `${info.toolCount} tool${info.toolCount !== 1 ? "s" : ""}`,
-                                  info.resourceCount > 0 &&
-                                    `${info.resourceCount} resource${info.resourceCount !== 1 ? "s" : ""}`,
-                                  info.promptCount > 0 &&
-                                    `${info.promptCount} prompt${info.promptCount !== 1 ? "s" : ""}`,
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ")
-                              : (info.error ?? info.status)}
-                          </span>
-                          <span class="mcp-status-actions">
-                            {info.status !== "connecting" && (
+              {!mobileReviewOpen &&
+                showMcpStatus &&
+                snapshot?.ui.mcpStatusInfos && (
+                  <div class="mcp-status-panel">
+                    <div class="mcp-status-header">
+                      <i class="codicon codicon-server" />
+                      <span>MCP Servers</span>
+                      <button
+                        class="mcp-status-close icon-button"
+                        onClick={() => setShowMcpStatus(false)}
+                        title="Dismiss"
+                      >
+                        <i class="codicon codicon-close" />
+                      </button>
+                    </div>
+                    {snapshot.ui.mcpStatusInfos.length === 0 ? (
+                      <p class="mcp-status-empty">No MCP servers configured.</p>
+                    ) : (
+                      <ul class="mcp-status-list">
+                        {snapshot.ui.mcpStatusInfos.map((info) => (
+                          <li
+                            key={info.name}
+                            class={`mcp-status-item mcp-status-${info.status}`}
+                          >
+                            <i
+                              class={`codicon ${
+                                info.status === "connected"
+                                  ? "codicon-check"
+                                  : info.status === "connecting"
+                                    ? "codicon-loading codicon-modifier-spin"
+                                    : "codicon-error"
+                              }`}
+                            />
+                            <span class="mcp-status-name">{info.name}</span>
+                            <span class="mcp-status-detail">
+                              {info.status === "connected"
+                                ? [
+                                    `${info.toolCount} tool${info.toolCount !== 1 ? "s" : ""}`,
+                                    info.resourceCount > 0 &&
+                                      `${info.resourceCount} resource${info.resourceCount !== 1 ? "s" : ""}`,
+                                    info.promptCount > 0 &&
+                                      `${info.promptCount} prompt${info.promptCount !== 1 ? "s" : ""}`,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ")
+                                : (info.error ?? info.status)}
+                            </span>
+                            <span class="mcp-status-actions">
+                              {info.status !== "connecting" && (
+                                <button
+                                  class="icon-button"
+                                  title="Reconnect"
+                                  onClick={() =>
+                                    handleMcpAction(info.name, "reconnect")
+                                  }
+                                >
+                                  <i class="codicon codicon-refresh" />
+                                </button>
+                              )}
                               <button
                                 class="icon-button"
-                                title="Reconnect"
+                                title="Reauthenticate"
                                 onClick={() =>
-                                  handleMcpAction(info.name, "reconnect")
+                                  handleMcpAction(info.name, "reauthenticate")
                                 }
                               >
-                                <i class="codicon codicon-refresh" />
+                                <i class="codicon codicon-key" />
                               </button>
-                            )}
-                            <button
-                              class="icon-button"
-                              title="Reauthenticate"
-                              onClick={() =>
-                                handleMcpAction(info.name, "reauthenticate")
-                              }
-                            >
-                              <i class="codicon codicon-key" />
-                            </button>
-                            <button
-                              class="icon-button mcp-action-disable"
-                              title="Disable"
-                              onClick={() =>
-                                handleMcpAction(info.name, "disable")
-                              }
-                            >
-                              <i class="codicon codicon-circle-slash" />
-                            </button>
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-              {(foreground?.todos?.length ?? 0) > 0 && (
+                              <button
+                                class="icon-button mcp-action-disable"
+                                title="Disable"
+                                onClick={() =>
+                                  handleMcpAction(info.name, "disable")
+                                }
+                              >
+                                <i class="codicon codicon-circle-slash" />
+                              </button>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
                 <TodoPanel todos={foreground?.todos ?? []} />
               )}
-              {pendingQuestion && (
+              {visibleQuestion && !mobileReviewOpen && (
                 <QuestionCard
-                  key={pendingQuestion.id}
-                  id={pendingQuestion.id}
-                  questions={pendingQuestion.questions}
-                  backgroundTask={pendingQuestion.backgroundTask}
+                  key={visibleQuestion.id}
+                  id={visibleQuestion.id}
+                  questions={visibleQuestion.questions}
+                  backgroundTask={visibleQuestion.backgroundTask}
                   modes={modes}
                   remoteProgress={
                     remoteQuestionProgress &&
-                    remoteQuestionProgress.id === pendingQuestion.id
+                    remoteQuestionProgress.id === visibleQuestion.id
                       ? {
                           step: remoteQuestionProgress.step,
                           answers: remoteQuestionProgress.answers,
@@ -2348,7 +2543,7 @@ export function BrowserGatewayApp({
                   onProgressChange={(progress) => {
                     browserVscodeApi.postMessage({
                       command: "agentQuestionProgress",
-                      id: pendingQuestion.id,
+                      id: visibleQuestion.id,
                       step: progress.step,
                       answers: progress.answers,
                       notes: progress.notes,
@@ -2356,6 +2551,7 @@ export function BrowserGatewayApp({
                     });
                   }}
                   onSubmit={(id, answers, notes) => {
+                    setLocalDismissedQuestionId(id);
                     browserVscodeApi.postMessage({
                       command: "agentQuestionResponse",
                       id,
@@ -2377,6 +2573,26 @@ export function BrowserGatewayApp({
                     }
                     title="Drag to resize approval card"
                   />
+                  <div class="approval-mobile-review-actions">
+                    <button
+                      class={`secondary mobile-review-button${mobileReviewOpen ? " active" : ""}`}
+                      aria-expanded={mobileReviewOpen}
+                      disabled={!canOpenMobileReview}
+                      onClick={() =>
+                        setMobilePane((current) =>
+                          current === "review" ? null : "review",
+                        )
+                      }
+                      type="button"
+                    >
+                      <i
+                        class={`codicon ${mobileReviewOpen ? "codicon-comment-discussion" : "codicon-diff"}`}
+                      />
+                      <span>
+                        {mobileReviewOpen ? "Back to chat" : "View diff"}
+                      </span>
+                    </button>
+                  </div>
                   {visibleApproval.kind === "command" ? (
                     <CommandCard
                       request={visibleApproval}
@@ -2417,7 +2633,7 @@ export function BrowserGatewayApp({
                   )}
                 </div>
               )}
-              {streaming ? (
+              {streaming && !mobileReviewOpen ? (
                 <div class="streaming-status-bar browser-streaming-row">
                   <i class="codicon codicon-loading codicon-modifier-spin" />
                   <span>
@@ -2432,56 +2648,53 @@ export function BrowserGatewayApp({
                   </span>
                 </div>
               ) : null}
-              <BackgroundSessionStrip
-                sessions={background}
-                onStop={handleStopBackground}
-                onOpenTranscript={handleOpenBgTranscript}
-              />
-              <div class="browser-chat-composer">
-                <InputArea
-                  onSend={handleSend}
-                  onStop={handleStop}
-                  streaming={Boolean(streaming)}
-                  reasoningEffort={effectiveReasoningEffort}
-                  onSetReasoningEffort={handleSetReasoningEffort}
-                  onExportTranscript={handleExportTranscript}
-                  hasMessages={messages.length > 0}
-                  vscodeApi={browserVscodeApi}
-                  injection={null}
-                  onInjectionConsumed={() => undefined}
-                  slashCommands={slashCommands}
-                  onExecuteBuiltinCommand={handleExecuteBuiltinCommand}
-                  modes={composerModes}
-                  currentMode={foreground?.mode ?? "code"}
-                  currentModel={foreground?.model ?? "claude-sonnet-4-6"}
-                  currentCondenseThreshold={foreground?.condenseThreshold}
-                  availableModels={composerModels}
-                  onSwitchMode={handleSwitchMode}
-                  onSelectModel={handleSelectModel}
-                  onSetCondenseThreshold={handleSetCondenseThreshold}
-                  onSignIn={handleSignIn}
-                  agentWriteApproval={
-                    foreground?.agentWriteApproval ?? "prompt"
-                  }
-                  onSetAgentWriteApproval={handleSetWriteApproval}
-                  autoContinueEnabled={autoContinueEnabled}
-                  onToggleAutoContinue={handleToggleAutoContinue}
-                  autoContinueStatus={autoContinueStatus}
-                  allowAttachments={true}
-                  allowMediaPaste={true}
-                  allowThinkingToggle={true}
-                  allowExportTranscript={false}
-                  allowFileMentions={true}
+              {!mobileReviewOpen && (
+                <BackgroundSessionStrip
+                  sessions={background}
+                  onStop={handleStopBackground}
+                  onOpenTranscript={handleOpenBgTranscript}
                 />
-              </div>
+              )}
+              {!mobileReviewOpen && (
+                <div class="browser-chat-composer">
+                  <InputArea
+                    onSend={handleSend}
+                    onStop={handleStop}
+                    streaming={Boolean(streaming)}
+                    reasoningEffort={effectiveReasoningEffort}
+                    onSetReasoningEffort={handleSetReasoningEffort}
+                    onExportTranscript={handleExportTranscript}
+                    hasMessages={messages.length > 0}
+                    vscodeApi={browserVscodeApi}
+                    injection={null}
+                    onInjectionConsumed={() => undefined}
+                    slashCommands={slashCommands}
+                    onExecuteBuiltinCommand={handleExecuteBuiltinCommand}
+                    modes={composerModes}
+                    currentMode={foreground?.mode ?? "code"}
+                    currentModel={foreground?.model ?? "claude-sonnet-4-6"}
+                    currentCondenseThreshold={foreground?.condenseThreshold}
+                    availableModels={composerModels}
+                    onSwitchMode={handleSwitchMode}
+                    onSelectModel={handleSelectModel}
+                    onSetCondenseThreshold={handleSetCondenseThreshold}
+                    onSignIn={handleSignIn}
+                    agentWriteApproval={
+                      foreground?.agentWriteApproval ?? "prompt"
+                    }
+                    onSetAgentWriteApproval={handleSetWriteApproval}
+                    autoContinueEnabled={autoContinueEnabled}
+                    onToggleAutoContinue={handleToggleAutoContinue}
+                    autoContinueStatus={autoContinueStatus}
+                    allowAttachments={true}
+                    allowMediaPaste={true}
+                    allowThinkingToggle={true}
+                    allowExportTranscript={false}
+                    allowFileMentions={true}
+                  />
+                </div>
+              )}
             </div>
-          </PaneCard>
-        </section>
-
-        <section class="browser-side browser-side-bottom">
-          <PaneCard fill>
-            <PaneHeader title="Terminal / Activity" />
-            <div class="pane-body stacked-list">{terminalPaneContent}</div>
           </PaneCard>
         </section>
       </main>

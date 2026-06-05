@@ -1,13 +1,15 @@
-import * as vscode from "vscode";
 import * as http from "http";
 import * as net from "net";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import * as vscode from "vscode";
+
 import type {
-  OAuthClientMetadata,
   OAuthClientInformationMixed,
+  OAuthClientMetadata,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 
 export class McpOAuthError extends Error {
   constructor(
@@ -52,6 +54,8 @@ export class McpOAuthProvider implements OAuthClientProvider {
   private _codeVerifier = "";
   onLog?: (message: string) => void;
   onBeforeAuthorizationOpen?: () => boolean | Promise<boolean>;
+  allowInteractiveAuth = true;
+  suppressRefreshTokenReauthPrompt = false;
 
   private tokenSummary(tokens: OAuthTokens | undefined): string {
     if (!tokens) return "none";
@@ -302,8 +306,23 @@ export class McpOAuthProvider implements OAuthClientProvider {
     const hasRefreshToken = Boolean(existingTokens?.refresh_token);
 
     this.onLog?.(
-      `[mcp:${this.serverName}] oauth authorization request redirect_uri=${authRedirectUri ?? "none"} local_redirect=${this.redirectUrl} hasSavedTokens=${hasSavedTokens} hasRefreshToken=${hasRefreshToken}`,
+      `[mcp:${this.serverName}] oauth authorization request redirect_uri=${authRedirectUri ?? "none"} local_redirect=${this.redirectUrl} hasSavedTokens=${hasSavedTokens} hasRefreshToken=${hasRefreshToken} allowInteractiveAuth=${this.allowInteractiveAuth}`,
     );
+
+    if (!this.allowInteractiveAuth) {
+      const suffix = hasRefreshToken
+        ? " after refresh token failure"
+        : hasSavedTokens
+          ? " after saved token rejection"
+          : "";
+      this.onLog?.(
+        `[mcp:${this.serverName}] suppressing interactive OAuth${suffix}; manual reauthentication required`,
+      );
+      throw new McpOAuthError(
+        "authorization_error",
+        `OAuth authorization blocked for "${this.serverName}": manual reauthentication required${suffix}`,
+      );
+    }
 
     if (this.onBeforeAuthorizationOpen) {
       const allowed = await this.onBeforeAuthorizationOpen();
@@ -319,6 +338,16 @@ export class McpOAuthProvider implements OAuthClientProvider {
       this.onLog?.(
         `[mcp:${this.serverName}] falling back to interactive OAuth despite saved refresh token; likely refresh-token grant failed or was rejected by provider. client=${this.clientSummary(clientInfo)} tokens=${this.tokenSummary(existingTokens)}`,
       );
+      if (this.suppressRefreshTokenReauthPrompt) {
+        this.onLog?.(
+          `[mcp:${this.serverName}] suppressing interactive reauthentication prompt after refresh-token fallback; entering manual reauthenticate required state`,
+        );
+        throw new McpOAuthError(
+          "authorization_error",
+          `OAuth authorization blocked for "${this.serverName}": manual reauthentication required after refresh token failure`,
+        );
+      }
+
       const reauthAction = "Reauthenticate now";
       const selection = await vscode.window.showWarningMessage(
         `AgentLink: Automatic token refresh failed for "${this.serverName}". Reauthenticate to continue.`,

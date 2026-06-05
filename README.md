@@ -789,6 +789,20 @@ Stop a running background agent and return any partial output collected so far.
 | `sessionId` | string  | Background session id to stop                  |
 | `reason`    | string? | Optional reason recorded with the cancellation |
 
+### set_task_status
+
+Mark the current built-in agent turn's final status. This drives the highlighted final marker shown in the chat transcript.
+
+| Parameter          | Type    | Description                                                                                                            |
+| ------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `status`           | string  | Required final status: `completed`, `waiting_for_user`, `blocked`, or `cancelled`                                      |
+| `summary`          | string? | User-facing final result. Make it self-contained: what changed, why it matters, validation run/skipped, and follow-up. |
+| `continueLabel`    | string? | Optional button label for a clear continuation action                                                                  |
+| `continuePrompt`   | string? | Optional prompt sent as the user's visible message if the continuation action is clicked                               |
+| `suppressContinue` | boolean | Set true when the task is complete and no continuation button or automatic continue action should be offered           |
+
+For non-trivial completed work, prefer 3-6 concise bullets or 1-2 short paragraphs over a terse “Done.” Include what changed, why it matters, validation results, skipped checks with reasons, and concrete caveats or handoff notes. Completed markers get a default Continue action unless `suppressContinue` is true; blocked, waiting, and cancelled markers do not. Keep the result final; avoid open-ended questions or generic offers for more help.
+
 ### ask_user
 
 Ask the user one or more structured questions and wait for responses before continuing.
@@ -1007,22 +1021,24 @@ A shared local helper process serves the browser UI on a stable configured port 
 The browser surface supports:
 
 - live transcript viewing and send
-- approvals and structured questions
+- approvals and structured questions as chat-pane cards
 - background task visibility
-- read-only diff review
-- read-only command/output visibility
+- read-only file diff review in the Review pane for pending write-tool changes
+- command output in transcript tool-call results
 - mode, model, and write-approval selectors
 - `@` project-file mentions and external-file attach (routed through VS Code's file picker)
 - media paste and drag-drop (images/PDFs)
 
-It is **not** a full browser IDE — diff apply and terminal interaction intentionally stay in VS Code. The gateway is designed for local/dev use; treat it as MVP-grade rather than final-hardened.
+The Review pane is intentionally diff-only: it shows pending file changes from write tools in a read-only Monaco diff viewer and does not duplicate approval or question cards from the chat pane. Pending diffs are selected from a VS Code-like file-tab strip, and the editor uses captured VS Code CSS theme variables for tab/editor/diff chrome plus Monaco language tokenization for syntax highlighting. Exact custom theme token colors are best-effort today because the gateway receives CSS variables, not the full resolved VS Code TextMate token color rules.
+
+It is **not** a full browser IDE — diff editing/apply and terminal interaction intentionally stay in VS Code. The browser does not emulate the integrated terminal; command output is available from the `execute_command` tool-call result in the chat transcript. The gateway is designed for local/dev use; treat it as MVP-grade rather than final-hardened.
 
 ## Multi-Window Support
 
 Each VS Code window runs its own independent MCP server on its own port. The extension writes config to each workspace folder root so that agent instances running in that directory connect to the correct window.
 
 - **No port conflicts** — if the configured port is in use, the extension falls back to an OS-assigned port automatically.
-- **Correct window routing** — terminals, diffs, and approval dialogs appear in the window that owns the workspace.
+- **Correct window routing** — diffs, approvals, and command execution happen in the window that owns the workspace.
 - **Automatic lifecycle** — config files are created on server start and cleaned up on stop/window close. Existing entries in those files are preserved.
 
 ## Settings

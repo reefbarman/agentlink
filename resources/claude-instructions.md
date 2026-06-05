@@ -51,6 +51,8 @@ These are the most frequent violations. Check yourself before every tool call:
 - **DO NOT use `Glob` to find files.** Use `list_files`.
 - **DO NOT fall back to built-in tools when a agentlink tool returns an error.** Fix the issue (wrong parameter type, missing required param, etc.) and retry with the agentlink tool.
 
+> **`write_file`/`apply_diff` are for file *contents* only.** They replace echoing/heredoc'ing content into the shell — not ordinary filesystem operations. Copying, moving, renaming, deleting, or creating files and directories (`cp`, `mv`, `rm`, `mkdir`, `touch`, `chmod`) are fine via `execute_command`. Don't read a file and rewrite it with `write_file` just to copy or move it — use `cp`/`mv`.
+
 ### Tool details
 
 | Instead of (built-in) | Use (agentlink MCP)         | Why                                                                                                                                          |
@@ -156,3 +158,4 @@ agentlink also provides tools that Claude Code doesn't have natively. Use these 
 - **`get_background_status`** — Non-blocking progress check for a background agent. Use this when coordinating parallel work and you need current status/tool/progress preview without waiting for completion. Do not poll in a tight loop.
 - **`get_background_result`** — Wait for a background agent to finish and return its final output. Use only when you're ready to integrate results or the foreground is truly blocked on the result.
 - **`kill_background_agent`** — Stop a background agent that is obsolete, too broad, conflicting with foreground work, or taking too long. Returns any partial output collected so far.
+- **`set_task_status`** — Mark the built-in agent turn as completed, waiting, blocked, or cancelled. Its `summary` is the user-facing final result, not a terse label: make it self-contained with what changed, why it matters, validation run or skipped, and any concrete follow-up.

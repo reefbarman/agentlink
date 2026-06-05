@@ -15,7 +15,10 @@ import type { AgentMode } from "./modes.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { SkillEntry } from "./skillLoader.js";
-import { buildPromptArtifacts } from "./systemPrompt.js";
+import {
+  buildPromptArtifacts,
+  type WorkspaceFolderInfo,
+} from "./systemPrompt.js";
 import { buildSessionTitleFromUserText } from "./sessionTitle.js";
 import { randomUUID } from "crypto";
 
@@ -74,6 +77,8 @@ export class AgentSession {
 
   /** Active file path at session creation — used for subfolder AGENTS.md and hot-reload. */
   activeFilePath: string | undefined;
+  /** Workspace folders to surface in the system prompt (multi-root workspaces). */
+  private workspaceFolders: WorkspaceFolderInfo[] | undefined;
 
   /** Provider ID (e.g. "anthropic", "codex") — used for provider-specific system prompt tuning. */
   providerId: string | undefined;
@@ -156,6 +161,7 @@ export class AgentSession {
     cwd: string;
     activeFilePath?: string;
     providerId?: string;
+    workspaceFolders?: WorkspaceFolderInfo[];
   }) {
     this.id = randomUUID();
     this.mode = opts.mode;
@@ -175,6 +181,7 @@ export class AgentSession {
     this.systemPrompt = opts.systemPrompt;
     this.activeFilePath = opts.activeFilePath;
     this.providerId = opts.providerId;
+    this.workspaceFolders = opts.workspaceFolders;
   }
 
   static async create(opts: {
@@ -189,6 +196,7 @@ export class AgentSession {
     devMode?: boolean;
     activeFilePath?: string;
     providerId?: string;
+    workspaceFolders?: WorkspaceFolderInfo[];
   }): Promise<AgentSession> {
     const artifacts = await buildPromptArtifacts(opts.mode, opts.cwd, {
       devMode: opts.devMode,
@@ -197,6 +205,7 @@ export class AgentSession {
       model: opts.config.model,
       isBackground: opts.isBackground,
       lightweight: opts.lightweight,
+      workspaceFolders: opts.workspaceFolders,
     });
     const agentMode =
       opts.agentMode ??
@@ -211,6 +220,7 @@ export class AgentSession {
       background: opts.background,
       activeFilePath: opts.activeFilePath,
       providerId: opts.providerId,
+      workspaceFolders: opts.workspaceFolders,
     });
     session.setAdvertisedSkills(artifacts.skills);
     return session;
@@ -220,12 +230,17 @@ export class AgentSession {
    * Rebuild the system prompt in-place (used for hot-reload when instruction files change).
    * Preserves the activeFilePath that was set at session creation.
    */
-  async rebuildSystemPrompt(opts?: { devMode?: boolean }): Promise<void> {
+  async rebuildSystemPrompt(opts?: {
+    devMode?: boolean;
+    workspaceFolders?: WorkspaceFolderInfo[];
+  }): Promise<void> {
+    if (opts?.workspaceFolders) this.workspaceFolders = opts.workspaceFolders;
     const artifacts = await buildPromptArtifacts(this.mode, this.cwd, {
       devMode: opts?.devMode,
       activeFilePath: this.activeFilePath,
       providerId: this.providerId,
       model: this.model,
+      workspaceFolders: this.workspaceFolders,
     });
     this.systemPrompt = artifacts.systemPrompt;
     this.setAdvertisedSkills(artifacts.skills);
@@ -243,6 +258,7 @@ export class AgentSession {
       devMode: opts?.devMode,
       providerId: this.providerId,
       model: this.model,
+      workspaceFolders: this.workspaceFolders,
     });
     const agentMode =
       opts?.agentMode ??

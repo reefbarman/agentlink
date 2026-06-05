@@ -31,6 +31,40 @@ async function waitForListening(
   });
 }
 
+async function makeExtensionRoot(): Promise<string> {
+  const extensionRootPath = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-helper-extension-root-"),
+  );
+  await fs.mkdir(path.join(extensionRootPath, "dist"), { recursive: true });
+  await fs.mkdir(path.join(extensionRootPath, "media"), { recursive: true });
+  await fs.writeFile(
+    path.join(extensionRootPath, "dist", "browser-gateway.js"),
+    "console.log('gateway');",
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(extensionRootPath, "dist", "browser-gateway.css"),
+    "body{}",
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(extensionRootPath, "dist", "codicon.css"),
+    "@font-face{}",
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(extensionRootPath, "dist", "codicon.ttf"),
+    "font",
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(extensionRootPath, "media", "icon.png"),
+    "icon",
+    "utf-8",
+  );
+  return extensionRootPath;
+}
+
 describe("BrowserGatewayHelper proxy routing", () => {
   const servers: http.Server[] = [];
   let helper: BrowserGatewayHelper | null = null;
@@ -126,6 +160,47 @@ describe("BrowserGatewayHelper proxy routing", () => {
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
 
+  it("serves versioned browser assets with cache revalidation headers", async () => {
+    const extensionRootPath = await makeExtensionRoot();
+
+    const helperPort = 47203;
+    const helperServer = http.createServer();
+    servers.push(helperServer);
+
+    const options: HelperRuntimeOptions = {
+      port: helperPort,
+      helperVersion: "test version/with spaces",
+      idleShutdownMs: 120_000,
+      extensionRootPath,
+    };
+    helper = new BrowserGatewayHelper(options, helperServer);
+    helperServer.on("request", helper.handleRequest);
+    await helper.start();
+
+    const helperBase = `http://127.0.0.1:${helperPort}`;
+    const rootResponse = await fetch(`${helperBase}/`);
+    expect(rootResponse.headers.get("cache-control")).toBe("no-store");
+    const html = await rootResponse.text();
+    const encodedVersion = "test%20version%2Fwith%20spaces";
+    expect(html).toContain(`/codicon.css?v=${encodedVersion}`);
+    expect(html).toContain(`/browser-gateway.css?v=${encodedVersion}`);
+    expect(html).toContain(`/browser-gateway.js?v=${encodedVersion}`);
+
+    const scriptResponse = await fetch(
+      `${helperBase}/browser-gateway.js?v=${encodedVersion}`,
+    );
+    expect(scriptResponse.ok).toBe(true);
+    expect(scriptResponse.headers.get("cache-control")).toBe("no-cache");
+    expect(scriptResponse.headers.get("x-agentlink-helper-version")).toBe(
+      "test version/with spaces",
+    );
+    expect(scriptResponse.headers.get("etag")).toBe(
+      '"test version/with spaces:dist/browser-gateway.js"',
+    );
+
+    await fs.rm(extensionRootPath, { recursive: true, force: true });
+  });
+
   it("requires browser session cookie for browser-facing helper APIs", async () => {
     const extensionRootPath = await fs.mkdtemp(
       path.join(process.cwd(), ".tmp-helper-extension-root-"),
@@ -188,6 +263,57 @@ describe("BrowserGatewayHelper proxy routing", () => {
       },
     });
     expect(authorized.ok).toBe(true);
+
+    await fs.rm(extensionRootPath, { recursive: true, force: true });
+  });
+
+  it("accepts authenticated internal shutdown requests", async () => {
+    const extensionRootPath = await makeExtensionRoot();
+
+    const helperPort = 47204;
+    const helperServer = http.createServer();
+    servers.push(helperServer);
+
+    const options: HelperRuntimeOptions = {
+      port: helperPort,
+      helperVersion: "test-version",
+      idleShutdownMs: 120_000,
+      extensionRootPath,
+    };
+    helper = new BrowserGatewayHelper(options, helperServer);
+    helperServer.on("request", helper.handleRequest);
+    await helper.start();
+
+    const helperBase = `http://127.0.0.1:${helperPort}`;
+    const unauthorized = await fetch(`${helperBase}/internal/shutdown`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(unauthorized.status).toBe(401);
+
+    const discovery = JSON.parse(
+      await fs.readFile(getBrowserGatewayHelperDiscoveryPath(), "utf-8"),
+    ) as { clientSharedSecret: string };
+
+    const authorized = await fetch(`${helperBase}/internal/shutdown`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${discovery.clientSharedSecret}`,
+      },
+      body: "{}",
+    });
+    expect(authorized.status).toBe(202);
+    await expect(authorized.json()).resolves.toEqual({ ok: true });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const healthController = new AbortController();
+    const healthTimer = setTimeout(() => healthController.abort(), 250);
+    await expect(
+      fetch(`${helperBase}/health`, { signal: healthController.signal }),
+    ).rejects.toThrow();
+    clearTimeout(healthTimer);
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });

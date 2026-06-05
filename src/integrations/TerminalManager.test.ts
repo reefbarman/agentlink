@@ -109,6 +109,112 @@ describe("TerminalManager terminal selection", () => {
     Reflect.deleteProperty(vscode.window as object, "terminals");
   });
 
+  it("emits terminal open, command, and state events for sendText fallback execution", async () => {
+    const manager = new TerminalManager();
+    const openEvents: unknown[] = [];
+    const commandStartEvents: unknown[] = [];
+    const stateEvents: unknown[] = [];
+    manager.onTerminalEvent("open", (event) => openEvents.push(event));
+    manager.onTerminalEvent("commandStart", (event) =>
+      commandStartEvents.push(event),
+    );
+    manager.onTerminalEvent("state", (event) => stateEvents.push(event));
+
+    vi.spyOn(
+      manager as unknown as {
+        waitForShellIntegration: (terminal: unknown) => Promise<boolean>;
+      },
+      "waitForShellIntegration",
+    ).mockResolvedValue(false);
+
+    const result = await manager.executeCommand({
+      command: "echo no-capture",
+      cwd: "/workspace/events",
+    });
+
+    expect(result).toMatchObject({
+      terminal_id: expect.stringMatching(/^term_/),
+      execution_mode: "send_text",
+      output_captured: false,
+    });
+    expect(openEvents).toEqual([
+      expect.objectContaining({
+        id: result.terminal_id,
+        name: "AgentLink",
+        cwd: "/workspace/events",
+        busy: false,
+      }),
+    ]);
+    expect(commandStartEvents).toEqual([
+      expect.objectContaining({
+        terminalId: result.terminal_id,
+        command: "echo no-capture",
+        captureLevel: "command-sent-only",
+      }),
+    ]);
+    expect(stateEvents).toEqual([
+      expect.objectContaining({
+        id: result.terminal_id,
+        name: "AgentLink",
+        cwd: "/workspace/events",
+        busy: true,
+      }),
+    ]);
+  });
+
+  it("stops notifying disposed terminal event listeners", () => {
+    const manager = new TerminalManager();
+    const listener = vi.fn();
+    const subscription = manager.onTerminalEvent("open", listener);
+
+    subscription.dispose();
+
+    (
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      }
+    ).createTerminal("/workspace", "AgentLink");
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("returns managed metadata for a VS Code terminal object", () => {
+    const manager = new TerminalManager();
+    const terminal = {
+      name: "AgentLink",
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies MockVscodeTerminal;
+    Object.defineProperty(vscode.window, "terminals", {
+      configurable: true,
+      value: [terminal],
+    });
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      {
+        id: "term_lookup",
+        name: "AgentLink",
+        cwd: "/workspace",
+        busy: false,
+        backgroundRunning: true,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal,
+      },
+    ];
+
+    expect(
+      manager.getManagedTerminalMetadataForTerminal(terminal as never),
+    ).toEqual({
+      id: "term_lookup",
+      name: "AgentLink",
+      cwd: "/workspace",
+      busy: true,
+    });
+  });
+
   it("creates a new default terminal when the only idle default terminal has a different cwd", async () => {
     const manager = new TerminalManager();
 

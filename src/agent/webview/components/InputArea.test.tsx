@@ -1,13 +1,29 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/preact";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/preact";
 
 import { InputArea } from "./InputArea";
 import type { SlashCommandInfo } from "../types";
 
+class ImmediateFileReader {
+  public result: string | ArrayBuffer | null = null;
+  public onload:
+    | ((this: FileReader, ev: ProgressEvent<FileReader>) => unknown)
+    | null = null;
+
+  readAsDataURL(file: File): void {
+    this.result = `data:${file.type || "image/png"};base64,abc123`;
+    this.onload?.call(
+      this as unknown as FileReader,
+      {} as ProgressEvent<FileReader>,
+    );
+  }
+}
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
+  globalThis.FileReader = ImmediateFileReader as unknown as typeof FileReader;
 });
 
 afterEach(() => {
@@ -91,5 +107,49 @@ describe("InputArea slash popup", () => {
 
     fireEvent.click(button);
     expect(onToggleAutoContinue).toHaveBeenCalledWith(false);
+  });
+
+  it("attaches pasted images when the clipboard item type is empty but the file has a type", async () => {
+    const { container } = renderInputArea([]);
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const image = new File(["image-bytes"], "screenshot.png", {
+      type: "image/png",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        items: [
+          {
+            kind: "file",
+            type: "",
+            getAsFile: () => image,
+          },
+        ],
+        files: [],
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".image-attachment-chip")).toBeTruthy();
+    });
+  });
+
+  it("attaches pasted images exposed only through clipboard files", async () => {
+    const { container } = renderInputArea([]);
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+    const image = new File(["image-bytes"], "clipboard.png", {
+      type: "image/png",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        items: [],
+        files: [image],
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".image-attachment-chip")).toBeTruthy();
+    });
   });
 });
