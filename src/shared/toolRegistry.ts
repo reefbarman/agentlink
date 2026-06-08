@@ -37,6 +37,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Read the contents of a file with line numbers. Returns content in 'line_number | content' format. Supports text files, local images, and PDF text extraction. Includes file metadata (size, modified, language), git status, and diagnostics summary when available. Supports optional 'query' param to semantically jump to the most relevant section using the codebase index.",
   },
+  get_context: {
+    label: "Context pack",
+    description:
+      "Build a compact read-only context pack for an explicit file: metadata, git status, diagnostics summary, symbol outline, bounded numbered content, and working-set status. Supports opt-in unchanged-content omission via per-session content hashes.",
+  },
   load_skill: {
     label: "Load advertised skill",
     description:

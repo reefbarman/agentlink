@@ -440,6 +440,29 @@ Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not avai
 
 **Friendly errors:** `ENOENT` → `"File not found: {path}. Working directory: {root}"`, `EACCES` → `"Permission denied"`, `EISDIR` → `"Use list_files instead"`. When `auto_follow_suggestion` succeeds, the response includes suggestion/resolution metadata showing the requested path and followed file.
 
+### get_context
+
+Build a compact read-only context pack for an explicit file. This is intended to collapse the common orientation sequence into one bounded response while tracking whether the same content range has already been returned in the current session.
+
+| Parameter                  | Type     | Description                                                                                           |
+| -------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `path`                     | string   | File path to build context for. Directory paths are not bulk-read.                                    |
+| `offset`                   | number?  | Starting line number for the content slice (1-indexed, default: 1).                                   |
+| `limit`                    | number?  | Maximum content lines to include (default: 200, capped at 400).                                       |
+| `dedupe_unchanged_content` | boolean? | When true, omit content for an unchanged exact range already returned in this session. Default false. |
+| `refresh`                  | boolean? | When true, include content even if unchanged-content dedupe would otherwise omit it.                  |
+
+**Response includes:**
+
+- `path`, `total_lines`, `showing`, `truncated` — target and pagination info
+- `size`, `modified`, `language`, `git_status` — file metadata when available
+- `diagnostics` — `{ errors: N, warnings: N }` summary when diagnostics exist
+- `symbols` — compact document symbol outline when language services provide one
+- `working_set` — `status`, `content_hash`, optional `previous_content_hash`, `range`, `should_include_content`, and `last_read_at`
+- `content` — numbered lines, omitted only when `working_set.should_include_content` is false
+
+Working-set statuses are `new`, `unchanged`, `changed`, and `omitted_unchanged`. Omission is opt-in and exact-range only; overlapping ranges and full-file reads are tracked independently so callers do not lose content they have not explicitly received.
+
 ### load_skill
 
 Load the full contents of an AgentLink skill file that was explicitly advertised in the current built-in agent system prompt. This is intentionally not a general-purpose file reader: it only accepts skill paths that were listed for the active session.

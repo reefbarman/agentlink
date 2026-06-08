@@ -12,6 +12,11 @@ vi.mock("../tools/readFile.js", () => ({
     .fn()
     .mockResolvedValue({ content: [{ type: "text", text: "file content" }] }),
 }));
+vi.mock("../tools/context/getContext.js", () => ({
+  handleGetContext: vi
+    .fn()
+    .mockResolvedValue({ content: [{ type: "text", text: "context" }] }),
+}));
 vi.mock("../tools/listFiles.js", () => ({
   handleListFiles: vi
     .fn()
@@ -144,6 +149,7 @@ const mockCtx: ToolDispatchContext = {
 describe("READ_ONLY_TOOLS", () => {
   it("includes expected read-only tools", () => {
     expect(READ_ONLY_TOOLS.has("read_file")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("get_context")).toBe(true);
     expect(READ_ONLY_TOOLS.has("list_files")).toBe(true);
     expect(READ_ONLY_TOOLS.has("search_files")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_diagnostics")).toBe(true);

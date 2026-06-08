@@ -5,7 +5,7 @@ import type { AgentMode } from "./modes.js";
  * from connected MCP servers.
  */
 export const TOOL_GROUPS: Record<string, string[]> = {
-  read: ["read_file", "list_files", "open_file"],
+  read: ["read_file", "get_context", "list_files", "open_file"],
   edit: [
     "write_file",
     "apply_diff",

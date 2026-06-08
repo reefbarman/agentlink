@@ -38,6 +38,7 @@ import { handleExecuteCommand } from "../tools/executeCommand.js";
 import { handleFindAndReplace } from "../tools/findAndReplace.js";
 import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetCompletions } from "../tools/getCompletions.js";
+import { handleGetContext } from "../tools/context/getContext.js";
 import { handleGetDiagnostics } from "../tools/getDiagnostics.js";
 import { handleGetFeedback } from "../tools/getFeedback.js";
 import { handleGetHover } from "../tools/getHover.js";
@@ -66,6 +67,7 @@ import { z } from "zod";
 
 export const READ_ONLY_TOOLS = new Set([
   "read_file",
+  "get_context",
   "load_skill",
   "list_files",
   "search_files",
@@ -116,6 +118,7 @@ function zodSchemaToJsonSchema(
 
 const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   read_file: schemas.readFileSchema,
+  get_context: schemas.getContextSchema,
   load_skill: schemas.loadSkillSchema,
   list_files: schemas.listFilesSchema,
   search_files: schemas.searchFilesSchema,
@@ -908,6 +911,16 @@ export async function dispatchToolCall(
         ctx.onFileRead(params.path);
       }
       return handleReadFile(params, approvalManager, approvalPanel, sessionId);
+    case "get_context":
+      if (ctx.onFileRead && typeof params.path === "string") {
+        ctx.onFileRead(params.path);
+      }
+      return handleGetContext(
+        params,
+        approvalManager,
+        approvalPanel,
+        sessionId,
+      );
     case "load_skill": {
       const result = await handleLoadSkill(
         params,

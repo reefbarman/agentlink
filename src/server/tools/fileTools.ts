@@ -1,16 +1,19 @@
-import { handleReadFile } from "../../tools/readFile.js";
-import { handleLoadSkill } from "../../tools/loadSkill.js";
-import { handleListFiles } from "../../tools/listFiles.js";
-import { handleSearchFiles } from "../../tools/searchFiles.js";
-import { handleGetDiagnostics } from "../../tools/getDiagnostics.js";
 import {
-  readFileSchema,
-  loadSkillSchema,
-  listFilesSchema,
-  searchFilesSchema,
+  getContextSchema,
   getDiagnosticsSchema,
+  listFilesSchema,
+  loadSkillSchema,
+  readFileSchema,
+  searchFilesSchema,
 } from "../../shared/toolSchemas.js";
+
 import type { ToolRegistrationContext } from "./types.js";
+import { handleGetContext } from "../../tools/context/getContext.js";
+import { handleGetDiagnostics } from "../../tools/getDiagnostics.js";
+import { handleListFiles } from "../../tools/listFiles.js";
+import { handleLoadSkill } from "../../tools/loadSkill.js";
+import { handleReadFile } from "../../tools/readFile.js";
+import { handleSearchFiles } from "../../tools/searchFiles.js";
 
 export function registerFileTools(ctx: ToolRegistrationContext): void {
   const { server, tracker, approvalManager, approvalPanel, sid, touch, desc } =
@@ -28,6 +31,24 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       (params) => {
         touch();
         return handleReadFile(params, approvalManager, approvalPanel, sid());
+      },
+      (p) => String(p.path ?? ""),
+      sid,
+    ),
+  );
+
+  server.registerTool(
+    "get_context",
+    {
+      description: desc("get_context"),
+      inputSchema: getContextSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    tracker.wrapHandler(
+      "get_context",
+      (params) => {
+        touch();
+        return handleGetContext(params, approvalManager, approvalPanel, sid());
       },
       (p) => String(p.path ?? ""),
       sid,

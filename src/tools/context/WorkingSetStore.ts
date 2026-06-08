@@ -18,6 +18,7 @@ export interface WorkingSetCheckOptions {
   sessionId: string;
   path: string;
   range?: WorkingSetRange;
+  deriveRange?: (contentBytes: Buffer) => WorkingSetRange;
   dedupeUnchangedContent?: boolean;
   refresh?: boolean;
   now?: number;
@@ -32,6 +33,8 @@ export interface WorkingSetCheckResult {
   modifiedMs: number;
   lastReadAt: number;
   shouldIncludeContent: boolean;
+  contentBytes: Buffer;
+  range?: WorkingSetRange;
   note?: string;
 }
 
@@ -77,11 +80,12 @@ export class WorkingSetStore {
   async check(options: WorkingSetCheckOptions): Promise<WorkingSetCheckResult> {
     const now = options.now ?? Date.now();
     const absolutePath = path.resolve(options.path);
-    const rangeKey = getRangeKey(options.range);
     const [bytes, stats] = await Promise.all([
       readFile(absolutePath),
       stat(absolutePath),
     ]);
+    const range = options.deriveRange?.(bytes) ?? options.range;
+    const rangeKey = getRangeKey(range);
     const contentHash = hashBytes(bytes);
 
     const session = this.getOrCreateSession(options.sessionId, now);
@@ -144,6 +148,8 @@ export class WorkingSetStore {
       modifiedMs: stats.mtimeMs,
       lastReadAt: now,
       shouldIncludeContent,
+      contentBytes: bytes,
+      range,
       note,
     };
   }

@@ -71,6 +71,38 @@ export const loadSkillSchema = {
     ),
 };
 
+export const getContextSchema = {
+  path: z
+    .string()
+    .describe(
+      "File path to build a context pack for (absolute or relative to workspace root). Directory paths are not bulk-read.",
+    ),
+  offset: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Starting line number for the content slice (1-indexed, default: 1).",
+    ),
+  limit: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Maximum number of content lines to include (default: 200, capped at 400).",
+    ),
+  dedupe_unchanged_content: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, omit content for an unchanged exact range already returned in this session. Default: false.",
+    ),
+  refresh: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, include content even if dedupe_unchanged_content would otherwise omit it.",
+    ),
+};
+
 export const listFilesSchema = {
   path: z
     .string()
