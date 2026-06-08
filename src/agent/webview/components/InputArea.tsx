@@ -822,26 +822,38 @@ export function InputArea({
         isImage: boolean;
         docMimeType: string | null;
       }> = [];
-      const seenFiles = new Set<File>();
+      // Dedup by file metadata, not object identity: the same clipboard entry
+      // surfaces in both `items` (via getAsFile()) and `files`, but each access
+      // returns a distinct File instance, so an identity Set wouldn't catch it.
+      const seenFiles = new Set<string>();
 
       const addClipboardFile = (file: File, itemType = file.type) => {
-        if (seenFiles.has(file)) return;
+        const key = `${file.name} ${file.size} ${file.type} ${file.lastModified}`;
+        if (seenFiles.has(key)) return;
         const mimeType = itemType || file.type;
         const isImage = ACCEPTED_IMAGE_TYPES.has(mimeType);
         const docMimeType = isImage ? null : getDocumentMimeType(file);
         if (!isImage && !docMimeType) return;
-        seenFiles.add(file);
+        seenFiles.add(key);
         mediaItems.push({ file, itemType: mimeType, isImage, docMimeType });
       };
 
-      for (const item of items) {
-        if (item.kind !== "file") continue;
-        const file = item.getAsFile();
-        if (!file) continue;
-        addClipboardFile(file, item.type || file.type);
-      }
-      for (const file of clipboardFiles) {
-        addClipboardFile(file);
+      // `items` and `files` expose the SAME clipboard entries. Read from a
+      // single source — otherwise each entry gets added twice (and the two File
+      // instances carry different lastModified/name, so metadata dedup misses
+      // them). Prefer `items`, which also gives us the precise MIME via
+      // item.type; only fall back to `files` when no file-kind items exist.
+      const fileItems = items.filter((item) => item.kind === "file");
+      if (fileItems.length > 0) {
+        for (const item of fileItems) {
+          const file = item.getAsFile();
+          if (!file) continue;
+          addClipboardFile(file, item.type || file.type);
+        }
+      } else {
+        for (const file of clipboardFiles) {
+          addClipboardFile(file);
+        }
       }
 
       if (mediaItems.length === 0) return; // Let text paste through

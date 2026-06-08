@@ -52,6 +52,9 @@ export interface HelperRuntimeOptions {
 const DEFAULT_IDLE_SHUTDOWN_MS = 60_000;
 const DEFAULT_HELPER_VERSION = "dev";
 const DEFAULT_MDNS_NAME = "agentlink";
+const AGENTLINK_ICON_PATH = "/agentlink-icon.png";
+const AGENTLINK_ICON_SVG_PATH = "/agentlink-icon.svg";
+const AGENTLINK_ICON_SIZES = "256x256";
 
 function logHelper(message: string): void {
   process.stderr.write(`[browser-gateway-helper] ${message}\n`);
@@ -469,8 +472,27 @@ export class BrowserGatewayHelper {
       return;
     }
 
-    if (method === "GET" && pathname === "/favicon.ico") {
-      void this.handleFaviconRequest(res);
+    if (
+      method === "GET" &&
+      (pathname === "/favicon.ico" ||
+        pathname === AGENTLINK_ICON_PATH ||
+        pathname === "/apple-touch-icon.png")
+    ) {
+      void this.handleAppIconRequest(res);
+      return;
+    }
+
+    if (method === "GET" && pathname === AGENTLINK_ICON_SVG_PATH) {
+      void this.handleStaticAssetRequest(
+        "media/agentlink-terminal.svg",
+        "image/svg+xml; charset=utf-8",
+        res,
+      );
+      return;
+    }
+
+    if (method === "GET" && pathname === "/site.webmanifest") {
+      this.handleWebManifestRequest(res);
       return;
     }
 
@@ -1192,7 +1214,7 @@ export class BrowserGatewayHelper {
     await writeBrowserGatewayHelperDiscovery(record);
   }
 
-  private async handleFaviconRequest(res: http.ServerResponse): Promise<void> {
+  private async handleAppIconRequest(res: http.ServerResponse): Promise<void> {
     try {
       const iconPath = path.join(
         this.options.extensionRootPath,
@@ -1200,11 +1222,50 @@ export class BrowserGatewayHelper {
         "icon.png",
       );
       const content = await fs.readFile(iconPath);
-      res.writeHead(200, { "Content-Type": "image/png" });
+      res.writeHead(200, {
+        "Content-Type": "image/png",
+        "Cache-Control": "no-cache",
+        ETag: JSON.stringify(`${this.options.helperVersion}:media/icon.png`),
+        "X-AgentLink-Helper-Version": this.options.helperVersion,
+      });
       res.end(content);
     } catch {
       writeJson(res, 404, { error: "not_found" });
     }
+  }
+
+  private handleWebManifestRequest(res: http.ServerResponse): void {
+    writeJson(
+      res,
+      200,
+      {
+        name: "AgentLink Remote",
+        short_name: "AgentLink",
+        description: "Remote control surface for AgentLink.",
+        start_url: "/",
+        scope: "/",
+        display: "standalone",
+        background_color: "#1e1e1e",
+        theme_color: "#4EC9B0",
+        icons: [
+          {
+            src: AGENTLINK_ICON_SVG_PATH,
+            sizes: "any",
+            type: "image/svg+xml",
+            purpose: "any",
+          },
+          {
+            src: AGENTLINK_ICON_PATH,
+            sizes: AGENTLINK_ICON_SIZES,
+            type: "image/png",
+            purpose: "any",
+          },
+        ],
+      },
+      {
+        "Content-Type": "application/manifest+json; charset=utf-8",
+      },
+    );
   }
 
   private async handleStaticAssetRequest(
@@ -1238,8 +1299,17 @@ export class BrowserGatewayHelper {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="AgentLink Remote">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="AgentLink">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#4EC9B0">
   <title>AgentLink Browser Gateway</title>
   ${renderThemeStyleTag(initialTheme)}
+  <link rel="icon" type="image/svg+xml" href="${AGENTLINK_ICON_SVG_PATH}?v=${assetVersion}">
+  <link rel="icon" type="image/png" sizes="${AGENTLINK_ICON_SIZES}" href="${AGENTLINK_ICON_PATH}?v=${assetVersion}">
+  <link rel="apple-touch-icon" sizes="${AGENTLINK_ICON_SIZES}" href="/apple-touch-icon.png?v=${assetVersion}">
+  <link rel="manifest" href="/site.webmanifest?v=${assetVersion}">
   <link rel="stylesheet" href="/codicon.css?v=${assetVersion}">
   <link rel="stylesheet" href="/browser-gateway.css?v=${assetVersion}">
 </head>

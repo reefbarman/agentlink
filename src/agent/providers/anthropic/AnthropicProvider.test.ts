@@ -9,7 +9,7 @@ describe("AnthropicProvider capabilities", () => {
     expect(provider.getCapabilities("claude-sonnet-4-6").contextWindow).toBe(
       1_000_000,
     );
-    expect(provider.getCapabilities("claude-opus-4-6").contextWindow).toBe(
+    expect(provider.getCapabilities("claude-opus-4-8").contextWindow).toBe(
       1_000_000,
     );
   });
@@ -20,15 +20,15 @@ describe("AnthropicProvider capabilities", () => {
     ).toBe(200_000);
   });
 
-  it("keeps max output tokens at 128k for exposed models", () => {
+  it("reports max output tokens for exposed models", () => {
     expect(provider.getCapabilities("claude-sonnet-4-6").maxOutputTokens).toBe(
-      128_000,
+      64_000,
     );
-    expect(provider.getCapabilities("claude-opus-4-6").maxOutputTokens).toBe(
+    expect(provider.getCapabilities("claude-opus-4-8").maxOutputTokens).toBe(
       128_000,
     );
     expect(
       provider.getCapabilities("claude-haiku-4-5-20251001").maxOutputTokens,
-    ).toBe(128_000);
+    ).toBe(64_000);
   });
 });

@@ -58,6 +58,7 @@ import { handleRenameSymbol } from "../tools/renameSymbol.js";
 import { handleSearchFiles } from "../tools/searchFiles.js";
 import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleShowNotification } from "../tools/showNotification.js";
+import { handleStartWorktreeAgent } from "../tools/startWorktreeAgent.js";
 import { handleWriteFile } from "../tools/writeFile.js";
 import { z } from "zod";
 
@@ -128,6 +129,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   execute_command: schemas.executeCommandSchema,
   get_terminal_output: schemas.getTerminalOutputSchema,
   close_terminals: schemas.closeTerminalsSchema,
+  start_worktree_agent: schemas.startWorktreeAgentSchema,
   go_to_definition: schemas.positionSchema,
   go_to_implementation: schemas.positionSchema,
   go_to_type_definition: schemas.positionSchema,
@@ -632,6 +634,7 @@ export interface ToolDispatchContext {
   approvalPanel: ApprovalPanelProvider;
   sessionId: string;
   extensionUri: import("vscode").Uri;
+  globalStorageUri?: import("vscode").Uri;
   trackerCtx?: import("../server/ToolCallTracker.js").TrackerContext;
   toolCallTracker?: import("../server/ToolCallTracker.js").ToolCallTracker;
   mcpHub?: McpClientHub;
@@ -983,6 +986,26 @@ export async function dispatchToolCall(
       return handleGetTerminalOutput(params);
     case "close_terminals":
       return handleCloseTerminals(params);
+    case "start_worktree_agent":
+      if (!ctx.globalStorageUri) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "error",
+                error:
+                  "Worktree agent startup is not available in this context.",
+              }),
+            },
+          ],
+        };
+      }
+      return handleStartWorktreeAgent(params, {
+        globalStorageUri: ctx.globalStorageUri,
+        onApprovalRequest,
+        sessionId,
+      });
 
     // --- Editor ---
     case "open_file":

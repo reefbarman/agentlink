@@ -15,6 +15,7 @@ import {
   registerWriteTools,
   registerTerminalTools,
   registerSearchTools,
+  registerWorktreeTools,
   registerDevTools,
 } from "./tools/index.js";
 import type { ToolRegistrationContext } from "./tools/types.js";
@@ -43,6 +44,7 @@ export function registerTools(
   getSessionId: () => string | undefined,
   tracker: ToolCallTracker,
   extensionUri: import("vscode").Uri,
+  globalStorageUri: import("vscode").Uri,
   trust: TrustGate,
 ): void {
   const sid = () => getSessionId() ?? "unknown";
@@ -97,6 +99,7 @@ export function registerTools(
     approvalManager,
     approvalPanel,
     extensionUri,
+    globalStorageUri,
     sid,
     touch,
     desc,
@@ -116,6 +119,7 @@ export function registerTools(
   registerWriteTools(ctx);
   registerTerminalTools(ctx);
   registerSearchTools(ctx);
+  registerWorktreeTools(ctx);
 
   if (__DEV_BUILD__) {
     registerDevTools(ctx);

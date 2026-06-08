@@ -14,7 +14,12 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "get_code_actions",
     "apply_code_action",
   ],
-  command: ["execute_command", "get_terminal_output", "close_terminals"],
+  command: [
+    "execute_command",
+    "get_terminal_output",
+    "close_terminals",
+    "start_worktree_agent",
+  ],
   language: [
     "get_diagnostics",
     "get_hover",

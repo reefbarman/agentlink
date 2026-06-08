@@ -32,7 +32,7 @@ type AnthropicModelCapabilities = ModelCapabilities & {
   supportsThinking: boolean;
 };
 
-const CLAUDE_4_6_REASONING_EFFORTS = [
+const CLAUDE_REASONING_EFFORTS = [
   "none",
   "low",
   "medium",
@@ -42,14 +42,14 @@ const CLAUDE_4_6_REASONING_EFFORTS = [
 
 const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
   {
-    "claude-opus-4-6": {
+    "claude-opus-4-8": {
       supportsThinking: true,
       supportsCaching: true,
       supportsImages: true,
       supportsToolUse: true,
       contextWindow: 1_000_000,
       maxOutputTokens: 128_000,
-      reasoningEfforts: [...CLAUDE_4_6_REASONING_EFFORTS],
+      reasoningEfforts: [...CLAUDE_REASONING_EFFORTS],
       defaultReasoningEffort: "high",
     },
     "claude-sonnet-4-6": {
@@ -58,8 +58,8 @@ const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
       supportsImages: true,
       supportsToolUse: true,
       contextWindow: 1_000_000,
-      maxOutputTokens: 128_000,
-      reasoningEfforts: [...CLAUDE_4_6_REASONING_EFFORTS],
+      maxOutputTokens: 64_000,
+      reasoningEfforts: [...CLAUDE_REASONING_EFFORTS],
       defaultReasoningEffort: "high",
     },
     "claude-haiku-4-5-20251001": {
@@ -68,7 +68,7 @@ const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
       supportsImages: true,
       supportsToolUse: true,
       contextWindow: 200_000,
-      maxOutputTokens: 128_000,
+      maxOutputTokens: 64_000,
     },
   };
 
@@ -110,8 +110,8 @@ export class AnthropicProvider implements ModelProvider {
 
   listModels(): ModelInfo[] {
     return [
-      this.makeModelInfo("claude-sonnet-4-6", "Claude Sonnet 4"),
-      this.makeModelInfo("claude-opus-4-6", "Claude Opus 4"),
+      this.makeModelInfo("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+      this.makeModelInfo("claude-opus-4-8", "Claude Opus 4.8"),
       this.makeModelInfo("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
     ];
   }
@@ -445,7 +445,7 @@ export class AnthropicProvider implements ModelProvider {
 // ── Helpers (moved from AgentEngine.ts) ──
 
 function supportsAdaptiveThinking(model: string): boolean {
-  return model === "claude-opus-4-6" || model === "claude-sonnet-4-6";
+  return model === "claude-opus-4-8" || model === "claude-sonnet-4-6";
 }
 
 function toAnthropicTool(tool: ToolDefinition): Anthropic.Tool {

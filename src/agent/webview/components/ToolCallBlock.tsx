@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from "preact/hooks";
+import { useCallback, useMemo, useState } from "preact/hooks";
+
 import type { ContentBlock } from "../types";
 import { InlineDiff } from "./InlineDiff";
 
@@ -170,7 +171,7 @@ function filePart(path: string, line?: number): SummaryPart {
   if (!path) return { type: "text", text: "" };
   return {
     type: "file",
-    display: shortPath(path) + (line ? `:${line}` : ""),
+    display: formatToolFileDisplayPath(path) + (line ? `:${line}` : ""),
     path,
     line,
   };
@@ -214,8 +215,20 @@ function getStreamingSummary(
   }
 }
 
-function shortPath(p: string): string {
+export function formatToolFileDisplayPath(p: string): string {
   if (!p) return "";
+  if (
+    p.startsWith("/") ||
+    p === "." ||
+    p === ".." ||
+    p.startsWith("./") ||
+    p.startsWith("../") ||
+    /^[A-Za-z]:[\\/]/.test(p) ||
+    p.startsWith("\\\\")
+  ) {
+    return p;
+  }
+
   const parts = p.split("/");
   return parts.length > 3
     ? ".../" + parts.slice(-2).join("/")

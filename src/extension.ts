@@ -66,6 +66,7 @@ import { readBrowserGatewayHelperDiscovery } from "./browser-gateway/browserGate
 import { BrowserGatewayHelperAdminClient } from "./browser-gateway/helper/BrowserGatewayHelperAdminClient.js";
 import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
+import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js";
 
 export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
@@ -185,6 +186,36 @@ function getSemanticSetupDetail(reason?: SemanticReadinessReason): string {
   }
 }
 
+async function consumeWorktreeStartupIntent(
+  context: vscode.ExtensionContext,
+  provider: ChatViewProvider,
+  logFn: (msg: string) => void,
+): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder || folder.uri.scheme !== "file") return;
+
+  try {
+    const store = new WorktreeAgentIntentStore(context.globalStorageUri.fsPath);
+    const intent = await store.consumeIntentForWorkspace(folder.uri.fsPath);
+    if (!intent) {
+      await store.pruneExpired();
+      return;
+    }
+    logFn(
+      `[worktree-agent] consumed startup intent ${intent.id} for ${intent.worktreePath}`,
+    );
+    await provider.startPromptInMode({
+      prompt: intent.prompt,
+      mode: intent.mode,
+      autoSubmit: intent.autoSubmit,
+    });
+  } catch (err) {
+    logFn(
+      `[worktree-agent] failed to consume startup intent: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 // --- Multi-agent config management ---
 // Uses the agent abstraction layer to write/cleanup config for all configured agents.
 
@@ -292,6 +323,7 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
     approvalPanel,
     toolCallTracker,
     context.extensionUri,
+    context.globalStorageUri,
   );
 
   // Notify sidebar + status bar when sessions change (connect/disconnect/trust)
@@ -1245,6 +1277,7 @@ export function activate(context: vscode.ExtensionContext): void {
     approvalPanel: builtinApprovalPanel,
     sessionId: "agent", // synthetic session ID for the built-in agent
     extensionUri: context.extensionUri,
+    globalStorageUri: context.globalStorageUri,
     mcpHub: chatViewProvider.getMcpHub(),
     onModeSwitch: (mode, reason, silent) =>
       chatViewProvider.handleModeSwitch(mode, reason, silent),
@@ -1269,6 +1302,8 @@ export function activate(context: vscode.ExtensionContext): void {
   chatViewProvider.setApprovalManager(approvalManager);
   chatViewProvider.setToolCallTracker(toolCallTracker);
   chatViewProvider.setSessionManager(agentSessionManager);
+
+  void consumeWorktreeStartupIntent(context, chatViewProvider, log);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(

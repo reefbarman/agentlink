@@ -79,7 +79,7 @@ function makeSessionManagerStub() {
         status: "streaming",
         displayStatus: "streaming",
         resolvedMode: "review",
-        resolvedModel: "claude-opus-4-6",
+        resolvedModel: "claude-opus-4-8",
       },
     ]),
   };
@@ -448,7 +448,7 @@ describe("BrowserGatewayServer", () => {
           status: "streaming",
           displayStatus: "streaming",
           resolvedMode: "review",
-          resolvedModel: "claude-opus-4-6",
+          resolvedModel: "claude-opus-4-8",
         },
       ],
       diffs: [
@@ -793,7 +793,7 @@ describe("BrowserGatewayServer", () => {
         "Content-Type": "application/json",
         Authorization: "Bearer test-token",
       },
-      body: JSON.stringify({ model: "claude-opus-4-6" }),
+      body: JSON.stringify({ model: "claude-opus-4-8" }),
     });
     expect(authorizedModelSwitch.status).toBe(200);
     const modelSwitchJson = await authorizedModelSwitch.json();
@@ -802,13 +802,13 @@ describe("BrowserGatewayServer", () => {
       snapshot: {
         session: {
           foreground: {
-            model: "claude-opus-4-6",
+            model: "claude-opus-4-8",
           },
         },
       },
     });
     expect(chatViewProvider.submitBrowserSetModel).toHaveBeenCalledWith(
-      "claude-opus-4-6",
+      "claude-opus-4-8",
     );
 
     const authorizedWriteApproval = await fetch(

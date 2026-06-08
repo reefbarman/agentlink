@@ -18,6 +18,7 @@ export async function handleListFiles(
     depth?: number;
     pattern?: string;
     query?: string;
+    include_ignored?: boolean;
   },
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
@@ -117,13 +118,20 @@ export async function handleListFiles(
         params.path,
         params.depth,
         params.pattern,
+        params.include_ignored,
       );
     }
 
     const recursive = params.recursive ?? false;
 
     if (recursive || params.depth) {
-      return await listRecursive(dirPath, params.path, params.depth);
+      return await listRecursive(
+        dirPath,
+        params.path,
+        params.depth,
+        undefined,
+        params.include_ignored,
+      );
     } else {
       return await listShallow(dirPath, params.path);
     }
@@ -172,6 +180,7 @@ async function listRecursive(
   inputPath: string,
   depth?: number,
   pattern?: string,
+  includeIgnored?: boolean,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   const rgPath = await getRipgrepBinPath();
   const args = [
@@ -183,6 +192,10 @@ async function listRecursive(
     "-g",
     "!**/.git/**",
   ];
+
+  if (includeIgnored) {
+    args.push("--no-ignore");
+  }
 
   if (depth !== undefined && depth > 0) {
     args.push("--max-depth", String(depth));
@@ -207,6 +220,7 @@ async function listRecursive(
     entries: entries.join("\n"),
     count: entries.length,
     truncated,
+    ...(includeIgnored && { include_ignored: true }),
   };
 
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };

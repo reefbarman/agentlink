@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/preact";
 
+import type { ApprovalRequest } from "../../approvals/webview/types";
 import { BrowserGatewayApp } from "./BrowserGatewayApp";
 import { h } from "preact";
 
@@ -44,12 +45,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 type TestSnapshot = {
   ui: {
-    approval: null | {
-      kind: "write";
-      id: string;
-      filePath: string;
-      writeOperation: "create" | "modify";
-    };
+    approval: null | ApprovalRequest;
     question: null | {
       id: string;
       questions: Array<{
@@ -560,6 +556,136 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /View diff/ })).toBeTruthy();
     });
+  });
+
+  it("hides the mobile View diff action for approvals without matching diffs", async () => {
+    installMatchMediaMock(true);
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const snapshot = createSnapshot();
+    snapshot.ui.approval = {
+      kind: "command",
+      id: "approval-1",
+      command: "npm test",
+    };
+    snapshot.diffs = [
+      {
+        requestId: "diff-1",
+        filePath: "src/file.ts",
+        operation: "modify",
+        originalPreview: "before",
+        proposedPreview: "after",
+        outsideWorkspace: false,
+        createdAt: 1,
+      },
+    ];
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "awaiting_approval", label: "Approval" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true });
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Run" })).toBeTruthy();
+    });
+    expect(screen.queryByRole("button", { name: /View diff/ })).toBeNull();
+  });
+
+  it("opens the mobile review pane for diff approvals matched by request id", async () => {
+    installMatchMediaMock(true);
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const snapshot = createSnapshot();
+    snapshot.ui.approval = {
+      kind: "write",
+      id: "diff-1",
+      writeOperation: "modify",
+    };
+    snapshot.diffs = [
+      {
+        requestId: "diff-1",
+        filePath: "src/file.ts",
+        operation: "modify",
+        originalPreview: "before",
+        proposedPreview: "after",
+        outsideWorkspace: false,
+        createdAt: 1,
+      },
+    ];
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "awaiting_approval", label: "Approval" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true });
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /View diff/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Back to chat/ })).toBeTruthy();
+    });
+    expect(screen.getByTestId("browser-diff-viewer").textContent).toBe(
+      "diff-1",
+    );
   });
 
   it("keeps the Review pane diff-only when approvals and questions are pending", async () => {

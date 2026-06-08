@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.11.103",
+  "version": "1.13.7",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -454,6 +454,11 @@
           "minimum": 0,
           "description": "Seconds to remember a single-use command approval (run-once / accept). Repeat identical commands within this window are auto-approved. Set to 0 to disable."
         },
+        "agentlink.worktreeDirectorySuffix": {
+          "type": "string",
+          "default": "-worktrees",
+          "description": "Suffix for the sibling worktree container used by start_worktree_agent when no worktreePath is provided. Default paths are <repo-parent>/<repo-name><suffix>/<sanitized-workstream-name>."
+        },
         "agentlink.agentModel": {
           "type": "string",
           "default": "claude-sonnet-4-6",
@@ -482,7 +487,7 @@
           "default": 10000,
           "minimum": 1024,
           "maximum": 32768,
-          "description": "Token budget for extended thinking (only used with thinking-capable models like claude-opus-4-6)."
+          "description": "Token budget for extended thinking (only used with thinking-capable models like claude-opus-4-8)."
         },
         "agentlink.showThinking": {
           "type": "boolean",
@@ -573,6 +578,7 @@
     "picomatch": "^4.0.3",
     "preact": "^10.28.4",
     "simple-git": "^3.32.3",
+    "unpdf": "^1.6.2",
     "vega": "^6.2.0",
     "vega-embed": "^7.1.0",
     "vega-lite": "^6.4.2",

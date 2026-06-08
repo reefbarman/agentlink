@@ -654,7 +654,16 @@ export function BrowserGatewayApp({
       ? pendingQuestion
       : null;
   const mobileReviewOpen = mobileLayout && mobilePane === "review";
-  const canOpenMobileReview = mobileLayout && diffs.length > 0;
+  const visibleApprovalDiff =
+    visibleApproval?.kind === "write"
+      ? diffs.find(
+          (diff) =>
+            diff.requestId === visibleApproval.id ||
+            (visibleApproval.filePath !== undefined &&
+              diff.filePath === visibleApproval.filePath),
+        )
+      : undefined;
+  const canOpenMobileReview = mobileLayout && Boolean(visibleApprovalDiff);
   const awaitingUserInput = Boolean(
     visibleApproval ||
     visibleQuestion ||
@@ -684,6 +693,12 @@ export function BrowserGatewayApp({
 
     lastVisibleApprovalIdRef.current = currentVisibleApprovalId;
   }, [mobilePane, visibleApproval?.id]);
+
+  useEffect(() => {
+    if (mobilePane === "review" && !canOpenMobileReview) {
+      setMobilePane(null);
+    }
+  }, [canOpenMobileReview, mobilePane]);
 
   useEffect(() => {
     if (!thinkingPending || !foreground || pendingReasoningEffort === null)
@@ -2573,26 +2588,27 @@ export function BrowserGatewayApp({
                     }
                     title="Drag to resize approval card"
                   />
-                  <div class="approval-mobile-review-actions">
-                    <button
-                      class={`secondary mobile-review-button${mobileReviewOpen ? " active" : ""}`}
-                      aria-expanded={mobileReviewOpen}
-                      disabled={!canOpenMobileReview}
-                      onClick={() =>
-                        setMobilePane((current) =>
-                          current === "review" ? null : "review",
-                        )
-                      }
-                      type="button"
-                    >
-                      <i
-                        class={`codicon ${mobileReviewOpen ? "codicon-comment-discussion" : "codicon-diff"}`}
-                      />
-                      <span>
-                        {mobileReviewOpen ? "Back to chat" : "View diff"}
-                      </span>
-                    </button>
-                  </div>
+                  {canOpenMobileReview && (
+                    <div class="approval-mobile-review-actions">
+                      <button
+                        class={`secondary mobile-review-button${mobileReviewOpen ? " active" : ""}`}
+                        aria-expanded={mobileReviewOpen}
+                        onClick={() =>
+                          setMobilePane((current) =>
+                            current === "review" ? null : "review",
+                          )
+                        }
+                        type="button"
+                      >
+                        <i
+                          class={`codicon ${mobileReviewOpen ? "codicon-comment-discussion" : "codicon-diff"}`}
+                        />
+                        <span>
+                          {mobileReviewOpen ? "Back to chat" : "View diff"}
+                        </span>
+                      </button>
+                    </div>
+                  )}
                   {visibleApproval.kind === "command" ? (
                     <CommandCard
                       request={visibleApproval}

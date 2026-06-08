@@ -118,7 +118,7 @@ describe("resolveBackgroundRoute", () => {
 
   it("prefers sonnet for routine anthropic review fallbacks", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
-    const opus = makeModel("claude-opus-4-6", "anthropic");
+    const opus = makeModel("claude-opus-4-8", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
@@ -145,7 +145,7 @@ describe("resolveBackgroundRoute", () => {
 
   it("prefers opus for complex anthropic review fallbacks", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
-    const opus = makeModel("claude-opus-4-6", "anthropic");
+    const opus = makeModel("claude-opus-4-8", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
@@ -166,14 +166,14 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-opus-4-6");
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=deep_reasoning");
   });
 
   it("honors explicit modelTier override for review tasks", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
-    const opus = makeModel("claude-opus-4-6", "anthropic");
+    const opus = makeModel("claude-opus-4-8", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
@@ -193,7 +193,7 @@ describe("resolveBackgroundRoute", () => {
       { mode: "code", model: "gpt-5" },
     );
 
-    expect(route.resolvedModel).toBe("claude-opus-4-6");
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
     expect(route.routingReason).toContain("tier=deep_reasoning");
   });
 

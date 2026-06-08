@@ -71,7 +71,7 @@ flowchart LR
 - **Inline approvals in chat** — command, write, rename, MCP, and mode-switch approvals render in the built-in chat UI. The separate approval panel is mainly for external MCP agents.
 - **Session history and restore** — chat sessions are persisted and restored across VS Code reloads/startup.
 - **Checkpoints and revert** — create workspace checkpoints and revert later. Checkpoints are stored in AgentLink’s own shadow git repo under `.agentlink/checkpoints/`, separate from your project’s real git history.
-- **Slash commands** — built-ins include `/new`, `/mode`, `/model`, `/condense`, `/checkpoint`, `/revert`, `/help`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, and `/btw`.
+- **Slash commands** — built-ins include `/new`, `/mode`, `/model`, `/condense`, `/checkpoint`, `/revert`, `/help`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, `/btw`, and `/pair`. Custom commands and detected skills appear in the same picker.
 - **Background agents** — spawn parallel sub-agents for review and research, then inspect their result/transcript from the foreground session.
 - **Auto-condense** — when context fills up, AgentLink can condense the conversation and continue without losing task continuity.
 - **Model picker + auth-aware UX** — model selection is built into the chat UI and can prompt for Anthropic or OpenAI/Codex auth as needed.
@@ -124,6 +124,7 @@ Or clone the repo first and run it locally:
 1. Go to the [latest release](https://github.com/reefbarman/agentlink/releases/latest)
 2. Download the `.vsix` file
 3. Install it:
+
    ```sh
    code --install-extension agentlink-*.vsix --force
    ```
@@ -379,7 +380,7 @@ AgentLink auto-configures `~/.codex/config.toml` with the `[mcp_servers.agentlin
 
 For any MCP client not listed above, configure it to connect to:
 
-```
+```text
 http://localhost:<port>/mcp
 ```
 
@@ -401,20 +402,23 @@ For external MCP clients, AgentLink establishes a trusted workspace session firs
 
 ## Tools
 
+The tools below are available through the local AgentLink MCP server for external MCP clients after `handshake`, and most are also available to the built-in agent. A later section calls out built-in-agent-only orchestration tools.
+
 ### read_file
 
-Read file contents with line numbers. Returns rich metadata that built-in read tools cannot provide.
+Read file contents with line numbers. Returns rich metadata that built-in read tools cannot provide. Supports text files, local images, and PDF text extraction.
 
-| Parameter         | Type     | Description                                                                                                                                        |
-| ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`            | string   | File path (absolute or relative to workspace root)                                                                                                 |
-| `offset`          | number?  | Starting line number (1-indexed, default: 1)                                                                                                       |
-| `limit`           | number?  | Maximum lines to read (default: 2000)                                                                                                              |
-| `include_symbols` | boolean? | Include top-level symbol outline (default: true)                                                                                                   |
-| `query`           | string?  | Semantic search query to jump to the most relevant section. Auto-sets offset using the codebase index. Ignored if `offset` is explicitly provided. |
-| `anchor`          | string?  | Literal anchor text to locate and jump near. Ignored if `offset` is explicitly provided.                                                           |
-| `anchor_regex`    | string?  | Regex anchor pattern to locate and jump near. Ignored if `offset` is explicitly provided.                                                          |
-| `anchor_offset`   | number?  | Line offset applied after anchor/semantic match (e.g. `-20` for context above).                                                                    |
+| Parameter                | Type     | Description                                                                                                                                        |
+| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`                   | string   | File path (absolute or relative to workspace root)                                                                                                 |
+| `offset`                 | number?  | Starting line number (1-indexed, default: 1)                                                                                                       |
+| `limit`                  | number?  | Maximum lines to read (default: 2000)                                                                                                              |
+| `include_symbols`        | boolean? | Include top-level symbol outline (default: true)                                                                                                   |
+| `query`                  | string?  | Semantic search query to jump to the most relevant section. Auto-sets offset using the codebase index. Ignored if `offset` is explicitly provided. |
+| `anchor`                 | string?  | Literal anchor text to locate and jump near. Ignored if `offset` is explicitly provided.                                                           |
+| `anchor_regex`           | string?  | Regex anchor pattern to locate and jump near. Ignored if `offset` is explicitly provided.                                                          |
+| `anchor_offset`          | number?  | Line offset applied after anchor/semantic match (e.g. `-20` for context above).                                                                    |
+| `auto_follow_suggestion` | boolean? | If `path` is not found and exactly one high-confidence suggestion exists, automatically read that suggested file and include resolution metadata.  |
 
 **Response includes:**
 
@@ -432,21 +436,34 @@ Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not avai
 
 **Image support:** Local image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) are returned as base64-encoded `image` content that the agent can view directly. Max image size: 10 MB.
 
-**Friendly errors:** `ENOENT` → `"File not found: {path}. Working directory: {root}"`, `EACCES` → `"Permission denied"`, `EISDIR` → `"Use list_files instead"`.
+**PDF support:** Local `.pdf` files are parsed to extracted text and returned in the same numbered-line JSON shape as text files, with `file_type: "pdf"`. Max PDF size: 50 MB. `offset` and `limit` apply to extracted text lines.
+
+**Friendly errors:** `ENOENT` → `"File not found: {path}. Working directory: {root}"`, `EACCES` → `"Permission denied"`, `EISDIR` → `"Use list_files instead"`. When `auto_follow_suggestion` succeeds, the response includes suggestion/resolution metadata showing the requested path and followed file.
+
+### load_skill
+
+Load the full contents of an AgentLink skill file that was explicitly advertised in the current built-in agent system prompt. This is intentionally not a general-purpose file reader: it only accepts skill paths that were listed for the active session.
+
+| Parameter | Type   | Description                                |
+| --------- | ------ | ------------------------------------------ |
+| `path`    | string | Advertised skill file path to load exactly |
+
+Returns the skill file content and metadata needed for the agent to follow the skill instructions.
 
 ### list_files
 
 List files and directories. Directories have a trailing `/` suffix.
 
-| Parameter   | Type     | Description                                                                                                                                                                |
-| ----------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`      | string   | Directory path                                                                                                                                                             |
-| `recursive` | boolean? | List recursively (default: false)                                                                                                                                          |
-| `depth`     | number?  | Max directory depth for recursive listing                                                                                                                                  |
-| `pattern`   | string?  | Glob pattern to filter files (e.g. `*.ts`, `*.test.*`). Implies recursive search.                                                                                          |
-| `query`     | string?  | Semantic search query to find files by meaning (e.g. `"authentication logic"`). Returns files ranked by relevance. Other params ignored when set. Requires codebase index. |
+| Parameter         | Type     | Description                                                                                                                                                                                   |
+| ----------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`            | string   | Directory path                                                                                                                                                                                |
+| `recursive`       | boolean? | List recursively (default: false)                                                                                                                                                             |
+| `depth`           | number?  | Max directory depth for recursive listing                                                                                                                                                     |
+| `pattern`         | string?  | Glob pattern to filter files (e.g. `*.ts`, `*.test.*`). Implies recursive search.                                                                                                             |
+| `include_ignored` | boolean? | Include ignored files/directories in recursive/pattern listing. Still excludes `node_modules` and `.git`. Default: false. Pair with `pattern` when possible to avoid noisy/truncated results. |
+| `query`           | string?  | Semantic search query to find files by meaning (e.g. `"authentication logic"`). Returns files ranked by relevance. Other params ignored when set. Requires codebase index.                    |
 
-Recursive listing uses ripgrep (`--files` mode) for speed and automatic `.gitignore` support.
+Recursive listing uses ripgrep (`--files` mode) for speed and automatic `.gitignore` support by default. Use `include_ignored: true` when expected files may live under ignored directories; pair it with `pattern` when possible (for example, `pattern: "*.pdf"`) to avoid noisy/truncated results.
 
 **Semantic mode:** When `query` is provided, the response includes `semantic: true`, files ranked by score, and `count`. Other listing params are ignored.
 
@@ -703,6 +720,7 @@ Common response fields include `terminal_id` (for reuse/polling), `output`, and 
 | --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `command`             | string   | Shell command to execute                                                                                                                                |
 | `cwd`                 | string?  | Working directory                                                                                                                                       |
+| `env`                 | object?  | Environment variables to merge into the terminal's base execution environment                                                                           |
 | `terminal_id`         | string?  | Reuse a specific terminal by ID. Usually omit for sequential commands so AgentLink can auto-reuse the default terminal.                                 |
 | `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`). Use only when intentionally creating/reusing a separate terminal.                                     |
 | `split_from`          | string?  | Split alongside an existing terminal, creating a visual group (for intentionally separate terminals).                                                   |
@@ -714,6 +732,8 @@ Common response fields include `terminal_id` (for reuse/polling), `output`, and 
 | `output_grep`         | string?  | Filter output to lines matching this regex (case-insensitive)                                                                                           |
 | `output_grep_context` | number?  | Context lines around each grep match                                                                                                                    |
 | `reason`              | string?  | Short reason explaining why the agent needs to run this command (shown in the approval dialog)                                                          |
+| `force`               | boolean? | Bypass command validation only for false-positive rejections of direct file-reading commands                                                            |
+| `force_reason`        | string?  | Required when `force=true`; explain why the validator rejection was a false positive                                                                    |
 
 ### close_terminals
 
@@ -724,6 +744,50 @@ Use this proactively to clean up dedicated terminals you created for background/
 | Parameter | Type      | Description                                                                      |
 | --------- | --------- | -------------------------------------------------------------------------------- |
 | `names`   | string[]? | Terminal names to close (e.g. `["Server", "Tests"]`). Omit to close all managed. |
+
+### start_worktree_agent
+
+Create or reuse a Git worktree, open it in a new VS Code window, and bootstrap AgentLink in that window with a supplied prompt. This is for isolated filesystem/workspace lanes when the user explicitly requests or approves a separate worktree window; it does not replace in-process `spawn_background_agent`.
+
+Safety/consent behavior:
+
+- Always shows an explicit approval prompt before creating/opening anything, even if command/write approvals are permissive.
+- Approval detail includes destination path, branch, base ref, prompt preview, autosubmit state, dirty-source warning, and existing-worktree reuse details when applicable.
+- Denial returns `status: "rejected"` and creates no worktree.
+- v1 supports only local `file` workspace folders; remote extension hosts are rejected rather than opening a wrong local path.
+- Uncommitted source changes are not copied into the new worktree; new branches are based on committed Git state.
+
+| Parameter      | Type     | Description                                                                                                        |
+| -------------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `task`         | string   | Short label for the parallel workstream                                                                            |
+| `prompt`       | string   | Initial prompt to autosubmit or prefill in the child AgentLink window                                              |
+| `sourcePath`   | string?  | Source workspace/repository path; required in multi-root workspaces                                                |
+| `branch`       | string?  | Branch to create/use; defaults to an `agentlink/<sanitized-task>-<id>` branch                                      |
+| `baseRef`      | string?  | Git ref to base a new branch on; defaults to current `HEAD`                                                        |
+| `worktreePath` | string?  | Absolute or workspace-relative destination; defaults under `<repo-parent>/<repo-name><suffix>/<sanitized-name>`    |
+| `mode`         | string?  | Optional child AgentLink mode (`code`, `architect`, `ask`, `debug`, `review`)                                      |
+| `autoSubmit`   | boolean? | Defaults to `true`; the approval prompt lets the user approve with autosubmit or approve with the prompt prefilled |
+
+Returns JSON with:
+
+- `status`: `"opened"`, `"rejected"`, or `"error"`
+- `worktreePath`, `branch`, `baseRef`
+- `intentId` when an intent was written for the child window
+- `message` for caveats/errors
+
+Example:
+
+```json
+{
+  "task": "Try alternate API client refactor",
+  "prompt": "In this isolated worktree, prototype the API client refactor and report trade-offs.",
+  "mode": "code"
+}
+```
+
+## Built-in agent orchestration tools
+
+These tools are available inside AgentLink's built-in agent runtime. They are not registered on the external MCP server, so external clients such as Claude Code, Copilot, Roo Code, Cline, Kilo Code, and Codex should not rely on them unless they are also running inside the built-in AgentLink chat.
 
 ### spawn_background_agent
 
@@ -738,15 +802,15 @@ Good examples:
 
 For writable background work, include explicit ownership boundaries in `message`: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts.
 
-| Parameter   | Type    | Description                                                                                       |
-| ----------- | ------- | ------------------------------------------------------------------------------------------------- |
-| `task`      | string  | Short label shown in UI                                                                           |
-| `message`   | string  | Full instruction for the background agent, including scope boundaries for writable work           |
-| `mode`      | string? | Optional mode override (`code`, `architect`, `ask`, `debug`, `review`)                            |
-| `model`     | string? | Optional explicit model override                                                                  |
-| `provider`  | string? | Optional provider preference/constraint                                                           |
-| `taskClass` | string? | Routing profile key (e.g. `review_code`, `review_plan`, `readonly-research`, `research`, `debug`) |
-| `modelTier` | string? | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`)                            |
+| Parameter   | Type    | Description                                                                                                                       |
+| ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `task`      | string  | Short label shown in UI                                                                                                           |
+| `message`   | string  | Full instruction for the background agent, including scope boundaries for writable work                                           |
+| `mode`      | string? | Optional mode override (`code`, `architect`, `ask`, `debug`, `review`)                                                            |
+| `model`     | string? | Optional explicit model override                                                                                                  |
+| `provider`  | string? | Optional provider preference/constraint                                                                                           |
+| `taskClass` | string? | Routing profile key (e.g. `review_code`, `review_plan`, `readonly-research`, `research`, `debug`, `explore`, `design`, `general`) |
+| `modelTier` | string? | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`)                                                            |
 
 Returns structured JSON including:
 
@@ -812,10 +876,12 @@ Ask the user one or more structured questions and wait for responses before cont
 | `questions` | question[] | Questions shown to the user in a structured UI |
 
 `question` objects support:
+
 - `id`, `type`, `question`
 - `options` and `recommended` for choice questions
 - `scale_min`, `scale_max`, `scale_min_label`, `scale_max_label` for scale questions
 - `allowBlank` for `text` questions when an intentionally empty response should be submittable
+- `modeSwitch` on exactly one `multiple_choice` question to combine a user choice with mode-change consent; the result includes `modeSwitched` when a mapped choice switches modes
 
 Use this when the agent needs explicit confirmation or a bounded choice rather than guessing.
 
@@ -837,6 +903,10 @@ Create or replace the built-in structured task list used to track progress on mu
 | `todos`   | todo[] | Complete task list, including completed and in-progress items |
 
 Use this for larger tasks that benefit from explicit progress tracking.
+
+## Built-in MCP client tools
+
+These are available to the built-in AgentLink chat when it connects out to other MCP servers from project/global MCP config.
 
 ### list_mcp_resources
 
@@ -1014,13 +1084,15 @@ Configure with `agentlink.recentApprovalTtl` (seconds). Set to `0` to disable.
 
 ## Browser Remote Session Control
 
-AgentLink can be driven from a browser on the same machine for remote interaction with a running built-in agent session. Open the UI with **AgentLink: Open Browser Gateway** from the command palette.
+AgentLink can be driven from a browser for remote interaction with a running built-in agent session. Open the UI with **AgentLink: Open Browser Gateway** from the command palette.
 
-A shared local helper process serves the browser UI on a stable configured port (`agentlink.browserGatewayPort`, default `47137`) so the URL is bookmarkable. When multiple VS Code windows are open, each registers a per-window API/SSE bridge and the browser can switch between them by instance from a single URL.
+A shared local helper process serves the browser UI on a stable configured port (`agentlink.browserGatewayPort`, default `47137`) so the URL is bookmarkable. In the default loopback-only mode it is available only on the same machine. If `agentlink.browserGatewayLanAccess` is enabled, the helper binds on the LAN, advertises an mDNS hostname (`agentlink.browserGatewayMdnsName`, default `agentlink.local`), and requires each non-loopback browser device to pair before it can control a session. Pair from `/pair` in chat or **AgentLink: Pair Browser Device**, and revoke devices with `/pair list` or **AgentLink: Manage Paired Browser Devices**.
+
+When multiple VS Code windows are open, each registers a per-window API/SSE bridge and the browser can switch between them by instance from a single URL.
 
 The browser surface supports:
 
-- live transcript viewing and send
+- live transcript viewing and send, including slash-command autocomplete backed by the same registry as VS Code
 - approvals and structured questions as chat-pane cards
 - background task visibility
 - read-only file diff review in the Review pane for pending write-tool changes
@@ -1043,32 +1115,45 @@ Each VS Code window runs its own independent MCP server on its own port. The ext
 
 ## Settings
 
-| Setting                             | Default                 | Description                                                                                                      |
-| ----------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `agentlink.agents`                  | `["claude-code"]`       | Which agents to auto-configure (claude-code, copilot, roo-code, cline, kilo-code, codex)                         |
-| `agentlink.port`                    | `0`                     | HTTP port for the MCP server (`0` = OS-assigned, recommended for multi-window)                                   |
-| `agentlink.autoStart`               | `true`                  | Auto-start server on activation                                                                                  |
-| `agentlink.autoUpdateInstructions`  | `false`                 | Auto-update agent instruction files on startup (enabled when you click Set Up Instructions during onboarding)    |
-| `agentlink.autoUpdateHooks`         | `false`                 | Auto-update enforcement hooks on startup (enabled when you click Install Hooks during onboarding)                |
-| `agentlink.requireAuth`             | `true`                  | Require Bearer token auth                                                                                        |
-| `agentlink.defaultMode`             | `code`                  | Default mode for new built-in agent sessions                                                                     |
-| `agentlink.agentModel`              | `claude-sonnet-4-6`     | Default model for the built-in agent chat                                                                        |
-| `agentlink.agentMaxTokens`          | `8192`                  | Maximum output tokens per built-in agent response                                                                |
-| `agentlink.thinkingBudget`          | `10000`                 | Extended thinking budget for thinking-capable models                                                             |
-| `agentlink.showThinking`            | `true`                  | Show thinking blocks in the built-in agent chat UI                                                               |
-| `agentlink.autoCondense`            | `true`                  | Automatically condense built-in agent conversation context when it fills up                                      |
-| `agentlink.autoCondenseThreshold`   | `0.9`                   | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`              |
-| `agentlink.modelCondenseThresholds` | `{}`                    | Per-model condense thresholds for the built-in agent                                                             |
-| `agentlink.semanticSearchEnabled`   | `false`                 | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                      |
-| `agentlink.qdrantUrl`               | `http://localhost:6333` | Qdrant vector database URL used for semantic search and indexing                                                 |
-| `agentlink.autoIndex`               | `true`                  | Automatically index the workspace on startup when semantic search is enabled                                     |
-| `agentlink.chunkGranularity`        | `fine`                  | Index chunking mode: `standard` or `fine`                                                                        |
-| `agentlink.indexExclusions`         | built-in defaults       | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                         |
-| `agentlink.masterBypass`            | `false`                 | Skip all approval prompts                                                                                        |
-| `agentlink.approvalPosition`        | `panel`                 | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                |
-| `agentlink.diagnosticDelay`         | `1500`                  | Max ms to wait for diagnostics after save                                                                        |
-| `agentlink.recentApprovalTtl`       | `60`                    | Seconds to remember single-use approvals. Repeat identical operations auto-approve within this window. `0` = off |
-| `agentlink.writeRules`              | `[]`                    | Glob patterns for auto-approved file writes (settings-level)                                                     |
+| Setting                                | Default                    | Description                                                                                                      |
+| -------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `agentlink.agents`                     | `[]`                       | Which agents to auto-configure (claude-code, copilot, roo-code, cline, kilo-code, codex)                         |
+| `agentlink.port`                       | `0`                        | HTTP port for the MCP server (`0` = OS-assigned, recommended for multi-window)                                   |
+| `agentlink.autoStart`                  | `true`                     | Auto-start server on activation                                                                                  |
+| `agentlink.browserGatewayPort`         | `47137`                    | Stable port for the shared browser gateway helper                                                                |
+| `agentlink.browserGatewayLanAccess`    | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                      |
+| `agentlink.browserGatewayMdnsName`     | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                            |
+| `agentlink.autoUpdateInstructions`     | `false`                    | Auto-update agent instruction files on startup (enabled when you click Set Up Instructions during onboarding)    |
+| `agentlink.autoUpdateHooks`            | `false`                    | Auto-update enforcement hooks on startup (enabled when you click Install Hooks during onboarding)                |
+| `agentlink.requireAuth`                | `true`                     | Require Bearer token auth                                                                                        |
+| `agentlink.defaultMode`                | `code`                     | Default mode for new built-in agent sessions                                                                     |
+| `agentlink.agentModel`                 | `claude-sonnet-4-6`        | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`            |
+| `agentlink.modeModelPreferences`       | per-mode defaults          | Default model by mode slug; changing the picker in a mode updates that mode's preference                         |
+| `agentlink.agentMaxTokens`             | `8192`                     | Maximum output tokens per built-in agent response                                                                |
+| `agentlink.thinkingBudget`             | `10000`                    | Extended thinking budget for thinking-capable models                                                             |
+| `agentlink.showThinking`               | `true`                     | Show thinking blocks in the built-in agent chat UI                                                               |
+| `agentlink.autoCondense`               | `true`                     | Automatically condense built-in agent conversation context when it fills up                                      |
+| `agentlink.autoCondenseThreshold`      | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`              |
+| `agentlink.modelCondenseThresholds`    | `{}`                       | Per-model condense thresholds for the built-in agent                                                             |
+| `agentlink.codexStatefulResponses`     | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                |
+| `agentlink.codexStoreResponses`        | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                 |
+| `agentlink.openaiCompatible.baseUrl`   | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                           |
+| `agentlink.openaiCompatible.model`     | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                             |
+| `agentlink.openaiCompatible.apiKey`    | `""`                       | Optional helper endpoint Bearer token                                                                            |
+| `agentlink.openaiCompatible.timeoutMs` | `5000`                     | Timeout for helper endpoint calls before falling back                                                            |
+| `agentlink.questionDetection.mode`     | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)         |
+| `agentlink.bgSummary.mode`             | `agent`                    | How background-agent status snippets are summarized (`agent`, `openai`, `heuristic`)                             |
+| `agentlink.semanticSearchEnabled`      | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                      |
+| `agentlink.qdrantUrl`                  | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                 |
+| `agentlink.autoIndex`                  | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                     |
+| `agentlink.chunkGranularity`           | `fine`                     | Index chunking mode: `standard` or `fine`                                                                        |
+| `agentlink.indexExclusions`            | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                         |
+| `agentlink.masterBypass`               | `false`                    | Skip all approval prompts                                                                                        |
+| `agentlink.approvalPosition`           | `panel`                    | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                |
+| `agentlink.diagnosticDelay`            | `1500`                     | Max ms to wait for diagnostics after save                                                                        |
+| `agentlink.recentApprovalTtl`          | `60`                       | Seconds to remember single-use approvals. Repeat identical operations auto-approve within this window. `0` = off |
+| `agentlink.worktreeDirectorySuffix`    | `-worktrees`               | Suffix for sibling worktree containers used by `start_worktree_agent` default paths                              |
+| `agentlink.writeRules`                 | `[]`                       | Glob patterns for auto-approved file writes (settings-level)                                                     |
 
 ## Platform Notes
 
@@ -1110,7 +1195,7 @@ Common fixes:
 - **Model unavailable or unauthenticated** — configure credentials with **AgentLink: Sign In to OpenAI/Codex**, **AgentLink: Set OpenAI API Key**, or **AgentLink: Set Anthropic API Key**
 - **Too much context / degraded responses** — use `/condense`, lower the active model's condense threshold, or leave `agentlink.autoCondense` enabled
 - **Approvals feel too noisy** — adjust write/command approvals and `agentlink.recentApprovalTtl`
-- **Want a different startup behavior** — change `agentlink.defaultMode` or `agentlink.agentModel`
+- **Want a different startup behavior** — change `agentlink.defaultMode`, `agentlink.modeModelPreferences`, or legacy fallback `agentlink.agentModel`
 
 ### Semantic search not working
 
@@ -1131,8 +1216,8 @@ If Qdrant is reachable but returns no collection, AgentLink will report that no 
 - **Session recovery**: Stale session IDs are transparently reused instead of returning 404 errors
 - **SSE resumability**: Each transport is configured with an in-memory event store for client reconnection
 - **Auth**: Optional Bearer token stored in VS Code's `globalState`, auto-written to agent config files with atomic writes
-- **Webviews**: Two Preact-based webviews (sidebar + approval panel) with `postMessage` state bridge
-- **Bundled**: Triple esbuild targets — extension (CJS/Node), sidebar webview (ESM/browser), and approval panel webview (ESM/browser)
+- **Webviews**: Preact-based VS Code webviews for status/sidebar, built-in agent chat, approvals, plus the browser gateway web app
+- **Bundled**: esbuild targets for the extension host and each webview/browser surface; new bundle outputs must be added to the packaging allowlist
 
 ## Development
 

@@ -378,6 +378,10 @@ export function BrowserDiffViewer({
       const languageId = inferLanguageId(detail.filePath);
       defineTheme(monaco, theme);
 
+      // Detach the previous models from the diff widget before disposing them.
+      // Disposing a TextModel that the DiffEditorWidget still references throws
+      // "TextModel got disposed before DiffEditorWidget model got reset".
+      editorRef.current?.setModel(null);
       originalModelRef.current?.dispose();
       proposedModelRef.current?.dispose();
 

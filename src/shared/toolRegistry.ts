@@ -35,7 +35,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   read_file: {
     label: "Read with line numbers",
     description:
-      "Read the contents of a file with line numbers. Returns content in 'line_number | content' format. Includes file metadata (size, modified, language), git status, and diagnostics summary when available. Supports optional 'query' param to semantically jump to the most relevant section using the codebase index.",
+      "Read the contents of a file with line numbers. Returns content in 'line_number | content' format. Supports text files, local images, and PDF text extraction. Includes file metadata (size, modified, language), git status, and diagnostics summary when available. Supports optional 'query' param to semantically jump to the most relevant section using the codebase index.",
   },
   load_skill: {
     label: "Load advertised skill",
@@ -45,7 +45,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   list_files: {
     label: "Directory listing",
     description:
-      "List files and directories at a given path. Directories have a trailing '/' suffix. Use 'pattern' to find files matching a glob (e.g. '*.test.ts'). Supports optional 'query' param to find files by meaning using the codebase index, returning files ranked by semantic relevance.",
+      "List files and directories at a given path. Directories have a trailing '/' suffix. Use 'pattern' to find files matching a glob (e.g. '*.test.ts'). Set include_ignored=true with recursive/pattern listing to include files hidden by ignore rules; pair it with pattern when possible to avoid noisy/truncated results. Supports optional 'query' param to find files by meaning using the codebase index, returning files ranked by semantic relevance.",
   },
   search_files: {
     label: "Regex & semantic search",
@@ -157,6 +157,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Clean up terminals",
     description:
       "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal).",
+  },
+  start_worktree_agent: {
+    label: "Start worktree agent",
+    description:
+      "Create or reuse a Git worktree, open it in a new VS Code window, and bootstrap AgentLink there with a supplied prompt. Use only for user-requested or explicitly user-approved isolated parallel workstreams. This tool always requires an explicit approval prompt before creating/opening anything, even when write or command approvals are permissive.",
   },
   open_file: {
     label: "Open in editor",

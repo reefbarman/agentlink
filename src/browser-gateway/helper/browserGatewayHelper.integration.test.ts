@@ -62,6 +62,11 @@ async function makeExtensionRoot(): Promise<string> {
     "icon",
     "utf-8",
   );
+  await fs.writeFile(
+    path.join(extensionRootPath, "media", "agentlink-terminal.svg"),
+    "<svg></svg>",
+    "utf-8",
+  );
   return extensionRootPath;
 }
 
@@ -182,9 +187,60 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(rootResponse.headers.get("cache-control")).toBe("no-store");
     const html = await rootResponse.text();
     const encodedVersion = "test%20version%2Fwith%20spaces";
+    expect(html).toContain(`/agentlink-icon.svg?v=${encodedVersion}`);
+    expect(html).toContain(`/agentlink-icon.png?v=${encodedVersion}`);
+    expect(html).toContain(`/apple-touch-icon.png?v=${encodedVersion}`);
+    expect(html).toContain(`/site.webmanifest?v=${encodedVersion}`);
+    expect(html).toContain(`apple-mobile-web-app-title" content="AgentLink"`);
     expect(html).toContain(`/codicon.css?v=${encodedVersion}`);
     expect(html).toContain(`/browser-gateway.css?v=${encodedVersion}`);
     expect(html).toContain(`/browser-gateway.js?v=${encodedVersion}`);
+
+    const iconResponse = await fetch(
+      `${helperBase}/agentlink-icon.png?v=${encodedVersion}`,
+    );
+    expect(iconResponse.ok).toBe(true);
+    expect(iconResponse.headers.get("content-type")).toBe("image/png");
+    expect(iconResponse.headers.get("cache-control")).toBe("no-cache");
+    expect(iconResponse.headers.get("x-agentlink-helper-version")).toBe(
+      "test version/with spaces",
+    );
+
+    const svgIconResponse = await fetch(
+      `${helperBase}/agentlink-icon.svg?v=${encodedVersion}`,
+    );
+    expect(svgIconResponse.ok).toBe(true);
+    expect(svgIconResponse.headers.get("content-type")).toBe(
+      "image/svg+xml; charset=utf-8",
+    );
+    expect(svgIconResponse.headers.get("cache-control")).toBe("no-cache");
+
+    const manifestResponse = await fetch(
+      `${helperBase}/site.webmanifest?v=${encodedVersion}`,
+    );
+    expect(manifestResponse.ok).toBe(true);
+    expect(manifestResponse.headers.get("content-type")).toBe(
+      "application/manifest+json; charset=utf-8",
+    );
+    const manifest = (await manifestResponse.json()) as {
+      name?: string;
+      short_name?: string;
+      theme_color?: string;
+      icons?: Array<{ src?: string; sizes?: string; purpose?: string }>;
+    };
+    expect(manifest.name).toBe("AgentLink Remote");
+    expect(manifest.short_name).toBe("AgentLink");
+    expect(manifest.theme_color).toBe("#4EC9B0");
+    expect(manifest.icons?.[0]).toMatchObject({
+      src: "/agentlink-icon.svg",
+      sizes: "any",
+      purpose: "any",
+    });
+    expect(manifest.icons?.[1]).toMatchObject({
+      src: "/agentlink-icon.png",
+      sizes: "256x256",
+      purpose: "any",
+    });
 
     const scriptResponse = await fetch(
       `${helperBase}/browser-gateway.js?v=${encodedVersion}`,

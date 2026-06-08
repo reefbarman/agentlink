@@ -1,5 +1,50 @@
-import { describe, it, expect } from "vitest";
-import { getToolCallVisualState } from "./ToolCallBlock";
+import { describe, expect, it } from "vitest";
+import {
+  formatToolFileDisplayPath,
+  getToolCallVisualState,
+} from "./ToolCallBlock";
+
+describe("formatToolFileDisplayPath", () => {
+  it("returns an empty display for empty paths", () => {
+    expect(formatToolFileDisplayPath("")).toBe("");
+  });
+
+  it("leaves short workspace-relative paths unchanged", () => {
+    expect(formatToolFileDisplayPath("src/App.tsx")).toBe("src/App.tsx");
+  });
+
+  it("compacts long workspace-relative paths", () => {
+    expect(formatToolFileDisplayPath("src/agent/webview/App.tsx")).toBe(
+      ".../webview/App.tsx",
+    );
+  });
+
+  it("preserves explicit relative paths", () => {
+    expect(formatToolFileDisplayPath(".")).toBe(".");
+    expect(formatToolFileDisplayPath("./src/agent/webview/App.tsx")).toBe(
+      "./src/agent/webview/App.tsx",
+    );
+    expect(formatToolFileDisplayPath("..")).toBe("..");
+    expect(formatToolFileDisplayPath("../other-project/src/App.tsx")).toBe(
+      "../other-project/src/App.tsx",
+    );
+  });
+
+  it("preserves absolute paths", () => {
+    expect(formatToolFileDisplayPath("/tmp/agentlink-output/full.log")).toBe(
+      "/tmp/agentlink-output/full.log",
+    );
+    expect(formatToolFileDisplayPath("C:/Users/tristan/output/full.log")).toBe(
+      "C:/Users/tristan/output/full.log",
+    );
+    expect(
+      formatToolFileDisplayPath("C:\\Users\\tristan\\output\\full.log"),
+    ).toBe("C:\\Users\\tristan\\output\\full.log");
+    expect(
+      formatToolFileDisplayPath("\\\\server\\share\\output\\full.log"),
+    ).toBe("\\\\server\\share\\output\\full.log");
+  });
+});
 
 describe("getToolCallVisualState", () => {
   it("marks incomplete tool calls as running", () => {

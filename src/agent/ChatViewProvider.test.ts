@@ -52,6 +52,16 @@ vi.mock("vscode", () => ({
     showErrorMessage: vi.fn(),
     activeTextEditor: undefined,
   },
+  env: {
+    sessionId: "test-session",
+    machineId: "test-machine",
+    appName: "VS Code Test",
+    appHost: "desktop",
+    language: "en",
+    uiKind: 1,
+    remoteName: undefined,
+  },
+  UIKind: { Desktop: 1, Web: 2 },
   workspace: {
     getConfiguration: mockGetConfiguration,
     workspaceFolders: [],
@@ -367,6 +377,236 @@ describe("ChatViewProvider session state sync", () => {
           message.sessionId === "session-new" &&
           Array.isArray(message.messages) &&
           message.messages.length === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("replays queued webview messages after postMessage delivery fails", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const foreground = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "streaming",
+      title: "Session 1",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [] as unknown[],
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => foreground),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    mockPostMessage.mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    (
+      provider as unknown as {
+        postMessage: (msg: Record<string, unknown>) => void;
+      }
+    ).postMessage.call(provider, {
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "missed text",
+    });
+
+    await Promise.resolve();
+
+    expect(
+      (provider as unknown as { webviewReady: boolean }).webviewReady,
+    ).toBe(false);
+    expect(
+      (provider as unknown as { pendingMessages: unknown[] }).pendingMessages,
+    ).toHaveLength(1);
+
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    (
+      provider as unknown as { flushPendingWebviewMessages: () => void }
+    ).flushPendingWebviewMessages.call(provider);
+
+    await Promise.resolve();
+
+    expect(mockPostMessage).toHaveBeenCalledTimes(2);
+    expect(mockPostMessage.mock.calls[1]?.[0]).toEqual({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "missed text",
+    });
+    expect(
+      (provider as unknown as { pendingMessages: unknown[] }).pendingMessages,
+    ).toHaveLength(0);
+  });
+
+  it("preserves send order when multiple webview messages fail asynchronously", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const foreground = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "streaming",
+      title: "Session 1",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [] as unknown[],
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => foreground),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    mockPostMessage.mockResolvedValue(false);
+
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    const postMessage = (
+      provider as unknown as {
+        postMessage: (msg: Record<string, unknown>) => void;
+      }
+    ).postMessage;
+
+    postMessage.call(provider, {
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "first",
+    });
+    postMessage.call(provider, {
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "second",
+    });
+    postMessage.call(provider, {
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "third",
+    });
+
+    await Promise.resolve();
+
+    expect(
+      (
+        provider as unknown as { pendingMessages: Array<{ text?: string }> }
+      ).pendingMessages.map((msg) => msg.text),
+    ).toEqual(["first", "second", "third"]);
+  });
+
+  it("hydrates the foreground transcript when the VS Code webview reconnects", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const foreground = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      title: "Session 1",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 12,
+      lastOutputTokens: 0,
+      getAllMessages: () =>
+        [
+          { role: "user", content: "prompt" },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "missed response" }],
+          },
+        ] as unknown[],
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => foreground),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      listPersistedSessions: vi.fn(() => []),
+      getRecentBgRoutingSummaries: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    const receiveListeners: Array<(msg: Record<string, unknown>) => void> = [];
+    (provider as unknown as { view: unknown }).view = {
+      webview: {
+        postMessage: mockPostMessage.mockResolvedValue(true),
+        options: {},
+        asWebviewUri: vi.fn((uri: unknown) => uri),
+        onDidReceiveMessage: (
+          listener: (msg: Record<string, unknown>) => void,
+        ) => {
+          receiveListeners.push(listener);
+          return { dispose: vi.fn() };
+        },
+        html: "",
+      },
+      onDidDispose: vi.fn(),
+      onDidChangeVisibility: vi.fn(),
+    };
+
+    provider.resolveWebviewView(
+      (provider as unknown as { view: unknown }).view as never,
+    );
+    receiveListeners[0]?.({ command: "webviewReady" });
+    await Promise.resolve();
+
+    expect(
+      mockPostMessage.mock.calls.some(
+        ([message]) =>
+          message.type === "agentSessionLoaded" &&
+          message.sessionId === "session-1" &&
+          Array.isArray(message.messages) &&
+          message.messages.some(
+            (msg: { role?: string; content?: unknown }) =>
+              msg.role === "assistant" &&
+              Array.isArray(msg.content) &&
+              msg.content.some(
+                (block: { type?: string; text?: string }) =>
+                  block.type === "text" && block.text === "missed response",
+              ),
+          ),
       ),
     ).toBe(true);
   });

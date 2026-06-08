@@ -3,7 +3,12 @@ import "./styles.css";
 
 import { BrowserGatewayApp } from "./BrowserGatewayApp";
 import type { BrowserGatewayThemeSnapshot } from "../../shared/types";
+import { installClipboardShim } from "./installClipboardShim";
 import { render } from "preact";
+
+// The gateway is served over plain HTTP locally, so `navigator.clipboard` is
+// absent. Install a fallback before Monaco/app code touches the clipboard.
+installClipboardShim();
 
 declare global {
   interface Window {

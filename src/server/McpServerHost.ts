@@ -1,15 +1,14 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { EventStore } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { randomUUID } from "crypto";
 import type * as http from "http";
-
 import type * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import type { EventStore } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { ToolCallTracker } from "./ToolCallTracker.js";
+import { randomUUID } from "crypto";
 import { registerTools } from "./registerTools.js";
 
 interface Session {
@@ -94,6 +93,7 @@ export class McpServerHost {
 
   private tracker: ToolCallTracker;
   private extensionUri: vscode.Uri;
+  private globalStorageUri: vscode.Uri;
 
   /** Fired when sessions are created, initialized with clientInfo, closed, or pruned. */
   onSessionChanged?: () => void;
@@ -104,12 +104,14 @@ export class McpServerHost {
     approvalPanel: ApprovalPanelProvider,
     tracker: ToolCallTracker,
     extensionUri: vscode.Uri,
+    globalStorageUri: vscode.Uri,
   ) {
     this.authToken = authToken;
     this.approvalManager = approvalManager;
     this.approvalPanel = approvalPanel;
     this.tracker = tracker;
     this.extensionUri = extensionUri;
+    this.globalStorageUri = globalStorageUri;
     this.cleanupInterval = setInterval(
       () => this.pruneIdleSessions(),
       CLEANUP_INTERVAL,
@@ -181,6 +183,7 @@ export class McpServerHost {
       () => transport.sessionId,
       this.tracker,
       this.extensionUri,
+      this.globalStorageUri,
       {
         isSessionTrusted,
         markSessionTrusted,

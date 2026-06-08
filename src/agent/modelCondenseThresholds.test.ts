@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 describe("modelCondenseThresholds", () => {
   it("defaults large-context frontier models to 0.6", () => {
     expect(getDefaultAutoCondenseThreshold("claude-sonnet-4-6")).toBe(0.6);
-    expect(getDefaultAutoCondenseThreshold("claude-opus-4-6")).toBe(0.6);
+    expect(getDefaultAutoCondenseThreshold("claude-opus-4-8")).toBe(0.6);
     expect(getDefaultAutoCondenseThreshold("gpt-5.4")).toBe(0.6);
     expect(getDefaultAutoCondenseThreshold("gpt-5.4-pro")).toBe(0.6);
   });

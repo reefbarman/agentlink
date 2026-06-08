@@ -2526,11 +2526,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         void this.sendModelsUpdate();
         this.sendSlashCommands();
         this.sendSessionList();
-        // Flush any messages queued before the webview was ready
-        for (const pending of this.pendingMessages) {
-          this.view?.webview.postMessage(pending);
-        }
-        this.pendingMessages = [];
+        // Flush any messages queued before the webview was ready. Use the same
+        // guarded send path as live messages so a reload/crash during replay does
+        // not silently drop transcript events.
+        this.flushPendingWebviewMessages();
         // Restore last session if there is no foreground session yet
         if (!this.sessionManager?.getForegroundSession()) {
           this.postMessage({ type: "agentRestoreSessionStart" });
@@ -2553,6 +2552,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               void this.sendDebugInfo();
             });
         } else {
+          const fg = this.sessionManager.getForegroundSession();
+          if (fg) {
+            this.postSessionLoaded(fg, {
+              checkpoints: this.getSessionCheckpoints(fg.id),
+            });
+          }
           this.sendInitialState();
           void this.sendDebugInfo();
         }
@@ -5286,6 +5291,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Inject a prompt into the chat input and optionally focus the panel.
    * Used by code actions (Fix/Explain with AgentLink).
    */
+  public async startPromptInMode(opts: {
+    prompt: string;
+    mode?: string;
+    autoSubmit?: boolean;
+  }): Promise<void> {
+    const mode = opts.mode?.trim();
+    if (mode && this.sessionManager) {
+      const current = this.sessionManager.getForegroundSession();
+      if (current) {
+        await this.sessionManager.switchForegroundMode(mode);
+      } else {
+        const session = await this.sessionManager.createSession(mode);
+        this.postSessionLoaded(session, {
+          checkpoints: this.getSessionCheckpoints(session.id),
+          tailTurns: 0,
+        });
+      }
+      this.sendInitialState();
+    }
+    this.injectPrompt(opts.prompt, [], opts.autoSubmit);
+  }
+
   public injectPrompt(
     prompt: string,
     attachments?: string[],
@@ -5353,11 +5380,51 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private postMessage(msg: ExtensionToWebview): void {
     this.projectExtensionMessage(msg);
-    if (!this.webviewReady) {
+    this.sendOrQueueWebviewMessage(msg);
+  }
+
+  private sendOrQueueWebviewMessage(msg: ExtensionToWebview): void {
+    if (!this.webviewReady || !this.view) {
       this.pendingMessages.push(msg);
       return;
     }
-    this.view?.webview.postMessage(msg);
+
+    Promise.resolve(this.view.webview.postMessage(msg)).then(
+      (delivered) => {
+        if (delivered !== false) return;
+        this.handleWebviewPostMessageFailure(msg, "postMessage returned false");
+      },
+      (err: unknown) => {
+        this.handleWebviewPostMessageFailure(msg, String(err));
+      },
+    );
+  }
+
+  private flushPendingWebviewMessages(): void {
+    if (this.pendingMessages.length === 0) return;
+
+    const pending = this.pendingMessages;
+    this.pendingMessages = [];
+    for (let i = 0; i < pending.length; i += 1) {
+      const msg = pending[i];
+      if (!msg) continue;
+      this.sendOrQueueWebviewMessage(msg);
+      if (!this.webviewReady) {
+        this.pendingMessages.push(...pending.slice(i + 1));
+        break;
+      }
+    }
+  }
+
+  private handleWebviewPostMessageFailure(
+    msg: ExtensionToWebview,
+    reason: string,
+  ): void {
+    if (!this.webviewReady && this.pendingMessages.includes(msg)) return;
+
+    this.log(`[webview] postMessage failed; queueing until ready: ${reason}`);
+    this.webviewReady = false;
+    this.pendingMessages.push(msg);
   }
 
   private postSessionLoaded(

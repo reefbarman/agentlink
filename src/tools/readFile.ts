@@ -32,6 +32,11 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
 
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
 
+// --- PDF support ---
+
+const PDF_EXTENSION = ".pdf";
+const MAX_PDF_SIZE = 50 * 1024 * 1024; // 50 MB
+
 // --- Concurrency control ---
 // Concurrent read_file calls can overwhelm VS Code's language server
 // (symbol outline requests are single-threaded). Limit concurrency to
@@ -375,6 +380,111 @@ export function buildReadFileError(
 
 // --- Main handler ---
 
+async function extractPdfText(filePath: string): Promise<string> {
+  const data = await fs.readFile(filePath);
+  // Lazy-import unpdf so the PDF.js runtime is only loaded when a PDF is
+  // actually read, never at extension activation. unpdf is a serverless build
+  // of PDF.js with no native canvas / worker dependencies, so it survives the
+  // single-file esbuild bundle (unlike pdf-parse, whose @napi-rs/canvas +
+  // pdf.worker file loads break under bundling and crashed activation).
+  const { extractText, getDocumentProxy } = await import("unpdf");
+  const pdf = await getDocumentProxy(new Uint8Array(data));
+  const { text } = await extractText(pdf, { mergePages: true });
+  return text;
+}
+
+async function readPdfFile(
+  filePath: string,
+  params: {
+    path: string;
+    offset?: number;
+    limit?: number;
+  },
+): Promise<ToolResult> {
+  const stat = await fs.stat(filePath);
+  if (stat.size > MAX_PDF_SIZE) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            error: `PDF too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_PDF_SIZE / 1024 / 1024} MB`,
+            path: params.path,
+          }),
+        },
+      ],
+    };
+  }
+
+  const raw = await extractPdfText(filePath);
+  const allLines = raw.split("\n");
+  const totalLines = allLines.length;
+  const offset = Math.max(1, params.offset ?? 1);
+
+  if (offset > totalLines) {
+    const emptyResult: Record<string, unknown> = {
+      total_lines: totalLines,
+      showing: "0-0",
+      content: "",
+      path: params.path,
+      size: stat.size,
+      modified: stat.mtime.toISOString(),
+      file_type: "pdf",
+    };
+    const gitStatus = getGitStatus(filePath);
+    if (gitStatus) emptyResult.git_status = gitStatus;
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(emptyResult) }],
+    };
+  }
+
+  const defaultLimit = 2000;
+  const rawLimit = params.limit ?? defaultLimit;
+  if (rawLimit <= 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            error: `Invalid limit: ${rawLimit}. Must be a positive number.`,
+            path: params.path,
+          }),
+        },
+      ],
+    };
+  }
+
+  const limit = Math.min(rawLimit, totalLines - offset + 1);
+  const lines = allLines.slice(offset - 1, offset - 1 + limit);
+  const numbered = lines
+    .map((line, i) => {
+      const lineNum = offset + i;
+      return `${lineNum} | ${line}`;
+    })
+    .join("\n");
+
+  const result: Record<string, unknown> = {
+    total_lines: totalLines,
+    showing: `${offset}-${offset + lines.length - 1}`,
+  };
+
+  const showingAll = offset === 1 && lines.length === totalLines;
+  if (!showingAll) {
+    result.truncated = true;
+  }
+
+  result.size = stat.size;
+  result.modified = stat.mtime.toISOString();
+  const gitStatus = getGitStatus(filePath);
+  if (gitStatus) result.git_status = gitStatus;
+  result.file_type = "pdf";
+  result.content = numbered;
+
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+  };
+}
+
 export function isEnoentWithSingleSuggestion(
   payload: Record<string, unknown>,
 ): payload is Record<string, unknown> & {
@@ -445,9 +555,13 @@ export async function handleReadFile(
       }
     }
 
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === PDF_EXTENSION) {
+      return await readPdfFile(filePath, params);
+    }
+
     if (isBinaryFile(filePath)) {
-      // Check if it's an image we can return as image content
-      const ext = path.extname(filePath).toLowerCase();
+      // Check if it's a supported binary format we can return.
       const mimeType = IMAGE_EXTENSIONS[ext];
 
       if (mimeType) {

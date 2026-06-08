@@ -307,9 +307,9 @@ export class AgentSessionManager {
     if (newProviderId !== fg.providerId) {
       fg.providerId = newProviderId;
       await fg.rebuildSystemPrompt({
-      devMode: this.devMode,
-      workspaceFolders: this.getWorkspaceFolders(),
-    });
+        devMode: this.devMode,
+        workspaceFolders: this.getWorkspaceFolders(),
+      });
     }
     await this.maybeAutoCondenseForegroundSession();
   }
@@ -1353,6 +1353,10 @@ export class AgentSessionManager {
       lightweight: isReviewTask,
       providerId,
     });
+
+    if (route.thinkingBudget === 0) {
+      session.reasoningEffort = "none";
+    }
 
     session.title = task.slice(0, 80);
     // Set status to "streaming" BEFORE registering the session, so the first

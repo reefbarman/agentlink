@@ -6,8 +6,13 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 
-const readFileMock = vi.fn();
-const statMock = vi.fn();
+const { readFileMock, statMock, extractTextMock, getDocumentProxyMock } =
+  vi.hoisted(() => ({
+    readFileMock: vi.fn(),
+    statMock: vi.fn(),
+    extractTextMock: vi.fn(),
+    getDocumentProxyMock: vi.fn(),
+  }));
 
 vi.mock("fs/promises", () => ({
   default: {
@@ -16,6 +21,11 @@ vi.mock("fs/promises", () => ({
   },
   readFile: readFileMock,
   stat: statMock,
+}));
+
+vi.mock("unpdf", () => ({
+  extractText: extractTextMock,
+  getDocumentProxy: getDocumentProxyMock,
 }));
 
 const resolveAndValidatePathMock = vi.fn();
@@ -47,6 +57,9 @@ describe("handleReadFile outside-workspace approval ordering", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    isBinaryFileMock.mockReturnValue(false);
+    getDocumentProxyMock.mockResolvedValue({ numPages: 1 });
+    extractTextMock.mockResolvedValue({ totalPages: 1, text: "" });
   });
 
   it("returns rejected status when outside-workspace approval is denied for a missing file", async () => {
@@ -194,6 +207,53 @@ describe("handleReadFile outside-workspace approval ordering", () => {
       expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
     },
   );
+
+  it("extracts PDF text by extension before binary detection", async () => {
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: "/workspace/docs/spec.pdf",
+      inWorkspace: true,
+    });
+    isBinaryFileMock.mockReturnValue(false);
+    statMock.mockResolvedValue({
+      size: 1024,
+      mtime: new Date("2024-01-02T03:04:05.000Z"),
+    });
+    readFileMock.mockResolvedValue(Buffer.from("%PDF"));
+    extractTextMock.mockResolvedValue({ totalPages: 1, text: "Title\nBody" });
+
+    const approvalManager = {
+      isPathTrusted: vi.fn(() => true),
+    } as unknown as ApprovalManager;
+    const approvalPanel = {} as ApprovalPanelProvider;
+
+    const result = await handleReadFile(
+      { path: "docs/spec.pdf", include_symbols: false },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(isBinaryFileMock).not.toHaveBeenCalled();
+    expect(getDocumentProxyMock).toHaveBeenCalledWith(
+      new Uint8Array(Buffer.from("%PDF")),
+    );
+    expect(extractTextMock).toHaveBeenCalledWith(
+      { numPages: 1 },
+      { mergePages: true },
+    );
+
+    const text = result.content.find((c) => c.type === "text")?.text;
+    expect(text).toBeTruthy();
+    const parsed = JSON.parse(text!);
+    expect(parsed).toMatchObject({
+      total_lines: 2,
+      showing: "1-2",
+      size: 1024,
+      modified: "2024-01-02T03:04:05.000Z",
+      file_type: "pdf",
+      content: "1 | Title\n2 | Body",
+    });
+  });
 
   it("skips outside-workspace approval for trusted paths and returns file-not-found", async () => {
     resolveAndValidatePathMock.mockReturnValue({

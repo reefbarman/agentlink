@@ -38,14 +38,12 @@ if [[ "$tool_name" =~ $file_tools_re ]]; then
 fi
 
 # Allow Read only for non-text file types that read_file still does not handle
-# (PDFs and notebooks — use read_file for local image files)
+# (notebooks — use read_file for local images and PDFs)
 if [ "$tool_name" = "Read" ]; then
   file_path=$(echo "$input" | jq -r '.tool_input.file_path // ""')
   ext="${file_path##*.}"
   ext_lower=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
   case "$ext_lower" in
-    # PDFs (built-in Read supports pages parameter)
-    pdf)  exit 0 ;;
     # Jupyter notebooks (built-in Read renders cells + outputs)
     ipynb)  exit 0 ;;
   esac

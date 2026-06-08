@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
         id: `bg-${seq}`,
         mode: opts.mode,
         model: opts.config.model,
+        reasoningEffort: "high",
         providerId: opts.providerId,
         title: "New Chat",
         background: Boolean(opts.background),
@@ -189,6 +190,33 @@ describe("AgentSessionManager background agents", () => {
     expect(summaries[0]).toContain("mode=");
     expect(summaries[0]).toContain("provider=");
     expect(summaries[0]).toContain("model=");
+  });
+
+  it("disables reasoning effort when the background route disables thinking", async () => {
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "review",
+      resolvedModel: "gpt-5.4-pro",
+      resolvedProvider: "codex",
+      taskClass: "review_plan",
+      routingReason: "test route",
+      fallbackUsed: false,
+      thinkingBudget: 0,
+      maxToolCalls: 5,
+      maxApiTurns: 3,
+      toolProfile: "review",
+    });
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "plan review",
+      message: "review the plan",
+      taskClass: "review_plan",
+    });
+
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.reasoningEffort).toBe("none");
   });
 
   it("killBackground stops a running session and returns partial output", async () => {

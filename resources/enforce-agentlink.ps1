@@ -47,7 +47,7 @@ if ($toolName -in $fileTools) {
 }
 
 # Allow Read only for non-text file types that read_file still does not handle
-# (PDFs and notebooks - use read_file for local image files)
+# (notebooks - use read_file for local image files and PDFs)
 if ($toolName -eq "Read") {
     $filePath = ""
     if ($input.tool_input -and $input.tool_input.PSObject.Properties["file_path"]) {
@@ -56,8 +56,6 @@ if ($toolName -eq "Read") {
     if ($filePath) {
         $ext = [System.IO.Path]::GetExtension($filePath).TrimStart(".").ToLower()
         $allowedExts = @(
-            # PDFs (built-in Read supports pages parameter)
-            "pdf",
             # Jupyter notebooks (built-in Read renders cells + outputs)
             "ipynb"
         )
