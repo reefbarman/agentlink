@@ -322,12 +322,18 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Be concise");
   });
 
-  it("prefers get_context for first-pass orientation on known files", async () => {
+  it("prefers get_context directly when a file path is already known", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
       providerId: "codex",
     });
+    expect(result).toContain("Known file path beats search");
+    expect(result).toContain(
+      "do not call `codebase_search` just to rediscover it",
+    );
+    expect(result).toContain("Go directly to `get_context`");
     expect(result).toContain("`get_context` for known files");
     expect(result).toContain("prefer `get_context` over `read_file`");
+    expect(result).toContain("`codebase_search` FIRST for unknown locations");
     expect(result).toContain("`read_file` for exact reads");
   });
 

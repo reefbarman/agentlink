@@ -164,10 +164,11 @@ const PROVIDER_PROMPTS: Record<string, string> = {
 
 ### Tool rules
 
-- **\`codebase_search\` FIRST** — Always use it before \`search_files\` or \`list_files\` when you don't know exactly where something is. It returns semantically relevant results even when you don't know the exact function or variable name.
+- **Known file path beats search** — If the user, an error, a stack trace, a prior tool result, or the task definition already gives you a concrete file path, do not call \`codebase_search\` just to rediscover it. Go directly to \`get_context\` for first-pass orientation on that file.
+- **\`get_context\` for known files** — When you already know the file path and need first-pass orientation, prefer \`get_context\` over \`read_file\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
+- **\`codebase_search\` FIRST for unknown locations** — Use it before \`search_files\` or \`list_files\` only when you don't know exactly where something is. It returns semantically relevant results even when you don't know the exact function or variable name.
 - **\`search_files\` for exact matches only** — Use regex search only after \`codebase_search\` has identified the relevant area, or when you need to find a specific literal string/pattern you already know.
 - **Never use \`list_files\` to explore** — Do not browse directory trees to find code. Use \`codebase_search\` to find files by meaning instead.
-- **\`get_context\` for known files** — When you already know the file path and need first-pass orientation, prefer \`get_context\` over \`read_file\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
 - **\`read_file\` for exact reads** — Use \`read_file\` when you need local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via \`query\`. When using \`read_file\` for code orientation, pass \`query\` to jump to the relevant section rather than reading from line 1.
 - **Terminal reuse by default** — For sequential \`execute_command\` calls, omit \`terminal_name\` and \`terminal_id\` so AgentLink reuses the default terminal. Only create a separate terminal when you intentionally need isolation (parallel/background work or temporary environment changes).
 - **Close dedicated terminals when done** — If you created named/background terminals, use \`close_terminals\` for targeted cleanup instead of leaving stale terminal tabs.
