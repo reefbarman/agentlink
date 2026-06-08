@@ -601,6 +601,7 @@ export async function handleApplyDiff(
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
   onApprovalRequest?: OnApprovalRequest,
+  mode?: string,
 ): Promise<ToolResult> {
   try {
     const { absolutePath: filePath, inWorkspace } = resolveAndValidatePath(
@@ -757,9 +758,15 @@ export async function handleApplyDiff(
       .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
 
+    // In architect mode, plan documents are the expected output and can be
+    // written without prompting for per-file approval.
+    const isArchitectPlanFile =
+      mode === "architect" && inWorkspace && relPath.startsWith("plans/");
+
     // Auto-approve check (includes recent single-use approvals within TTL)
     const canAutoApprove =
       masterBypass ||
+      isArchitectPlanFile ||
       (inWorkspace
         ? approvalManager.isAgentWriteApproved(sessionId, filePath)
         : approvalManager.isFileWriteApproved(sessionId, filePath));

@@ -967,6 +967,7 @@ export async function dispatchToolCall(
         approvalPanel,
         sessionId,
         onApprovalRequest,
+        ctx.mode,
       );
     case "find_and_replace":
       return handleFindAndReplace(
