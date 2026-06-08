@@ -525,6 +525,7 @@ export class AgentEngine {
       let retryCount = 0;
       let emptyResponseRetryCount = 0;
       let emptyResponseCondenseAttempted = false;
+      let thinkingSignatureRetryAttempted = false;
       let credentialRefreshCount = 0;
       // Sticky for the whole user turn: once we fall back from remote response
       // state to full local replay, keep reporting that on the eventual
@@ -946,6 +947,22 @@ export class AgentEngine {
               type: "warning",
               message:
                 "Codex could not resume the prior response state — retrying this turn with full local replay.",
+            };
+            continue;
+          }
+
+          if (
+            provider.id === "anthropic" &&
+            !thinkingSignatureRetryAttempted &&
+            /Invalid `signature` in `thinking` block|invalid.*signature.*thinking/i.test(
+              streamErrMsg,
+            )
+          ) {
+            thinkingSignatureRetryAttempted = true;
+            yield {
+              type: "warning",
+              message:
+                "Anthropic rejected a thinking replay signature — retrying with sanitized replay history.",
             };
             continue;
           }

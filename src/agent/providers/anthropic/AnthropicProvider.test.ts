@@ -1,6 +1,10 @@
+import {
+  AnthropicProvider,
+  sanitizeMessagesForAnthropicReplay,
+} from "./AnthropicProvider.js";
 import { describe, expect, it } from "vitest";
 
-import { AnthropicProvider } from "./AnthropicProvider.js";
+import type { MessageParam } from "../types.js";
 
 describe("AnthropicProvider capabilities", () => {
   const provider = new AnthropicProvider();
@@ -30,5 +34,105 @@ describe("AnthropicProvider capabilities", () => {
     expect(
       provider.getCapabilities("claude-haiku-4-5-20251001").maxOutputTokens,
     ).toBe(64_000);
+  });
+});
+
+describe("sanitizeMessagesForAnthropicReplay", () => {
+  it("strips historical thinking blocks while preserving text", () => {
+    const messages: MessageParam[] = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private", signature: "sig" },
+          { type: "text", text: "visible answer" },
+        ],
+      },
+    ];
+
+    expect(sanitizeMessagesForAnthropicReplay(messages)).toEqual({
+      messages: [
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "visible answer" }],
+        },
+      ],
+      strippedThinking: true,
+      strippedThinkingFromToolUse: false,
+    });
+  });
+
+  it("preserves assistant tool_use adjacency after stripping thinking", () => {
+    const messages: MessageParam[] = [
+      { role: "user", content: "read a file" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "need tool", signature: "sig" },
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "read_file",
+            input: { path: "src/index.ts" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: "file contents",
+          },
+        ],
+      },
+    ];
+
+    expect(sanitizeMessagesForAnthropicReplay(messages)).toEqual({
+      messages: [
+        { role: "user", content: "read a file" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_1",
+              name: "read_file",
+              input: { path: "src/index.ts" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_1",
+              content: "file contents",
+            },
+          ],
+        },
+      ],
+      strippedThinking: true,
+      strippedThinkingFromToolUse: true,
+    });
+  });
+
+  it("drops messages that only contain thinking blocks", () => {
+    const messages: MessageParam[] = [
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "private", signature: "sig" }],
+      },
+      { role: "user", content: "continue" },
+    ];
+
+    expect(sanitizeMessagesForAnthropicReplay(messages)).toEqual({
+      messages: [{ role: "user", content: "continue" }],
+      strippedThinking: true,
+      strippedThinkingFromToolUse: false,
+    });
   });
 });

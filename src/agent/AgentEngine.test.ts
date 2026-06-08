@@ -1286,6 +1286,76 @@ describe("AgentEngine", () => {
       }
     });
 
+    it("retries Anthropic invalid thinking signature errors once", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      Object.defineProperty(provider, "id", { value: "anthropic" });
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error(
+            '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid `signature` in `thinking` block"}}',
+          );
+        }
+        yield* makeProviderStream({ text: "Recovered response" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+      const warnings = events.filter((e) => e.type === "warning");
+      const errorEvent = events.find((e) => e.type === "error");
+      const lastMessage =
+        session.getAllMessages()[session.getAllMessages().length - 1];
+
+      expect(attempts).toBe(2);
+      expect(warnings).toContainEqual(
+        expect.objectContaining({
+          type: "warning",
+          message:
+            "Anthropic rejected a thinking replay signature — retrying with sanitized replay history.",
+        }),
+      );
+      expect(errorEvent).toBeUndefined();
+      expect(lastMessage).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "Recovered response" }],
+      });
+    });
+
+    it("does not loop on repeated Anthropic invalid thinking signature errors", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      Object.defineProperty(provider, "id", { value: "anthropic" });
+      provider.stream = async function* () {
+        attempts += 1;
+        throw new Error(
+          '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid `signature` in `thinking` block"}}',
+        );
+        yield* makeProviderStream();
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+      const warnings = events.filter((e) => e.type === "warning");
+      const errorEvent = events.find((e) => e.type === "error");
+
+      expect(attempts).toBe(2);
+      expect(
+        warnings.filter(
+          (e) =>
+            e.message ===
+            "Anthropic rejected a thinking replay signature — retrying with sanitized replay history.",
+        ),
+      ).toHaveLength(1);
+      expect(errorEvent).toBeDefined();
+    });
+
     it("recovers silently on the first empty response retry", async () => {
       let attempts = 0;
       const provider = makeMockProvider();

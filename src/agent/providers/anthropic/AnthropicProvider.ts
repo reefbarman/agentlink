@@ -153,11 +153,12 @@ export class AnthropicProvider implements ModelProvider {
       signal,
     } = request;
 
-    // Build Anthropic-native request params
+    // Build Anthropic-native request params. Historical extended-thinking
+    // signatures are provider-private replay artifacts; keep them in the local
+    // transcript/UI, but do not send them back to Anthropic.
+    const sanitizedReplay = sanitizeMessagesForAnthropicReplay(messages);
     const anthropicMessages = addMessageCacheBreakpoints(
-      mergeConsecutiveUserMessages(
-        messages.map(({ role, content }) => ({ role, content })),
-      ),
+      mergeConsecutiveUserMessages(sanitizedReplay.messages),
     ) as Anthropic.MessageParam[];
 
     const anthropicTools = tools
@@ -189,7 +190,10 @@ export class AnthropicProvider implements ModelProvider {
     };
 
     const requestedEffort = reasoningEffort ?? "high";
-    if (requestedEffort !== "none") {
+    if (
+      requestedEffort !== "none" &&
+      !sanitizedReplay.strippedThinkingFromToolUse
+    ) {
       const params = requestParams as unknown as Record<string, unknown>;
       if (supportsAdaptiveThinking(model)) {
         params.thinking = { type: "adaptive" };
@@ -379,7 +383,9 @@ export class AnthropicProvider implements ModelProvider {
       max_tokens: maxTokens,
       ...(temperature !== undefined ? { temperature } : {}),
       system: systemPrompt,
-      messages: messages.map(({ role, content }) => ({
+      messages: mergeConsecutiveUserMessages(
+        sanitizeMessagesForAnthropicReplay(messages).messages,
+      ).map(({ role, content }) => ({
         role,
         content,
       })) as Anthropic.MessageParam[],
@@ -446,6 +452,39 @@ export class AnthropicProvider implements ModelProvider {
 
 function supportsAdaptiveThinking(model: string): boolean {
   return model === "claude-opus-4-8" || model === "claude-sonnet-4-6";
+}
+
+export interface AnthropicReplaySanitizationResult {
+  messages: MessageParam[];
+  strippedThinking: boolean;
+  strippedThinkingFromToolUse: boolean;
+}
+
+export function sanitizeMessagesForAnthropicReplay(
+  messages: MessageParam[],
+): AnthropicReplaySanitizationResult {
+  const sanitized: MessageParam[] = [];
+  let strippedThinking = false;
+  let strippedThinkingFromToolUse = false;
+
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) {
+      sanitized.push({ role: msg.role, content: msg.content });
+      continue;
+    }
+
+    const hadThinking = msg.content.some((block) => block.type === "thinking");
+    const hasToolUse = msg.content.some((block) => block.type === "tool_use");
+    const content = msg.content.filter((block) => block.type !== "thinking");
+    if (hadThinking) {
+      strippedThinking = true;
+      strippedThinkingFromToolUse ||= msg.role === "assistant" && hasToolUse;
+    }
+    if (content.length === 0) continue;
+    sanitized.push({ role: msg.role, content });
+  }
+
+  return { messages: sanitized, strippedThinking, strippedThinkingFromToolUse };
 }
 
 function toAnthropicTool(tool: ToolDefinition): Anthropic.Tool {
