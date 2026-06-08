@@ -11,6 +11,12 @@ Reset the work copy and print the task prompt:
 node --experimental-strip-types scripts/agent-eval.mts reset --task small-ts-bugfix
 ```
 
+Run the fixture validation from the repo root:
+
+```sh
+npm --prefix fixtures/agent-eval-workspace/work test
+```
+
 Generate a JSON report after an AgentLink run has produced a trace summary:
 
 ```sh
