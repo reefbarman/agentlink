@@ -2,6 +2,7 @@
   "id": "small-ts-bugfix",
   "title": "Fix cart totals so discounts cannot make totals negative",
   "workspace": "fixtures/agent-eval-workspace/work",
+  "pristine": "fixtures/agent-eval-workspace/pristine-small-ts-bugfix",
   "prompt": "In the AgentLink eval fixture workspace, fix the cart total bug so discounts cannot make totals negative. Edit only files under fixtures/agent-eval-workspace/work. Run the fixture validation command and report what changed.",
   "validationCommand": "npm --prefix fixtures/agent-eval-workspace/work test",
   "expectedFiles": ["src/cart.js"],

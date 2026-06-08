@@ -1,0 +1,13 @@
+{
+  "id": "architect-plan",
+  "title": "Plan tag support for the notes app fixture",
+  "workspace": "fixtures/agent-eval-workspace/work",
+  "pristine": "fixtures/agent-eval-workspace/pristine-architect-plan",
+  "prompt": "In the AgentLink eval fixture workspace, create an implementation plan for adding tag support to the notes app. Do not modify files. The plan should identify the relevant files, outline steps, mention tests, and call out risks or compatibility concerns.",
+  "successCriteria": [
+    "No files are modified.",
+    "The plan identifies src/notes.js and docs/requirements.md as relevant context.",
+    "The plan includes test coverage for lowercase normalization and empty-tag filtering.",
+    "The plan avoids adding a database or external dependency."
+  ]
+}

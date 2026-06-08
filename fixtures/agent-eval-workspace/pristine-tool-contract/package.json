@@ -1,0 +1,8 @@
+{
+  "name": "agentlink-tool-contract-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/toolRegistry.test.js"
+  }
+}

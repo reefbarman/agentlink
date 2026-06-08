@@ -8,6 +8,7 @@ interface EvalTaskDefinition {
   id: string;
   title: string;
   workspace: string;
+  pristine: string;
   prompt: string;
   validationCommand?: string;
   expectedFiles?: string[];
@@ -47,6 +48,7 @@ interface ParsedArgs {
   session?: string;
   summary?: string;
   output?: string;
+  latest?: string;
 }
 
 const REPO_ROOT = path.resolve(
@@ -54,7 +56,6 @@ const REPO_ROOT = path.resolve(
   "..",
 );
 const FIXTURE_ROOT = path.join(REPO_ROOT, "fixtures", "agent-eval-workspace");
-const PRISTINE_DIR = path.join(FIXTURE_ROOT, "pristine");
 const WORK_DIR = path.join(FIXTURE_ROOT, "work");
 const TASKS_DIR = path.join(FIXTURE_ROOT, "tasks");
 const DEFAULT_TASK_ID = "small-ts-bugfix";
@@ -64,19 +65,21 @@ function main(): void {
   const command = args._[0] ?? "help";
 
   if (command === "reset") {
-    resetFixture();
     const task = loadTask(args.task ?? DEFAULT_TASK_ID);
+    resetFixture(task);
     printTask(task);
     return;
   }
 
   if (command === "report") {
     const task = loadTask(args.task ?? DEFAULT_TASK_ID);
-    const traceSummary = args.session
-      ? loadTraceSummaryFromSession(args.session)
-      : args.summary
-        ? loadTraceSummaryFromPath(args.summary)
-        : undefined;
+    const traceSummary = isEnabled(args.latest)
+      ? loadLatestTraceSummary()
+      : args.session
+        ? loadTraceSummaryFromSession(args.session)
+        : args.summary
+          ? loadTraceSummaryFromPath(args.summary)
+          : undefined;
     const report = buildReport(task, traceSummary);
     const outputPath = path.resolve(
       REPO_ROOT,
@@ -91,11 +94,12 @@ function main(): void {
   printHelp();
 }
 
-function resetFixture(): void {
+function resetFixture(task: EvalTaskDefinition): void {
+  const pristineDir = path.resolve(REPO_ROOT, task.pristine);
   fs.rmSync(WORK_DIR, { recursive: true, force: true });
-  copyDir(PRISTINE_DIR, WORK_DIR);
+  copyDir(pristineDir, WORK_DIR);
   console.log(
-    `Reset ${path.relative(REPO_ROOT, WORK_DIR)} from pristine fixture.`,
+    `Reset ${path.relative(REPO_ROOT, WORK_DIR)} from ${path.relative(REPO_ROOT, pristineDir)}.`,
   );
 }
 
@@ -106,6 +110,9 @@ function loadTask(taskId: string): EvalTaskDefinition {
 
 function printTask(task: EvalTaskDefinition): void {
   console.log(`\nTask: ${task.title}`);
+  if (task.pristine) {
+    console.log(`Pristine: ${task.pristine}`);
+  }
   console.log(`Workspace: ${task.workspace}`);
   if (task.validationCommand) {
     console.log(`Validation: ${task.validationCommand}`);
@@ -149,10 +156,45 @@ function loadTraceSummaryFromSession(sessionId: string): TraceSummary {
   return loadTraceSummaryFromPath(summaryPath);
 }
 
+function loadLatestTraceSummary(): TraceSummary {
+  const historyDir = path.join(REPO_ROOT, ".agentlink", "history");
+  const candidates: Array<{ path: string; modifiedAt: number }> = [];
+  collectTraceSummaries(historyDir, candidates);
+  candidates.sort((a, b) => b.modifiedAt - a.modifiedAt);
+  const latest = candidates[0];
+  if (!latest) {
+    throw new Error(`No activity trace summaries found under ${historyDir}`);
+  }
+  return loadTraceSummaryFromPath(latest.path);
+}
+
+function collectTraceSummaries(
+  dir: string,
+  candidates: Array<{ path: string; modifiedAt: number }>,
+): void {
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectTraceSummaries(entryPath, candidates);
+    } else if (entry.isFile() && entry.name === "activity-trace-summary.json") {
+      candidates.push({
+        path: entryPath,
+        modifiedAt: fs.statSync(entryPath).mtimeMs,
+      });
+    }
+  }
+}
+
+function isEnabled(value: string | undefined): boolean {
+  return value !== undefined && value !== "false" && value !== "0";
+}
+
 function loadTraceSummaryFromPath(summaryPath: string): TraceSummary {
-  return JSON.parse(
-    fs.readFileSync(path.resolve(REPO_ROOT, summaryPath), "utf-8"),
-  ) as TraceSummary;
+  const resolvedPath = path.isAbsolute(summaryPath)
+    ? summaryPath
+    : path.resolve(REPO_ROOT, summaryPath);
+  return JSON.parse(fs.readFileSync(resolvedPath, "utf-8")) as TraceSummary;
 }
 
 function copyDir(source: string, target: string): void {
@@ -193,7 +235,8 @@ function setArg(args: ParsedArgs, key: string, value: string): void {
     key === "task" ||
     key === "session" ||
     key === "summary" ||
-    key === "output"
+    key === "output" ||
+    key === "latest"
   ) {
     args[key] = value;
   }
@@ -204,7 +247,9 @@ function printHelp(): void {
 
 Usage:
   node --experimental-strip-types scripts/agent-eval.mts reset [--task small-ts-bugfix]
-  node --experimental-strip-types scripts/agent-eval.mts report [--task small-ts-bugfix] [--session <sessionId> | --summary <path>] [--output <path>]
+  node --experimental-strip-types scripts/agent-eval.mts report [--task small-ts-bugfix] [--latest true | --session <sessionId> | --summary <path>] [--output <path>]
+
+Trace source precedence for report is: --latest, then --session, then --summary.
 
 Commands:
   reset   Reset fixture work directory and print the task prompt.

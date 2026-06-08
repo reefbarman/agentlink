@@ -344,10 +344,16 @@ implementation surface.
 - Tests cover trace capping, persistence, task-memory filtering, and eval report generation.
 - `npm run lint` and `npm test` pass.
 
-## Deferred Follow-up Phases
+## Follow-up Phases
 
-1. **Phase 0.5:** expand the benchmark suite to architect/planning, tool-contract/docs update,
-   and multi-file refactor tasks; add Markdown comparison reports.
+1. **Phase 0.5:** expand the benchmark suite beyond the initial bugfix fixture.
+   - Implemented task-specific pristine fixture directories so each benchmark can reset to its
+     own safe workspace state.
+   - Added `architect-plan`, `tool-contract-docs`, and `multi-file-refactor` task definitions to
+     cover planning, contract/docs updates, and multi-file code edits.
+   - Added `report --latest true` for quick local trace-summary snapshots; use immediately after
+     an evaluated session, because subsequent AgentLink activity can update the newest trace file.
+   - Still deferred: Markdown comparison reports and multi-run aggregate summaries.
 2. **Phase 1:** Activity Timeline / Flight Recorder product surface, backed by the trace model but
    with deliberate UX, browser policy, and privacy review.
 3. **Phase 2:** Context Pack + Working Set using trace/read metrics as the baseline.
