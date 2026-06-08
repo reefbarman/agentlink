@@ -18,6 +18,9 @@ interface EvalTaskDefinition {
 interface TraceSummary {
   sessionId: string;
   eventCount: number;
+  recordedEventCount?: number;
+  droppedEventCount?: number;
+  traceTruncated?: boolean;
   toolCalls: number;
   toolCallsByName: Record<string, number>;
   totalToolResultTextChars?: number;
@@ -34,6 +37,11 @@ interface TraceSummary {
   errorCount: number;
   lastEventAt?: number;
   finalStatus?: string;
+  deltaFrom?: {
+    eventCount: number;
+    lastEventAt?: number;
+    source?: string;
+  };
 }
 
 interface EvalReport {
@@ -51,6 +59,7 @@ interface ParsedArgs {
   summary?: string;
   output?: string;
   latest?: string;
+  since?: string;
 }
 
 const REPO_ROOT = path.resolve(
@@ -73,16 +82,34 @@ function main(): void {
     return;
   }
 
+  if (command === "mark") {
+    const traceSummary = loadLatestTraceSummary();
+    const outputPath = path.resolve(
+      REPO_ROOT,
+      args.output ??
+        path.join("fixtures", "agent-eval-workspace", "agent-eval-mark.json"),
+    );
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify(traceSummary, null, 2),
+      "utf-8",
+    );
+    console.log(`Wrote ${path.relative(REPO_ROOT, outputPath)}`);
+    return;
+  }
+
   if (command === "report") {
     const task = loadTask(args.task ?? DEFAULT_TASK_ID);
-    const traceSummary = isEnabled(args.latest)
-      ? loadLatestTraceSummary()
-      : args.session
-        ? loadTraceSummaryFromSession(args.session)
-        : args.summary
-          ? loadTraceSummaryFromPath(args.summary)
-          : undefined;
-    const report = buildReport(task, traceSummary);
+    const traceSummary = loadSelectedTraceSummary(args);
+    const baselineSummary = args.since
+      ? loadTraceSummaryFromPath(args.since)
+      : undefined;
+    const report = buildReport(
+      task,
+      traceSummary && baselineSummary
+        ? diffTraceSummary(traceSummary, baselineSummary, args.since)
+        : traceSummary,
+    );
     const outputPath = path.resolve(
       REPO_ROOT,
       args.output ??
@@ -145,6 +172,121 @@ function buildReport(
     ...(traceSummary ? { traceSummary } : {}),
     notes,
   };
+}
+
+function loadSelectedTraceSummary(args: ParsedArgs): TraceSummary | undefined {
+  return isEnabled(args.latest)
+    ? loadLatestTraceSummary()
+    : args.session
+      ? loadTraceSummaryFromSession(args.session)
+      : args.summary
+        ? loadTraceSummaryFromPath(args.summary)
+        : undefined;
+}
+
+function diffTraceSummary(
+  current: TraceSummary,
+  baseline: TraceSummary,
+  source?: string,
+): TraceSummary {
+  if (current.sessionId !== baseline.sessionId) {
+    throw new Error(
+      `Cannot diff trace summaries from different sessions: ${baseline.sessionId} vs ${current.sessionId}`,
+    );
+  }
+
+  return {
+    sessionId: current.sessionId,
+    eventCount: subtractNumber(current.eventCount, baseline.eventCount),
+    recordedEventCount: subtractOptionalNumber(
+      current.recordedEventCount,
+      baseline.recordedEventCount,
+    ),
+    droppedEventCount: subtractOptionalNumber(
+      current.droppedEventCount,
+      baseline.droppedEventCount,
+    ),
+    traceTruncated: current.traceTruncated || baseline.traceTruncated,
+    toolCalls: subtractNumber(current.toolCalls, baseline.toolCalls),
+    toolCallsByName: diffNumberMap(
+      current.toolCallsByName,
+      baseline.toolCallsByName,
+    ),
+    totalToolResultTextChars: subtractOptionalNumber(
+      current.totalToolResultTextChars,
+      baseline.totalToolResultTextChars,
+    ),
+    toolResultTextCharsByName: diffNumberMap(
+      current.toolResultTextCharsByName,
+      baseline.toolResultTextCharsByName,
+    ),
+    apiCalls: subtractNumber(current.apiCalls, baseline.apiCalls),
+    totalInputTokens: subtractNumber(
+      current.totalInputTokens,
+      baseline.totalInputTokens,
+    ),
+    totalOutputTokens: subtractNumber(
+      current.totalOutputTokens,
+      baseline.totalOutputTokens,
+    ),
+    totalCacheReadTokens: subtractNumber(
+      current.totalCacheReadTokens,
+      baseline.totalCacheReadTokens,
+    ),
+    totalCacheCreationTokens: subtractNumber(
+      current.totalCacheCreationTokens,
+      baseline.totalCacheCreationTokens,
+    ),
+    condenseCount: subtractNumber(
+      current.condenseCount,
+      baseline.condenseCount,
+    ),
+    userInterjectionCount: subtractNumber(
+      current.userInterjectionCount,
+      baseline.userInterjectionCount,
+    ),
+    finalMarkerCount: subtractNumber(
+      current.finalMarkerCount,
+      baseline.finalMarkerCount,
+    ),
+    warningCount: subtractNumber(current.warningCount, baseline.warningCount),
+    errorCount: subtractNumber(current.errorCount, baseline.errorCount),
+    lastEventAt: current.lastEventAt,
+    finalStatus: current.finalStatus,
+    deltaFrom: {
+      eventCount: baseline.eventCount,
+      lastEventAt: baseline.lastEventAt,
+      source,
+    },
+  };
+}
+
+function subtractNumber(current: number, baseline: number): number {
+  return Math.max(0, current - baseline);
+}
+
+function subtractOptionalNumber(
+  current: number | undefined,
+  baseline: number | undefined,
+): number | undefined {
+  if (current === undefined && baseline === undefined) return undefined;
+  return subtractNumber(current ?? 0, baseline ?? 0);
+}
+
+function diffNumberMap(
+  current: Record<string, number> | undefined,
+  baseline: Record<string, number> | undefined,
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  const keys = new Set([
+    ...Object.keys(current ?? {}),
+    ...Object.keys(baseline ?? {}),
+  ]);
+  for (const key of keys) {
+    const value = subtractNumber(current?.[key] ?? 0, baseline?.[key] ?? 0);
+    if (value > 0) result[key] = value;
+  }
+  return result;
 }
 
 function loadTraceSummaryFromSession(sessionId: string): TraceSummary {
@@ -238,7 +380,8 @@ function setArg(args: ParsedArgs, key: string, value: string): void {
     key === "session" ||
     key === "summary" ||
     key === "output" ||
-    key === "latest"
+    key === "latest" ||
+    key === "since"
   ) {
     args[key] = value;
   }
@@ -249,12 +392,15 @@ function printHelp(): void {
 
 Usage:
   node --experimental-strip-types scripts/agent-eval.mts reset [--task small-ts-bugfix]
-  node --experimental-strip-types scripts/agent-eval.mts report [--task small-ts-bugfix] [--latest true | --session <sessionId> | --summary <path>] [--output <path>]
+  node --experimental-strip-types scripts/agent-eval.mts mark [--output <path>]
+  node --experimental-strip-types scripts/agent-eval.mts report [--task small-ts-bugfix] [--latest true | --session <sessionId> | --summary <path>] [--since <markPath>] [--output <path>]
 
 Trace source precedence for report is: --latest, then --session, then --summary.
+Use mark before a benchmark and report --since <markPath> after it to produce task-scoped deltas.
 
 Commands:
   reset   Reset fixture work directory and print the task prompt.
+  mark    Write the latest trace summary as a baseline mark.
   report  Write a JSON eval report from a trace summary.
 `);
 }
