@@ -1,0 +1,13 @@
+{
+  "id": "small-ts-bugfix",
+  "title": "Fix cart totals so discounts cannot make totals negative",
+  "workspace": "fixtures/agent-eval-workspace/work",
+  "prompt": "In the AgentLink eval fixture workspace, fix the cart total bug so discounts cannot make totals negative. Edit only files under fixtures/agent-eval-workspace/work. Run the fixture validation command and report what changed.",
+  "validationCommand": "npm test",
+  "expectedFiles": ["src/cart.js"],
+  "successCriteria": [
+    "The failing discount edge-case test passes.",
+    "The fix is localized to the fixture work directory.",
+    "The final response reports the validation command and result."
+  ]
+}

@@ -5,6 +5,7 @@ import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
+import { ActivityTraceRecorder } from "./ActivityTraceRecorder.js";
 import type { AgentMode } from "./modes.js";
 import {
   getAgentTools,
@@ -67,6 +68,7 @@ export class AgentSessionManager {
   private devMode: boolean;
   private store?: SessionStore;
   private log?: (msg: string) => void;
+  private activityTraceRecorder: ActivityTraceRecorder;
 
   /** CheckpointManager shared across sessions (one shadow repo per workspace) */
   private checkpointManager: CheckpointManager | null = null;
@@ -159,6 +161,9 @@ export class AgentSessionManager {
     this.devMode = devMode ?? false;
     this.store = store;
     this.log = log;
+    this.activityTraceRecorder = new ActivityTraceRecorder({
+      workspaceDir: cwd,
+    });
 
     // Initialize checkpoint manager asynchronously — failures are non-fatal
     this.checkpointManager = new CheckpointManager({
@@ -188,6 +193,16 @@ export class AgentSessionManager {
     if (this.engine) {
       this.engine.setToolContext(ctx);
     }
+  }
+
+  private recordAndEmitEvent(sessionId: string, event: AgentEvent): void {
+    const session = this.sessions.get(sessionId);
+    this.activityTraceRecorder.appendAgentEvent(
+      sessionId,
+      event,
+      session?.background ? "background_agent" : "foreground_agent",
+    );
+    this.onEvent?.(sessionId, event);
   }
 
   private getEngine(): AgentEngine {
@@ -542,7 +557,7 @@ export class AgentSessionManager {
       const existing = this.checkpoints.get(session.id) ?? [];
       existing.push(checkpoint);
       this.checkpoints.set(session.id, existing);
-      this.onEvent?.(session.id, {
+      this.recordAndEmitEvent(session.id, {
         type: "checkpoint_created",
         checkpointId: checkpoint.id,
         turnIndex,
@@ -612,7 +627,7 @@ export class AgentSessionManager {
             // Don't forward yet — check for pending todos first
             continue;
           }
-          this.onEvent?.(session.id, event);
+          this.recordAndEmitEvent(session.id, event);
 
           // After forwarding a user_interjection event, create a checkpoint so
           // the user can revert to the state immediately before that injected
@@ -637,7 +652,7 @@ export class AgentSessionManager {
               const existing = this.checkpoints.get(session.id) ?? [];
               existing.push(interjectionCheckpoint);
               this.checkpoints.set(session.id, existing);
-              this.onEvent?.(session.id, {
+              this.recordAndEmitEvent(session.id, {
                 type: "checkpoint_created",
                 checkpointId: interjectionCheckpoint.id,
                 turnIndex: interjectionTurnIndex,
@@ -693,7 +708,7 @@ export class AgentSessionManager {
         }
 
         // Emit the deferred done
-        this.onEvent?.(session.id, {
+        this.recordAndEmitEvent(session.id, {
           type: "done",
           totalInputTokens: session.totalInputTokens,
           totalOutputTokens: session.totalOutputTokens,
@@ -705,10 +720,14 @@ export class AgentSessionManager {
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : String(err);
       session.status = "error";
-      this.onEvent?.(session.id, { type: "error", error, retryable: false });
+      this.recordAndEmitEvent(session.id, {
+        type: "error",
+        error,
+        retryable: false,
+      });
       // Persist before emitting done so sendSessionList sees the saved session
       this.saveSession(session.id);
-      this.onEvent?.(session.id, {
+      this.recordAndEmitEvent(session.id, {
         type: "done",
         totalInputTokens: session.totalInputTokens,
         totalOutputTokens: session.totalOutputTokens,
@@ -810,14 +829,18 @@ export class AgentSessionManager {
         if (event.type === "done") {
           this.saveSession(session.id);
         }
-        this.onEvent?.(session.id, event);
+        this.recordAndEmitEvent(session.id, event);
       }
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : String(err);
       session.status = "error";
-      this.onEvent?.(session.id, { type: "error", error, retryable: false });
+      this.recordAndEmitEvent(session.id, {
+        type: "error",
+        error,
+        retryable: false,
+      });
       this.saveSession(session.id);
-      this.onEvent?.(session.id, {
+      this.recordAndEmitEvent(session.id, {
         type: "done",
         totalInputTokens: session.totalInputTokens,
         totalOutputTokens: session.totalOutputTokens,
@@ -927,7 +950,7 @@ export class AgentSessionManager {
         if (event.type === "condense") {
           condenseSucceeded = true;
         }
-        this.onEvent?.(session.id, event);
+        this.recordAndEmitEvent(session.id, event);
       }
       this.saveSession(session.id);
 
@@ -937,18 +960,18 @@ export class AgentSessionManager {
             if (event.type === "done") {
               this.saveSession(session.id);
             }
-            this.onEvent?.(session.id, event);
+            this.recordAndEmitEvent(session.id, event);
           }
         } catch (err: unknown) {
           const error = err instanceof Error ? err.message : String(err);
           session.status = "error";
-          this.onEvent?.(session.id, {
+          this.recordAndEmitEvent(session.id, {
             type: "error",
             error,
             retryable: false,
           });
           this.saveSession(session.id);
-          this.onEvent?.(session.id, {
+          this.recordAndEmitEvent(session.id, {
             type: "done",
             totalInputTokens: session.totalInputTokens,
             totalOutputTokens: session.totalOutputTokens,
@@ -960,7 +983,7 @@ export class AgentSessionManager {
       }
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : String(err);
-      this.onEvent?.(session.id, { type: "condense_error", error });
+      this.recordAndEmitEvent(session.id, { type: "condense_error", error });
     } finally {
       session.status = "idle";
       this.onSessionsChanged?.();
@@ -1477,14 +1500,18 @@ export class AgentSessionManager {
             statusDetail: this.bgStatusDetail.get(session.id),
           });
 
-          this.onEvent?.(session.id, event);
+          this.recordAndEmitEvent(session.id, event);
         }
       } catch (err: unknown) {
         const error = err instanceof Error ? err.message : String(err);
         session.status = "error";
         this.setBgError(session.id, error);
-        this.onEvent?.(session.id, { type: "error", error, retryable: false });
-        this.onEvent?.(session.id, {
+        this.recordAndEmitEvent(session.id, {
+          type: "error",
+          error,
+          retryable: false,
+        });
+        this.recordAndEmitEvent(session.id, {
           type: "done",
           totalInputTokens: session.totalInputTokens,
           totalOutputTokens: session.totalOutputTokens,
