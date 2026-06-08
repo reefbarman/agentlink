@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
-import * as path from "path";
 import * as os from "os";
-import { loadCustomInstructions, buildSystemPrompt } from "./systemPrompt.js";
+import * as path from "path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildSystemPrompt, loadCustomInstructions } from "./systemPrompt.js";
 
 let tmpDir: string;
 let tmpHome: string;
@@ -319,6 +320,15 @@ describe("buildSystemPrompt", () => {
     });
     expect(result).toContain("Provider-Specific Behavior");
     expect(result).toContain("Be concise");
+  });
+
+  it("prefers get_context for first-pass orientation on known files", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      providerId: "codex",
+    });
+    expect(result).toContain("`get_context` for known files");
+    expect(result).toContain("prefer `get_context` over `read_file`");
+    expect(result).toContain("`read_file` for exact reads");
   });
 
   it("does not include provider section when no providerId is given", async () => {

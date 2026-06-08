@@ -442,7 +442,7 @@ Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not avai
 
 ### get_context
 
-Build a compact read-only context pack for an explicit file. This is intended to collapse the common orientation sequence into one bounded response while tracking whether the same content range has already been returned in the current session.
+Build a compact read-only context pack for an explicit file. Prefer this over `read_file` for first-pass orientation when the file path is already known; use `read_file` when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via `query`. This is intended to collapse the common orientation sequence into one bounded response while tracking whether the same content range has already been returned in the current session.
 
 | Parameter                  | Type     | Description                                                                                           |
 | -------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
