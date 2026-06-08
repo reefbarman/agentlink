@@ -20,6 +20,8 @@ interface TraceSummary {
   eventCount: number;
   toolCalls: number;
   toolCallsByName: Record<string, number>;
+  totalToolResultTextChars?: number;
+  toolResultTextCharsByName?: Record<string, number>;
   apiCalls: number;
   totalInputTokens: number;
   totalOutputTokens: number;

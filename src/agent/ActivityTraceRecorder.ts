@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import type { AgentEvent } from "./types.js";
+import type { ToolResult } from "../shared/types.js";
 import { randomUUID } from "crypto";
 
 export type ActivityTraceSource =
@@ -45,6 +46,8 @@ export interface ActivityTraceSummary {
   traceTruncated: boolean;
   toolCalls: number;
   toolCallsByName: Record<string, number>;
+  totalToolResultTextChars: number;
+  toolResultTextCharsByName: Record<string, number>;
   apiCalls: number;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -221,6 +224,7 @@ export class ActivityTraceRecorder {
             toolName: event.toolName,
             durationMs: event.durationMs,
             resultContentTypes: event.result.map((item) => item.type),
+            resultTextChars: countToolResultTextChars(event.result),
             input: summarizeToolInput(event.input),
             mcpApprovalPromoted: Boolean(event.mcpApprovalPromotion),
             mcpServerName: event.mcpApprovalPromotion?.serverName,
@@ -366,9 +370,10 @@ export class ActivityTraceRecorder {
     if (existing) return existing;
     const loaded = this.loadSummary(sessionId);
     if (loaded) {
-      this.summaries.set(sessionId, loaded);
-      this.sequences.set(sessionId, loaded.eventCount);
-      return loaded;
+      const normalized = normalizeSummary(loaded);
+      this.summaries.set(sessionId, normalized);
+      this.sequences.set(sessionId, normalized.eventCount);
+      return normalized;
     }
     const summary: ActivityTraceSummary = {
       sessionId,
@@ -378,6 +383,8 @@ export class ActivityTraceRecorder {
       traceTruncated: false,
       toolCalls: 0,
       toolCallsByName: {},
+      totalToolResultTextChars: 0,
+      toolResultTextCharsByName: {},
       apiCalls: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
@@ -409,6 +416,10 @@ export class ActivityTraceRecorder {
       const toolName = readString(event.payload, "toolName") ?? "unknown";
       summary.toolCallsByName[toolName] =
         (summary.toolCallsByName[toolName] ?? 0) + 1;
+      const resultTextChars = readNumber(event.payload, "resultTextChars");
+      summary.totalToolResultTextChars += resultTextChars;
+      summary.toolResultTextCharsByName[toolName] =
+        (summary.toolResultTextCharsByName[toolName] ?? 0) + resultTextChars;
     }
     if (event.kind === "api_request") {
       summary.apiCalls += 1;
@@ -470,6 +481,33 @@ export class ActivityTraceRecorder {
   private summaryPath(sessionId: string): string {
     return path.join(this.historyDir, sessionId, SUMMARY_FILE);
   }
+}
+
+function normalizeSummary(summary: ActivityTraceSummary): ActivityTraceSummary {
+  return {
+    ...summary,
+    toolCallsByName: summary.toolCallsByName ?? {},
+    totalToolResultTextChars: summary.totalToolResultTextChars ?? 0,
+    toolResultTextCharsByName: summary.toolResultTextCharsByName ?? {},
+  };
+}
+
+function countToolResultTextChars(result: ToolResult["content"]): number {
+  if (!Array.isArray(result)) return 0;
+  let total = 0;
+  for (const item of result) {
+    if (
+      item &&
+      typeof item === "object" &&
+      "type" in item &&
+      item.type === "text" &&
+      "text" in item &&
+      typeof item.text === "string"
+    ) {
+      total += item.text.length;
+    }
+  }
+  return total;
 }
 
 function summarizeText(prefix: string, text: string): string {

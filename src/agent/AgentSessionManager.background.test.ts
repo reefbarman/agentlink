@@ -92,6 +92,18 @@ vi.mock("./AgentSession.js", () => ({
   },
 }));
 
+async function waitFor<T>(
+  read: () => T,
+  predicate: (value: T) => boolean,
+): Promise<T> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const value = read();
+    if (predicate(value)) return value;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return read();
+}
+
 describe("AgentSessionManager background agents", () => {
   const config = {
     model: "claude-sonnet-4-6",
@@ -288,15 +300,16 @@ describe("AgentSessionManager background agents", () => {
       message: "inspect file",
     });
 
-    await new Promise((r) => setTimeout(r, 0));
-
     const session = (mgr as any).sessions.get(spawned.sessionId);
     session.status = "streaming";
     session.currentTool = "read_file";
 
-    const info = mgr
-      .getBgSessionInfos()
-      .find((s: any) => s.id === spawned.sessionId);
+    const info = await waitFor(
+      () =>
+        mgr.getBgSessionInfos().find((s: any) => s.id === spawned.sessionId),
+      (value) =>
+        value?.displayStatus === "Reading src/agent/ChatViewProvider.ts",
+    );
     expect(info).toBeDefined();
     expect(info!.displayStatus).toBe("Reading src/agent/ChatViewProvider.ts");
     expect(info!.displayStatusSource).toBe("heuristic");
