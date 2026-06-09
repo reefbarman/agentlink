@@ -168,6 +168,15 @@ export function emptyStructuralCache(
   };
 }
 
+export function getStructuralCachePath(cachePath: string): string {
+  const ext = path.extname(cachePath);
+  if (!ext) return `${cachePath}.structural.json`;
+  return path.join(
+    path.dirname(cachePath),
+    `${path.basename(cachePath, ext)}.structural${ext}`,
+  );
+}
+
 // --- File hashing ---
 
 export function hashContent(content: string): string {

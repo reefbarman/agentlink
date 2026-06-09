@@ -39,13 +39,19 @@ import {
 } from "./markdownChunker.js";
 import {
   buildPathSegments,
+  emptyStructuralCache,
+  getStructuralCachePath,
   loadCache,
+  loadStructuralCache,
   writeCache,
+  writeStructuralCache,
   diffFiles,
   scanFiles,
   readFilesBatch,
   type FileWithContent,
 } from "./workerLib.js";
+import { extractStructuralFile } from "./structuralExtractor.js";
+import type { StructuralGraphCache } from "./structuralGraph.js";
 import type {
   ExtensionToWorkerMessage,
   StartIndexMessage,
@@ -149,6 +155,104 @@ function countCachedChunks(cache: IndexCache): number {
   return total;
 }
 
+function loadWorkerStructuralCache(args: {
+  cachePath: string;
+  workspaceRoot: string;
+  collectionName: string;
+}): { path: string; cache: StructuralGraphCache } {
+  const structuralCachePath = getStructuralCachePath(args.cachePath);
+  const cache = loadStructuralCache(structuralCachePath, args.workspaceRoot);
+  cache.workspaceRoot = args.workspaceRoot;
+  cache.collectionName = args.collectionName;
+  return { path: structuralCachePath, cache };
+}
+
+function resetStructuralCache(
+  structuralCache: StructuralGraphCache,
+  workspaceRoot: string,
+  collectionName: string,
+): void {
+  const fresh = emptyStructuralCache(workspaceRoot, collectionName);
+  structuralCache.version = fresh.version;
+  structuralCache.workspaceRoot = fresh.workspaceRoot;
+  structuralCache.collectionName = fresh.collectionName;
+  structuralCache.generatedAt = fresh.generatedAt;
+  structuralCache.files = fresh.files;
+}
+
+function updateStructuralCacheForFiles(
+  structuralCache: StructuralGraphCache,
+  files: FileWithContent[],
+  workspaceRoot: string,
+): number {
+  const indexedAt = new Date().toISOString();
+  let updated = 0;
+  for (const file of files) {
+    const existing = structuralCache.files[file.relPath];
+    if (existing?.hash === file.hash) continue;
+    structuralCache.files[file.relPath] = extractStructuralFile({
+      content: file.content,
+      absPath: file.absPath,
+      relPath: file.relPath,
+      workspaceRoot,
+      hash: file.hash,
+      indexedAt,
+      mtimeMs: file.mtimeMs,
+      size: file.size,
+    });
+    updated++;
+  }
+  if (updated > 0) {
+    structuralCache.generatedAt = new Date().toISOString();
+  }
+  return updated;
+}
+
+async function backfillStructuralCacheForCachedFiles(args: {
+  files: string[];
+  workspaceRoot: string;
+  cache: IndexCache;
+  structuralCache: StructuralGraphCache;
+  errors: string[];
+}): Promise<number> {
+  const missingStructuralPaths: Array<{ absPath: string; relPath: string }> =
+    [];
+
+  for (const absPath of args.files) {
+    if (!absPath.startsWith(args.workspaceRoot)) continue;
+    const relPath = path.relative(args.workspaceRoot, absPath);
+    if (relPath.startsWith("..")) continue;
+
+    const cached = args.cache.files[relPath];
+    if (!cached) continue;
+
+    const structuralEntry = args.structuralCache.files[relPath];
+    if (structuralEntry?.hash === cached.hash) continue;
+
+    missingStructuralPaths.push({ absPath, relPath });
+  }
+
+  let updated = 0;
+  for (let i = 0; i < missingStructuralPaths.length; i += FILE_BATCH_SIZE) {
+    const readErrors: string[] = [];
+    const files = await readFilesBatch(
+      missingStructuralPaths.slice(i, i + FILE_BATCH_SIZE),
+      readErrors,
+    );
+    args.errors.push(...readErrors);
+
+    updated += updateStructuralCacheForFiles(
+      args.structuralCache,
+      files.filter(
+        (file) => args.cache.files[file.relPath]?.hash === file.hash,
+      ),
+      args.workspaceRoot,
+    );
+  }
+
+  return updated;
+}
+
 // --- Entry point ---
 
 process.on("message", (msg: ExtensionToWorkerMessage) => {
@@ -199,6 +303,8 @@ interface BatchConfig {
   collectionName: string;
   embeddingBearerToken: string;
   cachePath: string;
+  structuralCachePath: string;
+  workspaceRoot: string;
   granularity: ChunkGranularity;
 }
 
@@ -218,6 +324,7 @@ async function processFileBatch(
   files: FileWithContent[],
   config: BatchConfig,
   cache: IndexCache,
+  structuralCache: StructuralGraphCache,
 ): Promise<BatchResult> {
   const errors: string[] = [];
   let filesIndexed = 0;
@@ -317,15 +424,28 @@ async function processFileBatch(
     }
   }
 
-  // 5. Update cache for completed files
+  // 5. Update caches for processed files. Structural extraction is independent
+  // of embeddings, so keep the sidecar fresh even if vector upsert partially
+  // failed and the vector cache entry cannot be updated yet.
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     const ids = filePointIds.get(i) ?? [];
+    const indexedAt = new Date().toISOString();
+    structuralCache.files[file.relPath] = extractStructuralFile({
+      content: file.content,
+      absPath: file.absPath,
+      relPath: file.relPath,
+      workspaceRoot: config.workspaceRoot,
+      hash: file.hash,
+      indexedAt,
+      mtimeMs: file.mtimeMs,
+      size: file.size,
+    });
     if (ids.length > 0) {
       cache.files[file.relPath] = {
         hash: file.hash,
         pointIds: ids,
-        indexedAt: new Date().toISOString(),
+        indexedAt,
         mtimeMs: file.mtimeMs,
         size: file.size,
       };
@@ -333,7 +453,9 @@ async function processFileBatch(
     }
   }
   cache.granularity = config.granularity;
+  structuralCache.generatedAt = new Date().toISOString();
   writeCache(config.cachePath, cache);
+  writeStructuralCache(config.structuralCachePath, structuralCache);
 
   return { filesIndexed, chunksCreated, pointsUpserted, errors };
 }
@@ -355,10 +477,23 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
   setMarkdownGranularity(msg.granularity);
 
   try {
+    const { path: structuralCachePath, cache: structuralCache } =
+      loadWorkerStructuralCache({
+        cachePath: msg.cachePath,
+        workspaceRoot: msg.workspaceRoot,
+        collectionName: msg.collectionName,
+      });
+
     // Force re-index: delete collection and clear cache
     if (msg.force) {
       await deleteCollection(msg.qdrantUrl, msg.collectionName);
       writeCache(msg.cachePath, { version: 1, files: {} });
+      resetStructuralCache(
+        structuralCache,
+        msg.workspaceRoot,
+        msg.collectionName,
+      );
+      writeStructuralCache(structuralCachePath, structuralCache);
     }
 
     // Ensure Qdrant collection exists
@@ -374,6 +509,11 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       await ensureCollection(msg.qdrantUrl, msg.collectionName);
       cache.files = {};
       cache.granularity = msg.granularity;
+      resetStructuralCache(
+        structuralCache,
+        msg.workspaceRoot,
+        msg.collectionName,
+      );
     }
 
     // Phase 1: Scan files to determine what changed (paths only, no content held)
@@ -423,13 +563,31 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           }
         }
         delete cache.files[relPath];
+        delete structuralCache.files[relPath];
       }
       sendProgress("cleanup", staleRelPaths.length, staleRelPaths.length);
+      structuralCache.generatedAt = new Date().toISOString();
       writeCache(msg.cachePath, cache);
+      writeStructuralCache(structuralCachePath, structuralCache);
+    }
+
+    if (!aborted) {
+      const structuralBackfillCount =
+        await backfillStructuralCacheForCachedFiles({
+          files: msg.files,
+          workspaceRoot: msg.workspaceRoot,
+          cache,
+          structuralCache,
+          errors,
+        });
+      if (structuralBackfillCount > 0) {
+        writeStructuralCache(structuralCachePath, structuralCache);
+      }
     }
 
     if (aborted || toIndexPaths.length === 0) {
       writeCache(msg.cachePath, cache);
+      writeStructuralCache(structuralCachePath, structuralCache);
       sendComplete({
         filesIndexed: 0,
         totalFilesInIndex: Object.keys(cache.files).length,
@@ -452,6 +610,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       collectionName: msg.collectionName,
       embeddingBearerToken: msg.embeddingBearerToken,
       cachePath: msg.cachePath,
+      structuralCachePath,
+      workspaceRoot: msg.workspaceRoot,
       granularity: msg.granularity,
     };
 
@@ -487,6 +647,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
           }
           delete cache.files[file.relPath];
         }
+        delete structuralCache.files[file.relPath];
       }
 
       // Process batch through chunk → embed → upsert pipeline
@@ -497,7 +658,12 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         `batch ${batchNum + 1}/${totalBatches}`,
       );
 
-      const result = await processFileBatch(batchFiles, batchConfig, cache);
+      const result = await processFileBatch(
+        batchFiles,
+        batchConfig,
+        cache,
+        structuralCache,
+      );
       filesIndexed += result.filesIndexed;
       chunksCreated += result.chunksCreated;
       pointsUpserted += result.pointsUpserted;
@@ -508,7 +674,9 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
 
     // Final cache save
     cache.granularity = msg.granularity;
+    structuralCache.generatedAt = new Date().toISOString();
     writeCache(msg.cachePath, cache);
+    writeStructuralCache(structuralCachePath, structuralCache);
 
     sendComplete({
       filesIndexed,
@@ -546,6 +714,12 @@ async function handleIncrementalUpdate(
 
   try {
     const cache = loadCache(msg.cachePath);
+    const { path: structuralCachePath, cache: structuralCache } =
+      loadWorkerStructuralCache({
+        cachePath: msg.cachePath,
+        workspaceRoot: msg.workspaceRoot,
+        collectionName: msg.collectionName,
+      });
 
     // Handle removed files
     for (const absPath of msg.removed) {
@@ -564,6 +738,7 @@ async function handleIncrementalUpdate(
         }
       }
       delete cache.files[relPath];
+      delete structuralCache.files[relPath];
     }
 
     // Handle added/changed files — diff against cache
@@ -589,6 +764,7 @@ async function handleIncrementalUpdate(
           errors.push(`Failed to delete points for ${file.relPath}: ${err}`);
         }
       }
+      delete structuralCache.files[file.relPath];
     }
 
     // Process in batches using processFileBatch
@@ -598,13 +774,20 @@ async function handleIncrementalUpdate(
         collectionName: msg.collectionName,
         embeddingBearerToken: msg.embeddingBearerToken,
         cachePath: msg.cachePath,
+        structuralCachePath,
+        workspaceRoot: msg.workspaceRoot,
         granularity: msg.granularity,
       };
 
       for (let i = 0; i < toIndex.length; i += FILE_BATCH_SIZE) {
         if (aborted) break;
         const batch = toIndex.slice(i, i + FILE_BATCH_SIZE);
-        const result = await processFileBatch(batch, batchConfig, cache);
+        const result = await processFileBatch(
+          batch,
+          batchConfig,
+          cache,
+          structuralCache,
+        );
         filesIndexed += result.filesIndexed;
         chunksCreated += result.chunksCreated;
         pointsUpserted += result.pointsUpserted;
@@ -613,7 +796,9 @@ async function handleIncrementalUpdate(
     }
 
     cache.granularity = msg.granularity;
+    structuralCache.generatedAt = new Date().toISOString();
     writeCache(msg.cachePath, cache);
+    writeStructuralCache(structuralCachePath, structuralCache);
 
     sendComplete({
       filesIndexed,

@@ -7,6 +7,7 @@ import {
   buildPathSegments,
   diffFiles,
   emptyStructuralCache,
+  getStructuralCachePath,
   hashContent,
   isBinaryContent,
   loadCache,
@@ -235,6 +236,15 @@ describe("loadStructuralCache / writeStructuralCache", () => {
 
     expect(loadStructuralCache(cachePath, tmpDir)).toEqual(
       emptyStructuralCache(tmpDir),
+    );
+  });
+
+  it("derives the structural sidecar path from the vector cache path", () => {
+    expect(getStructuralCachePath(path.join(tmpDir, "al-123.json"))).toBe(
+      path.join(tmpDir, "al-123.structural.json"),
+    );
+    expect(getStructuralCachePath(path.join(tmpDir, "al-123"))).toBe(
+      path.join(tmpDir, "al-123.structural.json"),
     );
   });
 });
