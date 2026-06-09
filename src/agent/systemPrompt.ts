@@ -493,16 +493,7 @@ async function getSystemInfo(
 
   const modelLine = model ? `\n- Model: ${model}` : "";
 
-  // List additional workspace folders so the agent knows where each project
-  // lives without having to search for it. Only emitted for multi-root
-  // workspaces — a single root is already covered by the project root line.
-  let foldersSection = "";
-  if (workspaceFolders && workspaceFolders.length > 1) {
-    const items = workspaceFolders
-      .map((f) => `  - ${f.name}: ${f.path}`)
-      .join("\n");
-    foldersSection = `\n\n### Workspace Folders\n\nThis is a multi-root workspace. The following projects are open — use these paths directly instead of searching for them:\n\n${items}`;
-  }
+  const foldersSection = getWorkspaceFoldersSection(workspaceFolders);
 
   return `
 ## System Information
@@ -546,13 +537,32 @@ export async function loadCustomInstructions(
  * custom instructions, skills, and dev feedback — only keeps identity, mode
  * prompt, and the background review section.
  */
-function buildLightweightPrompt(mode: string, cwd: string): string {
+function getWorkspaceFoldersSection(
+  workspaceFolders?: WorkspaceFolderInfo[],
+): string {
+  // List additional workspace folders so the agent knows where each project
+  // lives without having to search for it. Only emitted for multi-root
+  // workspaces — a single root is already covered by the project root line.
+  if (!workspaceFolders || workspaceFolders.length <= 1) return "";
+
+  const items = workspaceFolders
+    .map((f) => `  - ${f.name}: ${f.path}`)
+    .join("\n");
+  return `\n\n### Workspace Folders\n\nThis is a multi-root workspace. The following projects are open — use these paths directly instead of searching for them:\n\n${items}`;
+}
+
+function buildLightweightPrompt(
+  mode: string,
+  cwd: string,
+  workspaceFolders?: WorkspaceFolderInfo[],
+): string {
   const modePrompt = MODE_PROMPTS[mode] ?? MODE_PROMPTS.review ?? "";
+  const foldersSection = getWorkspaceFoldersSection(workspaceFolders);
 
   return `You are AgentLink, a skilled software engineer running as a background review agent inside a VS Code extension.
 
 - The project root directory is: ${cwd}
-- All file paths should be relative to this directory.
+- All file paths should be relative to this directory.${foldersSection}
 ${modePrompt}
 
 ## Background Agent
@@ -594,7 +604,10 @@ export async function buildPromptArtifacts(
 ): Promise<PromptArtifacts> {
   // Lightweight path: minimal prompt for background review agents
   if (options?.lightweight) {
-    return { systemPrompt: buildLightweightPrompt(mode, cwd), skills: [] };
+    return {
+      systemPrompt: buildLightweightPrompt(mode, cwd, options.workspaceFolders),
+      skills: [],
+    };
   }
 
   const base = getBasePrompt(cwd);

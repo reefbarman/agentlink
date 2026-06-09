@@ -237,6 +237,20 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("web: /work/web");
   });
 
+  it("lists workspace folders in lightweight background review prompts", async () => {
+    const result = await buildSystemPrompt("review", tmpDir, {
+      isBackground: true,
+      lightweight: true,
+      workspaceFolders: [
+        { name: "api", path: "/work/api" },
+        { name: "web", path: "/work/web" },
+      ],
+    });
+    expect(result).toContain("Workspace Folders");
+    expect(result).toContain("api: /work/api");
+    expect(result).toContain("web: /work/web");
+  });
+
   it("omits the workspace folders section for a single root", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
       workspaceFolders: [{ name: "api", path: "/work/api" }],

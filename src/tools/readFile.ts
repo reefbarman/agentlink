@@ -272,20 +272,21 @@ async function getSymbolOutline(
     if (!symbols || symbols.length === 0) return undefined;
 
     // Group by kind for token efficiency — avoids repeating "method" 100+ times
-    const grouped: Record<string, string[]> = {};
+    const grouped: Record<string, string[]> = Object.create(null) as Record<
+      string,
+      string[]
+    >;
     for (const s of symbols) {
       const kind = SYMBOL_KIND_NAMES[s.kind] ?? "symbol";
       const line = s.range.start.line + 1;
-      if (!grouped[kind]) grouped[kind] = [];
-      grouped[kind].push(`${s.name} (line ${line})`);
+      (grouped[kind] ??= []).push(`${s.name} (line ${line})`);
 
       // Recurse one level into container symbols (class → methods, etc.)
       if (CONTAINER_KINDS.has(s.kind) && s.children?.length) {
         for (const child of s.children) {
           const childKind = SYMBOL_KIND_NAMES[child.kind] ?? "symbol";
           const childLine = child.range.start.line + 1;
-          if (!grouped[childKind]) grouped[childKind] = [];
-          grouped[childKind].push(
+          (grouped[childKind] ??= []).push(
             `${s.name}.${child.name} (line ${childLine})`,
           );
         }

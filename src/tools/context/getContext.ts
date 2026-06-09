@@ -175,7 +175,10 @@ async function getDocumentSymbols(
     return undefined;
   }
 
-  const grouped: Record<string, string[]> = {};
+  const grouped: Record<string, string[]> = Object.create(null) as Record<
+    string,
+    string[]
+  >;
   for (const symbol of symbols) {
     addSymbol(grouped, symbol);
     if (CONTAINER_KINDS.has(symbol.kind)) {
@@ -193,9 +196,9 @@ function addSymbol(
   parentName?: string,
 ): void {
   const kind = SYMBOL_KIND_NAMES[symbol.kind] ?? "symbol";
-  grouped[kind] ??= [];
+  const bucket = (grouped[kind] ??= []);
   const name = parentName ? `${parentName}.${symbol.name}` : symbol.name;
-  grouped[kind].push(`${name} (line ${symbol.range.start.line + 1})`);
+  bucket.push(`${name} (line ${symbol.range.start.line + 1})`);
 }
 
 function getDiagnosticsSummary(

@@ -93,6 +93,13 @@ const DIRECT_FILE_COMMANDS = new Map<
   ],
 ]);
 
+const PDF_READING_COMMANDS = new Set([
+  "pdftotext",
+  "pdfinfo",
+  "mutool",
+  "qpdf",
+]);
+
 /**
  * Check if any sub-command in a compound command starts with head/tail/cat/grep.
  * Splits on && ; || but NOT on | (pipe case is handled separately).
@@ -111,6 +118,12 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
       if (segmentTokens.length === 0) continue;
 
       const segmentCmd = segmentTokens[0];
+
+      const pdfReadViolation = checkPdfReadingCommand(
+        segmentCmd,
+        segmentTokens,
+      );
+      if (pdfReadViolation) return pdfReadViolation;
 
       if (segmentCmd === "tee") {
         const teeFiles = findTeeFileTargets(segmentTokens.slice(1));
@@ -355,6 +368,28 @@ function checkInlineScriptFileWriters(
   }
 
   return null;
+}
+
+function checkPdfReadingCommand(
+  cmd: string,
+  tokens: string[],
+): ValidationResult | null {
+  if (!PDF_READING_COMMANDS.has(cmd)) return null;
+
+  const pdfPath = tokens
+    .slice(1)
+    .find((token) => stripQuotes(token).toLowerCase().endsWith(".pdf"));
+  if (!pdfPath) return null;
+
+  const path = stripQuotes(pdfPath);
+  return {
+    type: "direct",
+    message: [
+      `Command rejected: "${cmd}" should not be used to read local PDFs in the terminal.`,
+      ``,
+      `Use read_file with path: "${path}" instead — it supports PDF text extraction and keeps file reads in AgentLink's structured tool flow.`,
+    ].join("\n"),
+  };
 }
 
 function buildInlineScriptWriteViolation(

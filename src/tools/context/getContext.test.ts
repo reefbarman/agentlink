@@ -199,6 +199,49 @@ describe("handleGetContext", () => {
     });
   });
 
+  it("groups constructor symbols without colliding with Object.prototype", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "example.ts");
+    const content = "class Example {\n  constructor() {}\n}\n";
+    fs.writeFileSync(filePath, content);
+    vscodeMock.workspaceFolders = [
+      { uri: { fsPath: fs.realpathSync(workspace) }, name: "workspace" },
+    ];
+    vscodeMock.openTextDocument.mockResolvedValue(
+      makeDocument(filePath, content),
+    );
+    vscodeMock.executeCommand.mockResolvedValue([
+      {
+        name: "Example",
+        kind: 4,
+        range: { start: { line: 0 }, end: { line: 2 } },
+        children: [
+          {
+            name: "constructor",
+            kind: 8,
+            range: { start: { line: 1 }, end: { line: 1 } },
+            children: [],
+          },
+        ],
+      },
+    ]);
+
+    const { handleGetContext } = await import("./getContext.js");
+    const result = await handleGetContext(
+      { path: "example.ts" },
+      { isPathTrusted: vi.fn(() => true) } as never,
+      {} as never,
+      "session-constructor-symbol",
+    );
+
+    const payload = JSON.parse(getText(result));
+    expect(payload.error).toBeUndefined();
+    expect(payload.symbols).toMatchObject({
+      class: ["Example (line 1)"],
+      constructor: ["Example.constructor (line 2)"],
+    });
+  });
+
   it("omits unchanged content only when dedupe is enabled for the same returned range", async () => {
     const workspace = makeTempWorkspace();
     const filePath = path.join(workspace, "example.ts");
