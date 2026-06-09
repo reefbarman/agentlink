@@ -246,7 +246,7 @@ describe("resolveBackgroundRoute", () => {
     expect(route.routingReason).toContain("ignored requested provider");
   });
 
-  it("returns thinkingBudget and maxToolCalls from review_code task class", async () => {
+  it("returns thinkingBudget and tool profile from review_code task class", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const codexModel = makeModel("gpt-5", "codex");
     const registry = makeRegistry([
@@ -265,8 +265,6 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.thinkingBudget).toBe(4096);
-    expect(route.maxToolCalls).toBe(10);
-    expect(route.maxApiTurns).toBe(5);
     expect(route.toolProfile).toBe("review");
   });
 
@@ -289,12 +287,10 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.thinkingBudget).toBe(0);
-    expect(route.maxToolCalls).toBe(5);
-    expect(route.maxApiTurns).toBe(3);
     expect(route.toolProfile).toBe("review");
   });
 
-  it("returns soft limits for general task class", async () => {
+  it("does not return turn or tool limits for general task class", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
 
@@ -309,12 +305,12 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.thinkingBudget).toBeUndefined();
-    expect(route.maxToolCalls).toBe(12);
-    expect(route.maxApiTurns).toBe(5);
+    expect("maxToolCalls" in route).toBe(false);
+    expect("maxApiTurns" in route).toBe(false);
     expect(route.toolProfile).toBeUndefined();
   });
 
-  it("returns readonly-research profile and soft limits", async () => {
+  it("returns readonly-research profile without turn or tool limits", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
 
@@ -329,19 +325,19 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedMode).toBe("ask");
-    expect(route.maxToolCalls).toBe(15);
-    expect(route.maxApiTurns).toBe(6);
+    expect("maxToolCalls" in route).toBe(false);
+    expect("maxApiTurns" in route).toBe(false);
     expect(route.toolProfile).toBe("readonly-research");
   });
 
   it.each([
-    ["research", "ask", 15, 6],
-    ["explore", "architect", 18, 7],
-    ["debug", "debug", 18, 7],
-    ["design", "architect", 12, 5],
+    ["research", "ask"],
+    ["explore", "architect"],
+    ["debug", "debug"],
+    ["design", "architect"],
   ] as const)(
-    "returns soft limits for %s task class",
-    async (taskClass, expectedMode, expectedToolCalls, expectedApiTurns) => {
+    "returns mode without turn or tool limits for %s task class",
+    async (taskClass, expectedMode) => {
       const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
       const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
 
@@ -356,8 +352,8 @@ describe("resolveBackgroundRoute", () => {
       );
 
       expect(route.resolvedMode).toBe(expectedMode);
-      expect(route.maxToolCalls).toBe(expectedToolCalls);
-      expect(route.maxApiTurns).toBe(expectedApiTurns);
+      expect("maxToolCalls" in route).toBe(false);
+      expect("maxApiTurns" in route).toBe(false);
       expect(route.toolProfile).toBeUndefined();
     },
   );

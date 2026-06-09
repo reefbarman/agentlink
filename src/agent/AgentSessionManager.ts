@@ -1450,8 +1450,6 @@ export class AgentSessionManager {
         for await (const event of bgEngine.run(session, {
           isBackground: true,
           toolProfile: route.toolProfile,
-          maxApiTurns: route.maxApiTurns,
-          maxToolCalls: route.maxToolCalls,
         })) {
           if (event.type === "text_delta") {
             this.appendBgStreamingText(session.id, event.text);
@@ -2200,6 +2198,9 @@ export class AgentSessionManager {
       // permanently hung waiters (e.g. if the session crashes without cleanup).
       const safetyMs = 30 * 60 * 1000;
       const timerId = setTimeout(() => {
+        this.log?.(
+          `[background] Result waiter timed out for ${sessionId}; background agent is still allowed to continue running.`,
+        );
         resolve(
           session.getLastAssistantText() ??
             "(background agent timed out waiting for result)",

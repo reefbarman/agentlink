@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
   return {
     setToolContext: vi.fn(),
     runBehavior: vi.fn<() => AsyncGenerator<unknown>>(),
+    runArgs: vi.fn(),
     resolveBackgroundRoute: vi.fn(
       async (
         _registry: unknown,
@@ -80,7 +81,8 @@ vi.mock("./backgroundModelRouter.js", () => ({
 vi.mock("./AgentEngine.js", () => ({
   AgentEngine: class MockAgentEngine {
     setToolContext = mocks.setToolContext;
-    run(..._args: unknown[]) {
+    run(...args: unknown[]) {
+      mocks.runArgs(...args);
       return mocks.runBehavior();
     }
   },
@@ -213,8 +215,6 @@ describe("AgentSessionManager background agents", () => {
       routingReason: "test route",
       fallbackUsed: false,
       thinkingBudget: 0,
-      maxToolCalls: 5,
-      maxApiTurns: 3,
       toolProfile: "review",
     });
 
@@ -229,6 +229,35 @@ describe("AgentSessionManager background agents", () => {
 
     const session = (mgr as any).sessions.get(spawned.sessionId);
     expect(session.reasoningEffort).toBe("none");
+  });
+
+  it("does not forward legacy route turn limits to background engine runs", async () => {
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "code",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "general",
+      routingReason: "legacy capped route",
+      fallbackUsed: false,
+      maxToolCalls: 1,
+      maxApiTurns: 1,
+    });
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    await mgr.spawnBackground({
+      task: "uncapped background task",
+      message: "run until complete",
+      taskClass: "general",
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mocks.runArgs).toHaveBeenCalled();
+    const opts = mocks.runArgs.mock.calls[0][1];
+    expect(opts).toMatchObject({ isBackground: true });
+    expect(opts.maxToolCalls).toBeUndefined();
+    expect(opts.maxApiTurns).toBeUndefined();
   });
 
   it("killBackground stops a running session and returns partial output", async () => {
@@ -406,8 +435,6 @@ describe("AgentSessionManager background agents", () => {
       taskClass: "readonly-research",
       routingReason: "test route",
       fallbackUsed: false,
-      maxToolCalls: 15,
-      maxApiTurns: 6,
       toolProfile: "readonly-research",
     });
     mocks.runBehavior.mockReturnValue(

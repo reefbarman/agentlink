@@ -1,12 +1,13 @@
-import routingConfigRaw from "./backgroundModelRouting.config.json";
-import type { ProviderRegistry } from "./providers/index.js";
-import type { ModelInfo } from "./providers/types.js";
 import type {
   BackgroundRouteResolution,
   ModelTier,
   ProviderStrategy,
   SpawnBackgroundRequest,
 } from "./backgroundTypes.js";
+
+import type { ModelInfo } from "./providers/types.js";
+import type { ProviderRegistry } from "./providers/index.js";
+import routingConfigRaw from "./backgroundModelRouting.config.json";
 
 interface TaskRouteRule {
   preferredMode?: string;
@@ -17,10 +18,6 @@ interface TaskRouteRule {
   requireReviewCapableModel?: boolean;
   /** Override thinking budget for background agents of this task class. */
   thinkingBudget?: number;
-  /** Soft maximum tool calls before the agent is asked to wrap up. */
-  maxToolCalls?: number;
-  /** Soft maximum API turns before the agent is asked to wrap up. */
-  maxApiTurns?: number;
   /** Restrict the tool set for this task class (e.g. "review" for read-only review tools). */
   toolProfile?: string;
 }
@@ -170,12 +167,6 @@ export async function resolveBackgroundRoute(
   const ruleOverrides = {
     ...(rule.thinkingBudget !== undefined
       ? { thinkingBudget: rule.thinkingBudget }
-      : {}),
-    ...(rule.maxToolCalls !== undefined
-      ? { maxToolCalls: rule.maxToolCalls }
-      : {}),
-    ...(rule.maxApiTurns !== undefined
-      ? { maxApiTurns: rule.maxApiTurns }
       : {}),
     ...(rule.toolProfile ? { toolProfile: rule.toolProfile } : {}),
   };
