@@ -238,6 +238,7 @@ describe("getAgentTools", () => {
     const names = reviewTools.map((t) => t.name);
     // Should include read-only review tools
     expect(names).toContain("read_file");
+    expect(names).toContain("get_context");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("search_files");
     expect(names).toContain("codebase_search");
@@ -264,6 +265,7 @@ describe("getAgentTools", () => {
     const names = tools.map((t) => t.name);
 
     expect(names).toContain("read_file");
+    expect(names).toContain("get_context");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("search_files");
     expect(names).toContain("codebase_search");
@@ -279,6 +281,22 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("apply_code_action");
     expect(names).not.toContain("ask_user");
     expect(names).not.toContain("spawn_background_agent");
+  });
+
+  it("restricts tools when toolProfile is set to 'btw'", () => {
+    const tools = getAgentTools(undefined, undefined, true, "btw");
+    const names = tools.map((t) => t.name);
+
+    expect(names).toContain("read_file");
+    expect(names).toContain("get_context");
+    expect(names).toContain("get_module_neighbors");
+    expect(names).toContain("codebase_search");
+    expect(names).toContain("get_call_hierarchy");
+
+    expect(names).not.toContain("write_file");
+    expect(names).not.toContain("apply_diff");
+    expect(names).not.toContain("execute_command");
+    expect(names).not.toContain("ask_user");
   });
 
   it("includes module neighbors in all built-in mode-filtered tool sets", () => {

@@ -509,6 +509,7 @@ export interface BgStatusResult {
 const TOOL_PROFILES: Record<string, Set<string>> = {
   review: new Set([
     "read_file",
+    "get_context",
     "get_module_neighbors",
     "search_files",
     "codebase_search",
@@ -523,6 +524,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
   ]),
   "readonly-research": new Set([
     "read_file",
+    "get_context",
     "get_module_neighbors",
     "search_files",
     "codebase_search",
@@ -540,6 +542,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
   ]),
   btw: new Set([
     "read_file",
+    "get_context",
     "get_module_neighbors",
     "search_files",
     "codebase_search",
