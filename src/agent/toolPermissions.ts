@@ -8,6 +8,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   read: [
     "read_file",
     "get_context",
+    "get_repo_map",
     "get_module_neighbors",
     "list_files",
     "open_file",

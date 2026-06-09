@@ -47,6 +47,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Read the structural repo-map sidecar for a file and return imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after get_context when you need module-level blast-radius awareness before editing. Requires the codebase index/structural sidecar to be built.",
   },
+  get_repo_map: {
+    label: "Repo map",
+    description:
+      "Read the structural repo-map sidecar and return a budgeted whole-project skeleton: cache metadata, aggregate counts, directory summaries, external dependency summaries, and prioritized file/module entries. Use before broad edits to understand module boundaries and drill into files with get_module_neighbors. Requires the codebase index/structural sidecar to be built.",
+  },
   load_skill: {
     label: "Load advertised skill",
     description:

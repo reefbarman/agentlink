@@ -117,6 +117,33 @@ export const getModuleNeighborsSchema = {
     ),
 };
 
+export const getRepoMapSchema = {
+  path: z
+    .string()
+    .optional()
+    .describe(
+      "Optional workspace-relative or absolute file/directory path to scope the repo map. Omit for the first workspace root.",
+    ),
+  max_chars: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Hard output budget in characters for the JSON payload (default 20000, minimum 2000, capped at 60000).",
+    ),
+  max_files: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Maximum file skeleton entries to include before budget truncation (default 200, capped at 1000).",
+    ),
+  include_external: z
+    .boolean()
+    .optional()
+    .describe(
+      "Include summarized external dependency specifiers (default true). Set false to reserve budget for internal files.",
+    ),
+};
+
 export const listFilesSchema = {
   path: z
     .string()

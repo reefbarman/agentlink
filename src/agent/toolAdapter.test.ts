@@ -23,6 +23,11 @@ vi.mock("../tools/getModuleNeighbors.js", () => ({
     content: [{ type: "text", text: "module neighbors" }],
   }),
 }));
+vi.mock("../tools/getRepoMap.js", () => ({
+  handleGetRepoMap: vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: "repo map" }],
+  }),
+}));
 vi.mock("../tools/listFiles.js", () => ({
   handleListFiles: vi
     .fn()
@@ -156,6 +161,7 @@ describe("READ_ONLY_TOOLS", () => {
   it("includes expected read-only tools", () => {
     expect(READ_ONLY_TOOLS.has("read_file")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_context")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("get_repo_map")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_module_neighbors")).toBe(true);
     expect(READ_ONLY_TOOLS.has("list_files")).toBe(true);
     expect(READ_ONLY_TOOLS.has("search_files")).toBe(true);
@@ -216,6 +222,7 @@ describe("getAgentTools", () => {
   it("includes the core file tools and foreground task status tool", () => {
     const names = getAgentTools().map((t) => t.name);
     expect(names).toContain("read_file");
+    expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("write_file");
     expect(names).toContain("apply_diff");
@@ -239,6 +246,7 @@ describe("getAgentTools", () => {
     // Should include read-only review tools
     expect(names).toContain("read_file");
     expect(names).toContain("get_context");
+    expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("search_files");
     expect(names).toContain("codebase_search");
@@ -266,6 +274,7 @@ describe("getAgentTools", () => {
 
     expect(names).toContain("read_file");
     expect(names).toContain("get_context");
+    expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("search_files");
     expect(names).toContain("codebase_search");
@@ -289,6 +298,7 @@ describe("getAgentTools", () => {
 
     expect(names).toContain("read_file");
     expect(names).toContain("get_context");
+    expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("codebase_search");
     expect(names).toContain("get_call_hierarchy");
@@ -299,9 +309,10 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("ask_user");
   });
 
-  it("includes module neighbors in all built-in mode-filtered tool sets", () => {
+  it("includes structural repo map tools in all built-in mode-filtered tool sets", () => {
     for (const mode of BUILT_IN_MODES) {
       const names = getAgentTools(mode).map((t) => t.name);
+      expect(names, mode.slug).toContain("get_repo_map");
       expect(names, mode.slug).toContain("get_module_neighbors");
     }
   });

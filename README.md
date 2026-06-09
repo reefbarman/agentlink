@@ -463,6 +463,31 @@ Build a compact read-only context pack for an explicit file. Prefer this over `r
 
 Working-set statuses are `new`, `unchanged`, `changed`, and `omitted_unchanged`. Omission is opt-in and exact-range only; overlapping ranges and full-file reads are tracked independently so callers do not lose content they have not explicitly received.
 
+### get_repo_map
+
+Read the structural repo-map sidecar as a budgeted whole-project or scoped skeleton. Use this before broad edits to understand module boundaries and high-level dependency shape, then drill into specific files with `get_module_neighbors` when you need exact imports/dependents.
+
+| Parameter          | Type     | Description                                                                                                         |
+| ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| `path`             | string?  | Optional workspace-relative or absolute file/directory path to scope the map. Omit for the first workspace root.    |
+| `max_chars`        | number?  | Hard output budget in characters for the JSON payload (default 20,000; minimum 2,000; capped at 60,000).            |
+| `max_files`        | number?  | Maximum file skeleton entries to include before budget truncation (default 200; capped at 1,000).                   |
+| `include_external` | boolean? | Include summarized external dependency specifiers (default true). Set false to reserve budget for internal modules. |
+
+**Response includes:**
+
+- `workspace_root`, `cache` — sidecar identity and cache location when available
+- `freshness.graph` — sidecar availability, generated timestamp, cache version, and indexed file count
+- `scope` — requested scope path and number of indexed files matched
+- `totals` — aggregate counts for files, imports, internal imports, external imports, exports, and symbols
+- `directories` — budgeted directory summaries sorted by file count
+- `external_dependencies` — budgeted external specifier summaries by importer count (omitted when `include_external: false`)
+- `files` — budgeted file/module skeletons: path, language, internal imports, external imports, exports, top-level symbols, and reverse import count
+- `budget` — requested budget, final serialized character count, truncation flag, and omitted counts
+- `note` — present for missing sidecar or empty scope cases
+
+The tool is intentionally static and budgeted. It is best for orientation, module-boundary discovery, and deciding where to inspect next; use `get_module_neighbors` for a complete single-file neighborhood and LSP tools for symbol-precise semantics. Requires the codebase index/structural sidecar to be built.
+
 ### get_module_neighbors
 
 Read the structural repo-map sidecar for a single source/config file. Use this after `get_context` when you need module-level blast-radius awareness before editing: what the file imports, what it exports, which indexed modules import it, and what top-level symbols it declares.

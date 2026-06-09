@@ -45,6 +45,7 @@ import { handleGetHover } from "../tools/getHover.js";
 import { handleGetInlayHints } from "../tools/getInlayHints.js";
 import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
 import { handleGetReferences } from "../tools/getReferences.js";
+import { handleGetRepoMap } from "../tools/getRepoMap.js";
 import { handleGetSymbols } from "../tools/getSymbols.js";
 import { handleGetTerminalOutput } from "../tools/getTerminalOutput.js";
 import { handleGetTypeHierarchy } from "../tools/getTypeHierarchy.js";
@@ -69,6 +70,7 @@ import { z } from "zod";
 export const READ_ONLY_TOOLS = new Set([
   "read_file",
   "get_context",
+  "get_repo_map",
   "get_module_neighbors",
   "load_skill",
   "list_files",
@@ -121,6 +123,7 @@ function zodSchemaToJsonSchema(
 const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   read_file: schemas.readFileSchema,
   get_context: schemas.getContextSchema,
+  get_repo_map: schemas.getRepoMapSchema,
   get_module_neighbors: schemas.getModuleNeighborsSchema,
   load_skill: schemas.loadSkillSchema,
   list_files: schemas.listFilesSchema,
@@ -510,6 +513,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
   review: new Set([
     "read_file",
     "get_context",
+    "get_repo_map",
     "get_module_neighbors",
     "search_files",
     "codebase_search",
@@ -525,6 +529,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
   "readonly-research": new Set([
     "read_file",
     "get_context",
+    "get_repo_map",
     "get_module_neighbors",
     "search_files",
     "codebase_search",
@@ -543,6 +548,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
   btw: new Set([
     "read_file",
     "get_context",
+    "get_repo_map",
     "get_module_neighbors",
     "search_files",
     "codebase_search",
@@ -930,6 +936,11 @@ export async function dispatchToolCall(
         approvalPanel,
         sessionId,
       );
+    case "get_repo_map":
+      if (ctx.onFileRead && typeof params.path === "string") {
+        ctx.onFileRead(params.path);
+      }
+      return handleGetRepoMap(params, ctx.globalStorageUri);
     case "get_module_neighbors":
       if (ctx.onFileRead && typeof params.path === "string") {
         ctx.onFileRead(params.path);
