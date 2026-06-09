@@ -5,6 +5,7 @@ import {
   READ_ONLY_TOOLS,
   type ToolDispatchContext,
 } from "./toolAdapter.js";
+import { BUILT_IN_MODES } from "./modes.js";
 
 // Mock all tool handlers so dispatchToolCall tests don't hit VS Code APIs
 vi.mock("../tools/readFile.js", () => ({
@@ -16,6 +17,11 @@ vi.mock("../tools/context/getContext.js", () => ({
   handleGetContext: vi
     .fn()
     .mockResolvedValue({ content: [{ type: "text", text: "context" }] }),
+}));
+vi.mock("../tools/getModuleNeighbors.js", () => ({
+  handleGetModuleNeighbors: vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: "module neighbors" }],
+  }),
 }));
 vi.mock("../tools/listFiles.js", () => ({
   handleListFiles: vi
@@ -150,6 +156,7 @@ describe("READ_ONLY_TOOLS", () => {
   it("includes expected read-only tools", () => {
     expect(READ_ONLY_TOOLS.has("read_file")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_context")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("get_module_neighbors")).toBe(true);
     expect(READ_ONLY_TOOLS.has("list_files")).toBe(true);
     expect(READ_ONLY_TOOLS.has("search_files")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_diagnostics")).toBe(true);
@@ -209,6 +216,7 @@ describe("getAgentTools", () => {
   it("includes the core file tools and foreground task status tool", () => {
     const names = getAgentTools().map((t) => t.name);
     expect(names).toContain("read_file");
+    expect(names).toContain("get_module_neighbors");
     expect(names).toContain("write_file");
     expect(names).toContain("apply_diff");
     expect(names).toContain("execute_command");
@@ -230,6 +238,7 @@ describe("getAgentTools", () => {
     const names = reviewTools.map((t) => t.name);
     // Should include read-only review tools
     expect(names).toContain("read_file");
+    expect(names).toContain("get_module_neighbors");
     expect(names).toContain("search_files");
     expect(names).toContain("codebase_search");
     expect(names).toContain("get_diagnostics");
@@ -255,6 +264,7 @@ describe("getAgentTools", () => {
     const names = tools.map((t) => t.name);
 
     expect(names).toContain("read_file");
+    expect(names).toContain("get_module_neighbors");
     expect(names).toContain("search_files");
     expect(names).toContain("codebase_search");
     expect(names).toContain("get_diagnostics");
@@ -269,6 +279,13 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("apply_code_action");
     expect(names).not.toContain("ask_user");
     expect(names).not.toContain("spawn_background_agent");
+  });
+
+  it("includes module neighbors in all built-in mode-filtered tool sets", () => {
+    for (const mode of BUILT_IN_MODES) {
+      const names = getAgentTools(mode).map((t) => t.name);
+      expect(names, mode.slug).toContain("get_module_neighbors");
+    }
   });
 
   it("does not restrict tools when toolProfile is undefined", () => {
