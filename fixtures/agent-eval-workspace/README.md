@@ -41,3 +41,5 @@ node --experimental-strip-types scripts/agent-eval.mts report --task small-ts-bu
 - `multi-file-refactor` — rename shared helpers across a small module graph while preserving behavior.
 
 Do not edit any `pristine-*` directory during an evaluation run. Edit only `work/`.
+
+`work/` is git-ignored because it is resettable, but AgentLink's indexer has a narrow Phase 0 fixture exception for this path. Phase 0 comparisons need the mutable work directory to be indexed so tools like `get_repo_map`, `get_module_neighbors`, and semantic search can be measured against the actual edit target, not only the pristine source copies.

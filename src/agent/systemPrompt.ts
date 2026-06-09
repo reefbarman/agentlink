@@ -148,11 +148,12 @@ const PROVIDER_PROMPTS: Record<string, string> = {
 
 ### Bias for action
 
-- Default to acting quickly. For most tasks, 1–2 targeted searches should give you enough context to attempt an edit. Iterate based on compiler/test feedback rather than reading everything up front.
-- **Always start with \`codebase_search\`** when exploring unfamiliar code or locating where something lives — it is faster and more targeted than grepping or browsing directories.
+- Default to acting quickly. For most tasks, 1–2 targeted orientation calls should give you enough context to attempt an edit. Iterate based on compiler/test feedback rather than reading everything up front.
+- **Use \`get_repo_map\` before search for broad known-scope edits** — when the user gives a concrete directory/scope for a refactor, migration, API/tool contract update, or multi-file edit, call \`get_repo_map\` scoped to that path first to get module/file skeletons, imports/exports, and likely blast radius.
+- **Use \`codebase_search\` first for unfamiliar code with no known scope** — it is faster and more targeted than grepping or browsing directories when you don't know where something lives.
 - For straightforward changes, don't over-explore. If you've read several files without finding a clear reason to keep reading, make your best attempt and iterate.
 - If you believe you know where the change should go, attempt the edit immediately and refine based on feedback.
-- For complex refactors or unfamiliar codebases, more exploration is appropriate — but always use semantic search first, then targeted reads.
+- For complex refactors, use \`get_repo_map\` first when the scope is known; use semantic search first only when the relevant scope/files are unknown.
 
 ### Narrate your work
 
@@ -165,6 +166,7 @@ const PROVIDER_PROMPTS: Record<string, string> = {
 ### Tool rules
 
 - **Known file path beats search** — If the user, an error, a stack trace, a prior tool result, or the task definition already gives you a concrete file path, do not call \`codebase_search\` just to rediscover it. Go directly to \`get_context\` for first-pass orientation on that file.
+- **Known broad scope beats search** — If the task names a concrete directory/package/workspace area and requires multi-file understanding or edits, call \`get_repo_map\` for that scope before \`codebase_search\`/\`search_files\`; then drill into selected files with \`get_module_neighbors\` and \`get_context\`.
 - **\`get_context\` for known files** — When you already know the file path and need first-pass orientation, prefer \`get_context\` over \`read_file\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
 - **\`codebase_search\` FIRST for unknown locations** — Use it before \`search_files\` or \`list_files\` only when you don't know exactly where something is. It returns semantically relevant results even when you don't know the exact function or variable name.
 - **\`search_files\` for exact matches only** — Use regex search only after \`codebase_search\` has identified the relevant area, or when you need to find a specific literal string/pattern you already know.

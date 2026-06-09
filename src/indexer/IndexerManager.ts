@@ -57,6 +57,12 @@ export interface IndexStatus {
 
 const WATCHER_DEBOUNCE_MS = 2000;
 const MAX_FILE_SIZE = 1_000_000; // 1MB
+// Phase 0 eval fixture exception: keep the resettable workdir git-ignored
+// while still indexing it so structural/semantic tool gains can be measured.
+const EXPLICITLY_INDEXED_IGNORED_PATHS = [
+  "fixtures/agent-eval-workspace/work/**",
+];
+
 const DEFAULT_INDEX_EXCLUSIONS = [
   "**/node_modules/**",
   "**/.git/**",
@@ -837,9 +843,21 @@ export class IndexerManager implements vscode.Disposable {
       }
     });
 
-    return this.filterGitIgnoredPaths(existingFiles, workspaceRoot, {
-      keepIgnored: false,
-    });
+    const nonIgnoredFiles = await this.filterGitIgnoredPaths(
+      existingFiles,
+      workspaceRoot,
+      {
+        keepIgnored: false,
+      },
+    );
+    const explicitlyIndexedIgnoredFiles = await this.filterGitIgnoredPaths(
+      existingFiles.filter((filePath) =>
+        this.isExplicitlyIndexedIgnoredPath(filePath, workspaceRoot),
+      ),
+      workspaceRoot,
+      { keepIgnored: true },
+    );
+    return [...new Set([...nonIgnoredFiles, ...explicitlyIndexedIgnoredFiles])];
   }
 
   private async filterExplicitlyIncludedRemovedPaths(
@@ -853,6 +871,19 @@ export class IndexerManager implements vscode.Disposable {
       exclusions,
     );
     return files.filter((filePath) => !exclusionMatcher(filePath));
+  }
+
+  private isExplicitlyIndexedIgnoredPath(
+    filePath: string,
+    workspaceRoot: string,
+  ): boolean {
+    const relPath = path
+      .relative(workspaceRoot, filePath)
+      .split(path.sep)
+      .join("/");
+    return EXPLICITLY_INDEXED_IGNORED_PATHS.some((pattern) =>
+      picomatch(pattern, { dot: true })(relPath),
+    );
   }
 
   private buildExclusionMatcher(

@@ -97,16 +97,25 @@ When the codebase index is available, `read_file` and `list_files` both accept a
 
 Use these to reduce context-gathering round-trips: `list_files` with `query` to find relevant files, then `read_file` with `query` to land on the right section.
 
-### Search strategy — use `codebase_search` FIRST
+### Search strategy — choose structure, semantics, or exact text by task shape
 
-When exploring code, understanding architecture, or investigating how something works, **always start with `codebase_search`** before falling back to `search_files` regex search. Semantic search finds conceptually related code even when you don't know the exact names, patterns, or file locations.
+When a task spans a known directory/module boundary — for example a refactor, API/tool contract update, migration, or broad edit under an explicit path — **start with `get_repo_map` scoped to that path before semantic or regex search**. It gives you file/module skeletons, imports, exports, and directory summaries in one budgeted call so you can choose exact files and then drill down with `get_module_neighbors` or `get_context`.
+
+When exploring unfamiliar code without a known scope, understanding architecture, or investigating how something works, **start with `codebase_search`** before falling back to `search_files` regex search. Semantic search finds conceptually related code even when you don't know the exact names, patterns, or file locations.
+
+**Use `get_repo_map` before search when:**
+
+- The user gives a concrete directory/scope for a broad edit or refactor
+- You need module boundaries, imports/exports, dependents, or likely blast radius before editing
+- You are planning multiple file edits and need a compact file/module skeleton first
+- You want to avoid repeated `codebase_search`/`search_files` calls just to discover the local graph
 
 **Use `codebase_search` when:**
 
 - Exploring unfamiliar code ("how does auth work?", "where are API routes?")
 - You don't know exact function/variable/class names
 - Looking for conceptual matches ("error handling", "database connections", "file uploads")
-- Starting a new task and need to understand the relevant parts of the codebase
+- Starting a new task and need to understand the relevant parts of the codebase but no concrete scope/path is known
 - The user asks a broad question about the codebase
 
 **Use `search_files` (regex) when:**
@@ -115,7 +124,7 @@ When exploring code, understanding architecture, or investigating how something 
 - You need precise text matching (e.g. finding all imports of a specific module)
 - You need to count occurrences or find-and-replace
 
-**Combine both:** Start with `codebase_search` to discover relevant files and concepts, then use `search_files` for precise lookups within those files.
+**Combine tools:** For known-scope broad edits, start with `get_repo_map`, drill into candidate files with `get_module_neighbors`/`get_context`, then use `search_files` for precise symbol/string matches. For unknown-scope exploration, start with `codebase_search` to discover relevant files and concepts, then use `search_files` for precise lookups within those files.
 
 **Prefer `list_files` with `query` over `codebase_search` when:**
 
