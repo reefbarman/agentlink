@@ -463,6 +463,28 @@ Build a compact read-only context pack for an explicit file. Prefer this over `r
 
 Working-set statuses are `new`, `unchanged`, `changed`, and `omitted_unchanged`. Omission is opt-in and exact-range only; overlapping ranges and full-file reads are tracked independently so callers do not lose content they have not explicitly received.
 
+### get_module_neighbors
+
+Read the structural repo-map sidecar for a single source/config file. Use this after `get_context` when you need module-level blast-radius awareness before editing: what the file imports, what it exports, which indexed modules import it, and what top-level symbols it declares.
+
+| Parameter     | Type    | Description                                                                                                   |
+| ------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `path`        | string  | Source/config file path (absolute or relative to workspace root)                                              |
+| `max_results` | number? | Maximum items to return in each list: `imports`, `exports`, `symbols`, and `dependents` (default 50, max 200) |
+
+**Response includes:**
+
+- `path`, `workspace_root`, `cache` — target and sidecar cache identity
+- `freshness.target` — `fresh`, `stale`, `missing_from_graph`, `target_missing`, or `unknown`, with hashes when available
+- `freshness.graph` — sidecar availability, generated timestamp, cache version, and file count
+- `imports` — bounded list of static/reexport/require/dynamic imports with specifiers, resolved relative paths, imported names, and line numbers
+- `exports` — bounded list of named/default/reexport/CommonJS exports
+- `symbols` — bounded top-level symbols recorded by the structural extractor
+- `dependents` — bounded reverse module dependencies: indexed files whose resolved imports point at the target
+- `note` — omitted when the sidecar and target are usable; present for missing/stale graph cases
+
+This is a static module graph, not an LSP-precise symbol reference query. Use language tools such as `get_references`, `go_to_definition`, and `get_call_hierarchy` when exact symbol semantics matter. Requires the codebase index/structural sidecar to be built.
+
 ### load_skill
 
 Load the full contents of an AgentLink skill file that was explicitly advertised in the current built-in agent system prompt. This is intentionally not a general-purpose file reader: it only accepts skill paths that were listed for the active session.

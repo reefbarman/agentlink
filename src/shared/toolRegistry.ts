@@ -42,6 +42,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Build a compact read-only context pack for an explicit file: metadata, git status, diagnostics summary, symbol outline, bounded numbered content, and working-set status. Prefer this over read_file for first-pass orientation when the file path is already known. Supports opt-in unchanged-content omission via per-session content hashes.",
   },
+  get_module_neighbors: {
+    label: "Module neighbors",
+    description:
+      "Read the structural repo-map sidecar for a file and return imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after get_context when you need module-level blast-radius awareness before editing. Requires the codebase index/structural sidecar to be built.",
+  },
   load_skill: {
     label: "Load advertised skill",
     description:

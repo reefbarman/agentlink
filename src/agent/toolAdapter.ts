@@ -43,6 +43,7 @@ import { handleGetDiagnostics } from "../tools/getDiagnostics.js";
 import { handleGetFeedback } from "../tools/getFeedback.js";
 import { handleGetHover } from "../tools/getHover.js";
 import { handleGetInlayHints } from "../tools/getInlayHints.js";
+import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
 import { handleGetReferences } from "../tools/getReferences.js";
 import { handleGetSymbols } from "../tools/getSymbols.js";
 import { handleGetTerminalOutput } from "../tools/getTerminalOutput.js";
@@ -68,6 +69,7 @@ import { z } from "zod";
 export const READ_ONLY_TOOLS = new Set([
   "read_file",
   "get_context",
+  "get_module_neighbors",
   "load_skill",
   "list_files",
   "search_files",
@@ -119,6 +121,7 @@ function zodSchemaToJsonSchema(
 const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   read_file: schemas.readFileSchema,
   get_context: schemas.getContextSchema,
+  get_module_neighbors: schemas.getModuleNeighborsSchema,
   load_skill: schemas.loadSkillSchema,
   list_files: schemas.listFilesSchema,
   search_files: schemas.searchFilesSchema,
@@ -921,6 +924,11 @@ export async function dispatchToolCall(
         approvalPanel,
         sessionId,
       );
+    case "get_module_neighbors":
+      if (ctx.onFileRead && typeof params.path === "string") {
+        ctx.onFileRead(params.path);
+      }
+      return handleGetModuleNeighbors(params, ctx.globalStorageUri);
     case "load_skill": {
       const result = await handleLoadSkill(
         params,

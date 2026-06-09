@@ -103,6 +103,20 @@ export const getContextSchema = {
     ),
 };
 
+export const getModuleNeighborsSchema = {
+  path: z
+    .string()
+    .describe(
+      "Source/config file path (absolute or relative to workspace root) to inspect in the structural repo map.",
+    ),
+  max_results: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Maximum items to return in each list: imports, exports, symbols, and dependents (default 50, capped at 200).",
+    ),
+};
+
 export const listFilesSchema = {
   path: z
     .string()

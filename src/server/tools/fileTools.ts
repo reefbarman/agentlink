@@ -1,6 +1,7 @@
 import {
   getContextSchema,
   getDiagnosticsSchema,
+  getModuleNeighborsSchema,
   listFilesSchema,
   loadSkillSchema,
   readFileSchema,
@@ -10,6 +11,7 @@ import {
 import type { ToolRegistrationContext } from "./types.js";
 import { handleGetContext } from "../../tools/context/getContext.js";
 import { handleGetDiagnostics } from "../../tools/getDiagnostics.js";
+import { handleGetModuleNeighbors } from "../../tools/getModuleNeighbors.js";
 import { handleListFiles } from "../../tools/listFiles.js";
 import { handleLoadSkill } from "../../tools/loadSkill.js";
 import { handleReadFile } from "../../tools/readFile.js";
@@ -49,6 +51,24 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       (params) => {
         touch();
         return handleGetContext(params, approvalManager, approvalPanel, sid());
+      },
+      (p) => String(p.path ?? ""),
+      sid,
+    ),
+  );
+
+  server.registerTool(
+    "get_module_neighbors",
+    {
+      description: desc("get_module_neighbors"),
+      inputSchema: getModuleNeighborsSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    tracker.wrapHandler(
+      "get_module_neighbors",
+      (params) => {
+        touch();
+        return handleGetModuleNeighbors(params, ctx.globalStorageUri);
       },
       (p) => String(p.path ?? ""),
       sid,
