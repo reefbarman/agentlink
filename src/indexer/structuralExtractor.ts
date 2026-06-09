@@ -45,7 +45,7 @@ export function extractStructuralFile(
 ): StructuralFileEntry {
   const language = getLanguage(options.absPath);
   const lines = options.content.split("\n");
-  const imports = extractImports(lines, options);
+  const imports = extractImports(options.content, lines, options);
   const exports = extractExports(lines, options);
   const symbols = extractSymbols(lines, exports);
 
@@ -63,45 +63,45 @@ export function extractStructuralFile(
 }
 
 function extractImports(
+  content: string,
   lines: string[],
   options: ExtractStructuralFileOptions,
 ): StructuralImport[] {
   const imports: StructuralImport[] = [];
 
+  for (const match of content.matchAll(
+    /^\s*import\s+(?:type\s+)?(?:(.*?)\s+from\s+)?["']([^"']+)["']/gms,
+  )) {
+    const importClause = match[1]?.trim();
+    const specifier = match[2];
+    imports.push(
+      buildImport({
+        specifier,
+        kind: "static",
+        line: getLineNumberAtOffset(content, match.index ?? 0),
+        imported: parseImportedNames(importClause),
+        options,
+      }),
+    );
+  }
+
+  for (const match of content.matchAll(
+    /^\s*export\s+(?:type\s+)?(?:\*|\{([\s\S]*?)\})\s+from\s+["']([^"']+)["']/gm,
+  )) {
+    const specifier = match[2];
+    imports.push(
+      buildImport({
+        specifier,
+        kind: "reexport",
+        line: getLineNumberAtOffset(content, match.index ?? 0),
+        imported: parseNamedList(match[1]),
+        options,
+      }),
+    );
+  }
+
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
-    const staticImport = line.match(
-      /^\s*import\s+(?:type\s+)?(?:(.+?)\s+from\s+)?["']([^"']+)["']/,
-    );
-    if (staticImport) {
-      const importClause = staticImport[1]?.trim();
-      const specifier = staticImport[2];
-      imports.push(
-        buildImport({
-          specifier,
-          kind: "static",
-          line: lineNumber,
-          imported: parseImportedNames(importClause),
-          options,
-        }),
-      );
-    }
-
-    const reexport = line.match(
-      /^\s*export\s+(?:type\s+)?(?:\*|\{([^}]*)\})\s+from\s+["']([^"']+)["']/,
-    );
-    if (reexport) {
-      const specifier = reexport[2];
-      imports.push(
-        buildImport({
-          specifier,
-          kind: "reexport",
-          line: lineNumber,
-          imported: parseNamedList(reexport[1]),
-          options,
-        }),
-      );
-    }
 
     for (const match of line.matchAll(/\brequire\(\s*["']([^"']+)["']\s*\)/g)) {
       imports.push(
@@ -127,6 +127,14 @@ function extractImports(
   });
 
   return dedupeImports(imports);
+}
+
+function getLineNumberAtOffset(content: string, offset: number): number {
+  let line = 1;
+  for (let i = 0; i < offset; i++) {
+    if (content.charCodeAt(i) === 10) line++;
+  }
+  return line;
 }
 
 function extractExports(
@@ -296,7 +304,7 @@ function parseNamedList(list: string | undefined): string[] {
   if (!list) return [];
   return list
     .split(",")
-    .map((part) => part.trim())
+    .map((part) => part.trim().replace(/^type\s+/, ""))
     .filter(Boolean)
     .map((part) => {
       const [left, right] = part.split(/\s+as\s+/).map((item) => item.trim());
@@ -313,8 +321,10 @@ function resolveSpecifier(
 
   const sourceDir = path.dirname(options.absPath);
   const candidateBase = path.resolve(sourceDir, specifier);
-  for (const ext of SOURCE_EXTENSIONS) {
-    const candidate = `${candidateBase}${ext}`;
+  for (const candidate of buildResolutionCandidates(
+    candidateBase,
+    options.absPath,
+  )) {
     if (isFile(candidate))
       return toWorkspaceRelPath(candidate, options.workspaceRoot);
   }
@@ -326,6 +336,44 @@ function resolveSpecifier(
   }
 
   return undefined;
+}
+
+function buildResolutionCandidates(
+  candidateBase: string,
+  importerAbsPath: string,
+): string[] {
+  const candidates = new Set<string>();
+  const ext = path.extname(candidateBase).toLowerCase();
+  const importerExt = path.extname(importerAbsPath).toLowerCase();
+  const preferTypeScriptSource =
+    importerExt === ".ts" || importerExt === ".tsx";
+
+  if ([".js", ".mjs", ".cjs"].includes(ext)) {
+    const withoutExt = candidateBase.slice(0, -ext.length);
+    if (preferTypeScriptSource) {
+      candidates.add(`${withoutExt}.ts`);
+      candidates.add(`${withoutExt}.tsx`);
+    }
+    candidates.add(candidateBase);
+    if (!preferTypeScriptSource) {
+      candidates.add(`${withoutExt}.ts`);
+      candidates.add(`${withoutExt}.tsx`);
+    }
+    return [...candidates];
+  }
+
+  if (ext === ".jsx") {
+    const withoutExt = candidateBase.slice(0, -ext.length);
+    if (preferTypeScriptSource) candidates.add(`${withoutExt}.tsx`);
+    candidates.add(candidateBase);
+    if (!preferTypeScriptSource) candidates.add(`${withoutExt}.tsx`);
+    return [...candidates];
+  }
+
+  for (const sourceExt of SOURCE_EXTENSIONS) {
+    candidates.add(`${candidateBase}${sourceExt}`);
+  }
+  return [...candidates];
 }
 
 function isRelativeSpecifier(specifier: string): boolean {

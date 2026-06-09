@@ -83,6 +83,72 @@ describe("extractStructuralFile", () => {
     ]);
   });
 
+  it("extracts multi-line static imports", () => {
+    writeFile(
+      "src/workerLib.ts",
+      "export const loadStructuralCache = () => null;",
+    );
+    writeFile("src/structuralGraph.ts", "export interface StructuralImport {}");
+    const entry = extract(
+      "src/foo.ts",
+      [
+        "import {",
+        "  getStructuralCachePath,",
+        "  hashContent,",
+        "  loadStructuralCache,",
+        '} from "./workerLib.js";',
+        "import type {",
+        "  StructuralFileEntry,",
+        "  StructuralGraphCache,",
+        "  StructuralImport,",
+        '} from "./structuralGraph.js";',
+      ].join("\n"),
+    );
+
+    expect(normalize(entry.imports)).toEqual([
+      {
+        specifier: "./workerLib.js",
+        kind: "static",
+        imported: [
+          "getStructuralCachePath",
+          "hashContent",
+          "loadStructuralCache",
+        ],
+        resolvedRelPath: "src/workerLib.ts",
+        line: 1,
+      },
+      {
+        specifier: "./structuralGraph.js",
+        kind: "static",
+        imported: [
+          "StructuralFileEntry",
+          "StructuralGraphCache",
+          "StructuralImport",
+        ],
+        resolvedRelPath: "src/structuralGraph.ts",
+        line: 6,
+      },
+    ]);
+  });
+
+  it("resolves generated .js specifiers to TypeScript source files", () => {
+    writeFile("src/getModuleNeighbors.ts", "export const handle = true;");
+    const entry = extract(
+      "src/toolAdapter.ts",
+      'import { handle } from "./getModuleNeighbors.js";',
+    );
+
+    expect(entry.imports).toEqual([
+      {
+        specifier: "./getModuleNeighbors.js",
+        kind: "static",
+        imported: ["handle"],
+        resolvedRelPath: "src/getModuleNeighbors.ts",
+        line: 1,
+      },
+    ]);
+  });
+
   it("extracts reexports and export declarations", () => {
     writeFile("src/bar.ts", "export const Bar = 1;");
     const entry = extract(
