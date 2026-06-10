@@ -9,6 +9,8 @@ export type AgentUiEvent =
   | {
       type: "agentQuestionRequest";
       id: string;
+      /** Visible explanation shown above structured questions. */
+      context: string;
       questions: Question[];
       /** When set, the question is from a background agent with this task name. */
       backgroundTask?: string;
@@ -28,6 +30,7 @@ export interface AgentUiPublisher {
   publishApprovalIdle(): void;
   publishQuestionRequest(
     id: string,
+    context: string,
     questions: Question[],
     backgroundTask?: string,
   ): void;
@@ -71,12 +74,18 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
 
   publishQuestionRequest(
     id: string,
+    context: string,
     questions: Question[],
     backgroundTask?: string,
   ): void {
     for (const publisher of this.publishers) {
       try {
-        publisher.publishQuestionRequest(id, questions, backgroundTask);
+        publisher.publishQuestionRequest(
+          id,
+          context,
+          questions,
+          backgroundTask,
+        );
       } catch {
         // Keep other sinks alive even if one publisher fails.
       }
@@ -125,12 +134,14 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
 
   publishQuestionRequest(
     id: string,
+    context: string,
     questions: Question[],
     backgroundTask?: string,
   ): void {
     this.publishMessage({
       type: "agentQuestionRequest",
       id,
+      context,
       questions,
       ...(backgroundTask ? { backgroundTask } : {}),
     });
@@ -173,12 +184,14 @@ export class InMemoryAgentUiEventHub
 
   publishQuestionRequest(
     id: string,
+    context: string,
     questions: Question[],
     backgroundTask?: string,
   ): void {
     this.publish({
       type: "agentQuestionRequest",
       id,
+      context,
       questions,
       ...(backgroundTask ? { backgroundTask } : {}),
     });

@@ -13,8 +13,6 @@
       "useForegroundModelByDefault": false,
       "requireReviewCapableModel": true,
       "thinkingBudget": 4096,
-      "maxToolCalls": 10,
-      "maxApiTurns": 5,
       "toolProfile": "review"
     },
     "review_plan": {
@@ -24,53 +22,39 @@
       "useForegroundModelByDefault": false,
       "requireReviewCapableModel": false,
       "thinkingBudget": 0,
-      "maxToolCalls": 5,
-      "maxApiTurns": 3,
       "toolProfile": "review"
     },
     "readonly-research": {
       "preferredMode": "ask",
       "providerStrategy": "same",
       "modelTier": "balanced",
-      "maxToolCalls": 15,
-      "maxApiTurns": 6,
       "toolProfile": "readonly-research"
     },
     "research": {
       "preferredMode": "ask",
       "providerStrategy": "same",
-      "modelTier": "balanced",
-      "maxToolCalls": 15,
-      "maxApiTurns": 6
+      "modelTier": "balanced"
     },
     "explore": {
       "preferredMode": "architect",
       "providerStrategy": "same",
-      "modelTier": "balanced",
-      "maxToolCalls": 18,
-      "maxApiTurns": 7
+      "modelTier": "balanced"
     },
     "debug": {
       "preferredMode": "debug",
       "providerStrategy": "same",
-      "modelTier": "balanced",
-      "maxToolCalls": 18,
-      "maxApiTurns": 7
+      "modelTier": "balanced"
     },
     "design": {
       "preferredMode": "architect",
       "providerStrategy": "same",
-      "modelTier": "deep_reasoning",
-      "maxToolCalls": 12,
-      "maxApiTurns": 5
+      "modelTier": "deep_reasoning"
     },
     "general": {
       "preferredMode": "code",
       "providerStrategy": "same",
       "modelTier": "balanced",
-      "useForegroundModelByDefault": true,
-      "maxToolCalls": 12,
-      "maxApiTurns": 5
+      "useForegroundModelByDefault": true
     }
   },
   "fallbackProviderOrder": ["anthropic", "codex"]

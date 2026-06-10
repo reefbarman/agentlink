@@ -48,6 +48,7 @@ function makeAuthManager(overrides?: Partial<Record<string, unknown>>) {
       canRefresh: true,
     }),
     isAuthenticated: vi.fn().mockResolvedValue(true),
+    getPreferredAuthMethod: vi.fn().mockResolvedValue("oauth"),
     ...overrides,
   };
 }
@@ -89,7 +90,7 @@ describe("CodexProvider.complete", () => {
 
     const provider = new CodexProvider(authManager as never);
     const result = await provider.complete({
-      model: "gpt-5.2-codex",
+      model: "gpt-5.5",
       systemPrompt: "system",
       messages: [{ role: "user", content: "Summarize this" }],
       maxTokens: 128,
@@ -110,7 +111,7 @@ describe("CodexProvider.complete", () => {
       }),
     );
     expect(requestBody).toMatchObject({
-      model: "gpt-5.2-codex",
+      model: "gpt-5.5",
       instructions: "system",
       stream: true,
       store: false,
@@ -1024,5 +1025,100 @@ describe("CodexProvider.stream", () => {
         }
       })(),
     ).rejects.toThrow(/Codex request failed: request blew up/);
+  });
+});
+
+describe("CodexProvider ChatGPT-backend model gating", () => {
+  beforeEach(() => {
+    createMock.mockReset();
+    openAiConstructorMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function captureBodyOnce(): { current?: Record<string, unknown> } {
+    const captured: { current?: Record<string, unknown> } = {};
+    createMock.mockImplementationOnce(async (body: Record<string, unknown>) => {
+      captured.current = body;
+      return (async function* () {
+        yield {
+          type: "response.done",
+          response: { id: "resp", usage: { input_tokens: 1, output_tokens: 1 } },
+        };
+      })();
+    });
+    return captured;
+  }
+
+  it("remaps an OAuth-unavailable model to gpt-5.5 on the ChatGPT backend", async () => {
+    const captured = captureBodyOnce();
+    const provider = new CodexProvider(makeAuthManager() as never);
+    for await (const _event of provider.stream({
+      model: "gpt-5.4-pro",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    })) {
+      // drain
+    }
+    expect(captured.current?.model).toBe("gpt-5.5");
+  });
+
+  it("remaps mini/nano tiers to the cheap served model", async () => {
+    const captured = captureBodyOnce();
+    const provider = new CodexProvider(makeAuthManager() as never);
+    for await (const _event of provider.stream({
+      model: "gpt-5.4-nano",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    })) {
+      // drain
+    }
+    expect(captured.current?.model).toBe("gpt-5.4-mini");
+  });
+
+  it("does not remap when authed with an API key", async () => {
+    const captured = captureBodyOnce();
+    const apiKeyAuth = makeAuthManager({
+      resolveModelAuth: vi.fn().mockResolvedValue({
+        method: "apiKey",
+        bearerToken: "sk-test",
+        canRefresh: false,
+      }),
+      getPreferredAuthMethod: vi.fn().mockResolvedValue("apiKey"),
+    });
+    const provider = new CodexProvider(apiKeyAuth as never);
+    for await (const _event of provider.stream({
+      model: "gpt-5.2-codex",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    })) {
+      // drain
+    }
+    expect(captured.current?.model).toBe("gpt-5.2-codex");
+  });
+
+  it("listModels hides API-key-only models on OAuth and keeps them on API key", async () => {
+    const oauthProvider = new CodexProvider(makeAuthManager() as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const oauthIds = oauthProvider.listModels().map((m) => m.id);
+    expect(oauthIds).toContain("gpt-5.5");
+    expect(oauthIds).toContain("gpt-5.4-mini");
+    expect(oauthIds).not.toContain("gpt-5.4-pro");
+    expect(oauthIds).not.toContain("gpt-5.2-codex");
+
+    const apiKeyProvider = new CodexProvider(
+      makeAuthManager({
+        getPreferredAuthMethod: vi.fn().mockResolvedValue("apiKey"),
+      }) as never,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const apiKeyIds = apiKeyProvider.listModels().map((m) => m.id);
+    expect(apiKeyIds).toContain("gpt-5.4-pro");
+    expect(apiKeyIds).toContain("gpt-5.2-codex");
   });
 });

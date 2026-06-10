@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-
 import type { ModeInfo, Question } from "../types";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 export interface QuestionProgress {
   step: number;
@@ -10,6 +9,7 @@ export interface QuestionProgress {
 
 interface QuestionCardProps {
   id: string;
+  context: string;
   questions: Question[];
   onSubmit: (
     id: string,
@@ -86,6 +86,7 @@ export function normalizeQuestionAnswer(
 
 export function QuestionCard({
   id,
+  context,
   questions,
   onSubmit,
   remoteProgress,
@@ -201,38 +202,42 @@ export function QuestionCard({
           From background agent: <strong>{backgroundTask}</strong>
         </div>
       )}
-      {questions.length > 1 && (
-        <div class="question-progress">
-          {questions.map((_, i) => (
-            <span
-              key={i}
-              class={`question-dot${i === step ? " question-dot-active" : i < step ? " question-dot-done" : ""}`}
-            />
-          ))}
-          <span class="question-progress-label">
-            {step + 1} / {questions.length}
-          </span>
-        </div>
-      )}
+      <div class="question-body">
+        <div class="question-context">{context || "Agent needs input:"}</div>
 
-      <div class="question-text">{q.question}</div>
+        {questions.length > 1 && (
+          <div class="question-progress">
+            {questions.map((_, i) => (
+              <span
+                key={i}
+                class={`question-dot${i === step ? " question-dot-active" : i < step ? " question-dot-done" : ""}`}
+              />
+            ))}
+            <span class="question-progress-label">
+              {step + 1} / {questions.length}
+            </span>
+          </div>
+        )}
 
-      <QuestionInput
-        question={q}
-        value={currentAnswer}
-        onChange={setAnswer}
-        modes={modes}
-      />
+        <div class="question-text">{q.question}</div>
 
-      {showNoteInput && (
-        <textarea
-          class="question-other-input"
-          placeholder="Other / add context (optional)"
-          value={currentNote}
-          onInput={(e) => setNote((e.target as HTMLTextAreaElement).value)}
-          rows={2}
+        <QuestionInput
+          question={q}
+          value={currentAnswer}
+          onChange={setAnswer}
+          modes={modes}
         />
-      )}
+
+        {showNoteInput && (
+          <textarea
+            class="question-other-input"
+            placeholder="Other / add context (optional)"
+            value={currentNote}
+            onInput={(e) => setNote((e.target as HTMLTextAreaElement).value)}
+            rows={2}
+          />
+        )}
+      </div>
 
       <div class="question-nav">
         <button
@@ -397,7 +402,9 @@ function QuestionInput({
     <div class="question-options">
       {options.map((opt) => {
         const targetMode =
-          !isMulti && question.modeSwitch ? question.modeSwitch[opt] : undefined;
+          !isMulti && question.modeSwitch
+            ? question.modeSwitch[opt]
+            : undefined;
         return (
           <button
             key={opt}

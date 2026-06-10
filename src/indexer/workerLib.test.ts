@@ -1,17 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
-import * as path from "path";
 import * as os from "os";
+import * as path from "path";
+
 import {
-  isBinaryContent,
-  buildPathSegments,
-  loadCache,
-  writeCache,
-  hashContent,
-  diffFiles,
   MAX_FILE_SIZE,
+  buildPathSegments,
+  diffFiles,
+  emptyStructuralCache,
+  getStructuralCachePath,
+  hashContent,
+  isBinaryContent,
+  loadCache,
+  loadStructuralCache,
+  writeCache,
+  writeStructuralCache,
 } from "./workerLib.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
 import type { IndexCache } from "./types.js";
+import type { StructuralGraphCache } from "./structuralGraph.js";
 
 // --- isBinaryContent ---
 
@@ -143,6 +150,102 @@ describe("loadCache / writeCache", () => {
     );
     const cache = loadCache(cachePath);
     expect(cache).toEqual({ version: 1, files: {} });
+  });
+});
+
+// --- structural cache I/O ---
+
+describe("loadStructuralCache / writeStructuralCache", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "structural-cache-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns an empty structural cache when file does not exist", () => {
+    const cache = loadStructuralCache(
+      path.join(tmpDir, "missing.structural.json"),
+      tmpDir,
+    );
+
+    expect(cache).toEqual({
+      version: 1,
+      workspaceRoot: tmpDir,
+      generatedAt: "1970-01-01T00:00:00.000Z",
+      files: {},
+    });
+  });
+
+  it("round-trips a structural cache through write then load", () => {
+    const cachePath = path.join(tmpDir, "cache.structural.json");
+    const cache: StructuralGraphCache = {
+      version: 1,
+      workspaceRoot: tmpDir,
+      collectionName: "al-test",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      files: {
+        "src/foo.ts": {
+          relPath: "src/foo.ts",
+          hash: "abc123",
+          indexedAt: "2026-01-01T00:00:00.000Z",
+          imports: [
+            {
+              specifier: "./bar",
+              kind: "static",
+              resolvedRelPath: "src/bar.ts",
+              line: 1,
+            },
+          ],
+          exports: [{ name: "foo", kind: "named", line: 3 }],
+          symbols: [{ name: "foo", kind: "function", exported: true, line: 3 }],
+        },
+      },
+    };
+
+    writeStructuralCache(cachePath, cache);
+    const loaded = loadStructuralCache(cachePath, tmpDir);
+    expect(loaded).toEqual(cache);
+  });
+
+  it("creates nested directories for structural cache path", () => {
+    const cachePath = path.join(tmpDir, "a", "b", "cache.structural.json");
+    writeStructuralCache(cachePath, emptyStructuralCache(tmpDir));
+    expect(fs.existsSync(cachePath)).toBe(true);
+  });
+
+  it("returns an empty structural cache for corrupt JSON", () => {
+    const cachePath = path.join(tmpDir, "corrupt.structural.json");
+    fs.writeFileSync(cachePath, "not json!!!", "utf-8");
+
+    expect(loadStructuralCache(cachePath, tmpDir)).toEqual(
+      emptyStructuralCache(tmpDir),
+    );
+  });
+
+  it("returns an empty structural cache for wrong version", () => {
+    const cachePath = path.join(tmpDir, "wrong-version.structural.json");
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify({ version: 99, workspaceRoot: tmpDir, files: {} }),
+      "utf-8",
+    );
+
+    expect(loadStructuralCache(cachePath, tmpDir)).toEqual(
+      emptyStructuralCache(tmpDir),
+    );
+  });
+
+  it("derives the structural sidecar path from the vector cache path", () => {
+    expect(getStructuralCachePath(path.join(tmpDir, "al-123.json"))).toBe(
+      path.join(tmpDir, "al-123.structural.json"),
+    );
+    expect(getStructuralCachePath(path.join(tmpDir, "al-123"))).toBe(
+      path.join(tmpDir, "al-123.structural.json"),
+    );
   });
 });
 

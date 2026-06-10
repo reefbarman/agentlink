@@ -30,10 +30,6 @@ export interface BackgroundRouteResolution {
   fallbackUsed: boolean;
   /** Override thinking budget for this task class (undefined = inherit foreground). */
   thinkingBudget?: number;
-  /** Soft max tool calls before the agent is told to wrap up. */
-  maxToolCalls?: number;
-  /** Soft max API turns before the agent is told to wrap up. */
-  maxApiTurns?: number;
   /** Tool profile name restricting available tools (e.g. "review"). */
   toolProfile?: string;
 }

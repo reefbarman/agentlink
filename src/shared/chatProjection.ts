@@ -11,7 +11,10 @@ import type {
 } from "../agent/webview/types.js";
 
 import type { DetectedQuestion } from "./questionDetection.js";
-import type { McpApprovalPromotionMeta } from "./types.js";
+import type {
+  McpApprovalPromotionMeta,
+  RequestContextBreakdown,
+} from "./types.js";
 import {
   getFinalMessageContinueAction,
   type FinalMessageMarker,
@@ -61,6 +64,19 @@ function inferBgResultStatus(
   return "completed";
 }
 
+export interface LoadedInstructionDebugInfo {
+  source: string;
+  chars: number;
+  promptChars?: number;
+  kind?: "instruction" | "rule";
+  deferred?: boolean;
+  hasFrontmatter?: boolean;
+  alwaysApply?: boolean;
+  loadPath?: string;
+  summary?: string;
+  globs?: string[];
+}
+
 export interface AppState {
   messages: ChatMessage[];
   chatState: ChatState;
@@ -73,7 +89,7 @@ export interface AppState {
   systemPrompt: string | null;
   /** Running token estimate from the engine — updated between API calls. */
   estimatedTotalUsed: number;
-  loadedInstructions: Array<{ source: string; chars: number }> | null;
+  loadedInstructions: LoadedInstructionDebugInfo[] | null;
   todos: TodoItem[];
   modes: ModeInfo[];
   availableModels: WebviewModelInfo[];
@@ -90,6 +106,8 @@ export interface AppState {
   }>;
   questionRequest: {
     id: string;
+    /** Visible explanation shown above structured questions. */
+    context: string;
     questions: Question[];
     /** When set, the question is from a background agent with this task name. */
     backgroundTask?: string;
@@ -113,7 +131,7 @@ export type AppAction =
       type: "SET_DEBUG_INFO";
       info: Record<string, string | number>;
       systemPrompt?: string;
-      loadedInstructions?: Array<{ source: string; chars: number }>;
+      loadedInstructions?: LoadedInstructionDebugInfo[];
     }
   | {
       type: "ADD_USER_MESSAGE";
@@ -149,6 +167,7 @@ export type AppAction =
       promptCacheRetention?: "in_memory" | "24h";
       storeResponseState?: boolean;
       providerResponseId?: string;
+      contextBreakdown?: RequestContextBreakdown;
     }
   | { type: "TOOL_START"; toolCallId: string; toolName: string }
   | { type: "TOOL_INPUT_DELTA"; toolCallId: string; partialJson: string }
@@ -207,6 +226,7 @@ export type AppAction =
   | {
       type: "SET_QUESTION";
       id: string;
+      context: string;
       questions: Question[];
       backgroundTask?: string;
     }
@@ -448,7 +468,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           } else {
             blocks.push({ type: "text", text: block.text });
           }
-        } else if (block.type === "thinking" && block.thinking) {
+        } else if (block.type === "thinking" && block.thinking?.trim()) {
           blocks.push({
             type: "thinking",
             id: block.id ?? crypto.randomUUID(),
@@ -696,6 +716,12 @@ function applyFinalMarkerToLatestAssistant(
   return messages;
 }
 
+function normalizeAssistantBlocks(blocks: ContentBlock[]): ContentBlock[] {
+  return blocks.filter(
+    (block) => block.type !== "thinking" || block.text.trim().length > 0,
+  );
+}
+
 function completeIncompleteRuntimeBlocks(
   messages: ChatMessage[],
 ): ChatMessage[] {
@@ -705,25 +731,32 @@ function completeIncompleteRuntimeBlocks(
         ((b.type === "tool_call" || b.type === "skill_load") && !b.complete) ||
         (b.type === "thinking" && !b.complete),
     );
-    if (!hasIncomplete) return m;
+    if (!hasIncomplete) {
+      const normalized = normalizeAssistantBlocks(m.blocks);
+      return normalized.length === m.blocks.length
+        ? m
+        : { ...m, blocks: normalized };
+    }
     return {
       ...m,
-      blocks: m.blocks.map((b) => {
-        if (
-          (b.type === "tool_call" || b.type === "skill_load") &&
-          !b.complete
-        ) {
-          return {
-            ...b,
-            complete: true,
-            result: b.result || '{"status":"stopped"}',
-          };
-        }
-        if (b.type === "thinking" && !b.complete) {
-          return { ...b, complete: true };
-        }
-        return b;
-      }),
+      blocks: normalizeAssistantBlocks(
+        m.blocks.map((b) => {
+          if (
+            (b.type === "tool_call" || b.type === "skill_load") &&
+            !b.complete
+          ) {
+            return {
+              ...b,
+              complete: true,
+              result: b.result || '{"status":"stopped"}',
+            };
+          }
+          if (b.type === "thinking" && !b.complete) {
+            return { ...b, complete: true };
+          }
+          return b;
+        }),
+      ),
     };
   });
 }
@@ -970,10 +1003,12 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
     case "THINKING_END": {
       const { msgs, last } = cloneLast(state.messages);
-      last.blocks = last.blocks.map((b) =>
-        b.type === "thinking" && b.id === action.thinkingId
-          ? { ...b, complete: true }
-          : b,
+      last.blocks = normalizeAssistantBlocks(
+        last.blocks.map((b) =>
+          b.type === "thinking" && b.id === action.thinkingId
+            ? { ...b, complete: true }
+            : b,
+        ),
       );
       return { ...state, messages: msgs };
     }
@@ -1228,6 +1263,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         promptCacheRetention: action.promptCacheRetention,
         storeResponseState: action.storeResponseState,
         providerResponseId: action.providerResponseId,
+        contextBreakdown: action.contextBreakdown,
       };
       return {
         ...state,
@@ -1567,6 +1603,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         ...state,
         questionRequest: {
           id: action.id,
+          context: action.context,
           questions: action.questions,
           ...(action.backgroundTask
             ? { backgroundTask: action.backgroundTask }

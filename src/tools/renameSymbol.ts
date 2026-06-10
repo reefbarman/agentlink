@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { getRelativePath } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { anyMemoryProtectedPath } from "../approvals/protectedPaths.js";
 import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
 import {
   saveInlineWriteTrustRules,
@@ -97,8 +98,13 @@ export async function handleRenameSymbol(
       .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
 
+    const touchesProtectedMemoryPath = anyMemoryProtectedPath(
+      entries.map(([entryUri]) => entryUri.fsPath),
+    );
+
     const canAutoApprove =
-      masterBypass || approvalManager.isAgentWriteApproved(sessionId);
+      !touchesProtectedMemoryPath &&
+      (masterBypass || approvalManager.isAgentWriteApproved(sessionId));
     let renameFollowUp: string | undefined;
 
     if (!canAutoApprove) {

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
   return {
     setToolContext: vi.fn(),
     runBehavior: vi.fn<() => AsyncGenerator<unknown>>(),
+    runArgs: vi.fn(),
     resolveBackgroundRoute: vi.fn(
       async (
         _registry: unknown,
@@ -58,7 +59,6 @@ const mocks = vi.hoisted(() => {
           pendingModeResume = null;
           return pending;
         }),
-        setPendingMedia: vi.fn(),
         autoTitle: vi.fn(),
         getAllMessages: vi.fn(() => []),
         abort: vi.fn(),
@@ -80,7 +80,8 @@ vi.mock("./backgroundModelRouter.js", () => ({
 vi.mock("./AgentEngine.js", () => ({
   AgentEngine: class MockAgentEngine {
     setToolContext = mocks.setToolContext;
-    run(..._args: unknown[]) {
+    run(...args: unknown[]) {
+      mocks.runArgs(...args);
       return mocks.runBehavior();
     }
   },
@@ -91,6 +92,18 @@ vi.mock("./AgentSession.js", () => ({
     create: (opts: unknown) => mocks.createSession(opts),
   },
 }));
+
+async function waitFor<T>(
+  read: () => T,
+  predicate: (value: T) => boolean,
+): Promise<T> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const value = read();
+    if (predicate(value)) return value;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return read();
+}
 
 describe("AgentSessionManager background agents", () => {
   const config = {
@@ -192,6 +205,30 @@ describe("AgentSessionManager background agents", () => {
     expect(summaries[0]).toContain("model=");
   });
 
+  it("wraps background questions with context, session id, and task attribution", async () => {
+    const onQuestion = vi.fn().mockResolvedValue({ answers: {}, notes: {} });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({ ...toolCtx, onQuestion });
+
+    const spawned = await mgr.spawnBackground({
+      task: "review task",
+      message: "run",
+    });
+
+    const bgCtx = mocks.setToolContext.mock.calls.at(
+      -1,
+    )?.[0] as ToolDispatchContext;
+    expect(bgCtx.onQuestion).toBeDefined();
+    await bgCtx.onQuestion?.("Need input.", [], spawned.sessionId);
+
+    expect(onQuestion).toHaveBeenCalledWith(
+      "Need input.",
+      [],
+      spawned.sessionId,
+      "review task",
+    );
+  });
+
   it("disables reasoning effort when the background route disables thinking", async () => {
     mocks.resolveBackgroundRoute.mockResolvedValueOnce({
       resolvedMode: "review",
@@ -201,8 +238,6 @@ describe("AgentSessionManager background agents", () => {
       routingReason: "test route",
       fallbackUsed: false,
       thinkingBudget: 0,
-      maxToolCalls: 5,
-      maxApiTurns: 3,
       toolProfile: "review",
     });
 
@@ -217,6 +252,35 @@ describe("AgentSessionManager background agents", () => {
 
     const session = (mgr as any).sessions.get(spawned.sessionId);
     expect(session.reasoningEffort).toBe("none");
+  });
+
+  it("does not forward legacy route turn limits to background engine runs", async () => {
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "code",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "general",
+      routingReason: "legacy capped route",
+      fallbackUsed: false,
+      maxToolCalls: 1,
+      maxApiTurns: 1,
+    });
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    await mgr.spawnBackground({
+      task: "uncapped background task",
+      message: "run until complete",
+      taskClass: "general",
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mocks.runArgs).toHaveBeenCalled();
+    const opts = mocks.runArgs.mock.calls[0][1];
+    expect(opts).toMatchObject({ isBackground: true });
+    expect(opts.maxToolCalls).toBeUndefined();
+    expect(opts.maxApiTurns).toBeUndefined();
   });
 
   it("killBackground stops a running session and returns partial output", async () => {
@@ -288,15 +352,16 @@ describe("AgentSessionManager background agents", () => {
       message: "inspect file",
     });
 
-    await new Promise((r) => setTimeout(r, 0));
-
     const session = (mgr as any).sessions.get(spawned.sessionId);
     session.status = "streaming";
     session.currentTool = "read_file";
 
-    const info = mgr
-      .getBgSessionInfos()
-      .find((s: any) => s.id === spawned.sessionId);
+    const info = await waitFor(
+      () =>
+        mgr.getBgSessionInfos().find((s: any) => s.id === spawned.sessionId),
+      (value) =>
+        value?.displayStatus === "Reading src/agent/ChatViewProvider.ts",
+    );
     expect(info).toBeDefined();
     expect(info!.displayStatus).toBe("Reading src/agent/ChatViewProvider.ts");
     expect(info!.displayStatusSource).toBe("heuristic");
@@ -393,8 +458,6 @@ describe("AgentSessionManager background agents", () => {
       taskClass: "readonly-research",
       routingReason: "test route",
       fallbackUsed: false,
-      maxToolCalls: 15,
-      maxApiTurns: 6,
       toolProfile: "readonly-research",
     });
     mocks.runBehavior.mockReturnValue(

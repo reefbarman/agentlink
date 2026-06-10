@@ -2,18 +2,59 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { exec } from "child_process";
-import { loadAllInstructions, loadModeRules } from "./configLoader.js";
+import picomatch from "picomatch";
+import type { ContextBreakdownItem } from "../shared/types.js";
+import {
+  estimateTokensFromChars,
+  measureContextItem,
+} from "./contextBreakdown.js";
+import {
+  loadAllInstructionBlocks,
+  loadAllInstructions,
+  loadMemory,
+  loadModeRules,
+  type InstructionBlock,
+} from "./configLoader.js";
 import { loadSkills, type SkillEntry } from "./skillLoader.js";
+import {
+  buildMcpToolCatalogSection,
+  type McpToolDisclosureCatalogEntry,
+} from "./mcpToolDisclosure.js";
 
 export interface PromptArtifacts {
   systemPrompt: string;
   skills: SkillEntry[];
+  advertisedRules: AdvertisedRuleEntry[];
+  promptBreakdown: {
+    sections: ContextBreakdownItem[];
+    totalChars: number;
+    estimatedTokens: number;
+  };
 }
 
 /** A workspace folder the agent should know about (multi-root workspaces). */
 export interface WorkspaceFolderInfo {
   name: string;
   path: string;
+}
+
+export interface AdvertisedRuleEntry {
+  source: string;
+  filePath: string;
+  loadPath: string;
+  summary?: string;
+  globs?: string[];
+}
+
+interface InstructionSections {
+  inlineInstructions: string;
+  ruleCatalogSection: string;
+  ruleCount: number;
+  advertisedRules: AdvertisedRuleEntry[];
+}
+
+export interface InstructionPartitionOptions {
+  activeFilePath?: string;
 }
 
 /**
@@ -44,6 +85,12 @@ function getBasePrompt(cwd: string): string {
 - When you don't know something, say so rather than guessing.
 - You are primarily a coding assistant, but you should be helpful with any question the user asks. If someone asks a non-technical question, answer it naturally — don't refuse or redirect. Being helpful builds trust.
 
+## Cross-Session Memory
+
+Use durable memory sparingly and only through \`propose_memory\` when available. Never bypass approval or write memory/config files directly.
+
+When the user states a durable preference, repeats a correction, or a hard-won learning would help future sessions, load the \`cross-session-memory\` skill for add/update/remove guidance.
+
 ## Questions & Clarification
 
 Ask clarifying questions before acting unless you are 100% certain about intent, scope, and constraints. This applies to all modes and task types.
@@ -64,11 +111,7 @@ When the user's choice naturally implies a mode change (e.g. "plan first" → ar
 
 ## Rich Output
 
-Your responses are rendered in a rich markdown view that supports GitHub-flavored markdown, Mermaid diagrams, and Vega/Vega-Lite charts. Use visualizations proactively when they clarify the answer.
-
-Prefer Mermaid for architecture, data flow, schemas, relationships, and workflows. Prefer Vega/Vega-Lite for quantitative comparisons, trends over time, distributions, and other data visualizations.
-
-Keep visualizations focused — show the relevant subset, not everything. A diagram or chart with 5-10 key elements is usually more useful than one with 50.
+Responses support GitHub-flavored Markdown plus Mermaid and Vega/Vega-Lite. Load the \`rich-output\` skill when diagrams, charts, or other structured rich rendering would clarify the answer.
 
 ## Final Response Status
 
@@ -134,25 +177,37 @@ const PROVIDER_PROMPTS: Record<string, string> = {
   anthropic: `
 ## Provider-Specific Behavior
 
-### Be concise
+### Visible progress and rationale
 
-- Favor short, dense responses. Explain *what* you did and *why* in 1–3 sentences per step — not a paragraph.
-- When making edits: state the change and rationale, then show the tool call. Don't narrate code line-by-line or restate what the diff already shows.
-- After tool calls, summarize findings briefly. Only elaborate if the result was surprising or requires a decision from the user.
-- Skip preamble and recaps. Don't restate the user's request, don't summarize what you're "about to do" before doing it, and don't provide a conclusion paragraph restating what you already did.
-- When listing multiple items (files found, changes made, errors fixed), use terse bullet points — not full sentences for each.
-- Thinking out loud is fine for complex reasoning, but keep it proportional to the complexity. Simple tasks don't need visible deliberation.`,
+- Stay concise, but do not rely on hidden thinking for user-facing context. If your next action depends on a decision, assumption, trade-off, or rationale, state a concise visible summary first.
+- Before the first tool call on a non-trivial task, write 2-4 bullets covering what you understand, what you will check or change next, and any key uncertainty.
+- After each tool call or small group of related tool calls, write 1-3 sentences explaining what changed in your understanding and what you will do next.
+- When asking the user a question, make the question self-contained. Include the relevant context, options, recommendation, and consequence of each choice. Never assume the user can see hidden reasoning.
+- For decisions, share a brief rationale or reasoning summary, not private chain-of-thought. Prefer: “I’m choosing A because X; B is riskier because Y.”
+- Avoid tool-only turns for user-facing actions like \`ask_user\`, \`switch_mode\`, and \`set_task_status\` unless the tool payload itself contains the full visible explanation.
+- Skip filler, broad recaps, and line-by-line diff narration. The goal is visible progress and rationale summaries, not verbosity.
+
+### Tool selection
+
+- Prefer the highest-level code intelligence tool that fits the question; avoid falling back to repeated file search and bulk reads when a more targeted tool is available.
+- **Known file path beats search** — If the user, an error, a stack trace, a prior tool result, or the task definition already gives you a concrete file path, do not search just to rediscover it. Go directly to \`get_context\` for first-pass orientation on that file.
+- **Known broad scope beats search** — If the task names a concrete directory/package/workspace area and requires multi-file understanding or edits, call \`get_repo_map\` for that scope before \`codebase_search\`/\`search_files\`; then drill into selected files with \`get_module_neighbors\` and \`get_context\`.
+- **\`get_context\` for known files** — When you already know the file path and need first-pass orientation, prefer \`get_context\` over \`read_file\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
+- **\`codebase_search\` first for unknown locations** — Use it before \`search_files\` or \`list_files\` when you do not know where relevant code lives. It returns semantically relevant results even when you do not know the exact function or variable name.
+- **\`search_files\` for exact matches only** — Use regex search when you need a specific literal string/pattern, or after \`codebase_search\` has identified the relevant area.
+- **\`read_file\` for exact reads** — Use \`read_file\` when you need complete content, a specific large line slice, local image/PDF/temp output content, or semantic in-file jumping via \`query\`.`,
 
   codex: `
 ## Provider-Specific Behavior
 
 ### Bias for action
 
-- Default to acting quickly. For most tasks, 1–2 targeted searches should give you enough context to attempt an edit. Iterate based on compiler/test feedback rather than reading everything up front.
-- **Always start with \`codebase_search\`** when exploring unfamiliar code or locating where something lives — it is faster and more targeted than grepping or browsing directories.
+- Default to acting quickly. For most tasks, 1–2 targeted orientation calls should give you enough context to attempt an edit. Iterate based on compiler/test feedback rather than reading everything up front.
+- **Use \`get_repo_map\` before search for broad known-scope edits** — when the user gives a concrete directory/scope for a refactor, migration, API/tool contract update, or multi-file edit, call \`get_repo_map\` scoped to that path first to get module/file skeletons, imports/exports, and likely blast radius.
+- **Use \`codebase_search\` first for unfamiliar code with no known scope** — it is faster and more targeted than grepping or browsing directories when you don't know where something lives.
 - For straightforward changes, don't over-explore. If you've read several files without finding a clear reason to keep reading, make your best attempt and iterate.
 - If you believe you know where the change should go, attempt the edit immediately and refine based on feedback.
-- For complex refactors or unfamiliar codebases, more exploration is appropriate — but always use semantic search first, then targeted reads.
+- For complex refactors, use \`get_repo_map\` first when the scope is known; use semantic search first only when the relevant scope/files are unknown.
 
 ### Narrate your work
 
@@ -164,10 +219,13 @@ const PROVIDER_PROMPTS: Record<string, string> = {
 
 ### Tool rules
 
-- **\`codebase_search\` FIRST** — Always use it before \`search_files\` or \`list_files\` when you don't know exactly where something is. It returns semantically relevant results even when you don't know the exact function or variable name.
+- **Known file path beats search** — If the user, an error, a stack trace, a prior tool result, or the task definition already gives you a concrete file path, do not call \`codebase_search\` just to rediscover it. Go directly to \`get_context\` for first-pass orientation on that file.
+- **Known broad scope beats search** — If the task names a concrete directory/package/workspace area and requires multi-file understanding or edits, call \`get_repo_map\` for that scope before \`codebase_search\`/\`search_files\`; then drill into selected files with \`get_module_neighbors\` and \`get_context\`.
+- **\`get_context\` for known files** — When you already know the file path and need first-pass orientation, prefer \`get_context\` over \`read_file\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
+- **\`codebase_search\` FIRST for unknown locations** — Use it before \`search_files\` or \`list_files\` only when you don't know exactly where something is. It returns semantically relevant results even when you don't know the exact function or variable name.
 - **\`search_files\` for exact matches only** — Use regex search only after \`codebase_search\` has identified the relevant area, or when you need to find a specific literal string/pattern you already know.
 - **Never use \`list_files\` to explore** — Do not browse directory trees to find code. Use \`codebase_search\` to find files by meaning instead.
-- **\`read_file\` with \`query\`** — Always pass the \`query\` parameter when reading a file to jump to the relevant section rather than reading from line 1.
+- **\`read_file\` for exact reads** — Use \`read_file\` when you need local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via \`query\`. When using \`read_file\` for code orientation, pass \`query\` to jump to the relevant section rather than reading from line 1.
 - **Terminal reuse by default** — For sequential \`execute_command\` calls, omit \`terminal_name\` and \`terminal_id\` so AgentLink reuses the default terminal. Only create a separate terminal when you intentionally need isolation (parallel/background work or temporary environment changes).
 - **Close dedicated terminals when done** — If you created named/background terminals, use \`close_terminals\` for targeted cleanup instead of leaving stale terminal tabs.
 - **\`output_file\` = STOP** — When \`execute_command\` or \`get_terminal_output\` returns an \`output_file\` field, the full output is already saved to that temp file. **NEVER re-run the command** to see more output or to search with different \`output_grep\` patterns. Instead, call \`read_file(output_file)\` to read the complete output. Re-running slow commands is a costly anti-pattern.
@@ -491,16 +549,7 @@ async function getSystemInfo(
 
   const modelLine = model ? `\n- Model: ${model}` : "";
 
-  // List additional workspace folders so the agent knows where each project
-  // lives without having to search for it. Only emitted for multi-root
-  // workspaces — a single root is already covered by the project root line.
-  let foldersSection = "";
-  if (workspaceFolders && workspaceFolders.length > 1) {
-    const items = workspaceFolders
-      .map((f) => `  - ${f.name}: ${f.path}`)
-      .join("\n");
-    foldersSection = `\n\n### Workspace Folders\n\nThis is a multi-root workspace. The following projects are open — use these paths directly instead of searching for them:\n\n${items}`;
-  }
+  const foldersSection = getWorkspaceFoldersSection(workspaceFolders);
 
   return `
 ## System Information
@@ -508,6 +557,156 @@ async function getSystemInfo(
 - OS: ${platform} (${arch})
 - Shell: ${shell}
 - Home: ${os.homedir()}${modelLine}${gitSection}${foldersSection}`;
+}
+
+function formatInstructionBlock(block: InstructionBlock): string {
+  return `# Instructions (${block.source}):\n${block.content}`;
+}
+
+export function formatRuleCatalogPath(
+  block: InstructionBlock,
+  cwd: string,
+): string {
+  if (!block.filePath) return block.source;
+
+  const relativePath = path.relative(cwd, block.filePath);
+  if (
+    relativePath &&
+    !relativePath.startsWith("..") &&
+    !path.isAbsolute(relativePath)
+  ) {
+    return relativePath;
+  }
+
+  return block.filePath;
+}
+
+function normalizePathForGlob(filePath: string): string {
+  return filePath.split(path.sep).join("/");
+}
+
+function ruleMatchesActiveFile(
+  block: InstructionBlock,
+  cwd: string,
+  activeFilePath?: string,
+): boolean {
+  if (!activeFilePath || !block.globs?.length) return false;
+
+  const activeAbsolutePath = path.resolve(activeFilePath);
+  const relativePath = path.relative(cwd, activeAbsolutePath);
+  const candidates = [normalizePathForGlob(activeAbsolutePath)];
+  if (
+    relativePath &&
+    !relativePath.startsWith("..") &&
+    !path.isAbsolute(relativePath)
+  ) {
+    candidates.push(normalizePathForGlob(relativePath));
+  }
+
+  return block.globs.some((glob) =>
+    candidates.some((candidate) =>
+      picomatch.isMatch(candidate, glob, { dot: true }),
+    ),
+  );
+}
+
+export function isDeferredRuleBlock(block: InstructionBlock): boolean {
+  return block.kind === "rule" && !block.alwaysApply;
+}
+
+export function shouldInlineInstructionBlock(
+  block: InstructionBlock,
+  cwd: string,
+  options?: InstructionPartitionOptions,
+): boolean {
+  return (
+    !isDeferredRuleBlock(block) ||
+    ruleMatchesActiveFile(block, cwd, options?.activeFilePath)
+  );
+}
+
+function buildInstructionSections(
+  blocks: InstructionBlock[],
+  cwd: string,
+  options?: InstructionPartitionOptions,
+): InstructionSections {
+  const inlineBlocks = blocks.filter((block) =>
+    shouldInlineInstructionBlock(block, cwd, options),
+  );
+  const ruleBlocks = blocks.filter(
+    (block) => !shouldInlineInstructionBlock(block, cwd, options),
+  );
+
+  const inlineInstructions = inlineBlocks
+    .map(formatInstructionBlock)
+    .join("\n\n");
+  const advertisedRules = ruleBlocks
+    .filter((block): block is InstructionBlock & { filePath: string } =>
+      Boolean(block.filePath),
+    )
+    .map((block) => {
+      const summary = getRuleCatalogSummary(block.content, block.description);
+      return {
+        source: block.source,
+        filePath: block.filePath,
+        loadPath: formatRuleCatalogPath(block, cwd),
+        ...(summary ? { summary } : {}),
+        ...(block.globs?.length ? { globs: block.globs } : {}),
+      };
+    });
+  const ruleCatalogSection = buildRuleCatalogSection(
+    advertisedRules,
+    ruleBlocks,
+  );
+
+  return {
+    inlineInstructions,
+    ruleCatalogSection,
+    ruleCount: ruleBlocks.length,
+    advertisedRules,
+  };
+}
+
+export function getRuleCatalogSummary(
+  content: string,
+  description?: string,
+): string {
+  const frontmatterDescription = description?.trim();
+  if (frontmatterDescription) return frontmatterDescription.slice(0, 160);
+
+  const firstSignalLine = content
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !line.startsWith("<!--"));
+
+  if (!firstSignalLine) return "";
+
+  return firstSignalLine.replace(/^#+\s*/, "").slice(0, 160);
+}
+
+function buildRuleCatalogSection(
+  advertisedRules: AdvertisedRuleEntry[],
+  blocks: InstructionBlock[],
+): string {
+  if (blocks.length === 0) return "";
+
+  const advertisedBySource = new Map(
+    advertisedRules.map((rule) => [rule.source, rule]),
+  );
+  const lines = blocks.map((block) => {
+    const advertised = advertisedBySource.get(block.source);
+    const loadPath = advertised?.loadPath ?? block.filePath ?? block.source;
+    const contentChars = block.content.length;
+    const summary =
+      advertised?.summary ??
+      getRuleCatalogSummary(block.content, block.description);
+    const summaryText = summary ? ` — ${summary}` : "";
+    const globs = advertised?.globs ?? block.globs;
+    const globText = globs?.length ? ` Applies to: ${globs.join(", ")}.` : "";
+    return `- ${block.source}${summaryText} (${contentChars} chars deferred).${globText} Load when relevant with \`load_rule\` path: \`${loadPath}\`.`;
+  });
+
+  return `\n\n## Rule Catalog\n\nThe following local rule files are available but their full contents are deferred to reduce prompt bloat. When a task may be governed by one of these rules, including when a listed glob matches files you will inspect or edit, load the relevant file with \`load_rule\` before acting.\n\n${lines.join("\n")}`;
 }
 
 /**
@@ -544,15 +743,48 @@ export async function loadCustomInstructions(
  * custom instructions, skills, and dev feedback — only keeps identity, mode
  * prompt, and the background review section.
  */
-function buildLightweightPrompt(mode: string, cwd: string): string {
-  const modePrompt = MODE_PROMPTS[mode] ?? MODE_PROMPTS.review ?? "";
+function getWorkspaceFoldersSection(
+  workspaceFolders?: WorkspaceFolderInfo[],
+): string {
+  // List additional workspace folders so the agent knows where each project
+  // lives without having to search for it. Only emitted for multi-root
+  // workspaces — a single root is already covered by the project root line.
+  if (!workspaceFolders || workspaceFolders.length <= 1) return "";
 
-  return `You are AgentLink, a skilled software engineer running as a background review agent inside a VS Code extension.
+  const items = workspaceFolders
+    .map((f) => `  - ${f.name}: ${f.path}`)
+    .join("\n");
+  return `\n\n### Workspace Folders\n\nThis is a multi-root workspace. The following projects are open — use these paths directly instead of searching for them:\n\n${items}`;
+}
 
+function buildPromptBreakdown(sections: ContextBreakdownItem[]): {
+  sections: ContextBreakdownItem[];
+  totalChars: number;
+  estimatedTokens: number;
+} {
+  const nonEmptySections = sections.filter((section) => section.chars > 0);
+  const totalChars = nonEmptySections.reduce(
+    (sum, section) => sum + section.chars,
+    0,
+  );
+  return {
+    sections: nonEmptySections,
+    totalChars,
+    estimatedTokens: estimateTokensFromChars(totalChars),
+  };
+}
+
+function buildLightweightPromptArtifacts(
+  mode: string,
+  cwd: string,
+  workspaceFolders?: WorkspaceFolderInfo[],
+): Omit<PromptArtifacts, "skills" | "advertisedRules"> {
+  const identity = `You are AgentLink, a skilled software engineer running as a background review agent inside a VS Code extension.`;
+  const rootSection = `
 - The project root directory is: ${cwd}
-- All file paths should be relative to this directory.
-${modePrompt}
-
+- All file paths should be relative to this directory.${getWorkspaceFoldersSection(workspaceFolders)}`;
+  const modePrompt = MODE_PROMPTS[mode] ?? MODE_PROMPTS.review ?? "";
+  const backgroundSection = `
 ## Background Agent
 
 You are running as a background review agent. Complete your review efficiently — be thorough but concise.
@@ -568,7 +800,19 @@ You are running as a background review agent. Complete your review efficiently �
 - Do not assume the foreground agent, the user, or the provided change is correct.
 - Be critical of underlying assumptions, not just surface implementation details.
 - Prefer concrete, evidence-backed findings over speculative concerns.
-- If the change is sound, say so clearly instead of forcing criticism.`.trimEnd();
+- If the change is sound, say so clearly instead of forcing criticism.`;
+
+  const sections = [
+    measureContextItem("lightweight identity", identity),
+    measureContextItem("lightweight root/system info", rootSection),
+    measureContextItem(`mode:${mode}`, modePrompt),
+    measureContextItem("background agent", backgroundSection),
+  ];
+  const systemPrompt = `${identity}
+${rootSection}
+${modePrompt}
+${backgroundSection}`.trimEnd();
+  return { systemPrompt, promptBreakdown: buildPromptBreakdown(sections) };
 }
 
 /**
@@ -588,11 +832,16 @@ export async function buildPromptArtifacts(
     isBackground?: boolean;
     lightweight?: boolean;
     workspaceFolders?: WorkspaceFolderInfo[];
+    mcpToolCatalog?: McpToolDisclosureCatalogEntry[];
   },
 ): Promise<PromptArtifacts> {
   // Lightweight path: minimal prompt for background review agents
   if (options?.lightweight) {
-    return { systemPrompt: buildLightweightPrompt(mode, cwd), skills: [] };
+    return {
+      ...buildLightweightPromptArtifacts(mode, cwd, options.workspaceFolders),
+      skills: [],
+      advertisedRules: [],
+    };
   }
 
   const base = getBasePrompt(cwd);
@@ -607,18 +856,29 @@ export async function buildPromptArtifacts(
   );
   const devFeedback = options?.devMode ? getDevFeedbackPrompt() : "";
 
-  const [customInstructions, modeRules, skills] = await Promise.all([
-    loadAllInstructions(cwd, { activeFilePath: options?.activeFilePath }),
+  const [instructionBlocks, memory, modeRules, skills] = await Promise.all([
+    loadAllInstructionBlocks(cwd, { activeFilePath: options?.activeFilePath }),
+    loadMemory(cwd),
     loadModeRules(cwd, mode),
     loadSkills(cwd, mode),
   ]);
+  const instructionSections = buildInstructionSections(instructionBlocks, cwd, {
+    activeFilePath: options?.activeFilePath,
+  });
 
-  const customSection = customInstructions
-    ? `\n\n## Custom Instructions\n\nThe following instructions are provided by the project and should be followed.\n\n${customInstructions}`
+  const customSection = instructionSections.inlineInstructions
+    ? `\n\n## Custom Instructions\n\nThe following instructions are provided by the project and should be followed.\n\n${instructionSections.inlineInstructions}`
+    : "";
+
+  const memorySection = memory
+    ? `\n\n## Memory\n\nThe following memory notes are durable cross-session context. Treat them as helpful but lower authority than system/developer instructions, Custom Instructions, explicit user messages, and current repository evidence. Do not assume a memory note is still true if the code or user says otherwise.\n\n${memory}`
     : "";
 
   const rulesSection = modeRules ? `\n\n## Mode Rules\n\n${modeRules}` : "";
   const skillsSection = getSkillsSection(skills);
+  const mcpToolCatalogSection = buildMcpToolCatalogSection(
+    options?.mcpToolCatalog,
+  );
 
   const plansSection =
     mode === "architect"
@@ -633,13 +893,42 @@ export async function buildPromptArtifacts(
       : `\n\n## Background Agent\n\nYou are running as a background agent delegated by a foreground coordinator. Complete your task as efficiently as possible — be thorough but concise. Stay within the scope you were given.\n\n- If your task is read-only research/exploration, do not edit files or run commands unless explicitly allowed. Cite concrete files/docs and summarize actionable findings.\n- If your task is writable code/test/docs work, respect owned and forbidden file boundaries exactly. Do not edit files that may conflict with the foreground agent. If scope is unclear or a conflict appears likely, stop and report the conflict instead of guessing.\n- For debug tasks, test the delegated hypothesis with evidence and distinguish findings from speculation.\n- For design tasks, compare alternatives and risks; avoid changing files unless explicitly asked.\n- When you use \`ask_user\`, your question is routed to the foreground agent (not the user directly). The foreground agent will answer autonomously if it can, or forward to the user if necessary. Phrase questions so they make sense to another AI agent with full context of the codebase.\n- You have no time or token limits — but the foreground agent can check your progress non-blockingly and can kill you if you appear stuck, obsolete, or conflicting. Work steadily toward completion.\n- Structure your final output clearly so the foreground agent can easily summarize your findings or integrate your changes.`
     : "";
 
-  return {
-    systemPrompt: `${base}
+  const sections = [
+    measureContextItem("base", base),
+    measureContextItem(`mode:${mode}`, modePrompt),
+    measureContextItem(
+      options?.providerId ? `provider:${options.providerId}` : "provider",
+      providerPrompt,
+    ),
+    measureContextItem("system info", `${systemInfo}${plansSection}`),
+    measureContextItem("dev feedback", devFeedback),
+    measureContextItem("custom instructions", customSection),
+    measureContextItem(
+      "rule catalog (deferred)",
+      instructionSections.ruleCatalogSection,
+      instructionSections.ruleCount,
+    ),
+    measureContextItem("memory", memorySection),
+    measureContextItem("mode rules", rulesSection),
+    measureContextItem("skills toc", skillsSection, skills.length),
+    measureContextItem(
+      "mcp tool catalog",
+      mcpToolCatalogSection,
+      options?.mcpToolCatalog?.length ?? 0,
+    ),
+    measureContextItem("background agent", backgroundSection),
+  ];
+  const systemPrompt = `${base}
 ${modePrompt}
 ${providerPrompt}
 ${systemInfo}${plansSection}
-${devFeedback}${customSection}${rulesSection}${skillsSection}${backgroundSection}`.trimEnd(),
+${devFeedback}${customSection}${instructionSections.ruleCatalogSection}${memorySection}${rulesSection}${skillsSection}${mcpToolCatalogSection}${backgroundSection}`.trimEnd();
+
+  return {
+    systemPrompt,
     skills,
+    advertisedRules: instructionSections.advertisedRules,
+    promptBreakdown: buildPromptBreakdown(sections),
   };
 }
 
@@ -655,6 +944,7 @@ export async function buildSystemPrompt(
     /** When lightweight is true, builds a minimal prompt (used for background reviews). */
     lightweight?: boolean;
     workspaceFolders?: WorkspaceFolderInfo[];
+    mcpToolCatalog?: McpToolDisclosureCatalogEntry[];
   },
 ): Promise<string> {
   const artifacts = await buildPromptArtifacts(mode, cwd, options);

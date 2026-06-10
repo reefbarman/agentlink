@@ -1,0 +1,8 @@
+{
+  "name": "agentlink-refactor-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/orders.test.js"
+  }
+}

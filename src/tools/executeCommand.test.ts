@@ -109,6 +109,70 @@ describe("handleExecuteCommand", () => {
     );
   });
 
+  it("rejects protected memory writes before masterBypass and force handling", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: "echo remember >> AGENTS.md",
+        force: true,
+        force_reason: "test should still reject protected memory writes",
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-protected",
+    );
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    const textItem = result.content[0];
+    expect(textItem.type).toBe("text");
+    if (textItem.type !== "text") throw new Error("Expected text result");
+
+    const payload = JSON.parse(textItem.text);
+    expect(payload.status).toBe("rejected");
+    expect(payload.reason).toContain("protected instructions or memory");
+    expect(payload.reason).toContain("force=true cannot bypass");
+  });
+
+  it("rejects protected memory writes introduced by approval command edits", async () => {
+    getConfiguration.mockReturnValueOnce({
+      get: vi.fn((key: string, fallback?: unknown) => {
+        if (key === "masterBypass") return false;
+        return fallback;
+      }),
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "echo ok" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: () => ({
+          promise: Promise.resolve({
+            decision: "accept",
+            editedCommand: "echo remember >> .agentlink/memory.md",
+          }),
+        }),
+      } as never,
+      "session-edited-protected",
+    );
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    const textItem = result.content[0];
+    expect(textItem.type).toBe("text");
+    if (textItem.type !== "text") throw new Error("Expected text result");
+
+    const payload = JSON.parse(textItem.text);
+    expect(payload.status).toBe("rejected");
+    expect(payload.command).toBe("echo remember >> .agentlink/memory.md");
+    expect(payload.original_command).toBe("echo ok");
+    expect(payload.reason).toContain("protected instructions or memory");
+  });
+
   it("returns actionable newline regex hint on ripgrep newline error", async () => {
     executeCommand.mockRejectedValue(
       new Error("ripgrep error: regex parse error: unescaped literal newline"),

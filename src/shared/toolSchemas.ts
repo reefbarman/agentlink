@@ -71,6 +71,87 @@ export const loadSkillSchema = {
     ),
 };
 
+export const loadRuleSchema = {
+  path: z
+    .string()
+    .describe(
+      "Absolute or workspace-relative path of a deferred rule file that was explicitly advertised in the current system prompt Rule Catalog.",
+    ),
+};
+
+export const getContextSchema = {
+  path: z
+    .string()
+    .describe(
+      "File path to build a context pack for (absolute or relative to workspace root). Directory paths are not bulk-read.",
+    ),
+  offset: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Starting line number for the content slice (1-indexed, default: 1).",
+    ),
+  limit: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Maximum number of content lines to include (default: 200, capped at 400).",
+    ),
+  dedupe_unchanged_content: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, omit content for an unchanged exact range already returned in this session. Default: false.",
+    ),
+  refresh: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, include content even if dedupe_unchanged_content would otherwise omit it.",
+    ),
+};
+
+export const getModuleNeighborsSchema = {
+  path: z
+    .string()
+    .describe(
+      "Source/config file path (absolute or relative to workspace root) to inspect in the structural repo map.",
+    ),
+  max_results: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Maximum items to return in each list: imports, exports, symbols, and dependents (default 50, capped at 200).",
+    ),
+};
+
+export const getRepoMapSchema = {
+  path: z
+    .string()
+    .optional()
+    .describe(
+      "Optional workspace-relative or absolute file/directory path to scope the repo map. Omit for the first workspace root.",
+    ),
+  max_chars: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Hard output budget in characters for the JSON payload (default 20000, minimum 2000, capped at 60000).",
+    ),
+  max_files: z.coerce
+    .number()
+    .optional()
+    .describe(
+      "Maximum file skeleton entries to include before budget truncation (default 200, capped at 1000).",
+    ),
+  include_external: z
+    .boolean()
+    .optional()
+    .describe(
+      "Include summarized external dependency specifiers (default true). Set false to reserve budget for internal files.",
+    ),
+};
+
 export const listFilesSchema = {
   path: z
     .string()
@@ -204,6 +285,43 @@ export const writeFileSchema = {
     .string()
     .describe("File path (absolute or relative to workspace root)"),
   content: z.string().describe("Complete file content to write"),
+};
+
+export const proposeMemorySchema = {
+  tier: z
+    .enum(["instructions", "skill", "command", "memory"])
+    .describe(
+      "Destination tier: instructions for durable rules, skill for reusable workflows, command for slash-command prompts, memory for lower-authority facts/gotchas.",
+    ),
+  scope: z
+    .enum(["global", "project"])
+    .describe("Global user memory/config or current project memory/config."),
+  operation: z
+    .enum(["add", "update", "remove"])
+    .describe("Whether to add, update, or remove remembered content."),
+  title: z.string().describe("Short label shown on the approval card"),
+  rationale: z
+    .string()
+    .describe(
+      "Why this should be persisted across sessions; shown to the user.",
+    ),
+  content: z
+    .string()
+    .describe(
+      "Markdown content to add or the replacement body for update/remove operations. For skills, pass the complete SKILL.md content.",
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      "Required for skill and command tiers. Lowercase hyphen identifier used for skill directory or command filename.",
+    ),
+  replaces: z
+    .string()
+    .optional()
+    .describe(
+      "Existing entry/section text to replace or remove. Matched with normalized whitespace.",
+    ),
 };
 
 export const applyDiffSchema = {

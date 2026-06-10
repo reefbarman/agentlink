@@ -1,0 +1,8 @@
+{
+  "name": "agentlink-eval-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/cart.test.js"
+  }
+}

@@ -133,6 +133,14 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
   {
+    name: "remember",
+    description:
+      "Review this session for durable learnings and propose approved memory/config updates",
+    source: "builtin",
+    builtin: false,
+    body: "Review this session for durable cross-session learnings. If something qualifies, check the most appropriate target for duplicates or contradictions, then call propose_memory using the highest appropriate tier: instructions for stable rules/conventions, skill for reusable workflows, command for reusable slash-command prompts, or memory for lower-authority facts/preferences/gotchas. Prefer concise date-stamped entries, batch related learnings, and do not propose anything session-specific, unverified, secret, or easy to rediscover. If nothing qualifies, say so briefly.",
+  },
+  {
     name: "skills",
     description: "Show detected AgentLink skills for the current mode",
     source: "builtin",

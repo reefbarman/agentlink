@@ -11,7 +11,7 @@ export interface InlineApprovalChoice {
 }
 
 export interface InlineApprovalRequest {
-  kind: "mcp" | "write" | "rename" | "command";
+  kind: "mcp" | "write" | "rename" | "command" | "memory";
   title: string;
   detail?: string;
   choices: InlineApprovalChoice[];
@@ -40,6 +40,10 @@ export type OnApprovalRequest = (
       trustScope?: string;
       rulePattern?: string;
       ruleMode?: string;
+      editedContent?: string;
+      memoryTier?: import("../approvals/webview/types.js").MemoryTier;
+      memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+      memoryName?: string;
     }
 >;
 
@@ -62,6 +66,43 @@ export type ToolResult = {
     mcpApprovalPromotion?: McpApprovalPromotionMeta;
   };
 };
+
+export interface ContextBreakdownItem {
+  label: string;
+  chars: number;
+  estimatedTokens: number;
+  count?: number;
+}
+
+export interface McpServerToolBreakdown {
+  serverName: string;
+  chars: number;
+  estimatedTokens: number;
+  toolCount: number;
+}
+
+export interface ToolContextBreakdown {
+  totalToolCount: number;
+  totalChars: number;
+  estimatedTokens: number;
+  native: ContextBreakdownItem;
+  mcp: {
+    totalServerCount: number;
+    totalToolCount: number;
+    totalChars: number;
+    estimatedTokens: number;
+    servers: McpServerToolBreakdown[];
+  };
+}
+
+export interface RequestContextBreakdown {
+  prompt: {
+    sections: ContextBreakdownItem[];
+    totalChars: number;
+    estimatedTokens: number;
+  };
+  tools?: ToolContextBreakdown;
+}
 
 /** Create a successful ToolResult from a JSON-serializable payload. */
 export function successResult(payload: Record<string, unknown>): ToolResult {

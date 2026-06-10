@@ -47,6 +47,7 @@ export interface BrowserGatewayUiState {
   question:
     | {
         id: string;
+        context: string;
         questions: Question[];
         backgroundTask?: string;
       }
@@ -59,6 +60,7 @@ export interface BrowserGatewayWireState {
   approval: ApprovalRequest | null;
   question: {
     id: string;
+    context: string;
     questions: Question[];
     backgroundTask?: string;
   } | null;
@@ -95,6 +97,7 @@ export interface BrowserGatewaySessionState {
         messageQueue: AppState["messageQueue"];
         questionRequest: {
           id: string;
+          context: string;
           questions: Question[];
           backgroundTask?: string;
         } | null;
@@ -130,7 +133,12 @@ export interface BrowserGatewayWireSessionState {
     lastCacheReadTokens: number;
     estimatedTotalUsed: number;
     messageQueue: AppState["messageQueue"];
-    questionRequest: { id: string; questions: Question[] } | null;
+    questionRequest: {
+      id: string;
+      context: string;
+      questions: Question[];
+      backgroundTask?: string;
+    } | null;
     detectedQuestion: AppState["detectedQuestion"];
     todos: TodoItem[];
     debugInfo: AppState["debugInfo"];
@@ -212,6 +220,7 @@ export class BrowserGatewayService implements vscode.Disposable {
   private question:
     | {
         id: string;
+        context: string;
         questions: Question[];
         backgroundTask?: string;
       }
@@ -277,6 +286,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       question: this.question
         ? {
             id: this.question.id,
+            context: this.question.context,
             questions: this.question.questions,
             ...(this.question.backgroundTask
               ? { backgroundTask: this.question.backgroundTask }
@@ -389,6 +399,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       question: this.question
         ? {
             id: this.question.id,
+            context: this.question.context,
             questions: this.question.questions,
             ...(this.question.backgroundTask
               ? { backgroundTask: this.question.backgroundTask }
@@ -554,6 +565,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       case "agentQuestionRequest":
         this.question = {
           id: event.id,
+          context: event.context,
           questions: event.questions,
           ...(event.backgroundTask
             ? { backgroundTask: event.backgroundTask }

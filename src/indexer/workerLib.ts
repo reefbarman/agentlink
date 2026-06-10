@@ -11,6 +11,10 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 import { createHash } from "crypto";
 import type { IndexCache } from "./types.js";
+import {
+  STRUCTURAL_GRAPH_CACHE_VERSION,
+  type StructuralGraphCache,
+} from "./structuralGraph.js";
 
 // --- Constants ---
 
@@ -122,6 +126,55 @@ export function writeCache(cachePath: string, cache: IndexCache): void {
   const dir = path.dirname(cachePath);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(cachePath, JSON.stringify(cache), "utf-8");
+}
+
+export function loadStructuralCache(
+  cachePath: string,
+  workspaceRoot = "",
+): StructuralGraphCache {
+  try {
+    const raw = fs.readFileSync(cachePath, "utf-8");
+    const parsed = JSON.parse(raw) as StructuralGraphCache;
+    if (parsed.version === STRUCTURAL_GRAPH_CACHE_VERSION && parsed.files) {
+      return parsed;
+    }
+  } catch {
+    // Missing or corrupt — start fresh
+  }
+  return emptyStructuralCache(workspaceRoot);
+}
+
+export function writeStructuralCache(
+  cachePath: string,
+  cache: StructuralGraphCache,
+): void {
+  const dir = path.dirname(cachePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = `${cachePath}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(cache), "utf-8");
+  fs.renameSync(tmpPath, cachePath);
+}
+
+export function emptyStructuralCache(
+  workspaceRoot: string,
+  collectionName?: string,
+): StructuralGraphCache {
+  return {
+    version: STRUCTURAL_GRAPH_CACHE_VERSION,
+    workspaceRoot,
+    ...(collectionName ? { collectionName } : {}),
+    generatedAt: new Date(0).toISOString(),
+    files: {},
+  };
+}
+
+export function getStructuralCachePath(cachePath: string): string {
+  const ext = path.extname(cachePath);
+  if (!ext) return `${cachePath}.structural.json`;
+  return path.join(
+    path.dirname(cachePath),
+    `${path.basename(cachePath, ext)}.structural${ext}`,
+  );
 }
 
 // --- File hashing ---

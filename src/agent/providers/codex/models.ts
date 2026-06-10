@@ -58,14 +58,69 @@ export interface ResponsesCaps {
   supportsMaxOutputTokens: boolean;
 }
 
-/** The preferred cheap/fast model for condensing on Codex. */
-export const CODEX_CONDENSE_MODEL = "gpt-5.4-nano";
+/**
+ * Models the ChatGPT/Codex OAuth backend (chatgpt.com/backend-api/codex)
+ * actually serves. Verified by probing the endpoint — it rejects every other
+ * model with "<id> is not supported when using Codex with a ChatGPT account",
+ * which reaches our SDK as a bare `400 status code (no body)`. The public
+ * API-key endpoint (api.openai.com) serves the full CODEX_MODELS set, so this
+ * gate only applies to OAuth auth.
+ *
+ * The backend only exposes roughly the current generation and rotates older
+ * ones out, so keep this list in sync as models ship. The runtime remap in
+ * CodexProvider is the backstop when this drifts.
+ */
+export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+] as const;
 
-/** Ordered fallback chain for condensing when account entitlements vary. */
+const CHATGPT_BACKEND_MODEL_SET = new Set<string>(
+  CODEX_CHATGPT_BACKEND_MODEL_IDS,
+);
+
+/**
+ * Default Codex model — routed to for background agents on the codex/gpt side
+ * (e.g. "opposite" provider strategy) and used as the OAuth remap target.
+ */
+export const CODEX_DEFAULT_MODEL = "gpt-5.5";
+
+/** Cheapest OAuth-served Codex model, used for condensing and cheap-tier tasks. */
+export const CODEX_OAUTH_CHEAP_MODEL = "gpt-5.4-mini";
+
+export function isCodexModelServedOnChatgptBackend(modelId: string): boolean {
+  return CHATGPT_BACKEND_MODEL_SET.has(modelId);
+}
+
+/**
+ * Map an arbitrary (possibly OAuth-unavailable) Codex model id to one the
+ * ChatGPT backend serves, preserving the rough tier: mini/nano collapse to the
+ * cheap model, everything else to the default (gpt-5.5).
+ */
+export function remapToChatgptBackendModel(modelId: string): string {
+  if (isCodexModelServedOnChatgptBackend(modelId)) return modelId;
+  if (
+    /mini|nano/.test(modelId) &&
+    CHATGPT_BACKEND_MODEL_SET.has(CODEX_OAUTH_CHEAP_MODEL)
+  ) {
+    return CODEX_OAUTH_CHEAP_MODEL;
+  }
+  return CODEX_DEFAULT_MODEL;
+}
+
+/** The preferred cheap/fast model for condensing on Codex (OAuth-served). */
+export const CODEX_CONDENSE_MODEL = CODEX_OAUTH_CHEAP_MODEL;
+
+/**
+ * Ordered fallback chain for condensing when account entitlements vary.
+ * OAuth-served models first so the ChatGPT backend never wastes a doomed call;
+ * API-key-only generations follow for completeness.
+ */
 export const CODEX_CONDENSE_MODEL_FALLBACKS = [
   CODEX_CONDENSE_MODEL,
-  "gpt-5.4-mini",
-  "gpt-5.1-codex-mini",
+  "gpt-5.5",
+  "gpt-5.4",
   "gpt-5.2-codex",
   "gpt-5.3-codex",
 ] as const;

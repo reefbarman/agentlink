@@ -4,19 +4,26 @@ import type {
   AgentRuntimeError,
   SessionStatus,
 } from "./types.js";
+import type { RequestContextBreakdown } from "../shared/types.js";
 import type {
   ContentBlock,
   ReasoningEffort,
   TextBlock,
 } from "./providers/types.js";
-import { getEffectiveHistory, injectSyntheticToolResults } from "./condense.js";
+import {
+  enforceToolResultAdjacency,
+  getEffectiveHistory,
+  injectSyntheticToolResults,
+} from "./condense.js";
 
 import type { AgentMode } from "./modes.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { SkillEntry } from "./skillLoader.js";
+import type { McpToolDisclosurePartition } from "./mcpToolDisclosure.js";
 import {
   buildPromptArtifacts,
+  type AdvertisedRuleEntry,
   type WorkspaceFolderInfo,
 } from "./systemPrompt.js";
 import { buildSessionTitleFromUserText } from "./sessionTitle.js";
@@ -28,6 +35,8 @@ export class AgentSession {
   createdAt: number;
   readonly cwd: string;
   systemPrompt: string;
+  contextBreakdown: RequestContextBreakdown;
+  mcpToolDisclosure?: McpToolDisclosurePartition;
 
   mode: string;
   /** Full mode definition (for tool filtering). Falls back to built-in 'code'. */
@@ -61,6 +70,8 @@ export class AgentSession {
   readonly filesRead = new Set<string>();
   /** Skills advertised in the current system prompt, keyed by path for allowlist validation. */
   private advertisedSkills = new Map<string, SkillEntry>();
+  /** Deferred rules advertised in the current system prompt, keyed by path for allowlist validation. */
+  private advertisedRules = new Map<string, AdvertisedRuleEntry>();
   /** Skill names explicitly loaded during this session and kept alive across condense. */
   readonly loadedSkills = new Set<string>();
   /** Total input tokens from the most recent API response: uncached + cache_read + cache_creation.
@@ -139,29 +150,18 @@ export class AgentSession {
     followUp?: string;
   } | null = null;
 
-  /**
-   * Turn-bound media attachments (images + PDFs).
-   * Keyed by message index so media survives retries and isn't confused with interjections.
-   * Non-persistent — ephemeral within the running session.
-   */
-  private _pendingMedia = new Map<
-    number,
-    {
-      images: Array<{ name: string; mimeType: string; base64: string }>;
-      documents: Array<{ name: string; mimeType: string; base64: string }>;
-    }
-  >();
-
   private constructor(opts: {
     mode: string;
     agentMode: AgentMode;
     config: AgentConfig;
     systemPrompt: string;
+    promptBreakdown: RequestContextBreakdown["prompt"];
     background?: boolean;
     cwd: string;
     activeFilePath?: string;
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
+    mcpToolDisclosure?: McpToolDisclosurePartition;
   }) {
     this.id = randomUUID();
     this.mode = opts.mode;
@@ -179,9 +179,11 @@ export class AgentSession {
     this.createdAt = Date.now();
     this.lastActiveAt = this.createdAt;
     this.systemPrompt = opts.systemPrompt;
+    this.contextBreakdown = { prompt: opts.promptBreakdown };
     this.activeFilePath = opts.activeFilePath;
     this.providerId = opts.providerId;
     this.workspaceFolders = opts.workspaceFolders;
+    this.mcpToolDisclosure = opts.mcpToolDisclosure;
   }
 
   static async create(opts: {
@@ -197,6 +199,7 @@ export class AgentSession {
     activeFilePath?: string;
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
+    mcpToolDisclosure?: McpToolDisclosurePartition;
   }): Promise<AgentSession> {
     const artifacts = await buildPromptArtifacts(opts.mode, opts.cwd, {
       devMode: opts.devMode,
@@ -206,6 +209,7 @@ export class AgentSession {
       isBackground: opts.isBackground,
       lightweight: opts.lightweight,
       workspaceFolders: opts.workspaceFolders,
+      mcpToolCatalog: opts.mcpToolDisclosure?.catalog,
     });
     const agentMode =
       opts.agentMode ??
@@ -216,13 +220,16 @@ export class AgentSession {
       agentMode,
       config: opts.config,
       systemPrompt: artifacts.systemPrompt,
+      promptBreakdown: artifacts.promptBreakdown,
       cwd: opts.cwd,
       background: opts.background,
       activeFilePath: opts.activeFilePath,
       providerId: opts.providerId,
       workspaceFolders: opts.workspaceFolders,
+      mcpToolDisclosure: opts.mcpToolDisclosure,
     });
     session.setAdvertisedSkills(artifacts.skills);
+    session.setAdvertisedRules(artifacts.advertisedRules);
     return session;
   }
 
@@ -241,9 +248,12 @@ export class AgentSession {
       providerId: this.providerId,
       model: this.model,
       workspaceFolders: this.workspaceFolders,
+      mcpToolCatalog: this.mcpToolDisclosure?.catalog,
     });
     this.systemPrompt = artifacts.systemPrompt;
+    this.contextBreakdown = { prompt: artifacts.promptBreakdown };
     this.setAdvertisedSkills(artifacts.skills);
+    this.setAdvertisedRules(artifacts.advertisedRules);
     this.resetProviderResponseState();
   }
 
@@ -259,6 +269,7 @@ export class AgentSession {
       providerId: this.providerId,
       model: this.model,
       workspaceFolders: this.workspaceFolders,
+      mcpToolCatalog: this.mcpToolDisclosure?.catalog,
     });
     const agentMode =
       opts?.agentMode ??
@@ -268,7 +279,9 @@ export class AgentSession {
     this.mode = mode;
     this.agentMode = agentMode;
     this.systemPrompt = artifacts.systemPrompt;
+    this.contextBreakdown = { prompt: artifacts.promptBreakdown };
     this.setAdvertisedSkills(artifacts.skills);
+    this.setAdvertisedRules(artifacts.advertisedRules);
     this.resetProviderResponseState();
     this.lastActiveAt = Date.now();
   }
@@ -284,8 +297,15 @@ export class AgentSession {
    * plus persisted runtime-error notes that are for local context only.
    */
   getMessages(): AgentMessage[] {
-    return injectSyntheticToolResults(
-      getEffectiveHistory(this.messages).filter((m) => !m.runtimeError),
+    // enforceToolResultAdjacency is the last line of defense: after all
+    // history transforms (condense slicing, resume-context insertion,
+    // synthetic results), every tool_result must still pair 1:1 with a
+    // tool_use in the immediately preceding assistant turn or providers
+    // reject the request with a 400.
+    return enforceToolResultAdjacency(
+      injectSyntheticToolResults(
+        getEffectiveHistory(this.messages).filter((m) => !m.runtimeError),
+      ),
     );
   }
 
@@ -312,11 +332,21 @@ export class AgentSession {
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       origin?: "vscode" | "browser";
+      images?: Array<{ name: string; mimeType: string; base64: string }>;
+      documents?: Array<{ name: string; mimeType: string; base64: string }>;
     },
   ): void {
     this.messages.push({
       role: "user",
       content: text,
+      ...(opts?.images?.length || opts?.documents?.length
+        ? {
+            media: {
+              images: opts.images ?? [],
+              documents: opts.documents ?? [],
+            },
+          }
+        : {}),
       ...(opts &&
       (opts.displayText ||
         opts.isSlashCommand ||
@@ -457,6 +487,14 @@ export class AgentSession {
 
   getAdvertisedSkills(): SkillEntry[] {
     return Array.from(this.advertisedSkills.values());
+  }
+
+  setAdvertisedRules(rules: AdvertisedRuleEntry[] = []): void {
+    this.advertisedRules = new Map(rules.map((rule) => [rule.filePath, rule]));
+  }
+
+  getAdvertisedRules(): AdvertisedRuleEntry[] {
+    return Array.from(this.advertisedRules.values());
   }
 
   getLoadedSkills(): string[] {
@@ -676,34 +714,6 @@ export class AgentSession {
     const pending = this._pendingModeResume;
     this._pendingModeResume = null;
     return pending;
-  }
-
-  /** Store pending media (images/PDFs) bound to a specific message index. */
-  setPendingMedia(
-    messageIndex: number,
-    images?: Array<{ name: string; mimeType: string; base64: string }>,
-    documents?: Array<{ name: string; mimeType: string; base64: string }>,
-  ): void {
-    const imgs = images?.length ? images : [];
-    const docs = documents?.length ? documents : [];
-    if (imgs.length > 0 || docs.length > 0) {
-      this._pendingMedia.set(messageIndex, { images: imgs, documents: docs });
-    }
-  }
-
-  /** Get pending media for a specific message index. Non-destructive — safe across retries. */
-  getPendingMedia(messageIndex: number):
-    | {
-        images: Array<{ name: string; mimeType: string; base64: string }>;
-        documents: Array<{ name: string; mimeType: string; base64: string }>;
-      }
-    | undefined {
-    return this._pendingMedia.get(messageIndex);
-  }
-
-  /** Clear all pending media. Call after the engine successfully processes the turn. */
-  clearPendingMedia(): void {
-    this._pendingMedia.clear();
   }
 
   createAbortController(): AbortController {

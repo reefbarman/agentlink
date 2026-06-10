@@ -97,16 +97,25 @@ When the codebase index is available, `read_file` and `list_files` both accept a
 
 Use these to reduce context-gathering round-trips: `list_files` with `query` to find relevant files, then `read_file` with `query` to land on the right section.
 
-### Search strategy — use `codebase_search` FIRST
+### Search strategy — choose structure, semantics, or exact text by task shape
 
-When exploring code, understanding architecture, or investigating how something works, **always start with `codebase_search`** before falling back to `search_files` regex search. Semantic search finds conceptually related code even when you don't know the exact names, patterns, or file locations.
+When a task spans a known directory/module boundary — for example a refactor, API/tool contract update, migration, or broad edit under an explicit path — **start with `get_repo_map` scoped to that path before semantic or regex search**. It gives you file/module skeletons, imports, exports, and directory summaries in one budgeted call so you can choose exact files and then drill down with `get_module_neighbors` or `get_context`.
+
+When exploring unfamiliar code without a known scope, understanding architecture, or investigating how something works, **start with `codebase_search`** before falling back to `search_files` regex search. Semantic search finds conceptually related code even when you don't know the exact names, patterns, or file locations.
+
+**Use `get_repo_map` before search when:**
+
+- The user gives a concrete directory/scope for a broad edit or refactor
+- You need module boundaries, imports/exports, dependents, or likely blast radius before editing
+- You are planning multiple file edits and need a compact file/module skeleton first
+- You want to avoid repeated `codebase_search`/`search_files` calls just to discover the local graph
 
 **Use `codebase_search` when:**
 
 - Exploring unfamiliar code ("how does auth work?", "where are API routes?")
 - You don't know exact function/variable/class names
 - Looking for conceptual matches ("error handling", "database connections", "file uploads")
-- Starting a new task and need to understand the relevant parts of the codebase
+- Starting a new task and need to understand the relevant parts of the codebase but no concrete scope/path is known
 - The user asks a broad question about the codebase
 
 **Use `search_files` (regex) when:**
@@ -115,7 +124,7 @@ When exploring code, understanding architecture, or investigating how something 
 - You need precise text matching (e.g. finding all imports of a specific module)
 - You need to count occurrences or find-and-replace
 
-**Combine both:** Start with `codebase_search` to discover relevant files and concepts, then use `search_files` for precise lookups within those files.
+**Combine tools:** For known-scope broad edits, start with `get_repo_map`, drill into candidate files with `get_module_neighbors`/`get_context`, then use `search_files` for precise symbol/string matches. For unknown-scope exploration, start with `codebase_search` to discover relevant files and concepts, then use `search_files` for precise lookups within those files.
 
 **Prefer `list_files` with `query` over `codebase_search` when:**
 
@@ -137,6 +146,9 @@ agentlink also provides tools that Claude Code doesn't have natively. Use these 
 
 - **`handshake`** — Establish a trusted connection by verifying workspace identity. Must be called before any other tool. Pass all your known working directories — the server validates that its workspace folders are present in your list.
 - **`codebase_search`** — Search the codebase by meaning, not exact text. Uses a vector index for semantic similarity search. Pass a natural language `query` and optionally a `path` to scope to a directory. Use `exclude_globs` to suppress noisy indexed paths for a specific query (for example `**/dist/**` or other generated folders) without rebuilding the index. Best for exploratory questions. Requires the codebase index to be built (see Codebase Index in the sidebar).
+- **`get_context`** — Build a compact context pack for an explicit file: metadata, git status, diagnostics summary, symbol outline, bounded numbered content, and working-set status. Prefer this over `read_file` for first-pass orientation when the file path is already known. Use `dedupe_unchanged_content: true` to omit unchanged content for an exact range already returned in this session; use `refresh: true` to force content back in.
+- **`get_repo_map`** — Read the structural repo-map sidecar for a budgeted whole-project or scoped skeleton: cache metadata, aggregate counts, directory summaries, external dependency summaries, and file/module entries. Use before broad edits to understand module boundaries, then drill into specific files with `get_module_neighbors`. Requires the codebase index/structural sidecar to be built.
+- **`get_module_neighbors`** — Read the structural repo-map sidecar for a file: imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after `get_context` when you need module-level blast-radius awareness before editing. Requires the codebase index/structural sidecar to be built; use LSP tools for symbol-precise verification.
 - **`go_to_definition`** — Jump to where a symbol is defined. Takes a file, line, and column.
 - **`go_to_implementation`** — Find concrete implementations of an interface, abstract class, or method. Unlike `go_to_definition` which shows the declaration, this shows where the code actually runs. Essential for interface-heavy codebases (TypeScript, Java, C#).
 - **`go_to_type_definition`** — Navigate to the type definition of a symbol. For `const x = getFoo()`, `go_to_definition` goes to `getFoo`'s declaration, but `go_to_type_definition` goes to the return type. Useful for exploring API return types.
@@ -153,6 +165,8 @@ agentlink also provides tools that Claude Code doesn't have natively. Use these 
 - **`open_file`** — Open a file in the VS Code editor, optionally scrolling to a specific line. Supports range selection with `end_line`/`end_column` to highlight code.
 - **`show_notification`** — Show a notification in VS Code. Use sparingly for important status updates.
 - **`load_skill`** — Load the full contents of a skill file that was explicitly advertised in the current AgentLink session prompt. This is not a general-purpose reader; only advertised skill paths are accepted.
+- **`load_rule`** — Load the full contents of a deferred local rule file that was explicitly advertised in the current AgentLink Rule Catalog. This is not a general-purpose reader; only advertised deferred rule paths are accepted.
+- **`propose_memory`** — Propose a durable cross-session memory/config update across instructions, skills, commands, or memory.md. Use only for generalizable learnings/preferences/workflows; it always requires explicit user approval and can be edited or rejected by the user.
 - **`find_and_replace`** — Bulk find-and-replace across **multiple files** using a glob pattern (e.g. `src/**/*.ts`). Supports literal strings and regex with capture groups. Opens a rich preview panel showing each match in context with inline diffs — the user can toggle individual matches on/off before accepting. Optional `max_replacements` adds a safety guardrail that aborts without applying edits when total matches exceed the threshold. **For single-file edits, prefer `apply_diff`** — it provides better diff review and format-on-save. Only use `find_and_replace` on a single file when making many identical replacements (e.g. renaming a variable throughout a file).
 - **`get_terminal_output`** — Check on a background or timed-out command. Pass the `terminal_id` returned by `execute_command`. Works for both `background: true` commands and foreground commands that timed out (indicated by `timed_out: true` in the response). Returns accumulated output, whether the command is still running, and the exit code when finished. Use `wait_seconds` to poll for new output (avoids needing two calls when a command was just started). Use `kill: true` to send Ctrl+C (SIGINT) and stop the command. Supports the same output filtering params as `execute_command` (`output_head`, `output_tail`, `output_grep`, etc.). When a running command appears stalled on an interactive prompt, responses include `blocked_on_prompt` with a prompt hint.
 - **`start_worktree_agent`** — Start an isolated parallel workstream by creating/reusing a Git worktree, opening it in a new VS Code window, and bootstrapping AgentLink there with a supplied prompt. Use this only when the user explicitly requested a separate worktree/window or after you ask and the user explicitly approves. The tool always shows a required approval prompt with destination path, branch, base ref, prompt preview, autosubmit choice, and dirty-worktree/reuse warnings before it creates or opens anything.

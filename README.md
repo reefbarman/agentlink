@@ -440,6 +440,76 @@ Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not avai
 
 **Friendly errors:** `ENOENT` → `"File not found: {path}. Working directory: {root}"`, `EACCES` → `"Permission denied"`, `EISDIR` → `"Use list_files instead"`. When `auto_follow_suggestion` succeeds, the response includes suggestion/resolution metadata showing the requested path and followed file.
 
+### get_context
+
+Build a compact read-only context pack for an explicit file. Prefer this over `read_file` for first-pass orientation when the file path is already known; use `read_file` when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via `query`. This is intended to collapse the common orientation sequence into one bounded response while tracking whether the same content range has already been returned in the current session.
+
+| Parameter                  | Type     | Description                                                                                           |
+| -------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `path`                     | string   | File path to build context for. Directory paths are not bulk-read.                                    |
+| `offset`                   | number?  | Starting line number for the content slice (1-indexed, default: 1).                                   |
+| `limit`                    | number?  | Maximum content lines to include (default: 200, capped at 400).                                       |
+| `dedupe_unchanged_content` | boolean? | When true, omit content for an unchanged exact range already returned in this session. Default false. |
+| `refresh`                  | boolean? | When true, include content even if unchanged-content dedupe would otherwise omit it.                  |
+
+**Response includes:**
+
+- `path`, `total_lines`, `showing`, `truncated` — target and pagination info
+- `size`, `modified`, `language`, `git_status` — file metadata when available
+- `diagnostics` — `{ errors: N, warnings: N }` summary when diagnostics exist
+- `symbols` — compact document symbol outline when language services provide one
+- `working_set` — `status`, `content_hash`, optional `previous_content_hash`, `range`, `should_include_content`, and `last_read_at`
+- `content` — numbered lines, omitted only when `working_set.should_include_content` is false
+
+Working-set statuses are `new`, `unchanged`, `changed`, and `omitted_unchanged`. Omission is opt-in and exact-range only; overlapping ranges and full-file reads are tracked independently so callers do not lose content they have not explicitly received.
+
+### get_repo_map
+
+Read the structural repo-map sidecar as a budgeted whole-project or scoped skeleton. Use this before broad edits to understand module boundaries and high-level dependency shape, then drill into specific files with `get_module_neighbors` when you need exact imports/dependents.
+
+| Parameter          | Type     | Description                                                                                                         |
+| ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| `path`             | string?  | Optional workspace-relative or absolute file/directory path to scope the map. Omit for the first workspace root.    |
+| `max_chars`        | number?  | Hard output budget in characters for the JSON payload (default 20,000; minimum 2,000; capped at 60,000).            |
+| `max_files`        | number?  | Maximum file skeleton entries to include before budget truncation (default 200; capped at 1,000).                   |
+| `include_external` | boolean? | Include summarized external dependency specifiers (default true). Set false to reserve budget for internal modules. |
+
+**Response includes:**
+
+- `workspace_root`, `cache` — sidecar identity and cache location when available
+- `freshness.graph` — sidecar availability, generated timestamp, cache version, and indexed file count
+- `scope` — requested scope path and number of indexed files matched
+- `totals` — aggregate counts for files, imports, internal imports, external imports, exports, and symbols
+- `directories` — budgeted directory summaries sorted by file count
+- `external_dependencies` — budgeted external specifier summaries by importer count (omitted when `include_external: false`)
+- `files` — budgeted file/module skeletons: path, language, internal imports, external imports, exports, top-level symbols, and reverse import count
+- `budget` — requested budget, final serialized character count, truncation flag, and omitted counts
+- `note` — present for missing sidecar or empty scope cases
+
+The tool is intentionally static and budgeted. It is best for orientation, module-boundary discovery, and deciding where to inspect next; use `get_module_neighbors` for a complete single-file neighborhood and LSP tools for symbol-precise semantics. Requires the codebase index/structural sidecar to be built.
+
+### get_module_neighbors
+
+Read the structural repo-map sidecar for a single source/config file. Use this after `get_context` when you need module-level blast-radius awareness before editing: what the file imports, what it exports, which indexed modules import it, and what top-level symbols it declares.
+
+| Parameter     | Type    | Description                                                                                                   |
+| ------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `path`        | string  | Source/config file path (absolute or relative to workspace root)                                              |
+| `max_results` | number? | Maximum items to return in each list: `imports`, `exports`, `symbols`, and `dependents` (default 50, max 200) |
+
+**Response includes:**
+
+- `path`, `workspace_root`, `cache` — target and sidecar cache identity
+- `freshness.target` — `fresh`, `stale`, `missing_from_graph`, `target_missing`, or `unknown`, with hashes when available
+- `freshness.graph` — sidecar availability, generated timestamp, cache version, and file count
+- `imports` — bounded list of static/reexport/require/dynamic imports with specifiers, resolved relative paths, imported names, and line numbers
+- `exports` — bounded list of named/default/reexport/CommonJS exports
+- `symbols` — bounded top-level symbols recorded by the structural extractor
+- `dependents` — bounded reverse module dependencies: indexed files whose resolved imports point at the target
+- `note` — omitted when the sidecar and target are usable; present for missing/stale graph cases
+
+This is a static module graph, not an LSP-precise symbol reference query. Use language tools such as `get_references`, `go_to_definition`, and `get_call_hierarchy` when exact symbol semantics matter. Requires the codebase index/structural sidecar to be built.
+
 ### load_skill
 
 Load the full contents of an AgentLink skill file that was explicitly advertised in the current built-in agent system prompt. This is intentionally not a general-purpose file reader: it only accepts skill paths that were listed for the active session.
@@ -449,6 +519,16 @@ Load the full contents of an AgentLink skill file that was explicitly advertised
 | `path`    | string | Advertised skill file path to load exactly |
 
 Returns the skill file content and metadata needed for the agent to follow the skill instructions.
+
+### load_rule
+
+Load the full contents of a deferred local rule file that was explicitly advertised in the current built-in agent Rule Catalog. This is intentionally not a general-purpose file reader: it only accepts deferred rule paths that were listed for the active session.
+
+| Parameter | Type   | Description                                        |
+| --------- | ------ | -------------------------------------------------- |
+| `path`    | string | Advertised deferred rule file path to load exactly |
+
+Returns the rule file content with frontmatter stripped, plus metadata identifying the loaded rule.
 
 ### list_files
 
@@ -506,6 +586,31 @@ Create or overwrite a file. Opens a **diff view** in VS Code for the user to rev
 | --------- | ------ | --------------------- |
 | `path`    | string | File path             |
 | `content` | string | Complete file content |
+
+### propose_memory
+
+Propose a cross-session memory/config update. This is the sanctioned path for durable learnings: the tool resolves the correct target, validates skill/command names and skill frontmatter, previews the proposed final file content, and always requires explicit user approval before writing. Approval can edit the final content or retarget tier/scope before accepting.
+
+| Parameter   | Type                                                 | Description                                                                   |
+| ----------- | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `tier`      | `"instructions" \| "skill" \| "command" \| "memory"` | Destination tier. Prefer instructions/skills/commands before memory fallback. |
+| `scope`     | `"global" \| "project"`                              | Write to user-global AgentLink config or the current project.                 |
+| `operation` | `"add" \| "update" \| "remove"`                      | Add new content, update existing content, or remove stale content.            |
+| `title`     | string                                               | Short approval-card label.                                                    |
+| `rationale` | string                                               | Why this should be remembered; shown to the user.                             |
+| `content`   | string                                               | Markdown entry/body. For `skill`, this must be the complete `SKILL.md`.       |
+| `name`      | string?                                              | Required for `skill` and `command`; lowercase hyphen identifier.              |
+| `replaces`  | string?                                              | Existing text to update/remove, matched with normalized whitespace.           |
+
+Targets:
+
+- `instructions` + `project` → existing root `AGENTS.md` / `AGENT.md` / `CLAUDE.md`, or creates `AGENTS.md`
+- `instructions` + `global` → `~/.agentlink/CLAUDE.md`
+- `skill` → `{scope}/.agentlink/skills/<name>/SKILL.md`
+- `command` → `{scope}/.agentlink/commands/<name>.md`
+- `memory` → `{scope}/.agentlink/memory.md`
+
+Responses include `status`, `path`, `tier`, `scope`, `operation`, and any new diagnostics. If `replaces` cannot be found, the error includes the current target content so the agent can retry accurately. Rejected approvals return `status: "rejected"` and any rejection reason.
 
 ### apply_diff
 
@@ -908,6 +1013,39 @@ Use this for larger tasks that benefit from explicit progress tracking.
 
 These are available to the built-in AgentLink chat when it connects out to other MCP servers from project/global MCP config.
 
+### find_mcp_tools
+
+Discover tools exposed by currently connected MCP servers.
+
+Use this when MCP tool schemas are progressively disclosed through a compact catalog instead of all being included in the main provider tool list.
+
+| Parameter        | Type     | Description                                                                                           |
+| ---------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `query`          | string?  | Case-insensitive search over server name, tool name, and description                                  |
+| `server`         | string?  | Restrict results to one MCP server name                                                               |
+| `includeSchemas` | boolean? | Include full input schemas for matching tools; defaults to `false`                                    |
+| `schemaLimit`    | number?  | Max returned tools that include schemas when `includeSchemas=true`; defaults to 1 and is capped at 20 |
+| `limit`          | number?  | Maximum tools to return; defaults to 50 and is capped at 200                                          |
+
+Response details:
+
+- `tools[]` contains `{ server, tool, name, description }`, plus `input_schema` for the top `schemaLimit` matches when requested.
+- `name` is the prefixed runtime tool name (`server__tool`); `tool` is the bare tool name to pass to `call_mcp_tool`.
+- `totalMatches` and `truncated` indicate whether more matches were available.
+- `schemaCount` and `schemaLimited` indicate how many full schemas were included and whether additional returned tools had schemas omitted.
+
+### call_mcp_tool
+
+Call a tool on a connected MCP server after discovering it with `find_mcp_tools`.
+
+This uses the same approval policy as directly exposed MCP tools, including session/project/global tool or server approvals.
+
+| Parameter | Type   | Description                                      |
+| --------- | ------ | ------------------------------------------------ |
+| `server`  | string | MCP server name                                  |
+| `tool`    | string | Bare MCP tool name without the `server__` prefix |
+| `input`   | object | Arguments object to pass to the MCP tool         |
+
 ### list_mcp_resources
 
 List resources exposed by currently connected MCP servers.
@@ -951,7 +1089,7 @@ AgentLink includes static routing policy for background agents (`src/agent/backg
 - **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and `get_background_result` only when ready to integrate.
 - **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Use explicit owned/forbidden paths in the spawn message.
 - **Read-only lanes**: `readonly-research` routes to ask mode with the `readonly-research` tool profile for pure lookup/exploration.
-- **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available.
+- **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available; when the opposite provider is Anthropic, Claude Fable 5 is preferred for Anthropic review candidates.
 - **Review complexity**: review spawns can explicitly set `modelTier`; otherwise review routing defaults to `balanced` for routine reviews and upgrades to `deep_reasoning` for complex reviews based on task/message heuristics.
 - **Fallback behavior**: deterministic fallback order is used when preferred candidates are unavailable or unauthenticated.
 - **Transparency**: routing decisions are returned by `spawn_background_agent`, logged as `[bg-route]`, and shown in background UI/debug info.

@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { isQuestionAnswered, normalizeQuestionAnswer } from "./QuestionCard";
+/** @vitest-environment jsdom */
+
+import {
+  QuestionCard,
+  isQuestionAnswered,
+  normalizeQuestionAnswer,
+} from "./QuestionCard";
+import { describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/preact";
 
 import type { Question } from "../types";
+import { h } from "preact";
 
 describe("QuestionCard helpers", () => {
   it("treats blank text answers as answered when allowBlank is true", () => {
@@ -26,5 +34,61 @@ describe("QuestionCard helpers", () => {
 
     expect(isQuestionAnswered(question, undefined, "")).toBe(false);
     expect(normalizeQuestionAnswer(question, {})).toEqual({});
+  });
+});
+
+describe("QuestionCard rendering", () => {
+  it("renders visible context above the current question", () => {
+    render(
+      h(QuestionCard, {
+        id: "question-1",
+        context:
+          "I found two viable paths and recommend the safer provider fix.",
+        questions: [
+          {
+            id: "scope",
+            type: "multiple_choice",
+            question: "Which scope should I implement?",
+            options: ["Provider fix", "UI-only fix"],
+            recommended: "Provider fix",
+          },
+        ],
+        onSubmit: vi.fn(),
+      }),
+    );
+
+    expect(
+      screen.getByText(
+        "I found two viable paths and recommend the safer provider fix.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Which scope should I implement?")).toBeTruthy();
+  });
+
+  it("keeps navigation outside the scrollable question body", () => {
+    const { container } = render(
+      h(QuestionCard, {
+        id: "question-1",
+        context: "Long context ".repeat(200),
+        questions: [
+          {
+            id: "scope",
+            type: "multiple_choice",
+            question: "Which scope should I implement?",
+            options: ["Provider fix", "UI-only fix"],
+            recommended: "Provider fix",
+          },
+        ],
+        onSubmit: vi.fn(),
+      }),
+    );
+
+    const body = container.querySelector(".question-body");
+    const nav = container.querySelector(".question-nav");
+
+    expect(body).toBeTruthy();
+    expect(nav).toBeTruthy();
+    expect(body?.contains(screen.getByText(/Long context/))).toBe(true);
+    expect(body?.contains(nav)).toBe(false);
   });
 });

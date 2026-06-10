@@ -233,6 +233,82 @@ export function injectSyntheticToolResults(
   return repaired;
 }
 
+/**
+ * Final safety net before history is sent to a provider: every tool_result
+ * must reference a tool_use in the run of user messages' immediately preceding
+ * assistant message (providers merge consecutive user messages into one turn),
+ * and each tool_use may be answered at most once.
+ *
+ * Drops orphaned tool_results and, when the same tool_use_id is answered more
+ * than once (e.g. a synthetic result injected ahead of the real one), keeps
+ * only the last occurrence — the real result is always appended after any
+ * synthetic placeholder.
+ */
+export function enforceToolResultAdjacency(
+  messages: AgentMessage[],
+): AgentMessage[] {
+  const result: AgentMessage[] = [];
+  let pendingToolUseIds = new Set<string>();
+  let userRun: AgentMessage[] = [];
+
+  const flushUserRun = () => {
+    if (userRun.length === 0) return;
+    // Last tool_result block per tool_use_id within this run (by identity).
+    const lastResultForId = new Map<string, ToolResultBlock>();
+    for (const msg of userRun) {
+      if (!Array.isArray(msg.content)) continue;
+      for (const block of msg.content) {
+        if (block.type === "tool_result") {
+          lastResultForId.set(
+            (block as ToolResultBlock).tool_use_id,
+            block as ToolResultBlock,
+          );
+        }
+      }
+    }
+    for (const msg of userRun) {
+      if (!Array.isArray(msg.content)) {
+        result.push(msg);
+        continue;
+      }
+      const kept = msg.content.filter((block) => {
+        if (block.type !== "tool_result") return true;
+        const toolUseId = (block as ToolResultBlock).tool_use_id;
+        return (
+          pendingToolUseIds.has(toolUseId) && // not an orphan
+          lastResultForId.get(toolUseId) === block // dedupe: keep last
+        );
+      });
+      if (kept.length === 0) continue;
+      result.push(
+        kept.length === msg.content.length ? msg : { ...msg, content: kept },
+      );
+    }
+    userRun = [];
+  };
+
+  for (const msg of messages) {
+    if (msg.role === "assistant") {
+      flushUserRun();
+      pendingToolUseIds = new Set(
+        Array.isArray(msg.content)
+          ? msg.content
+              .filter(
+                (block): block is ToolUseBlock => block.type === "tool_use",
+              )
+              .map((block) => block.id)
+          : [],
+      );
+      result.push(msg);
+      continue;
+    }
+    userRun.push(msg);
+  }
+  flushUserRun();
+
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Effective history (what gets sent to the API)
 // ---------------------------------------------------------------------------
@@ -336,8 +412,15 @@ export function getEffectiveHistory(messages: AgentMessage[]): AgentMessage[] {
     ],
   };
 
+  // Insert before the first real user prompt. Skip user messages that carry
+  // tool_result blocks: inserting between an assistant tool_use and its
+  // tool_result would break the adjacency the API requires (and trick
+  // injectSyntheticToolResults into adding a duplicate result).
+  const carriesToolResults = (msg: AgentMessage): boolean =>
+    Array.isArray(msg.content) &&
+    msg.content.some((block) => block.type === "tool_result");
   let insertionIndex = laterMessages.findIndex(
-    (msg) => msg.role === "user" && !msg.isSummary,
+    (msg) => msg.role === "user" && !msg.isSummary && !carriesToolResults(msg),
   );
   if (insertionIndex === -1) {
     insertionIndex = 0;

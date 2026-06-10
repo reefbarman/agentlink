@@ -1,5 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
 import type { AgentConfig, AgentMessage } from "./types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { AgentSessionManager } from "./AgentSessionManager.js";
 
 const mocks = vi.hoisted(() => {
   const createSession = vi.fn(async (opts: any) => ({
@@ -24,7 +30,6 @@ const mocks = vi.hoisted(() => {
     consumePendingInterjection: vi.fn(() => null),
     queuePendingModeResume: vi.fn(),
     consumePendingModeResume: vi.fn(() => null),
-    setPendingMedia: vi.fn(),
     autoTitle: vi.fn(),
     getAllMessages: vi.fn(() => []),
     rebuildSystemPrompt: vi.fn(async () => {}),
@@ -54,8 +59,6 @@ vi.mock("./AgentSession.js", () => ({
     create: (opts: unknown) => mocks.createSession(opts),
   },
 }));
-
-import { AgentSessionManager } from "./AgentSessionManager.js";
 
 const makeConfig = (): AgentConfig => ({
   model: "claude-sonnet-4-6",
@@ -128,6 +131,61 @@ describe("AgentSessionManager condense thresholds", () => {
     expect((session as any).setMode).toHaveBeenCalledWith(
       "architect",
       undefined,
+    );
+  });
+
+  it("passes an MCP disclosure snapshot when MCP tools are connected", async () => {
+    mocks.getConfiguration.mockReturnValue({
+      get: () => ({}),
+      inspect: () => undefined,
+    });
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    mgr.setToolContext({
+      approvalManager: {} as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+      mcpHub: {
+        getToolDefs: () => [
+          {
+            name: "linear__list_issues",
+            description: "List issues",
+            input_schema: {
+              type: "object",
+              properties: { query: { type: "string" } },
+            },
+          },
+          {
+            name: "ddg-search__search",
+            description: "Search the web",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        getServerConfig: (serverName: string) =>
+          serverName === "linear" ? { toolDisclosure: "deferred" } : undefined,
+      } as any,
+    });
+
+    await mgr.createSession("code");
+
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mcpToolDisclosure: expect.objectContaining({
+          inlineTools: [
+            expect.objectContaining({ name: "ddg-search__search" }),
+          ],
+          deferredTools: [
+            expect.objectContaining({ name: "linear__list_issues" }),
+          ],
+          catalog: [
+            expect.objectContaining({
+              serverName: "linear",
+              toolCount: 1,
+              representativeTools: ["list_issues"],
+            }),
+          ],
+        }),
+      }),
     );
   });
 
@@ -349,6 +407,110 @@ describe("AgentSessionManager in-flight persistence", () => {
   });
 });
 
+describe("AgentSessionManager activity tracing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getConfiguration.mockReturnValue({
+      get: () => undefined,
+      inspect: () => undefined,
+    });
+  });
+
+  it("records forwarded agent events to a bounded session trace", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-manager-trace-"),
+    );
+    try {
+      const mgr = new AgentSessionManager(makeConfig(), workspace);
+      const session = await mgr.createSession("code");
+      (session as any).messageCount = 0;
+      (session as any).isAborted = false;
+      (session as any).getAllMessages = vi.fn(() => []);
+      (session as any).addUserMessage = vi.fn(() => {
+        (session as any).messageCount += 1;
+        session.lastActiveAt = Date.now();
+      });
+      (session as any).autoTitle = vi.fn();
+      (session as any).consumePendingInterjection = vi.fn(() => null);
+      (session as any).consumePendingModeResume = vi.fn(() => null);
+
+      const engine = {
+        run: vi.fn(async function* () {
+          yield {
+            type: "tool_start",
+            toolCallId: "tool-1",
+            toolName: "read_file",
+          };
+          yield {
+            type: "tool_result",
+            toolCallId: "tool-1",
+            toolName: "read_file",
+            result: [{ type: "text", text: "ok" }],
+            durationMs: 12,
+            input: { path: "src/example.ts" },
+          };
+          yield {
+            type: "api_request",
+            requestId: "req-1",
+            model: "model-a",
+            inputTokens: 100,
+            uncachedInputTokens: 80,
+            outputTokens: 25,
+            cacheReadTokens: 10,
+            cacheCreationTokens: 5,
+            durationMs: 50,
+            timeToFirstToken: 10,
+          };
+          yield {
+            type: "done",
+            totalInputTokens: 100,
+            totalOutputTokens: 25,
+            totalCacheReadTokens: 10,
+            totalCacheCreationTokens: 5,
+          };
+        }),
+      };
+      (mgr as any).engine = engine;
+
+      await mgr.sendMessage(session.id, "start", session.mode);
+
+      const sessionDir = path.join(
+        workspace,
+        ".agentlink",
+        "history",
+        session.id,
+      );
+      const tracePath = path.join(sessionDir, "activity-trace.jsonl");
+      const summaryPath = path.join(sessionDir, "activity-trace-summary.json");
+      const traceLines = fs
+        .readFileSync(tracePath, "utf-8")
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { kind: string });
+      const summary = JSON.parse(fs.readFileSync(summaryPath, "utf-8"));
+
+      expect(traceLines.map((event) => event.kind)).toEqual([
+        "tool_start",
+        "tool_result",
+        "api_request",
+        "done",
+      ]);
+      expect(summary).toMatchObject({
+        eventCount: 4,
+        toolCalls: 1,
+        toolCallsByName: { read_file: 1 },
+        apiCalls: 1,
+        totalInputTokens: 100,
+        totalOutputTokens: 25,
+        totalCacheReadTokens: 10,
+        totalCacheCreationTokens: 5,
+      });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("AgentSessionManager checkpoints", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -392,7 +554,6 @@ describe("AgentSessionManager checkpoints", () => {
       consumePendingInterjection: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
-      setPendingMedia: vi.fn(),
       autoTitle: vi.fn(),
       getAllMessages: vi.fn(() => sessionMessages),
       getLoadedSkills: vi.fn(() => []),

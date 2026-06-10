@@ -1,7 +1,8 @@
-import { useState, useCallback } from "preact/hooks";
-import type { RefObject } from "preact";
 import type { ApprovalRequest, DecisionMessage } from "../types.js";
+import { useCallback, useState } from "preact/hooks";
+
 import { ApprovalLayout } from "./ApprovalLayout.js";
+import type { RefObject } from "preact";
 
 const MODES = ["glob", "prefix", "exact"] as const;
 const SCOPES = ["session", "project", "global", "skip"] as const;
@@ -152,6 +153,7 @@ export function RenameCard({ request, submit, followUpRef }: RenameCardProps) {
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      purpose="Rename a symbol across files"
       rulesContent={rulesJsx}
       rulesModified={!isSkipped}
       primaryLabel="Accept"

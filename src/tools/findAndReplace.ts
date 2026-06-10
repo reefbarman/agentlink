@@ -7,6 +7,7 @@ import {
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { anyMemoryProtectedPath } from "../approvals/protectedPaths.js";
 import {
   saveInlineWriteTrustRules,
   saveWriteTrustRules,
@@ -276,11 +277,16 @@ export async function handleFindAndReplace(
       .getConfiguration("agentlink")
       .get<boolean>("masterBypass", false);
 
+    const touchesProtectedMemoryPath = anyMemoryProtectedPath(
+      fileReplacements.map((fr) => fr.uri.fsPath),
+    );
+
     const canAutoApprove =
-      masterBypass ||
-      fileReplacements.every((fr) =>
-        approvalManager.isAgentWriteApproved(sessionId, fr.uri.fsPath),
-      );
+      !touchesProtectedMemoryPath &&
+      (masterBypass ||
+        fileReplacements.every((fr) =>
+          approvalManager.isAgentWriteApproved(sessionId, fr.uri.fsPath),
+        ));
     let followUp: string | undefined;
     let acceptedIds: Set<string> | undefined;
 

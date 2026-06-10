@@ -127,6 +127,28 @@ describe("browserGatewayRegistry", () => {
     ]);
   });
 
+  it("keeps same-named workspaces in a stable order across re-upserts", async () => {
+    const first = makeRecord({
+      instanceId: "instance-a",
+      port: 4001,
+      url: "http://127.0.0.1:4001",
+    });
+    const second = makeRecord({
+      instanceId: "instance-b",
+      port: 4002,
+      url: "http://127.0.0.1:4002",
+    });
+
+    await upsertBrowserGatewayInstance(first);
+    await upsertBrowserGatewayInstance(second);
+    await upsertBrowserGatewayInstance(first);
+
+    await expect(listBrowserGatewayInstances()).resolves.toEqual([
+      first,
+      second,
+    ]);
+  });
+
   it("recovers a stale registry lock and registers the instance", async () => {
     const record = makeRecord();
     registryMock.staleLock = true;

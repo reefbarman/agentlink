@@ -5,13 +5,27 @@ import type { AgentConfig } from "./types.js";
 import { AgentSession } from "./AgentSession.js";
 import type { ContentBlock } from "./providers/types.js";
 
+function makePromptArtifacts(systemPrompt: string) {
+  return {
+    systemPrompt,
+    skills: [],
+    advertisedRules: [],
+    promptBreakdown: {
+      sections: [
+        { label: "test", chars: systemPrompt.length, estimatedTokens: 1 },
+      ],
+      totalChars: systemPrompt.length,
+      estimatedTokens: 1,
+    },
+  };
+}
+
 // Mock prompt builders so create() doesn't hit the filesystem
 vi.mock("./systemPrompt.js", () => {
   const buildSystemPromptMock = vi.fn().mockResolvedValue("mock system prompt");
-  const buildPromptArtifactsMock = vi.fn().mockResolvedValue({
-    systemPrompt: "mock system prompt",
-    skills: [],
-  });
+  const buildPromptArtifactsMock = vi
+    .fn()
+    .mockResolvedValue(makePromptArtifacts("mock system prompt"));
   return {
     buildSystemPrompt: buildSystemPromptMock,
     buildPromptArtifacts: buildPromptArtifactsMock,
@@ -44,10 +58,9 @@ async function makeSession(
 describe("AgentSession", () => {
   beforeEach(() => {
     mockedBuildSystemPrompt.mockResolvedValue("mock system prompt");
-    mockedBuildPromptArtifacts.mockResolvedValue({
-      systemPrompt: "mock system prompt",
-      skills: [],
-    });
+    mockedBuildPromptArtifacts.mockResolvedValue(
+      makePromptArtifacts("mock system prompt"),
+    );
   });
 
   describe("creation", () => {
@@ -105,6 +118,32 @@ describe("AgentSession", () => {
     it("providerId is undefined when not specified", async () => {
       const session = await makeSession();
       expect(session.providerId).toBeUndefined();
+    });
+
+    it("passes MCP disclosure catalog to buildPromptArtifacts and stores the snapshot", async () => {
+      const mcpToolDisclosure = {
+        inlineTools: [],
+        deferredTools: [],
+        catalog: [
+          {
+            serverName: "linear",
+            toolCount: 46,
+            estimatedTokens: 10_214,
+            representativeTools: ["list_issues"],
+          },
+        ],
+      };
+
+      const session = await makeSession({ mcpToolDisclosure });
+
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "code",
+        "/test",
+        expect.objectContaining({
+          mcpToolCatalog: mcpToolDisclosure.catalog,
+        }),
+      );
+      expect(session.mcpToolDisclosure).toBe(mcpToolDisclosure);
     });
 
     it("passes providerId to buildPromptArtifacts on create", async () => {
@@ -183,6 +222,9 @@ describe("AgentSession", () => {
 
     it("appendToolResults appends tool results as a user message", async () => {
       const session = await makeSession();
+      session.appendAssistantTurn([
+        { type: "tool_use", id: "tu_123", name: "read_file", input: {} },
+      ]);
       const results = [
         {
           type: "tool_result" as const,
@@ -192,8 +234,22 @@ describe("AgentSession", () => {
       ];
       session.appendToolResults(results);
       const messages = session.getMessages();
-      expect(messages).toHaveLength(1);
-      expect(messages[0]).toEqual({ role: "user", content: results });
+      expect(messages).toHaveLength(2);
+      expect(messages[1]).toEqual({ role: "user", content: results });
+    });
+
+    it("getMessages drops tool results whose tool_use is missing from the prior assistant turn", async () => {
+      const session = await makeSession();
+      session.appendToolResults([
+        {
+          type: "tool_result" as const,
+          tool_use_id: "tu_orphan",
+          content: "stale",
+        },
+      ]);
+      expect(session.getMessages()).toHaveLength(0);
+      // Raw history is untouched — only the API view is sanitized.
+      expect(session.getAllMessages()).toHaveLength(1);
     });
 
     it("messageCount reflects added messages", async () => {
@@ -434,10 +490,9 @@ describe("AgentSession", () => {
       session.addUserMessage("keep this context");
       const priorMessageCount = session.messageCount;
 
-      mockedBuildPromptArtifacts.mockResolvedValueOnce({
-        systemPrompt: "mock ask prompt",
-        skills: [],
-      });
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("mock ask prompt"),
+      );
       await session.setMode("ask");
 
       expect(session.mode).toBe("ask");
@@ -453,10 +508,9 @@ describe("AgentSession", () => {
     it("setMode passes stored providerId to buildPromptArtifacts", async () => {
       const session = await makeSession({ providerId: "codex" });
       mockedBuildPromptArtifacts.mockClear();
-      mockedBuildPromptArtifacts.mockResolvedValueOnce({
-        systemPrompt: "mock ask prompt",
-        skills: [],
-      });
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("mock ask prompt"),
+      );
       await session.setMode("ask");
       expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
         "ask",
@@ -470,10 +524,9 @@ describe("AgentSession", () => {
     it("passes stored providerId to buildPromptArtifacts", async () => {
       const session = await makeSession({ providerId: "codex" });
       mockedBuildPromptArtifacts.mockClear();
-      mockedBuildPromptArtifacts.mockResolvedValueOnce({
-        systemPrompt: "rebuilt prompt",
-        skills: [],
-      });
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("rebuilt prompt"),
+      );
       await session.rebuildSystemPrompt();
       expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
         "code",

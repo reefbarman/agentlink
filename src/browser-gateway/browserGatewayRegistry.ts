@@ -172,7 +172,13 @@ export async function upsertBrowserGatewayInstance(
     const replaced = records.filter((r) => r.instanceId === record.instanceId);
     const next = records.filter((r) => r.instanceId !== record.instanceId);
     next.push(record);
-    next.sort((a, b) => a.workspaceName.localeCompare(b.workspaceName));
+    // Tie-break on instanceId so same-named workspaces keep a stable order
+    // across upserts (the upserted record is re-appended before sorting).
+    next.sort(
+      (a, b) =>
+        a.workspaceName.localeCompare(b.workspaceName) ||
+        a.instanceId.localeCompare(b.instanceId),
+    );
     await writeRegistry(next);
     logRegistry(
       `upsert path=${REGISTRY_PATH} record=${summarizeRecord(record)} previousCount=${records.length} nextCount=${next.length} replaced=${replaced.map(summarizeRecord).join(" | ") || "none"}`,

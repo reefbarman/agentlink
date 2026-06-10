@@ -10,6 +10,7 @@ import {
   buildAgentExecutionEnv,
   inheritProcessEnv,
 } from "../process/agentExecutionPolicy.js";
+import { isMcpToolName, parseMcpToolName } from "./mcpToolNames.js";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpServerConfig } from "./mcpConfig.js";
@@ -1047,8 +1048,8 @@ export class McpClientHub {
     prefixedName: string,
     input: Record<string, unknown>,
   ): Promise<ToolResult> {
-    const sep = prefixedName.indexOf("__");
-    if (sep === -1) {
+    const parsed = parseMcpToolName(prefixedName);
+    if (!parsed) {
       return {
         content: [
           {
@@ -1061,8 +1062,7 @@ export class McpClientHub {
       };
     }
 
-    const serverName = prefixedName.slice(0, sep);
-    const toolName = prefixedName.slice(sep + 2);
+    const { serverName, bareToolName: toolName } = parsed;
     const server = this.servers.get(serverName);
 
     if (!server || server.status !== "connected") {
@@ -1236,6 +1236,6 @@ export class McpClientHub {
 
   /** True if a tool name belongs to an MCP server (contains '__'). */
   static isMcpTool(name: string): boolean {
-    return name.includes("__");
+    return isMcpToolName(name);
   }
 }

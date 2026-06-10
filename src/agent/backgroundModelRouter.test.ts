@@ -116,14 +116,41 @@ describe("resolveBackgroundRoute", () => {
     expect(route.routingReason).toContain("opposite");
   });
 
-  it("prefers sonnet for routine anthropic review fallbacks", async () => {
+  it("defaults the codex side to gpt-5.5 for non-cheap opposite routing", async () => {
+    const anthModel = makeModel("claude-opus-4-8", "anthropic");
+    // Larger-context codex models would otherwise out-score gpt-5.5; the router
+    // should still default to gpt-5.5 (the OAuth-served default) rather than a
+    // model the ChatGPT backend rejects.
+    const codex55 = makeModel("gpt-5.5", "codex", { contextWindow: 400_000 });
+    const codex54 = makeModel("gpt-5.4", "codex", { contextWindow: 1_050_000 });
+    const registry = makeRegistry([
+      makeProvider("anthropic", [anthModel]),
+      makeProvider("codex", [codex55, codex54]),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      {
+        task: "Investigate failure",
+        message: "Look into this critical security issue thoroughly",
+        taskClass: "review_code",
+      },
+      { mode: "code", model: "claude-opus-4-8" },
+    );
+
+    expect(route.resolvedProvider).toBe("codex");
+    expect(route.resolvedModel).toBe("gpt-5.5");
+  });
+
+  it("prefers fable for routine opposite-provider anthropic reviews", async () => {
+    const fable = makeModel("claude-fable-5", "anthropic");
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
     const registry = makeRegistry([
-      makeProvider("anthropic", [sonnet, opus], true),
+      makeProvider("anthropic", [sonnet, opus, fable], true),
       makeProvider("codex", [codexModel], false),
     ]);
 
@@ -138,19 +165,20 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-sonnet-4-6");
+    expect(route.resolvedModel).toBe("claude-fable-5");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=balanced");
   });
 
-  it("prefers opus for complex anthropic review fallbacks", async () => {
+  it("prefers fable for complex opposite-provider anthropic reviews", async () => {
+    const fable = makeModel("claude-fable-5", "anthropic");
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
     const registry = makeRegistry([
-      makeProvider("anthropic", [sonnet, opus], true),
+      makeProvider("anthropic", [sonnet, opus, fable], true),
       makeProvider("codex", [codexModel], false),
     ]);
 
@@ -166,19 +194,20 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
+    expect(route.resolvedModel).toBe("claude-fable-5");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=deep_reasoning");
   });
 
   it("honors explicit modelTier override for review tasks", async () => {
+    const fable = makeModel("claude-fable-5", "anthropic");
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
     const registry = makeRegistry([
-      makeProvider("anthropic", [sonnet, opus], true),
+      makeProvider("anthropic", [sonnet, opus, fable], true),
       makeProvider("codex", [codexModel], false),
     ]);
 
@@ -193,7 +222,7 @@ describe("resolveBackgroundRoute", () => {
       { mode: "code", model: "gpt-5" },
     );
 
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
+    expect(route.resolvedModel).toBe("claude-fable-5");
     expect(route.routingReason).toContain("tier=deep_reasoning");
   });
 
@@ -246,7 +275,7 @@ describe("resolveBackgroundRoute", () => {
     expect(route.routingReason).toContain("ignored requested provider");
   });
 
-  it("returns thinkingBudget and maxToolCalls from review_code task class", async () => {
+  it("returns thinkingBudget and tool profile from review_code task class", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const codexModel = makeModel("gpt-5", "codex");
     const registry = makeRegistry([
@@ -265,8 +294,6 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.thinkingBudget).toBe(4096);
-    expect(route.maxToolCalls).toBe(10);
-    expect(route.maxApiTurns).toBe(5);
     expect(route.toolProfile).toBe("review");
   });
 
@@ -289,12 +316,10 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.thinkingBudget).toBe(0);
-    expect(route.maxToolCalls).toBe(5);
-    expect(route.maxApiTurns).toBe(3);
     expect(route.toolProfile).toBe("review");
   });
 
-  it("returns soft limits for general task class", async () => {
+  it("does not return turn or tool limits for general task class", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
 
@@ -309,12 +334,12 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.thinkingBudget).toBeUndefined();
-    expect(route.maxToolCalls).toBe(12);
-    expect(route.maxApiTurns).toBe(5);
+    expect("maxToolCalls" in route).toBe(false);
+    expect("maxApiTurns" in route).toBe(false);
     expect(route.toolProfile).toBeUndefined();
   });
 
-  it("returns readonly-research profile and soft limits", async () => {
+  it("returns readonly-research profile without turn or tool limits", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
 
@@ -329,19 +354,19 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedMode).toBe("ask");
-    expect(route.maxToolCalls).toBe(15);
-    expect(route.maxApiTurns).toBe(6);
+    expect("maxToolCalls" in route).toBe(false);
+    expect("maxApiTurns" in route).toBe(false);
     expect(route.toolProfile).toBe("readonly-research");
   });
 
   it.each([
-    ["research", "ask", 15, 6],
-    ["explore", "architect", 18, 7],
-    ["debug", "debug", 18, 7],
-    ["design", "architect", 12, 5],
+    ["research", "ask"],
+    ["explore", "architect"],
+    ["debug", "debug"],
+    ["design", "architect"],
   ] as const)(
-    "returns soft limits for %s task class",
-    async (taskClass, expectedMode, expectedToolCalls, expectedApiTurns) => {
+    "returns mode without turn or tool limits for %s task class",
+    async (taskClass, expectedMode) => {
       const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
       const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
 
@@ -356,8 +381,8 @@ describe("resolveBackgroundRoute", () => {
       );
 
       expect(route.resolvedMode).toBe(expectedMode);
-      expect(route.maxToolCalls).toBe(expectedToolCalls);
-      expect(route.maxApiTurns).toBe(expectedApiTurns);
+      expect("maxToolCalls" in route).toBe(false);
+      expect("maxApiTurns" in route).toBe(false);
       expect(route.toolProfile).toBeUndefined();
     },
   );

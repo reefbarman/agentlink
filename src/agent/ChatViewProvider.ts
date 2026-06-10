@@ -19,7 +19,9 @@ import type { AgentErrorActions, AgentEvent } from "./types.js";
 import type {
   BrowserGatewayThemeSnapshot,
   McpApprovalPromotionMeta,
+  RequestContextBreakdown,
 } from "../shared/types.js";
+import type { InstructionBlock } from "./configLoader.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { TodoItem } from "./todoTool.js";
 import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
@@ -37,7 +39,12 @@ import {
   persistMcpToolApproval,
 } from "./mcpConfig.js";
 import { loadCustomModes, getAllModes } from "./modes.js";
-import { buildSystemPrompt } from "./systemPrompt.js";
+import {
+  buildSystemPrompt,
+  formatRuleCatalogPath,
+  getRuleCatalogSummary,
+  shouldInlineInstructionBlock,
+} from "./systemPrompt.js";
 import { loadAllInstructionBlocks } from "./configLoader.js";
 import type {
   ApprovalRequest,
@@ -60,7 +67,38 @@ import {
   shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
   type AppState,
+  type LoadedInstructionDebugInfo,
 } from "../shared/chatProjection.js";
+
+function formatInstructionDebugInfo(
+  block: InstructionBlock,
+  cwd: string,
+  activeFilePath?: string,
+): LoadedInstructionDebugInfo {
+  const deferred = !shouldInlineInstructionBlock(block, cwd, {
+    activeFilePath,
+  });
+  const loadPath = block.filePath
+    ? formatRuleCatalogPath(block, cwd)
+    : undefined;
+  const summary =
+    block.kind === "rule"
+      ? getRuleCatalogSummary(block.content, block.description)
+      : undefined;
+
+  return {
+    source: block.source,
+    chars: block.content.length,
+    promptChars: deferred ? 0 : block.content.length,
+    kind: block.kind ?? "instruction",
+    deferred,
+    hasFrontmatter: block.hasFrontmatter,
+    alwaysApply: block.alwaysApply,
+    loadPath,
+    summary,
+    globs: block.globs,
+  };
+}
 
 /**
  * Webview protocol types — messages between extension and chat webview.
@@ -133,6 +171,7 @@ export type ExtensionToWebview =
       promptCacheRetention?: "in_memory" | "24h";
       storeResponseState?: boolean;
       providerResponseId?: string;
+      contextBreakdown?: RequestContextBreakdown;
     }
   | {
       type: "agentError";
@@ -248,7 +287,9 @@ export type ExtensionToWebview =
   | {
       type: "agentQuestionRequest";
       id: string;
+      context: string;
       questions: import("./webview/types.js").Question[];
+      backgroundTask?: string;
     }
   | { type: "agentQuestionCleared"; id: string }
   | {
@@ -455,7 +496,7 @@ export type ExtensionToWebview =
       type: "agentDebugInfo";
       info: Record<string, string | number>;
       systemPrompt?: string;
-      loadedInstructions?: Array<{ source: string; chars: number }>;
+      loadedInstructions?: LoadedInstructionDebugInfo[];
     }
   | {
       type: "showBgTranscript";
@@ -510,6 +551,20 @@ type ContextBudget = NonNullable<ChatState["contextBudget"]>;
 
 const RESTORE_TAIL_TURNS = 8;
 const RESTORE_BACKFILL_BATCH_TURNS = 12;
+
+/**
+ * Drop attached media (base64 images/PDFs) before sending raw messages to a
+ * UI surface — transcripts only render text, and the payloads can be megabytes.
+ */
+function stripMediaForTransport(
+  messages: import("./types.js").AgentMessage[],
+): import("./types.js").AgentMessage[] {
+  return messages.map((m) => {
+    if (!m.media) return m;
+    const { media: _media, ...rest } = m;
+    return rest;
+  });
+}
 
 function countUserTurns(messages: import("./types.js").AgentMessage[]): number {
   let count = 0;
@@ -635,6 +690,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             trustScope?: string;
             rulePattern?: string;
             ruleMode?: string;
+            editedContent?: string;
+            memoryTier?: import("../approvals/webview/types.js").MemoryTier;
+            memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+            memoryName?: string;
           },
     ) => void
   >();
@@ -1351,7 +1410,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   public requestApproval(
     request: {
-      kind: "mcp" | "write" | "rename" | "command" | "mode-switch";
+      kind: "mcp" | "write" | "rename" | "command" | "mode-switch" | "memory";
       title: string;
       detail?: string;
       choices: Array<{
@@ -1373,6 +1432,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         trustScope?: string;
         rulePattern?: string;
         ruleMode?: string;
+        editedContent?: string;
+        memoryTier?: import("../approvals/webview/types.js").MemoryTier;
+        memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+        memoryName?: string;
       }
   > {
     const id = request.id ?? randomUUID();
@@ -1499,6 +1562,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           command: request.title,
           mcpDetail: request.detail,
         };
+      case "memory":
+        return {
+          kind: "memory",
+          id,
+          command: request.title,
+          mcpDetail: request.detail,
+        };
       default:
         return {
           kind: request.kind as ApprovalRequest["kind"],
@@ -1514,6 +1584,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Called by the ask_user tool handler in toolAdapter.
    */
   public requestQuestion(
+    context: string,
     questions: import("./webview/types.js").Question[],
     sessionId: string,
     backgroundTask?: string,
@@ -1533,7 +1604,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           notes: (raw.notes as Record<string, string>) ?? {},
         });
       });
-      this.uiPublisher.publishQuestionRequest(id, questions, backgroundTask);
+      this.uiPublisher.publishQuestionRequest(
+        id,
+        context,
+        questions,
+        backgroundTask,
+      );
     });
   }
 
@@ -1546,6 +1622,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ruleMode?: string;
     rules?: Array<{ pattern: string; mode: string; scope: string }>;
     trustScope?: string;
+    editedContent?: string;
+    memoryTier?: import("../approvals/webview/types.js").MemoryTier;
+    memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+    memoryName?: string;
     followUp?: string;
   }): boolean {
     const id = msg.id;
@@ -1559,6 +1639,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         trustScope: msg.trustScope ?? undefined,
         rulePattern: msg.rulePattern ?? undefined,
         ruleMode: msg.ruleMode ?? undefined,
+        editedContent: msg.editedContent ?? undefined,
+        memoryTier: msg.memoryTier ?? undefined,
+        memoryScope: msg.memoryScope ?? undefined,
+        memoryName: msg.memoryName ?? undefined,
       });
       return true;
     }
@@ -1577,6 +1661,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ruleMode: msg.ruleMode ?? undefined,
       rules: msg.rules as DecisionMessage["rules"],
       trustScope: msg.trustScope ?? undefined,
+      editedContent: msg.editedContent ?? undefined,
+      memoryTier: msg.memoryTier ?? undefined,
+      memoryScope: msg.memoryScope ?? undefined,
+      memoryName: msg.memoryName ?? undefined,
       followUp: msg.followUp ?? undefined,
     };
     respond(decision);
@@ -1898,7 +1986,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ok: boolean;
     info?: Record<string, string | number>;
     systemPrompt?: string;
-    loadedInstructions?: Array<{ source: string; chars: number }>;
+    loadedInstructions?: LoadedInstructionDebugInfo[];
   }> {
     const os = require("os");
 
@@ -1933,6 +2021,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       info[`env.${key}`] = displayValue;
     }
 
+    const activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
     const fg = this.sessionManager?.getForegroundSession();
     let systemPrompt = fg?.systemPrompt;
     if (!systemPrompt && this.cwd) {
@@ -1944,6 +2033,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           : undefined;
         systemPrompt = await buildSystemPrompt(mode, this.cwd, {
           providerId,
+          activeFilePath,
           workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
             (f) => ({ name: f.name, path: f.uri.fsPath }),
           ),
@@ -1953,20 +2043,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    let loadedInstructions:
-      | Array<{ source: string; chars: number }>
-      | undefined;
+    let loadedInstructions: LoadedInstructionDebugInfo[] | undefined;
     if (this.cwd) {
       try {
-        const activeFilePath =
-          vscode.window.activeTextEditor?.document.uri.fsPath;
         const blocks = await loadAllInstructionBlocks(this.cwd, {
           activeFilePath,
         });
-        loadedInstructions = blocks.map((b) => ({
-          source: b.source,
-          chars: b.content.length,
-        }));
+        loadedInstructions = blocks.map((block) =>
+          formatInstructionDebugInfo(block, this.cwd, activeFilePath),
+        );
       } catch (err) {
         this.log(`[warn] Failed to load instruction blocks for debug: ${err}`);
       }
@@ -2150,7 +2235,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       transcript: {
         sessionId,
         task: session.title ?? "Background Agent",
-        messages: session.getAllMessages(),
+        messages: stripMediaForTransport(session.getAllMessages()),
       },
     };
   }
@@ -2250,7 +2335,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Watch instruction files for system prompt hot-reload
     const instructionPattern = new vscode.RelativePattern(
       cwd,
-      "{AGENTS.md,AGENT.md,CLAUDE.md,AGENTS.local.md,.claude/CLAUDE.md,.agentlink/CLAUDE.md,.agents/rules/**/*.md,.agentlink/rules/**/*.md,.agentlink/rules-*/**/*.md,.agents/rules-*/**/*.md,**/AGENTS.md,**/AGENT.md,**/AGENTS.local.md}",
+      "{AGENTS.md,AGENT.md,CLAUDE.md,AGENTS.local.md,.claude/CLAUDE.md,.agentlink/CLAUDE.md,.agentlink/memory.md,.agents/rules/**/*.md,.agentlink/rules/**/*.md,.agentlink/rules-*/**/*.md,.agents/rules-*/**/*.md,**/AGENTS.md,**/AGENT.md,**/AGENTS.local.md}",
     );
     const instructionWatcher =
       vscode.workspace.createFileSystemWatcher(instructionPattern);
@@ -2981,6 +3066,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               }>
             | undefined,
           trustScope: msg.trustScope as string | undefined,
+          editedContent: msg.editedContent as string | undefined,
+          memoryTier: msg.memoryTier as
+            | import("../approvals/webview/types.js").MemoryTier
+            | undefined,
+          memoryScope: msg.memoryScope as
+            | import("../approvals/webview/types.js").MemoryScope
+            | undefined,
+          memoryName: msg.memoryName as string | undefined,
           followUp: msg.followUp as string | undefined,
         });
         break;
@@ -3175,7 +3268,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               type: "showBgTranscript",
               sessionId,
               task: session.title ?? "Background Agent",
-              messages: session.getAllMessages(),
+              messages: stripMediaForTransport(session.getAllMessages()),
             });
           } else {
             vscode.window.showWarningMessage(
@@ -3824,6 +3917,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           promptCacheRetention: extMsg.promptCacheRetention,
           storeResponseState: extMsg.storeResponseState,
           providerResponseId: extMsg.providerResponseId,
+          contextBreakdown: extMsg.contextBreakdown,
         });
         break;
 
@@ -3926,6 +4020,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.applyProjectedAction({
           type: "SET_QUESTION",
           id: extMsg.id,
+          context: extMsg.context,
           questions: extMsg.questions,
           ...(extMsg.backgroundTask
             ? { backgroundTask: extMsg.backgroundTask }
@@ -4127,6 +4222,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       questionRequest: this.projectedForegroundState.questionRequest
         ? {
             id: this.projectedForegroundState.questionRequest.id,
+            context: this.projectedForegroundState.questionRequest.context,
             questions:
               this.projectedForegroundState.questionRequest.questions.map(
                 (question) => ({ ...question }),
@@ -4392,6 +4488,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           promptCacheRetention: event.promptCacheRetention,
           storeResponseState: event.storeResponseState,
           providerResponseId: event.providerResponseId,
+          contextBreakdown: event.contextBreakdown,
         });
         break;
 
@@ -5057,6 +5154,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Get system prompt from foreground session. If no foreground session
     // exists yet (fresh chat), build a fallback prompt for the default mode
     // so the Environment panel can still show the System Prompt section.
+    const activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
     const fg = this.sessionManager?.getForegroundSession();
     let systemPrompt = fg?.systemPrompt;
     if (!systemPrompt && this.cwd) {
@@ -5068,6 +5166,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           : undefined;
         systemPrompt = await buildSystemPrompt(mode, this.cwd, {
           providerId,
+          activeFilePath,
           workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
             (f) => ({ name: f.name, path: f.uri.fsPath }),
           ),
@@ -5078,20 +5177,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     // Load instruction blocks for the preview panel
-    let loadedInstructions:
-      | Array<{ source: string; chars: number }>
-      | undefined;
+    let loadedInstructions: LoadedInstructionDebugInfo[] | undefined;
     if (this.cwd) {
       try {
-        const activeFilePath =
-          vscode.window.activeTextEditor?.document.uri.fsPath;
         const blocks = await loadAllInstructionBlocks(this.cwd, {
           activeFilePath,
         });
-        loadedInstructions = blocks.map((b) => ({
-          source: b.source,
-          chars: b.content.length,
-        }));
+        loadedInstructions = blocks.map((block) =>
+          formatInstructionDebugInfo(block, this.cwd, activeFilePath),
+        );
       } catch (err) {
         this.log(`[warn] Failed to load instruction blocks for debug: ${err}`);
       }

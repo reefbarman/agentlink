@@ -1,6 +1,13 @@
-import * as os from "os";
 import * as fs from "fs/promises";
+import * as os from "os";
 import * as path from "path";
+
+const BUNDLED_SKILLS_DIRS = [
+  // Runtime bundle layout: dist/extension.js -> <extension>/resources/...
+  path.resolve(__dirname, "..", "resources", "builtin-skills"),
+  // Source/test layout: src/agent/skillLoader.ts -> <repo>/resources/...
+  path.resolve(__dirname, "..", "..", "resources", "builtin-skills"),
+];
 
 export interface SkillEntry {
   name: string;
@@ -66,18 +73,19 @@ async function scanSkillsDir(dir: string): Promise<Map<string, RawSkill>> {
  * Discover and load all skills visible to the current mode.
  *
  * Sources in ascending priority (later entries win on name collision):
- *   1. ~/.agents/skills/                  — global cross-agent (lowest)
- *   2. ~/.agents/skills-{mode}/           — global cross-agent, mode-specific
- *   3. ~/.claude/skills/                  — global Claude Code
- *   4. ~/.claude/skills-{mode}/           — global Claude Code, mode-specific
- *   5. ~/.agentlink/skills/               — global agentlink
- *   6. ~/.agentlink/skills-{mode}/        — global agentlink, mode-specific
- *   7. <cwd>/.agents/skills/              — project cross-agent
- *   8. <cwd>/.agents/skills-{mode}/       — project cross-agent, mode-specific
- *   9. <cwd>/.claude/skills/              — project Claude Code
- *  10. <cwd>/.claude/skills-{mode}/       — project Claude Code, mode-specific
- *  11. <cwd>/.agentlink/skills/           — project agentlink
- *  12. <cwd>/.agentlink/skills-{mode}/    — project agentlink, mode-specific (highest)
+ *   1. <extension>/resources/builtin-skills/ — bundled AgentLink skills (lowest)
+ *   2. ~/.agents/skills/                    — global cross-agent
+ *   3. ~/.agents/skills-{mode}/             — global cross-agent, mode-specific
+ *   4. ~/.claude/skills/                    — global Claude Code
+ *   5. ~/.claude/skills-{mode}/             — global Claude Code, mode-specific
+ *   6. ~/.agentlink/skills/                 — global agentlink
+ *   7. ~/.agentlink/skills-{mode}/          — global agentlink, mode-specific
+ *   8. <cwd>/.agents/skills/                — project cross-agent
+ *   9. <cwd>/.agents/skills-{mode}/         — project cross-agent, mode-specific
+ *  10. <cwd>/.claude/skills/                — project Claude Code
+ *  11. <cwd>/.claude/skills-{mode}/         — project Claude Code, mode-specific
+ *  12. <cwd>/.agentlink/skills/             — project agentlink
+ *  13. <cwd>/.agentlink/skills-{mode}/      — project agentlink, mode-specific (highest)
  *
  * Skills that declare `modeSlugs` in their SKILL.md frontmatter are only included
  * when the current mode slug appears in that list.
@@ -89,6 +97,7 @@ export async function loadSkills(
   const home = os.homedir();
 
   const sources = [
+    ...BUNDLED_SKILLS_DIRS,
     path.join(home, ".agents", "skills"),
     path.join(home, ".agents", `skills-${modeSlug}`),
     path.join(home, ".claude", "skills"),
@@ -103,20 +112,22 @@ export async function loadSkills(
     path.join(cwd, ".agentlink", `skills-${modeSlug}`),
   ];
 
-  // Merge in priority order — later sources win on name collision
+  // Merge visible skills in priority order — later sources win on name collision.
+  // Mode-incompatible skills should not mask lower-priority skills that are visible.
   const merged = new Map<string, RawSkill>();
   for (const dir of sources) {
     const entries = await scanSkillsDir(dir);
     for (const [name, skill] of entries) {
+      if (skill.modeSlugs && !skill.modeSlugs.includes(modeSlug)) continue;
       merged.set(name, skill);
     }
   }
 
-  return Array.from(merged.values())
-    .filter((s) => !s.modeSlugs || s.modeSlugs.includes(modeSlug))
-    .map(({ name, description, skillPath }) => ({
+  return Array.from(merged.values()).map(
+    ({ name, description, skillPath }) => ({
       name,
       description,
       skillPath,
-    }));
+    }),
+  );
 }

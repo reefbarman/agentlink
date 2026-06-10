@@ -38,6 +38,7 @@ import { DebugInfo } from "./components/DebugInfo";
 import { ElicitationModal } from "./components/ElicitationModal";
 import { InputArea } from "./components/InputArea";
 import { McpCard } from "../../approvals/webview/components/McpCard";
+import { MemoryCard } from "../../approvals/webview/components/MemoryCard";
 import { ModeSwitchCard } from "../../approvals/webview/components/ModeSwitchCard";
 import { PathCard } from "../../approvals/webview/components/PathCard";
 import { QuestionCard } from "./components/QuestionCard";
@@ -449,6 +450,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             promptCacheRetention: msg.promptCacheRetention,
             storeResponseState: msg.storeResponseState,
             providerResponseId: msg.providerResponseId,
+            contextBreakdown: msg.contextBreakdown,
           });
           break;
         case "agentError":
@@ -650,7 +652,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           dispatch({
             type: "SET_QUESTION",
             id: msg.id,
+            context: msg.context,
             questions: msg.questions,
+            ...(msg.backgroundTask
+              ? { backgroundTask: msg.backgroundTask }
+              : {}),
           });
           break;
 
@@ -944,6 +950,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                       promptCacheRetention: msg.promptCacheRetention,
                       storeResponseState: msg.storeResponseState,
                       providerResponseId: msg.providerResponseId,
+                      contextBreakdown: msg.contextBreakdown,
                     },
                   ).messages,
                 }
@@ -2296,6 +2303,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         {state.questionRequest && (
           <QuestionCard
             id={state.questionRequest.id}
+            context={state.questionRequest.context}
             questions={state.questionRequest.questions}
             backgroundTask={state.questionRequest.backgroundTask}
             modes={state.modes}
@@ -2372,6 +2380,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               />
             ) : forwardedApproval.kind === "mcp" ? (
               <McpCard
+                request={forwardedApproval}
+                submit={handleForwardedApprovalSubmit}
+                followUpRef={forwardedFollowUpRef}
+              />
+            ) : forwardedApproval.kind === "memory" ? (
+              <MemoryCard
                 request={forwardedApproval}
                 submit={handleForwardedApprovalSubmit}
                 followUpRef={forwardedFollowUpRef}

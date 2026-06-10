@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
-import * as path from "path";
 import * as os from "os";
-import { loadCustomInstructions, buildSystemPrompt } from "./systemPrompt.js";
+import * as path from "path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  buildPromptArtifacts,
+  buildSystemPrompt,
+  loadCustomInstructions,
+  shouldInlineInstructionBlock,
+} from "./systemPrompt.js";
 
 let tmpDir: string;
 let tmpHome: string;
@@ -236,6 +242,20 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("web: /work/web");
   });
 
+  it("lists workspace folders in lightweight background review prompts", async () => {
+    const result = await buildSystemPrompt("review", tmpDir, {
+      isBackground: true,
+      lightweight: true,
+      workspaceFolders: [
+        { name: "api", path: "/work/api" },
+        { name: "web", path: "/work/web" },
+      ],
+    });
+    expect(result).toContain("Workspace Folders");
+    expect(result).toContain("api: /work/api");
+    expect(result).toContain("web: /work/web");
+  });
+
   it("omits the workspace folders section for a single root", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
       workspaceFolders: [{ name: "api", path: "/work/api" }],
@@ -265,9 +285,311 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Custom Instructions");
   });
 
+  it("keeps rule files without frontmatter inline for backward compatibility", async () => {
+    const ruleDir = path.join(tmpDir, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "legacy.md"),
+      "# Legacy standards\nLEGACY RULE BODY SHOULD STAY INLINE",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+
+    expect(result).toContain("## Custom Instructions");
+    expect(result).toContain("# Instructions (.agentlink/rules/legacy.md):");
+    expect(result).toContain("LEGACY RULE BODY SHOULD STAY INLINE");
+    expect(result).not.toContain("## Rule Catalog");
+  });
+
+  it("defers rule-directory files with description frontmatter into a compact catalog", async () => {
+    const ruleDir = path.join(tmpDir, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "typescript.md"),
+      "---\ndescription: TypeScript standards\n---\n# TypeScript standards\nHIDDEN TYPESCRIPT RULE BODY SHOULD BE DEFERRED",
+    );
+
+    const artifacts = await buildPromptArtifacts("code", tmpDir);
+
+    expect(artifacts.systemPrompt).toContain("## Rule Catalog");
+    expect(artifacts.systemPrompt).toContain(
+      ".agentlink/rules/typescript.md — TypeScript standards",
+    );
+    expect(artifacts.systemPrompt).toContain(
+      "Load when relevant with `load_rule` path: `.agentlink/rules/typescript.md`.",
+    );
+    expect(artifacts.advertisedRules).toContainEqual(
+      expect.objectContaining({
+        filePath: path.join(ruleDir, "typescript.md"),
+        loadPath: ".agentlink/rules/typescript.md",
+        summary: "TypeScript standards",
+      }),
+    );
+    expect(artifacts.systemPrompt).not.toContain(
+      "HIDDEN TYPESCRIPT RULE BODY SHOULD BE DEFERRED",
+    );
+    expect(artifacts.promptBreakdown.sections).toContainEqual(
+      expect.objectContaining({
+        label: "rule catalog (deferred)",
+        count: 1,
+      }),
+    );
+  });
+
+  it("uses rule frontmatter description and globs in the deferred catalog", async () => {
+    const ruleDir = path.join(tmpDir, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "typescript.md"),
+      "---\ndescription: TypeScript edit standards\nglobs: src/**/*.{ts,tsx}, tests/**/*.ts\n---\n# Fallback heading\nHIDDEN TYPESCRIPT RULE BODY SHOULD BE DEFERRED",
+    );
+
+    const artifacts = await buildPromptArtifacts("code", tmpDir);
+
+    expect(artifacts.systemPrompt).toContain(
+      ".agentlink/rules/typescript.md — TypeScript edit standards",
+    );
+    expect(artifacts.systemPrompt).toContain(
+      "Applies to: src/**/*.{ts,tsx}, tests/**/*.ts.",
+    );
+    expect(artifacts.systemPrompt).toContain(
+      "including when a listed glob matches files you will inspect or edit",
+    );
+    expect(artifacts.systemPrompt).not.toContain("Fallback heading");
+    expect(artifacts.systemPrompt).not.toContain(
+      "HIDDEN TYPESCRIPT RULE BODY SHOULD BE DEFERRED",
+    );
+  });
+
+  it("inlines glob rule files when the active file matches at session creation", async () => {
+    const ruleDir = path.join(tmpDir, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "typescript.md"),
+      "---\ndescription: TypeScript edit standards\nglobs: src/**/*.{ts,tsx}\n---\n# TypeScript standards\nMATCHED TYPESCRIPT RULE BODY",
+    );
+
+    const artifacts = await buildPromptArtifacts("code", tmpDir, {
+      activeFilePath: path.join(tmpDir, "src", "components", "Button.tsx"),
+    });
+
+    expect(artifacts.systemPrompt).toContain("## Custom Instructions");
+    expect(artifacts.systemPrompt).toContain(
+      "# Instructions (.agentlink/rules/typescript.md):",
+    );
+    expect(artifacts.systemPrompt).toContain("MATCHED TYPESCRIPT RULE BODY");
+    expect(artifacts.systemPrompt).not.toContain("## Rule Catalog");
+    expect(
+      artifacts.promptBreakdown.sections.some(
+        (section) => section.label === "rule catalog (deferred)",
+      ),
+    ).toBe(false);
+  });
+
+  it("exposes the same active-file glob partitioning decision for debug metadata", () => {
+    const block = {
+      source: ".agentlink/rules/typescript.md",
+      content: "# TypeScript standards",
+      kind: "rule" as const,
+      globs: ["src/**/*.{ts,tsx}"],
+    };
+
+    expect(
+      shouldInlineInstructionBlock(block, tmpDir, {
+        activeFilePath: path.join(tmpDir, "src", "index.ts"),
+      }),
+    ).toBe(true);
+    expect(
+      shouldInlineInstructionBlock(block, tmpDir, {
+        activeFilePath: path.join(tmpDir, "docs", "index.md"),
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps glob rule files deferred when the active file does not match", async () => {
+    const ruleDir = path.join(tmpDir, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "typescript.md"),
+      "---\ndescription: TypeScript edit standards\nglobs: src/**/*.{ts,tsx}\n---\n# TypeScript standards\nUNMATCHED TYPESCRIPT RULE BODY",
+    );
+
+    const artifacts = await buildPromptArtifacts("code", tmpDir, {
+      activeFilePath: path.join(tmpDir, "docs", "readme.md"),
+    });
+
+    expect(artifacts.systemPrompt).toContain("## Rule Catalog");
+    expect(artifacts.systemPrompt).toContain(
+      ".agentlink/rules/typescript.md — TypeScript edit standards",
+    );
+    expect(artifacts.systemPrompt).toContain("Applies to: src/**/*.{ts,tsx}.");
+    expect(artifacts.systemPrompt).not.toContain(
+      "UNMATCHED TYPESCRIPT RULE BODY",
+    );
+    expect(artifacts.promptBreakdown.sections).toContainEqual(
+      expect.objectContaining({
+        label: "rule catalog (deferred)",
+        count: 1,
+      }),
+    );
+  });
+
+  it("supports YAML list-style globs and quoted frontmatter values", async () => {
+    const ruleDir = path.join(tmpDir, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "react.md"),
+      "---\ndescription: \"React component standards\"\nglobs:\n  - 'src/**/*.tsx'\n  - tests/**/*.tsx\n---\n# Fallback heading\nHIDDEN REACT RULE BODY SHOULD BE DEFERRED",
+    );
+
+    const artifacts = await buildPromptArtifacts("code", tmpDir);
+
+    expect(artifacts.systemPrompt).toContain(
+      ".agentlink/rules/react.md — React component standards",
+    );
+    expect(artifacts.systemPrompt).toContain(
+      "Applies to: src/**/*.tsx, tests/**/*.tsx.",
+    );
+    expect(artifacts.systemPrompt).not.toContain("Fallback heading");
+    expect(artifacts.systemPrompt).not.toContain(
+      "HIDDEN REACT RULE BODY SHOULD BE DEFERRED",
+    );
+  });
+
+  it("keeps quoted alwaysApply rule files inline", async () => {
+    const ruleDir = path.join(tmpDir, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "security.md"),
+      '---\nalwaysApply: "true"\n---\n# Security rules\nALWAYS INLINE SECURITY RULE',
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+
+    expect(result).toContain("## Custom Instructions");
+    expect(result).toContain("# Instructions (.agentlink/rules/security.md):");
+    expect(result).toContain("ALWAYS INLINE SECURITY RULE");
+    expect(result).not.toContain("alwaysApply");
+    expect(result).not.toContain("## Rule Catalog");
+  });
+
+  it("keeps alwaysApply rule files inline", async () => {
+    const ruleDir = path.join(tmpDir, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "security.md"),
+      "---\nalwaysApply: true\n---\n# Security rules\nALWAYS INLINE SECURITY RULE",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+
+    expect(result).toContain("## Custom Instructions");
+    expect(result).toContain("# Instructions (.agentlink/rules/security.md):");
+    expect(result).toContain("ALWAYS INLINE SECURITY RULE");
+    expect(result).not.toContain("alwaysApply: true");
+    expect(result).not.toContain("## Rule Catalog");
+  });
+
+  it("keeps root instruction files inline while deferring rule files", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "AGENTS.md"),
+      "ROOT INSTRUCTION CONTENT",
+    );
+    const ruleDir = path.join(tmpDir, ".claude", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "react.md"),
+      "---\ndescription: React standards\n---\n# React standards\nHIDDEN REACT RULE BODY SHOULD BE DEFERRED",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+
+    expect(result).toContain("## Custom Instructions");
+    expect(result).toContain("ROOT INSTRUCTION CONTENT");
+    expect(result).toContain("## Rule Catalog");
+    expect(result).toContain(".claude/rules/react.md");
+    expect(result).toContain(".claude/rules/react.md — React standards");
+    expect(result).not.toContain("HIDDEN REACT RULE BODY SHOULD BE DEFERRED");
+  });
+
+  it("catalogs global rule files with absolute load paths", async () => {
+    const ruleDir = path.join(tmpHome, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ruleDir, "global.md"),
+      "---\ndescription: Global standards\n---\n# Global standards\nHIDDEN GLOBAL RULE BODY SHOULD BE DEFERRED",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+
+    expect(result).toContain("~/.agentlink/rules/global.md");
+    expect(result).toContain(
+      `Load when relevant with \`load_rule\` path: \`${path.join(ruleDir, "global.md")}\`.`,
+    );
+    expect(result).toContain("~/.agentlink/rules/global.md — Global standards");
+    expect(result).not.toContain("HIDDEN GLOBAL RULE BODY SHOULD BE DEFERRED");
+  });
+
+  it("does not include a rule catalog section when no rule files exist", async () => {
+    const artifacts = await buildPromptArtifacts("code", tmpDir);
+
+    expect(artifacts.systemPrompt).not.toContain("## Rule Catalog");
+    expect(
+      artifacts.promptBreakdown.sections.some(
+        (section) => section.label === "rule catalog (deferred)",
+      ),
+    ).toBe(false);
+  });
+
   it("does not include custom instructions section when no files", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).not.toContain("Custom Instructions");
+  });
+
+  it("includes global and project memory as lower-authority durable context", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".agentlink"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, ".agentlink", "memory.md"),
+      "global preference",
+    );
+    fs.mkdirSync(path.join(tmpDir, ".agentlink"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".agentlink", "memory.md"),
+      "project convention",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("## Memory");
+    expect(result).toContain(
+      "lower authority than system/developer instructions",
+    );
+    expect(result).toContain(
+      "# Memory (~/.agentlink/memory.md):\nglobal preference",
+    );
+    expect(result).toContain(
+      "# Memory (.agentlink/memory.md):\nproject convention",
+    );
+    expect(result.indexOf("global preference")).toBeLessThan(
+      result.indexOf("project convention"),
+    );
+  });
+
+  it("omits memory section when no memory files exist", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).not.toContain("## Memory");
+  });
+
+  it("caps each memory file to recent content", async () => {
+    fs.mkdirSync(path.join(tmpDir, ".agentlink"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".agentlink", "memory.md"),
+      `OMITTED_PREFIX${"old".repeat(5_000)}RECENT_MEMORY`,
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("RECENT_MEMORY");
+    expect(result).toContain("Earlier content omitted:");
+    expect(result).not.toContain("OMITTED_PREFIX");
   });
 
   it("includes skills section when a skill exists in .agentlink/skills/", async () => {
@@ -284,9 +606,64 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("SKILL.md");
   });
 
-  it("omits skills section when no skills exist", async () => {
+  it("includes bundled skills when no user or project skills exist", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
-    expect(result).not.toContain("<skills>");
+    expect(result).toContain("<skills>");
+    expect(result).toContain("skill-writing");
+    expect(result).toContain("resources/builtin-skills/skill-writing/SKILL.md");
+    expect(result).toContain("rich-output");
+    expect(result).toContain("resources/builtin-skills/rich-output/SKILL.md");
+    expect(result).toContain("cross-session-memory");
+    expect(result).toContain(
+      "resources/builtin-skills/cross-session-memory/SKILL.md",
+    );
+  });
+
+  it("slims situational base prompt guidance behind bundled skills", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+
+    expect(result).toContain("Load the `rich-output` skill");
+    expect(result).toContain("load the `cross-session-memory` skill");
+    expect(result).toContain("durable preference");
+    expect(result).toContain("Never bypass approval");
+    expect(result).not.toContain(
+      "Prefer Mermaid for architecture, data flow, schemas, relationships, and workflows.",
+    );
+    expect(result).not.toContain(
+      "Propose memory when user feedback generalizes across sessions",
+    );
+  });
+
+  it("lets project skills override bundled skills by name", async () => {
+    const skillDir = path.join(tmpDir, ".agentlink", "skills", "skill-writing");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: skill-writing\ndescription: Project override\n---\n# Project skill writing\n",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("Project override");
+    expect(result).toContain(
+      path.join(tmpDir, ".agentlink", "skills", "skill-writing", "SKILL.md"),
+    );
+    expect(result).not.toContain(
+      "resources/builtin-skills/skill-writing/SKILL.md",
+    );
+  });
+
+  it("ignores mode-incompatible overrides when a bundled skill is visible", async () => {
+    const skillDir = path.join(tmpDir, ".agentlink", "skills", "skill-writing");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: skill-writing\ndescription: Review-only override\nmodeSlugs: review\n---\n# Review skill writing\n",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("skill-writing");
+    expect(result).toContain("resources/builtin-skills/skill-writing/SKILL.md");
+    expect(result).not.toContain("Review-only override");
   });
 
   it("excludes skills whose modeSlugs do not include the current mode", async () => {
@@ -318,12 +695,88 @@ describe("buildSystemPrompt", () => {
       providerId: "anthropic",
     });
     expect(result).toContain("Provider-Specific Behavior");
-    expect(result).toContain("Be concise");
+    expect(result).toContain("Visible progress and rationale");
+    expect(result).toContain("do not rely on hidden thinking");
+  });
+
+  it("gives anthropic models high-level code tool guidance", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      providerId: "anthropic",
+      model: "claude-fable-5",
+    });
+    expect(result).toContain("Tool selection");
+    expect(result).toContain("highest-level code intelligence tool");
+    expect(result).toContain("Go directly to `get_context`");
+    expect(result).toContain("prefer `get_context` over `read_file`");
+    expect(result).toContain("`codebase_search` first for unknown locations");
+    expect(result).toContain("`search_files` for exact matches only");
+  });
+
+  it("prefers get_context directly when a file path is already known", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      providerId: "codex",
+    });
+    expect(result).toContain("Known file path beats search");
+    expect(result).toContain(
+      "do not call `codebase_search` just to rediscover it",
+    );
+    expect(result).toContain("Go directly to `get_context`");
+    expect(result).toContain("`get_context` for known files");
+    expect(result).toContain("prefer `get_context` over `read_file`");
+    expect(result).toContain("`codebase_search` FIRST for unknown locations");
+    expect(result).toContain("`read_file` for exact reads");
   });
 
   it("does not include provider section when no providerId is given", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).not.toContain("Provider-Specific Behavior");
+  });
+
+  it("includes deferred MCP tool catalog entries when provided", async () => {
+    const artifacts = await buildPromptArtifacts("code", tmpDir, {
+      mcpToolCatalog: [
+        {
+          serverName: "linear",
+          toolCount: 46,
+          estimatedTokens: 10_214,
+          representativeTools: ["list_issues", "get_issue"],
+        },
+        {
+          serverName: "notion",
+          toolCount: 14,
+          estimatedTokens: 13_679,
+          representativeTools: ["notion-search"],
+        },
+      ],
+    });
+
+    expect(artifacts.systemPrompt).toContain("## MCP Tool Catalog");
+    expect(artifacts.systemPrompt).toContain(
+      "linear: 46 tools, ~10214 schema tokens deferred",
+    );
+    expect(artifacts.systemPrompt).toContain(
+      "Representative tools: list_issues, get_issue",
+    );
+    expect(artifacts.systemPrompt).toContain(
+      "notion: 14 tools, ~13679 schema tokens deferred",
+    );
+    expect(artifacts.promptBreakdown.sections).toContainEqual(
+      expect.objectContaining({
+        label: "mcp tool catalog",
+        count: 2,
+      }),
+    );
+  });
+
+  it("omits the MCP tool catalog section when none is provided", async () => {
+    const artifacts = await buildPromptArtifacts("code", tmpDir);
+
+    expect(artifacts.systemPrompt).not.toContain("## MCP Tool Catalog");
+    expect(
+      artifacts.promptBreakdown.sections.some(
+        (section) => section.label === "mcp tool catalog",
+      ),
+    ).toBe(false);
   });
 
   it("does not include provider section for unknown provider", async () => {
@@ -369,6 +822,7 @@ describe("buildSystemPrompt", () => {
     expect(result).not.toContain("Rich Output");
     expect(result).not.toContain("Custom Instructions");
     expect(result).not.toContain("project rules");
+    expect(result).not.toContain("Memory");
     expect(result).not.toContain("System Information");
     expect(result).not.toContain("Provider-Specific Behavior");
     expect(result).not.toContain("Do not manufacture disagreement");

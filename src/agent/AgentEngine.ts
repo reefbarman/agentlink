@@ -10,6 +10,9 @@ import {
   READ_ONLY_TOOLS,
   type ToolDispatchContext,
 } from "./toolAdapter.js";
+import { buildToolContextBreakdown } from "./contextBreakdown.js";
+import { parseMcpToolName } from "./mcpToolNames.js";
+import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { handleToolError } from "../shared/types.js";
 import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
@@ -181,6 +184,15 @@ function getOutputReservation(
     Math.max(session.maxTokens, session.thinkingBudget + 4096),
     caps.maxOutputTokens,
   );
+}
+
+function hasVisibleOrActionableOutput(blocks: ContentBlock[]): boolean {
+  return blocks.some((block) => {
+    if (block.type === "text") return block.text.trim().length > 0;
+    if (block.type === "thinking") return block.thinking.trim().length > 0;
+    if (block.type === "tool_use") return true;
+    return true;
+  });
 }
 
 function getCondenseBudgetSnapshot(
@@ -526,6 +538,8 @@ export class AgentEngine {
       let emptyResponseRetryCount = 0;
       let emptyResponseCondenseAttempted = false;
       let thinkingSignatureRetryAttempted = false;
+      let toolPairingRepairAttempts = 0;
+      const MAX_TOOL_PAIRING_REPAIR_ATTEMPTS = 2;
       let credentialRefreshCount = 0;
       // Sticky for the whole user turn: once we fall back from remote response
       // state to full local replay, keep reporting that on the eventual
@@ -538,12 +552,33 @@ export class AgentEngine {
         // Include tools when dispatch context is available, filtered by mode.
         // Compute this before any condense path so both automatic and retry-triggered
         // condenses see the same preserved runtime context that future requests will use.
-        const mcpToolDefs = this.toolCtx?.mcpHub?.getToolDefs() ?? [];
+        const connectedMcpToolDefs = this.toolCtx?.mcpHub?.getToolDefs() ?? [];
+        if (this.toolCtx?.mcpHub && connectedMcpToolDefs.length > 0) {
+          const serverNames = new Set(
+            connectedMcpToolDefs
+              .map((tool) => parseMcpToolName(tool.name)?.serverName)
+              .filter((name): name is string => name !== undefined),
+          );
+          session.mcpToolDisclosure = partitionMcpToolsForDisclosure(
+            connectedMcpToolDefs,
+            {
+              serverConfigs: [...serverNames].map((serverName) => ({
+                serverName,
+                mode: this.toolCtx?.mcpHub?.getServerConfig(serverName)
+                  ?.toolDisclosure,
+              })),
+            },
+          );
+        } else {
+          session.mcpToolDisclosure = undefined;
+        }
+        const providerMcpToolDefs =
+          session.mcpToolDisclosure?.inlineTools ?? connectedMcpToolDefs;
         const rawTools = this.toolCtx
           ? [
               ...getAgentTools(
                 session.agentMode,
-                mcpToolDefs,
+                providerMcpToolDefs,
                 opts?.isBackground,
                 opts?.toolProfile,
               ),
@@ -554,11 +589,8 @@ export class AgentEngine {
           toolNames: rawTools?.map((t) => t.name) ?? [],
           mcpServerNames: [
             ...new Set(
-              mcpToolDefs
-                .map((t) => {
-                  const sep = t.name.indexOf("__");
-                  return sep === -1 ? "" : t.name.slice(0, sep);
-                })
+              connectedMcpToolDefs
+                .map((t) => parseMcpToolName(t.name)?.serverName ?? "")
                 .filter((name) => name.length > 0),
             ),
           ],
@@ -612,12 +644,9 @@ export class AgentEngine {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
+              images: interjection.images,
+              documents: interjection.documents,
             });
-            session.setPendingMedia(
-              session.messageCount - 1,
-              interjection.images,
-              interjection.documents,
-            );
             yield {
               type: "user_interjection" as const,
               text: interjection.text,
@@ -662,6 +691,11 @@ export class AgentEngine {
           cachedToolFingerprint = fingerprint;
         }
         const tools = rawTools ? cachedTools : undefined;
+        const contextBreakdown = {
+          ...session.contextBreakdown,
+          tools: buildToolContextBreakdown(rawTools),
+        };
+        session.contextBreakdown = contextBreakdown;
 
         let contentBlocks: ContentBlock[] = [];
         let inputTokens = 0;
@@ -676,42 +710,21 @@ export class AgentEngine {
         let storeResponseState = false;
 
         try {
-          // Build a copy of messages for the API call, injecting any pending
+          // Build a copy of messages for the API call, injecting any attached
           // media (pasted images/PDFs) as content blocks alongside the text.
-          // getPendingMedia() is non-destructive — safe across retries.
-          //
-          // Pending media is keyed by the raw message index (from session.messages),
-          // but getMessages() returns a filtered/transformed view that may have
-          // different indices. Build a raw-index map so lookups stay aligned.
-          const rawMessages = session.getAllMessages();
+          // Media lives on the message itself (msg.media) and is re-sent on
+          // every request — the API is stateless, so omitting it would make
+          // the model lose access to images after the first response. History
+          // transforms preserve the field via object spread, and condensed
+          // messages drop out of effective history along with their media.
           const effectiveMessages = session.getMessages();
-
-          this.log?.(
-            `[media] building apiMessages: rawCount=${rawMessages.length} effectiveCount=${effectiveMessages.length}`,
-          );
-
-          // Map each effective message to its raw-array index by identity (===).
-          // This handles filtering (runtimeError, condensed messages) and
-          // content transforms (injectSyntheticToolResults) that change indices.
-          const rawIndexMap = new Map<object, number>();
-          for (let ri = 0; ri < rawMessages.length; ri++) {
-            rawIndexMap.set(rawMessages[ri], ri);
-          }
 
           const apiMessages: MessageParam[] = effectiveMessages.map(
             (msg, effectiveIdx) => {
-              const { role, content } = msg;
-              // Look up by identity first; for messages whose content was
-              // transformed by injectSyntheticToolResults (spread into a new
-              // object), fall back to undefined — those won't have pending media.
-              const rawIdx = rawIndexMap.get(msg);
-              const media =
-                rawIdx !== undefined
-                  ? session.getPendingMedia(rawIdx)
-                  : undefined;
+              const { role, content, media } = msg;
               if (media) {
                 this.log?.(
-                  `[media] found pending media at effectiveIdx=${effectiveIdx} rawIdx=${rawIdx} role=${role} contentType=${typeof content === "string" ? "string" : Array.isArray(content) ? `array(${content.length})` : "other"} images=${media.images.length} documents=${media.documents.length}`,
+                  `[media] found attached media at effectiveIdx=${effectiveIdx} role=${role} contentType=${typeof content === "string" ? "string" : Array.isArray(content) ? `array(${content.length})` : "other"} images=${media.images.length} documents=${media.documents.length}`,
                 );
               }
               if (media && role === "user") {
@@ -913,11 +926,16 @@ export class AgentEngine {
           if (signal.aborted) break;
           const streamErrMsg = buildErrorMessage(streamErr);
 
-          // Orphaned tool_use blocks (e.g. from an aborted run) cause a 400.
+          // Broken tool_use/tool_result pairing (e.g. from an aborted run or
+          // a bad history transform) causes a 400. Repair once and retry;
+          // if the repair doesn't converge, surface the error instead of
+          // retrying the same rejected payload forever.
           if (
             streamErrMsg.includes("tool_use") &&
-            streamErrMsg.includes("tool_result")
+            streamErrMsg.includes("tool_result") &&
+            toolPairingRepairAttempts < MAX_TOOL_PAIRING_REPAIR_ATTEMPTS
           ) {
+            toolPairingRepairAttempts++;
             session.replaceMessages(
               injectSyntheticToolResults(session.getAllMessages()),
             );
@@ -1053,10 +1071,6 @@ export class AgentEngine {
         retryCount = 0;
         apiTurnCount++;
 
-        // Release pending media now that the API has received it.
-        // This frees the base64 data from memory.
-        session.clearPendingMedia();
-
         if (signal.aborted) break;
 
         // Always record usage and emit api_request — even for capped turns.
@@ -1091,6 +1105,7 @@ export class AgentEngine {
           promptCacheRetention,
           storeResponseState,
           providerResponseId,
+          contextBreakdown,
         };
 
         // Enforce maxApiTurns: when the limit is reached and the model wants
@@ -1130,7 +1145,7 @@ export class AgentEngine {
           }
         }
 
-        if (contentBlocks.length === 0) {
+        if (!hasVisibleOrActionableOutput(contentBlocks)) {
           if (emptyResponseRetryCount < MAX_EMPTY_RESPONSE_RETRIES) {
             emptyResponseRetryCount++;
             if (emptyResponseRetryCount === 1) {
@@ -1467,12 +1482,9 @@ export class AgentEngine {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
+              images: interjection.images,
+              documents: interjection.documents,
             });
-            session.setPendingMedia(
-              session.messageCount - 1,
-              interjection.images,
-              interjection.documents,
-            );
             yield {
               type: "user_interjection" as const,
               text: interjection.text,
@@ -1635,6 +1647,7 @@ export class AgentEngine {
                   sessionId: session.id,
                   trackerCtx,
                   getAdvertisedSkills: () => session.getAdvertisedSkills(),
+                  getAdvertisedRules: () => session.getAdvertisedRules(),
                   onSkillLoad: (skillName: string) =>
                     session.trackLoadedSkill(skillName),
                 },
@@ -1646,6 +1659,7 @@ export class AgentEngine {
               sessionId: session.id,
               trackerCtx,
               getAdvertisedSkills: () => session.getAdvertisedSkills(),
+              getAdvertisedRules: () => session.getAdvertisedRules(),
               onSkillLoad: (skillName: string) =>
                 session.trackLoadedSkill(skillName),
             }));

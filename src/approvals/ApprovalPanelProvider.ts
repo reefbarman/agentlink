@@ -3,13 +3,18 @@ import * as vscode from "vscode";
 import type {
   ApprovalRequest,
   DecisionMessage,
+  MemoryOperation,
+  MemoryScope,
+  MemoryTier,
   SubCommandEntry,
 } from "./webview/types.js";
 
 import type { StatusBarManager } from "../util/StatusBarManager.js";
+import { isMemoryProtectedPath } from "./protectedPaths.js";
 import path from "path";
 import picomatch from "picomatch";
 import { randomUUID } from "crypto";
+import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
 
 // ── Response types ──────────────────────────────────────────────────────────
 
@@ -74,10 +79,21 @@ export interface RenameApprovalResponse {
   followUp?: string;
 }
 
+export interface MemoryApprovalResponse {
+  decision: "accept" | "reject";
+  rejectionReason?: string;
+  editedContent?: string;
+  memoryTier?: MemoryTier;
+  memoryScope?: MemoryScope;
+  memoryName?: string;
+  /** Optional follow-up message from the user */
+  followUp?: string;
+}
+
 // ── Internal types ──────────────────────────────────────────────────────────
 
 interface InternalRequest {
-  kind: "command" | "path" | "write" | "rename";
+  kind: "command" | "path" | "write" | "rename" | "memory";
   id: string;
   command?: string;
   fullCommand?: string;
@@ -93,6 +109,15 @@ interface InternalRequest {
   newName?: string;
   affectedFiles?: Array<{ path: string; changes: number }>;
   totalChanges?: number;
+  memoryTier?: MemoryTier;
+  memoryScope?: MemoryScope;
+  memoryOperation?: MemoryOperation;
+  memoryName?: string;
+  memoryTitle?: string;
+  memoryRationale?: string;
+  memoryTargetPath?: string;
+  memoryContent?: string;
+  memoryProposedContent?: string;
 }
 
 interface QueueEntry {
@@ -174,7 +199,11 @@ export class ApprovalPanelProvider
   enqueueCommandApproval(
     command: string,
     fullCommand: string,
-    options?: { subCommands?: SubCommandEntry[]; reason?: string; cwd?: string },
+    options?: {
+      subCommands?: SubCommandEntry[];
+      reason?: string;
+      cwd?: string;
+    },
   ): { promise: Promise<CommandApprovalResponse>; id: string } {
     const id = randomUUID();
     const promise = this.enqueue({
@@ -239,6 +268,35 @@ export class ApprovalPanelProvider
     return { promise, id };
   }
 
+  enqueueMemoryApproval(options: {
+    tier: MemoryTier;
+    scope: MemoryScope;
+    operation: MemoryOperation;
+    name?: string;
+    title: string;
+    rationale: string;
+    targetPath: string;
+    content: string;
+    proposedContent: string;
+    id?: string;
+  }): { promise: Promise<MemoryApprovalResponse>; id: string } {
+    const id = options.id ?? randomUUID();
+    const promise = this.enqueue({
+      kind: "memory",
+      id,
+      memoryTier: options.tier,
+      memoryScope: options.scope,
+      memoryOperation: options.operation,
+      memoryName: options.name,
+      memoryTitle: options.title,
+      memoryRationale: options.rationale,
+      memoryTargetPath: options.targetPath,
+      memoryContent: options.content,
+      memoryProposedContent: options.proposedContent,
+    }) as Promise<MemoryApprovalResponse>;
+    return { promise, id };
+  }
+
   cancelApproval(id: string): void {
     if (this.currentEntry?.request.id === id) {
       this.alertDisposable?.dispose();
@@ -263,10 +321,12 @@ export class ApprovalPanelProvider
     | CommandApprovalResponse
     | PathApprovalResponse
     | WriteApprovalResponse
-    | RenameApprovalResponse {
+    | RenameApprovalResponse
+    | MemoryApprovalResponse {
     if (kind === "command") return { decision: "reject" };
     if (kind === "write") return { decision: "reject" };
     if (kind === "rename") return { decision: "reject" };
+    if (kind === "memory") return { decision: "reject" };
     return { decision: "reject" };
   }
 
@@ -343,6 +403,15 @@ export class ApprovalPanelProvider
         newName: request.newName,
         affectedFiles: request.affectedFiles,
         totalChanges: request.totalChanges,
+        memoryTier: request.memoryTier,
+        memoryScope: request.memoryScope,
+        memoryOperation: request.memoryOperation,
+        memoryName: request.memoryName,
+        memoryTitle: request.memoryTitle,
+        memoryRationale: request.memoryRationale,
+        memoryTargetPath: request.memoryTargetPath,
+        memoryContent: request.memoryContent,
+        memoryProposedContent: request.memoryProposedContent,
         queuePosition,
         queueTotal,
       };
@@ -359,7 +428,9 @@ export class ApprovalPanelProvider
           ? "Write approval required"
           : request.kind === "rename"
             ? "Rename approval required"
-            : "Path access approval required",
+            : request.kind === "memory"
+              ? "Memory approval required"
+              : "Path access approval required",
     );
     vscode.commands.executeCommand("workbench.action.focusWindow");
 
@@ -403,6 +474,15 @@ export class ApprovalPanelProvider
       newName: request.newName,
       affectedFiles: request.affectedFiles,
       totalChanges: request.totalChanges,
+      memoryTier: request.memoryTier,
+      memoryScope: request.memoryScope,
+      memoryOperation: request.memoryOperation,
+      memoryName: request.memoryName,
+      memoryTitle: request.memoryTitle,
+      memoryRationale: request.memoryRationale,
+      memoryTargetPath: request.memoryTargetPath,
+      memoryContent: request.memoryContent,
+      memoryProposedContent: request.memoryProposedContent,
       queuePosition,
       queueTotal,
     };
@@ -420,6 +500,10 @@ export class ApprovalPanelProvider
     ruleMode?: string;
     rules?: Array<{ pattern: string; mode: string; scope: string }>;
     trustScope?: string;
+    editedContent?: string;
+    memoryTier?: MemoryTier;
+    memoryScope?: MemoryScope;
+    memoryName?: string;
     followUp?: string;
   }): void {
     // Handle webviewReady handshake
@@ -449,7 +533,8 @@ export class ApprovalPanelProvider
       | CommandApprovalResponse
       | PathApprovalResponse
       | WriteApprovalResponse
-      | RenameApprovalResponse;
+      | RenameApprovalResponse
+      | MemoryApprovalResponse;
 
     if (entry.request.kind === "command") {
       response = {
@@ -479,6 +564,16 @@ export class ApprovalPanelProvider
         trustScope: message.trustScope as RenameApprovalResponse["trustScope"],
         rulePattern: message.rulePattern || undefined,
         ruleMode: message.ruleMode as RenameApprovalResponse["ruleMode"],
+        followUp,
+      };
+    } else if (entry.request.kind === "memory") {
+      response = {
+        decision: message.decision as MemoryApprovalResponse["decision"],
+        rejectionReason: message.rejectionReason || undefined,
+        editedContent: message.editedContent ?? undefined,
+        memoryTier: message.memoryTier,
+        memoryScope: message.memoryScope,
+        memoryName: message.memoryName || undefined,
         followUp,
       };
     } else {
@@ -713,9 +808,22 @@ export class ApprovalPanelProvider
         return `path:${identifier}`;
       case "rename":
         return `rename:${identifier}`;
+      case "memory":
+        return undefined;
       default:
         return undefined;
     }
+  }
+
+  private isProtectedWriteRequest(request: InternalRequest): boolean {
+    if (request.kind !== "write" || !request.filePath) return false;
+    const filePath = path.isAbsolute(request.filePath)
+      ? request.filePath
+      : path.resolve(
+          tryGetFirstWorkspaceRoot() ?? process.cwd(),
+          request.filePath,
+        );
+    return isMemoryProtectedPath(filePath);
   }
 
   private approvalKeyForRequest(request: InternalRequest): string | undefined {
@@ -730,6 +838,8 @@ export class ApprovalPanelProvider
         return request.oldName && request.newName
           ? `rename:${request.oldName}\u2192${request.newName}`
           : undefined;
+      case "memory":
+        return undefined;
       default:
         return undefined;
     }
@@ -760,8 +870,11 @@ export class ApprovalPanelProvider
       | CommandApprovalResponse
       | PathApprovalResponse
       | WriteApprovalResponse
-      | RenameApprovalResponse,
+      | RenameApprovalResponse
+      | MemoryApprovalResponse,
   ): void {
+    if (this.isProtectedWriteRequest(request)) return;
+
     if (request.kind === "path") {
       this.recordPathApproval(request, response as PathApprovalResponse);
       return;
@@ -889,6 +1002,7 @@ export class ApprovalPanelProvider
     request: InternalRequest,
     options?: { allowPathApprovals?: boolean },
   ): boolean {
+    if (this.isProtectedWriteRequest(request)) return false;
     const identifier =
       request.kind === "command"
         ? request.fullCommand
@@ -911,7 +1025,8 @@ export class ApprovalPanelProvider
     | CommandApprovalResponse
     | PathApprovalResponse
     | WriteApprovalResponse
-    | RenameApprovalResponse {
+    | RenameApprovalResponse
+    | MemoryApprovalResponse {
     switch (kind) {
       case "command":
         return { decision: "run-once" };
@@ -921,6 +1036,8 @@ export class ApprovalPanelProvider
         return { decision: "allow-once" };
       case "rename":
         return { decision: "accept" };
+      case "memory":
+        return { decision: "reject" };
     }
   }
 

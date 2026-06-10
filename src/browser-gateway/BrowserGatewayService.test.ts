@@ -238,7 +238,7 @@ describe("BrowserGatewayService", () => {
     ]);
     expect(onDidChange).toHaveBeenCalled();
 
-    hub.publishQuestionRequest("question-1", [
+    hub.publishQuestionRequest("question-1", "Need confirmation.", [
       {
         id: "q1",
         type: "yes_no",
@@ -253,6 +253,7 @@ describe("BrowserGatewayService", () => {
       },
       question: {
         id: "question-1",
+        context: "Need confirmation.",
         questions: [
           {
             id: "q1",
@@ -269,6 +270,7 @@ describe("BrowserGatewayService", () => {
       approval: undefined,
       question: {
         id: "question-1",
+        context: "Need confirmation.",
         questions: [
           {
             id: "q1",
@@ -357,11 +359,16 @@ describe("BrowserGatewayService", () => {
       },
     });
 
-    hub.publishQuestionRequest("question-2", []);
+    hub.publishQuestionRequest("question-2", "Need input.", []);
     hub.publishApprovalIdle();
 
     expect(service.getUiState().recentEvents).toEqual([
-      { type: "agentQuestionRequest", id: "question-2", questions: [] },
+      {
+        type: "agentQuestionRequest",
+        id: "question-2",
+        context: "Need input.",
+        questions: [],
+      },
       { type: "idle" },
     ]);
 

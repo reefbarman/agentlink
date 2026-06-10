@@ -49,7 +49,10 @@ function commandTokenPrefixes(
   let inDouble = false;
   const flush = (end: number) => {
     if (tokenStart >= 0) {
-      result.push({ token: cmd.slice(tokenStart, end), prefix: cmd.slice(0, end) });
+      result.push({
+        token: cmd.slice(tokenStart, end),
+        prefix: cmd.slice(0, end),
+      });
       tokenStart = -1;
     }
   };
@@ -334,6 +337,7 @@ export function CommandCard({
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      purpose="Run a terminal command"
       rulesContent={rulesJsx}
       rulesModified={rulesModified}
       primaryLabel="Run"

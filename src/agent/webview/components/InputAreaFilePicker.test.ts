@@ -17,13 +17,24 @@ function stubScrollIntoView() {
   });
 }
 
+function stubAnimationFrame() {
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+    window.setTimeout(() => callback(performance.now()), 0),
+  );
+  vi.stubGlobal("cancelAnimationFrame", (handle: number) =>
+    window.clearTimeout(handle),
+  );
+}
+
 describe("InputArea file picker inline completion", () => {
   beforeEach(() => {
     stubScrollIntoView();
+    stubAnimationFrame();
   });
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   it("keeps the selected @path inline while attaching the file", async () => {

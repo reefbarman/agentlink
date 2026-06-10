@@ -1,3 +1,10 @@
+import type {
+  McpApprovalPromotionMeta,
+  RequestContextBreakdown,
+} from "../../shared/types.js";
+
+import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
+
 /** A mode available for selection */
 export interface ModeInfo {
   slug: string;
@@ -48,6 +55,15 @@ export interface SlashCommandInfo {
 }
 
 /** A question posed by the agent via the ask_user tool */
+export interface QuestionRequest {
+  id: string;
+  /** Visible explanation shown above structured questions. */
+  context: string;
+  questions: Question[];
+  /** When set, the question is from a background agent with this task name. */
+  backgroundTask?: string;
+}
+
 export interface Question {
   id: string;
   type:
@@ -135,6 +151,7 @@ export type ExtensionMessage =
       promptCacheRetention?: "in_memory" | "24h";
       storeResponseState?: boolean;
       providerResponseId?: string;
+      contextBreakdown?: RequestContextBreakdown;
     }
   | {
       type: "agentError";
@@ -220,7 +237,7 @@ export type ExtensionMessage =
       type: "agentDebugInfo";
       info: Record<string, string | number>;
       systemPrompt?: string;
-      loadedInstructions?: Array<{ source: string; chars: number }>;
+      loadedInstructions?: LoadedInstructionDebugInfo[];
     }
   | {
       type: "agentFileSearchResults";
@@ -292,13 +309,9 @@ export type ExtensionMessage =
       pattern?: string;
       error?: string;
     }
-  | {
+  | ({
       type: "agentQuestionRequest";
-      id: string;
-      questions: Question[];
-      /** When set, the question is from a background agent with this task name. */
-      backgroundTask?: string;
-    }
+    } & QuestionRequest)
   | { type: "agentQuestionCleared"; id: string }
   | {
       type: "agentQuestionProgress";
@@ -453,6 +466,7 @@ export type ExtensionMessage =
       promptCacheRetention?: "in_memory" | "24h";
       storeResponseState?: boolean;
       providerResponseId?: string;
+      contextBreakdown?: RequestContextBreakdown;
     }
   | {
       type: "agentBgError";
@@ -508,8 +522,6 @@ export type ShowBgTranscriptMessage = {
   /** Raw AgentMessage[] from the backend session */
   messages: unknown[];
 };
-
-import type { McpApprovalPromotionMeta } from "../../shared/types.js";
 
 export interface ChatState {
   sessionId: string | null;
@@ -688,6 +700,7 @@ export interface ChatMessage {
     promptCacheRetention?: "in_memory" | "24h";
     storeResponseState?: boolean;
     providerResponseId?: string;
+    contextBreakdown?: RequestContextBreakdown;
   };
   /** Set when role === "condense" */
   condenseInfo?: {

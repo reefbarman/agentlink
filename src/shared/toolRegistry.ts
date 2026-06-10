@@ -35,12 +35,32 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   read_file: {
     label: "Read with line numbers",
     description:
-      "Read the contents of a file with line numbers. Returns content in 'line_number | content' format. Supports text files, local images, and PDF text extraction. Includes file metadata (size, modified, language), git status, and diagnostics summary when available. Supports optional 'query' param to semantically jump to the most relevant section using the codebase index.",
+      "Read the contents of a file with line numbers. Use get_context first for orientation on a known source/config file; use read_file when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via query. Returns content in 'line_number | content' format with metadata, git status, and diagnostics summary when available.",
+  },
+  get_context: {
+    label: "Context pack",
+    description:
+      "Build a compact read-only context pack for an explicit file: metadata, git status, diagnostics summary, symbol outline, bounded numbered content, and working-set status. Prefer this over read_file for first-pass orientation when the file path is already known. Supports opt-in unchanged-content omission via per-session content hashes.",
+  },
+  get_module_neighbors: {
+    label: "Module neighbors",
+    description:
+      "Read the structural repo-map sidecar for a file and return imports, exports, top-level symbols, reverse module dependents, bounded counts, and freshness metadata. Use after get_context when you need module-level blast-radius awareness before editing. Requires the codebase index/structural sidecar to be built.",
+  },
+  get_repo_map: {
+    label: "Repo map",
+    description:
+      "Read the structural repo-map sidecar and return a budgeted whole-project skeleton: cache metadata, aggregate counts, directory summaries, external dependency summaries, and prioritized file/module entries. Use before broad edits to understand module boundaries and drill into files with get_module_neighbors. Requires the codebase index/structural sidecar to be built.",
   },
   load_skill: {
     label: "Load advertised skill",
     description:
       "Load the full contents of a skill file that was explicitly advertised in the current system prompt. Only valid for skill paths from the current session's skill list; not a general-purpose file reader.",
+  },
+  load_rule: {
+    label: "Load advertised rule",
+    description:
+      "Load the full contents of a deferred local rule file that was explicitly advertised in the current system prompt Rule Catalog. Only valid for deferred rule paths from the current session's rule catalog; not a general-purpose file reader.",
   },
   list_files: {
     label: "Directory listing",
@@ -56,6 +76,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     label: "Create/overwrite with diff review",
     description:
       "Create a new file or overwrite an existing file. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. Benefits from VS Code's format-on-save. Returns any user edits and new diagnostics.",
+  },
+  propose_memory: {
+    label: "Propose durable memory",
+    description:
+      "Propose an approved cross-session memory/config update. Resolves the correct global or project target across instructions, skills, commands, and memory.md, validates the proposal, and always requires explicit user approval before writing.",
   },
   apply_diff: {
     label: "Search/replace with diff review",

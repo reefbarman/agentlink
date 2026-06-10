@@ -15,11 +15,13 @@ export function clampCondenseThreshold(value: number): number {
   return Math.min(MAX_THRESHOLD, Math.max(MIN_THRESHOLD, value));
 }
 
-export function isAnthropicSonnetOrOpusModel(modelId: string): boolean {
+export function isAnthropicFrontierModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   return (
     lower.startsWith("claude-") &&
-    (lower.includes("sonnet") || lower.includes("opus"))
+    (lower.includes("fable") ||
+      lower.includes("sonnet") ||
+      lower.includes("opus"))
   );
 }
 
@@ -27,7 +29,7 @@ export function isAnthropicSonnetOrOpusModel(modelId: string): boolean {
 function isLargeContextFrontierModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   return (
-    isAnthropicSonnetOrOpusModel(lower) ||
+    isAnthropicFrontierModel(lower) ||
     lower === "gpt-5.4" ||
     lower === "gpt-5.4-pro"
   );

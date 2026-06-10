@@ -1,14 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from "preact/hooks";
 import type {
   ApprovalRequest,
-  ExtensionMessage,
   DecisionMessage,
+  ExtensionMessage,
 } from "./types.js";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+
 import { CommandCard } from "./components/CommandCard.js";
-import { PathCard } from "./components/PathCard.js";
-import { WriteCard } from "./components/WriteCard.js";
-import { RenameCard } from "./components/RenameCard.js";
 import { IdleState } from "./components/IdleState.js";
+import { MemoryCard } from "./components/MemoryCard.js";
+import { PathCard } from "./components/PathCard.js";
+import { RenameCard } from "./components/RenameCard.js";
+import { WriteCard } from "./components/WriteCard.js";
 
 interface VsCodeApi {
   postMessage(message: unknown): void;
@@ -62,11 +64,7 @@ export function App({ vscodeApi }: AppProps) {
       );
     case "path":
       return (
-        <PathCard
-          request={request}
-          submit={submit}
-          followUpRef={followUpRef}
-        />
+        <PathCard request={request} submit={submit} followUpRef={followUpRef} />
       );
     case "write":
       return (
@@ -79,6 +77,14 @@ export function App({ vscodeApi }: AppProps) {
     case "rename":
       return (
         <RenameCard
+          request={request}
+          submit={submit}
+          followUpRef={followUpRef}
+        />
+      );
+    case "memory":
+      return (
+        <MemoryCard
           request={request}
           submit={submit}
           followUpRef={followUpRef}

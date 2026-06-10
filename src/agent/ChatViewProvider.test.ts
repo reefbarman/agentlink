@@ -990,7 +990,11 @@ describe("ChatViewProvider session state sync", () => {
           projectedForegroundState: Record<string, unknown>;
         }
       ).projectedForegroundState,
-      questionRequest: { id: "question-1", questions: [] },
+      questionRequest: {
+        id: "question-1",
+        context: "Need input.",
+        questions: [],
+      },
     } as never;
 
     const ok = provider.submitBrowserQuestionResponse({

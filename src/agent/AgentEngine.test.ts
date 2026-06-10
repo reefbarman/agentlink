@@ -21,10 +21,16 @@ const mocks = vi.hoisted(() => ({
   mockBuildPromptArtifacts: vi.fn().mockResolvedValue({
     systemPrompt: "mock system prompt",
     skills: [],
+    promptBreakdown: {
+      sections: [{ label: "test", chars: 18, estimatedTokens: 5 }],
+      totalChars: 18,
+      estimatedTokens: 5,
+    },
   }),
   mockSummarizeConversation: vi.fn(),
   mockGetEffectiveHistory: vi.fn((messages: unknown[]) => messages),
   mockInjectSyntheticToolResults: vi.fn((messages: unknown[]) => messages),
+  mockEnforceToolResultAdjacency: vi.fn((messages: unknown[]) => messages),
 }));
 
 vi.mock("./systemPrompt.js", () => ({
@@ -36,6 +42,7 @@ vi.mock("./condense.js", () => ({
   summarizeConversation: mocks.mockSummarizeConversation,
   getEffectiveHistory: mocks.mockGetEffectiveHistory,
   injectSyntheticToolResults: mocks.mockInjectSyntheticToolResults,
+  enforceToolResultAdjacency: mocks.mockEnforceToolResultAdjacency,
 }));
 
 const TEST_MODEL = "claude-sonnet-4-6";
@@ -876,6 +883,125 @@ describe("AgentEngine", () => {
     });
   });
 
+  describe("tool assembly", () => {
+    it("omits deferred MCP tools from provider requests while retaining discovery/call meta-tools", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "content_blocks",
+          blocks: [{ type: "text", text: "ok" }],
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const liveMcpTools = [
+        {
+          name: "ddg-search__search",
+          description: "Search the web",
+          input_schema: { type: "object", properties: {} },
+        },
+        {
+          name: "linear__list_issues",
+          description: "List Linear issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ];
+
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolContext({
+        ...({} as ToolDispatchContext),
+        approvalManager: {} as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+        mcpHub: {
+          getToolDefs: () => liveMcpTools,
+          getServerConfig: (serverName: string) =>
+            serverName === "linear"
+              ? { toolDisclosure: "deferred" }
+              : undefined,
+        } as any,
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(streamCalls).toHaveLength(1);
+      const names = streamCalls[0]?.tools?.map((tool) => tool.name) ?? [];
+      expect(names).toContain("ddg-search__search");
+      expect(names).not.toContain("linear__list_issues");
+      expect(names).toContain("find_mcp_tools");
+      expect(names).toContain("call_mcp_tool");
+      expect(session.contextBreakdown.tools?.mcp.servers).toEqual([
+        expect.objectContaining({
+          serverName: "ddg-search",
+          toolCount: 1,
+        }),
+      ]);
+      expect(session.contextBreakdown.tools?.mcp.totalToolCount).toBe(1);
+      expect(session.mcpToolDisclosure?.deferredTools).toEqual([
+        expect.objectContaining({ name: "linear__list_issues" }),
+      ]);
+    });
+
+    it("recomputes MCP disclosure at request time when tools connect after session creation", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "content_blocks",
+          blocks: [{ type: "text", text: "ok" }],
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      expect(session.mcpToolDisclosure).toBeUndefined();
+
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolContext({
+        ...({} as ToolDispatchContext),
+        approvalManager: {} as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+        mcpHub: {
+          getToolDefs: () => [
+            {
+              name: "linear__list_issues",
+              description: "List Linear issues",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
+          getServerConfig: (serverName: string) =>
+            serverName === "linear"
+              ? { toolDisclosure: "deferred" }
+              : undefined,
+        } as any,
+      });
+
+      await collectEvents(engine.run(session));
+
+      const names = streamCalls[0]?.tools?.map((tool) => tool.name) ?? [];
+      expect(names).not.toContain("linear__list_issues");
+      expect(names).toContain("find_mcp_tools");
+      expect(names).toContain("call_mcp_tool");
+      expect(session.mcpToolDisclosure?.deferredTools).toEqual([
+        expect.objectContaining({ name: "linear__list_issues" }),
+      ]);
+      expect(session.contextBreakdown.tools?.mcp.totalToolCount).toBe(0);
+    });
+  });
+
   describe("token accounting", () => {
     it("reports api_request inputTokens as uncached + cache_read + cache_creation", async () => {
       const provider = makeMockProvider(
@@ -904,6 +1030,10 @@ describe("AgentEngine", () => {
       expect(session.totalInputTokens).toBe(50);
       expect(session.totalCacheReadTokens).toBe(9000);
       expect(session.totalCacheCreationTokens).toBe(1000);
+      expect(apiRequest.contextBreakdown?.prompt).toMatchObject({
+        totalChars: 18,
+        estimatedTokens: 5,
+      });
     });
 
     it("stores provider response id from usage events for future stateful codex turns", async () => {
@@ -1073,10 +1203,11 @@ describe("AgentEngine", () => {
         model: TEST_MODEL,
       });
       session.providerId = "codex";
-      session.addUserMessage("what's in this image?");
-      session.setPendingMedia(0, [
-        { name: "paste.png", mimeType: "image/png", base64: "abc123" },
-      ]);
+      session.addUserMessage("what's in this image?", {
+        images: [
+          { name: "paste.png", mimeType: "image/png", base64: "abc123" },
+        ],
+      });
       const engine = new AgentEngine(makeRegistry(provider));
 
       await collectEvents(engine.run(session));
@@ -1158,12 +1289,11 @@ describe("AgentEngine", () => {
         retryable: true,
       });
       // Now add the user message with an image
-      session.addUserMessage("what's in this image?");
-      // Raw index is 3 (after: user[0], assistant[1], runtimeError[2], user[3])
-      const rawIdx = session.messageCount - 1;
-      session.setPendingMedia(rawIdx, [
-        { name: "paste.png", mimeType: "image/png", base64: "abc123" },
-      ]);
+      session.addUserMessage("what's in this image?", {
+        images: [
+          { name: "paste.png", mimeType: "image/png", base64: "abc123" },
+        ],
+      });
 
       const engine = new AgentEngine(makeRegistry(provider));
       await collectEvents(engine.run(session));
@@ -1186,6 +1316,111 @@ describe("AgentEngine", () => {
           },
         ],
       });
+    });
+
+    it("re-sends pasted image media on subsequent API requests", async () => {
+      const streamCalls: StreamRequest[] = [];
+      let callCount = 0;
+      const provider: ModelProvider = {
+        id: "codex",
+        displayName: "Codex",
+        condenseModel: "gpt-5.4",
+        async isAuthenticated() {
+          return true;
+        },
+        getCapabilities() {
+          return TEST_CAPABILITIES;
+        },
+        listModels(): ModelInfo[] {
+          return [
+            {
+              id: TEST_MODEL,
+              displayName: "Codex",
+              provider: "codex",
+              capabilities: TEST_CAPABILITIES,
+            },
+          ];
+        },
+        async *stream(request: StreamRequest) {
+          streamCalls.push(request);
+          callCount += 1;
+          if (callCount === 1) {
+            yield {
+              type: "content_blocks",
+              blocks: [
+                {
+                  type: "tool_use",
+                  id: "call_read",
+                  name: "read_file",
+                  input: { path: "src/a.ts" },
+                },
+              ],
+            };
+          } else {
+            yield {
+              type: "content_blocks",
+              blocks: [{ type: "text", text: "done" }],
+            };
+          }
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+        },
+        async complete() {
+          return { text: "ok" };
+        },
+      };
+
+      const session = await makeSession({
+        ...testConfig,
+        model: TEST_MODEL,
+      });
+      session.providerId = "codex";
+      session.addUserMessage("what's in this image?", {
+        images: [
+          { name: "paste.png", mimeType: "image/png", base64: "abc123" },
+        ],
+      });
+
+      const engine = new AgentEngine(makeRegistry(provider));
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      };
+      engine.setToolContext(toolCtx);
+
+      const dispatchSpy = vi
+        .spyOn(await import("./toolAdapter.js"), "dispatchToolCall")
+        .mockResolvedValue({
+          content: [{ type: "text", text: "file contents" }],
+        });
+
+      try {
+        await collectEvents(engine.run(session));
+      } finally {
+        dispatchSpy.mockRestore();
+      }
+
+      const expectedImageMessage = {
+        role: "user",
+        content: [
+          { type: "text", text: "what's in this image?" },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "abc123",
+            },
+          },
+        ],
+      };
+      expect(streamCalls).toHaveLength(2);
+      expect(streamCalls[0]?.messages[0]).toEqual(expectedImageMessage);
+      // Regression: the API is stateless, so the image must be re-sent after
+      // the tool round-trip or the model loses access to it mid-conversation.
+      expect(streamCalls[1]?.messages[0]).toEqual(expectedImageMessage);
     });
 
     it("auto-retries Codex processing errors and still marks exhausted failures retryable", async () => {
@@ -1407,6 +1642,45 @@ describe("AgentEngine", () => {
             "Your previous response was empty. Continue from where you left off and provide the full response.",
         }),
       );
+    });
+
+    it("treats whitespace-only visible blocks as empty responses", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts === 1) {
+          yield {
+            type: "usage",
+            inputTokens: 100,
+            outputTokens: 1,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+          };
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "   " }],
+          };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "Recovered response" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+      const warnings = events.filter((e) => e.type === "warning");
+
+      expect(attempts).toBe(2);
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          type: "warning",
+          message: "Provider returned an empty response — retrying…",
+        }),
+      ]);
     });
 
     it("surfaces a retryable error after consecutive empty responses", async () => {

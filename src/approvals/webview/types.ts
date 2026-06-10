@@ -11,8 +11,19 @@ export interface SubCommandEntry {
   };
 }
 
+export type MemoryTier = "instructions" | "skill" | "command" | "memory";
+export type MemoryScope = "global" | "project";
+export type MemoryOperation = "add" | "update" | "remove";
+
 export interface ApprovalRequest {
-  kind: "command" | "path" | "write" | "rename" | "mcp" | "mode-switch";
+  kind:
+    | "command"
+    | "path"
+    | "write"
+    | "rename"
+    | "mcp"
+    | "mode-switch"
+    | "memory";
   id: string;
   /** For commands: the full compound command */
   command?: string;
@@ -48,6 +59,24 @@ export interface ApprovalRequest {
     isPrimary?: boolean;
     isDanger?: boolean;
   }>;
+  /** For memory proposals: destination tier. */
+  memoryTier?: MemoryTier;
+  /** For memory proposals: destination scope. */
+  memoryScope?: MemoryScope;
+  /** For memory proposals: add/update/remove. */
+  memoryOperation?: MemoryOperation;
+  /** For memory proposals: optional target identifier for skills/commands. */
+  memoryName?: string;
+  /** For memory proposals: human title shown to the user. */
+  memoryTitle?: string;
+  /** For memory proposals: why the agent wants to persist this. */
+  memoryRationale?: string;
+  /** For memory proposals: resolved target path. */
+  memoryTargetPath?: string;
+  /** For memory proposals: markdown entry/body being proposed. */
+  memoryContent?: string;
+  /** For memory proposals: complete target file content after applying the proposal. */
+  memoryProposedContent?: string;
 }
 
 export interface RuleEntry {
@@ -78,6 +107,14 @@ export interface DecisionMessage {
   ruleMode?: string;
   rules?: RuleEntry[];
   trustScope?: string;
+  /** For memory approvals: edited complete target file content. */
+  editedContent?: string;
+  /** For memory approvals: retargeted tier. */
+  memoryTier?: MemoryTier;
+  /** For memory approvals: retargeted scope. */
+  memoryScope?: MemoryScope;
+  /** For memory approvals: retargeted name for skill/command targets. */
+  memoryName?: string;
   /** Optional follow-up message from the user after accepting */
   followUp?: string;
 }

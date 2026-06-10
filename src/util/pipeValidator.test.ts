@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+
 import { validateCommand } from "./pipeValidator.js";
 
 describe("validateCommand", () => {
@@ -249,9 +250,7 @@ describe("validateCommand", () => {
     });
 
     it("rejects ruby -e that calls File.write", () => {
-      const result = validateCommand(
-        `ruby -e 'File.write("out.txt", "hi")'`,
-      );
+      const result = validateCommand(`ruby -e 'File.write("out.txt", "hi")'`);
       expect(result).not.toBeNull();
       expect(result!.message).toContain("inline Ruby");
     });
@@ -273,9 +272,7 @@ describe("validateCommand", () => {
     });
 
     it("allows inline ruby that only reads a file", () => {
-      expect(
-        validateCommand(`ruby -e 'puts File.read("out.txt")'`),
-      ).toBeNull();
+      expect(validateCommand(`ruby -e 'puts File.read("out.txt")'`)).toBeNull();
     });
   });
 
@@ -313,6 +310,34 @@ describe("validateCommand", () => {
       const result = validateCommand("grep TODO");
       expect(result).not.toBeNull();
       expect(result!.message).toContain("search_files");
+    });
+  });
+
+  describe("PDF reading commands", () => {
+    it("rejects pdftotext for a local PDF", () => {
+      const result = validateCommand('pdftotext "docs/My Spec.pdf" -');
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("read_file");
+      expect(result!.message).toContain('path: "docs/My Spec.pdf"');
+    });
+
+    it("rejects pdfinfo for a local PDF", () => {
+      const result = validateCommand("pdfinfo report.PDF");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("local PDFs");
+      expect(result!.message).toContain("read_file");
+    });
+
+    it("rejects PDF readers in pipeline segments", () => {
+      const result = validateCommand("mutool draw -F txt docs/spec.pdf | head");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain('"mutool"');
+      expect(result!.message).toContain("read_file");
+    });
+
+    it("allows PDF tools without a local PDF path", () => {
+      expect(validateCommand("pdfinfo --help")).toBeNull();
+      expect(validateCommand("qpdf --version")).toBeNull();
     });
   });
 

@@ -38,11 +38,14 @@ import { handleExecuteCommand } from "../tools/executeCommand.js";
 import { handleFindAndReplace } from "../tools/findAndReplace.js";
 import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetCompletions } from "../tools/getCompletions.js";
+import { handleGetContext } from "../tools/context/getContext.js";
 import { handleGetDiagnostics } from "../tools/getDiagnostics.js";
 import { handleGetFeedback } from "../tools/getFeedback.js";
 import { handleGetHover } from "../tools/getHover.js";
 import { handleGetInlayHints } from "../tools/getInlayHints.js";
+import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
 import { handleGetReferences } from "../tools/getReferences.js";
+import { handleGetRepoMap } from "../tools/getRepoMap.js";
 import { handleGetSymbols } from "../tools/getSymbols.js";
 import { handleGetTerminalOutput } from "../tools/getTerminalOutput.js";
 import { handleGetTypeHierarchy } from "../tools/getTypeHierarchy.js";
@@ -50,8 +53,10 @@ import { handleGoToDefinition } from "../tools/goToDefinition.js";
 import { handleGoToImplementation } from "../tools/goToImplementation.js";
 import { handleGoToTypeDefinition } from "../tools/goToTypeDefinition.js";
 import { handleListFiles } from "../tools/listFiles.js";
+import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
 import { handleOpenFile } from "../tools/openFile.js";
+import { handleProposeMemory } from "../tools/proposeMemory.js";
 // --- Handler imports ---
 import { handleReadFile } from "../tools/readFile.js";
 import { handleRenameSymbol } from "../tools/renameSymbol.js";
@@ -60,12 +65,17 @@ import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleShowNotification } from "../tools/showNotification.js";
 import { handleStartWorktreeAgent } from "../tools/startWorktreeAgent.js";
 import { handleWriteFile } from "../tools/writeFile.js";
+import { parseMcpToolName } from "./mcpToolNames.js";
 import { z } from "zod";
 
 // --- Read-only tools (safe to execute in parallel) ---
 
 export const READ_ONLY_TOOLS = new Set([
   "read_file",
+  "get_context",
+  "get_repo_map",
+  "get_module_neighbors",
+  "load_rule",
   "load_skill",
   "list_files",
   "search_files",
@@ -86,6 +96,7 @@ export const READ_ONLY_TOOLS = new Set([
   "show_notification",
   "get_terminal_output",
   "ask_user",
+  "find_mcp_tools",
   "spawn_background_agent",
   "get_background_status",
   "get_background_result",
@@ -93,7 +104,7 @@ export const READ_ONLY_TOOLS = new Set([
 
 // --- Tools excluded from the agent (MCP-only or not applicable) ---
 
-const EXCLUDED_TOOLS = new Set(["handshake", "load_skill"]);
+const EXCLUDED_TOOLS = new Set(["handshake", "load_rule", "load_skill"]);
 const DEV_FEEDBACK_TOOLS = new Set([
   "send_feedback",
   "get_feedback",
@@ -116,6 +127,10 @@ function zodSchemaToJsonSchema(
 
 const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   read_file: schemas.readFileSchema,
+  get_context: schemas.getContextSchema,
+  get_repo_map: schemas.getRepoMapSchema,
+  get_module_neighbors: schemas.getModuleNeighborsSchema,
+  load_rule: schemas.loadRuleSchema,
   load_skill: schemas.loadSkillSchema,
   list_files: schemas.listFilesSchema,
   search_files: schemas.searchFilesSchema,
@@ -124,6 +139,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   apply_diff: schemas.applyDiffSchema,
   find_and_replace: schemas.findAndReplaceSchema,
   rename_symbol: schemas.renameSymbolSchema,
+  propose_memory: schemas.proposeMemorySchema,
   open_file: schemas.openFileSchema,
   show_notification: schemas.showNotificationSchema,
   execute_command: schemas.executeCommandSchema,
@@ -184,7 +200,65 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
     : {}),
 };
 
+const CALL_MCP_TOOL: ToolDefinition = {
+  name: "call_mcp_tool",
+  description:
+    "Call a tool from a connected MCP server after discovering it with find_mcp_tools. Uses the same approval policy as directly exposed MCP tools.",
+  input_schema: {
+    type: "object",
+    properties: {
+      server: {
+        type: "string",
+        description: "MCP server name, e.g. linear or notion.",
+      },
+      tool: {
+        type: "string",
+        description:
+          "Bare MCP tool name without the server prefix, e.g. list_issues. Do not include server__.",
+      },
+      input: {
+        type: "object",
+        description: "Arguments object to pass to the MCP tool.",
+      },
+    },
+    required: ["server", "tool", "input"],
+  },
+};
+
 const MCP_META_TOOLS: ToolDefinition[] = [
+  {
+    name: "find_mcp_tools",
+    description:
+      "Discover tools available from connected MCP servers. Use this before calling tools whose full schemas were deferred from the system prompt.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Optional case-insensitive search over server name, tool name, and description.",
+        },
+        server: {
+          type: "string",
+          description: "Optional MCP server name to restrict results to.",
+        },
+        includeSchemas: {
+          type: "boolean",
+          description:
+            "Include full input schemas for matching tools. Default false. When true, schemas are limited by schemaLimit to keep discovery compact.",
+        },
+        schemaLimit: {
+          type: "number",
+          description:
+            "Maximum number of returned tools that include full schemas when includeSchemas=true (default 1, max 20).",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum tools to return (default 50, max 200).",
+        },
+      },
+    },
+  },
   {
     name: "list_mcp_resources",
     description: "List all resources available from connected MCP servers.",
@@ -234,10 +308,15 @@ const MCP_META_TOOLS: ToolDefinition[] = [
 const ASK_USER_TOOL: ToolDefinition = {
   name: "ask_user",
   description:
-    "Ask the user one or more structured questions and wait for their responses before continuing. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
+    "Ask the user one or more structured questions and wait for their responses before continuing. Always include `context`: visible user-facing text explaining why input is needed, the relevant trade-off/options, and your recommendation. Questions must be self-contained and must not rely on hidden thinking or prior invisible rationale. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
   input_schema: {
     type: "object",
     properties: {
+      context: {
+        type: "string",
+        description:
+          "Visible text shown above the questions. Must explain why input is needed, summarize relevant options/trade-offs, and include your recommendation. Do not rely on hidden thinking or prior invisible rationale.",
+      },
       questions: {
         type: "array",
         description:
@@ -309,7 +388,7 @@ const ASK_USER_TOOL: ToolDefinition = {
         },
       },
     },
-    required: ["questions"],
+    required: ["context", "questions"],
   },
 };
 
@@ -503,6 +582,9 @@ export interface BgStatusResult {
 const TOOL_PROFILES: Record<string, Set<string>> = {
   review: new Set([
     "read_file",
+    "get_context",
+    "get_repo_map",
+    "get_module_neighbors",
     "search_files",
     "codebase_search",
     "list_files",
@@ -516,6 +598,9 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
   ]),
   "readonly-research": new Set([
     "read_file",
+    "get_context",
+    "get_repo_map",
+    "get_module_neighbors",
     "search_files",
     "codebase_search",
     "list_files",
@@ -532,6 +617,9 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
   ]),
   btw: new Set([
     "read_file",
+    "get_context",
+    "get_repo_map",
+    "get_module_neighbors",
     "search_files",
     "codebase_search",
     "list_files",
@@ -573,6 +661,7 @@ export function getAgentTools(
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
     .filter(([name]) => (__DEV_BUILD__ ? true : !DEV_FEEDBACK_TOOLS.has(name)))
+    .filter(([name]) => !(isBackground && name === "propose_memory"))
     .filter(
       ([name]) =>
         !allowed ||
@@ -587,20 +676,25 @@ export function getAgentTools(
     }));
 
   // Append MCP tools if the mode allows the 'mcp' group (and not restricted by profile)
-  const allowedMcpTools =
-    !profileAllowlist &&
-    (!mode || (mode.toolGroups.includes("mcp") && mcpToolDefs))
-      ? (mcpToolDefs ?? [])
-      : [];
+  const canUseMcpTools =
+    !profileAllowlist && (!mode || mode.toolGroups.includes("mcp"));
+  const allowedMcpTools = canUseMcpTools && mcpToolDefs ? mcpToolDefs : [];
 
-  // Meta-tools and ask_user are always available regardless of mode restrictions
-  // (but excluded when a tool profile is active — profiles are meant to be restrictive).
+  // MCP client meta-tools follow the same mode gate as direct MCP tools and are
+  // excluded when a tool profile is active — profiles are meant to be restrictive.
   // Background agents are excluded from switch_mode and spawn tools to prevent
   // inadvertent foreground mode changes and nested spawning.
-  const metaTools = profileAllowlist ? [] : MCP_META_TOOLS;
+  const metaTools = canUseMcpTools ? MCP_META_TOOLS : [];
   const hiddenAgentTools = profileAllowlist
     ? []
     : [
+        {
+          name: "load_rule",
+          description:
+            TOOL_REGISTRY.load_rule?.description ??
+            "Load the full contents of an advertised local rule file.",
+          input_schema: zodSchemaToJsonSchema(schemas.loadRuleSchema),
+        },
         {
           name: "load_skill",
           description:
@@ -614,6 +708,7 @@ export function getAgentTools(
     ...hiddenAgentTools,
     ...allowedMcpTools,
     ...metaTools,
+    ...(canUseMcpTools ? [CALL_MCP_TOOL] : []),
     ...(profileAllowlist ? [] : [ASK_USER_TOOL]),
     ...(isBackground || profileAllowlist
       ? []
@@ -627,6 +722,134 @@ export function getAgentTools(
 export interface QuestionResponse {
   answers: Record<string, string | string[] | number | boolean | undefined>;
   notes: Record<string, string>;
+}
+
+function jsonTextResult(value: unknown): ToolResult {
+  return {
+    content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
+  };
+}
+
+function errorTextResult(error: string): ToolResult {
+  return { content: [{ type: "text", text: JSON.stringify({ error }) }] };
+}
+
+function clampToolLimit(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 50;
+  return Math.min(Math.floor(numeric), 200);
+}
+
+function clampSchemaLimit(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 1;
+  return Math.min(Math.floor(numeric), 20);
+}
+
+function normalizeDiscoveryText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function discoveryTokens(value: string): string[] {
+  return normalizeDiscoveryText(value)
+    .split(" ")
+    .filter((token) => token.length > 0)
+    .map((token) =>
+      token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token,
+    );
+}
+
+function scoreMcpToolDiscovery(
+  queryTokens: string[],
+  tool: { server: string; tool: string; name: string; description: string },
+): number {
+  if (queryTokens.length === 0) return 1;
+
+  const serverTokens = new Set(discoveryTokens(tool.server));
+  const bareToolTokenList = discoveryTokens(tool.tool);
+  const bareToolTokens = new Set(bareToolTokenList);
+  const queryTokenSet = new Set(queryTokens);
+  const nameTokens = new Set(discoveryTokens(tool.name));
+  const descriptionTokens = new Set(discoveryTokens(tool.description));
+  const normalizedHaystack = normalizeDiscoveryText(
+    `${tool.server} ${tool.tool} ${tool.name} ${tool.description}`,
+  );
+  const normalizedQuery = queryTokens.join(" ");
+
+  let score = normalizedHaystack.includes(normalizedQuery) ? 20 : 0;
+  let bareToolMatchCount = 0;
+  for (const token of queryTokens) {
+    if (bareToolTokens.has(token)) {
+      score += 12;
+      bareToolMatchCount += 1;
+    } else if (nameTokens.has(token)) score += 8;
+    else if (serverTokens.has(token)) score += 5;
+    else if (descriptionTokens.has(token)) score += 4;
+    else if (normalizedHaystack.includes(token)) score += 1;
+  }
+
+  const extraBareToolTokens = bareToolTokenList.filter(
+    (token) => !queryTokenSet.has(token),
+  ).length;
+  if (bareToolMatchCount > 0 && extraBareToolTokens === 0) score += 10;
+  else if (bareToolMatchCount > 0) score -= extraBareToolTokens * 3;
+
+  return score;
+}
+
+function discoverMcpTools(
+  mcpHub: McpClientHub,
+  params: Record<string, unknown>,
+): ToolResult {
+  const queryTokens = discoveryTokens(String(params.query ?? ""));
+  const serverFilter = String(params.server ?? "").trim();
+  const includeSchemas =
+    params.includeSchemas === true || params.includeSchemas === "true";
+  const schemaLimit = includeSchemas ? clampSchemaLimit(params.schemaLimit) : 0;
+  const limit = clampToolLimit(params.limit);
+
+  const rankedTools = mcpHub
+    .getToolDefs()
+    .map((tool) => {
+      const parsed = parseMcpToolName(tool.name);
+      if (!parsed) return null;
+      return {
+        server: parsed.serverName,
+        tool: parsed.bareToolName,
+        name: tool.name,
+        description: tool.description ?? "",
+        input_schema: tool.input_schema,
+      };
+    })
+    .filter((tool): tool is NonNullable<typeof tool> => tool !== null)
+    .filter((tool) => !serverFilter || tool.server === serverFilter)
+    .map((tool) => ({
+      tool,
+      score: scoreMcpToolDiscovery(queryTokens, tool),
+    }))
+    .filter((item) => queryTokens.length === 0 || item.score > 0)
+    .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name))
+    .map((item) => item.tool);
+  const tools = rankedTools.slice(0, limit).map((tool, index) => {
+    const { input_schema, ...summary } = tool;
+    return includeSchemas && index < schemaLimit
+      ? { ...summary, input_schema }
+      : summary;
+  });
+
+  return jsonTextResult({
+    tools,
+    count: tools.length,
+    totalMatches: rankedTools.length,
+    truncated: rankedTools.length > limit,
+    schemaCount: includeSchemas ? Math.min(tools.length, schemaLimit) : 0,
+    schemaLimited: includeSchemas && tools.length > schemaLimit,
+  });
 }
 
 export interface ToolDispatchContext {
@@ -652,6 +875,7 @@ export interface ToolDispatchContext {
   ) => Promise<{ approved: boolean; mode: string }>;
   onApprovalRequest?: import("../shared/types.js").OnApprovalRequest;
   onQuestion?: (
+    context: string,
     questions: import("../agent/webview/types.js").Question[],
     sessionId: string,
     /**
@@ -664,6 +888,12 @@ export interface ToolDispatchContext {
   onFileRead?: (filePath: string) => void;
   /** Returns the set of skills explicitly advertised to the current session. */
   getAdvertisedSkills?: () => Array<{ name: string; skillPath: string }>;
+  /** Returns the set of deferred rules explicitly advertised to the current session. */
+  getAdvertisedRules?: () => Array<{
+    source: string;
+    filePath: string;
+    summary?: string;
+  }>;
   /** Called whenever the agent loads a skill so the session can preserve it across condense. */
   onSkillLoad?: (skillName: string) => void;
   /** Spawn a background agent session. Returns routing metadata and new session ID. */
@@ -716,9 +946,21 @@ export async function dispatchToolCall(
     }
 
     // Check approval policy
-    const serverName = toolName.split("__")[0];
+    const parsedToolName = parseMcpToolName(toolName);
+    if (!parsedToolName) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: `Invalid MCP tool name: ${toolName}`,
+            }),
+          },
+        ],
+      };
+    }
+    const { serverName, bareToolName } = parsedToolName;
     const serverConfig = mcpHub.getServerConfig(serverName);
-    const bareToolName = toolName.slice(serverName.length + 2);
     const isAutoApproved =
       serverConfig?.toolPolicy === "allow" ||
       serverConfig?.allowedTools?.includes(bareToolName) ||
@@ -908,6 +1150,37 @@ export async function dispatchToolCall(
         ctx.onFileRead(params.path);
       }
       return handleReadFile(params, approvalManager, approvalPanel, sessionId);
+    case "get_context":
+      if (ctx.onFileRead && typeof params.path === "string") {
+        ctx.onFileRead(params.path);
+      }
+      return handleGetContext(
+        params,
+        approvalManager,
+        approvalPanel,
+        sessionId,
+      );
+    case "get_repo_map":
+      if (ctx.onFileRead && typeof params.path === "string") {
+        ctx.onFileRead(params.path);
+      }
+      return handleGetRepoMap(params, ctx.globalStorageUri);
+    case "get_module_neighbors":
+      if (ctx.onFileRead && typeof params.path === "string") {
+        ctx.onFileRead(params.path);
+      }
+      return handleGetModuleNeighbors(params, ctx.globalStorageUri);
+    case "load_rule":
+      if (ctx.onFileRead && typeof params.path === "string") {
+        ctx.onFileRead(params.path);
+      }
+      return handleLoadRule(
+        params,
+        approvalManager,
+        approvalPanel,
+        sessionId,
+        ctx.getAdvertisedRules?.() ?? [],
+      );
     case "load_skill": {
       const result = await handleLoadSkill(
         params,
@@ -954,6 +1227,7 @@ export async function dispatchToolCall(
         approvalPanel,
         sessionId,
         onApprovalRequest,
+        ctx.mode,
       );
     case "find_and_replace":
       return handleFindAndReplace(
@@ -971,6 +1245,11 @@ export async function dispatchToolCall(
         approvalPanel,
         sessionId,
         onApprovalRequest,
+      );
+    case "propose_memory":
+      return handleProposeMemory(
+        params as Parameters<typeof handleProposeMemory>[0],
+        approvalPanel,
       );
 
     // --- Terminal ---
@@ -1108,16 +1387,40 @@ export async function dispatchToolCall(
       );
     }
 
+    case "find_mcp_tools": {
+      if (!mcpHub) return errorTextResult("MCP hub not available");
+      return discoverMcpTools(mcpHub, params);
+    }
+
+    case "call_mcp_tool": {
+      if (!mcpHub) return errorTextResult("MCP hub not available");
+      const server = String(params.server ?? "").trim();
+      const tool = String(params.tool ?? "").trim();
+      if (!server || !tool) {
+        return errorTextResult("call_mcp_tool requires server and tool");
+      }
+      if (server.includes("__")) {
+        return errorTextResult(
+          "call_mcp_tool expects a server name without '__'; pass the bare tool name separately in tool",
+        );
+      }
+      const toolName = `${server}__${tool}`;
+      if (!mcpHub.getToolDefs().some((toolDef) => toolDef.name === toolName)) {
+        return errorTextResult(
+          `MCP tool not found: ${toolName}. Use find_mcp_tools to discover available tools.`,
+        );
+      }
+      const toolInput =
+        params.input &&
+        typeof params.input === "object" &&
+        !Array.isArray(params.input)
+          ? (params.input as Record<string, unknown>)
+          : {};
+      return dispatchToolCall(toolName, toolInput, ctx);
+    }
+
     case "list_mcp_resources": {
-      if (!mcpHub)
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ error: "MCP hub not available" }),
-            },
-          ],
-        };
+      if (!mcpHub) return errorTextResult("MCP hub not available");
       const resources = mcpHub.getAllResources();
       return {
         content: [{ type: "text", text: JSON.stringify(resources, null, 2) }],
@@ -1125,15 +1428,7 @@ export async function dispatchToolCall(
     }
 
     case "read_mcp_resource": {
-      if (!mcpHub)
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ error: "MCP hub not available" }),
-            },
-          ],
-        };
+      if (!mcpHub) return errorTextResult("MCP hub not available");
       return mcpHub.readResource(
         String(params.server ?? ""),
         String(params.uri ?? ""),
@@ -1141,15 +1436,7 @@ export async function dispatchToolCall(
     }
 
     case "list_mcp_prompts": {
-      if (!mcpHub)
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ error: "MCP hub not available" }),
-            },
-          ],
-        };
+      if (!mcpHub) return errorTextResult("MCP hub not available");
       const prompts = mcpHub.getAllPrompts();
       return {
         content: [{ type: "text", text: JSON.stringify(prompts, null, 2) }],
@@ -1157,15 +1444,7 @@ export async function dispatchToolCall(
     }
 
     case "get_mcp_prompt": {
-      if (!mcpHub)
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ error: "MCP hub not available" }),
-            },
-          ],
-        };
+      if (!mcpHub) return errorTextResult("MCP hub not available");
       const args = params.arguments as Record<string, string> | undefined;
       return mcpHub.getPrompt(
         String(params.server ?? ""),
@@ -1181,6 +1460,20 @@ export async function dispatchToolCall(
             {
               type: "text",
               text: JSON.stringify({ error: "Question handler not available" }),
+            },
+          ],
+        };
+      }
+      const context = String(params.context ?? "").trim();
+      if (!context) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error:
+                  "ask_user requires visible context so the user can answer without relying on hidden thinking.",
+              }),
             },
           ],
         };
@@ -1222,7 +1515,7 @@ export async function dispatchToolCall(
         };
       }
 
-      const response = await ctx.onQuestion(questions, ctx.sessionId);
+      const response = await ctx.onQuestion(context, questions, ctx.sessionId);
       // Format as a readable responses array so Claude sees question + answer + note together
       const responses = questions.map((q) => {
         const answer = response.answers[q.id];
@@ -1264,7 +1557,7 @@ export async function dispatchToolCall(
         }
       }
 
-      const payload: Record<string, unknown> = { responses };
+      const payload: Record<string, unknown> = { context, responses };
       if (modeSwitched) payload.modeSwitched = modeSwitched;
       return {
         content: [{ type: "text", text: JSON.stringify(payload) }],

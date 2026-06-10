@@ -1,0 +1,15 @@
+{
+  "id": "multi-file-refactor",
+  "title": "Rename money helpers across a small module graph",
+  "workspace": "fixtures/agent-eval-workspace/work",
+  "pristine": "fixtures/agent-eval-workspace/pristine-multi-file-refactor",
+  "prompt": "In the AgentLink eval fixture workspace, refactor the money helper names for clarity: rename formatCents to formatCurrency and addCents to addMoney. Update all imports/usages under fixtures/agent-eval-workspace/work, keep behavior unchanged, then run the fixture validation command and report what changed.",
+  "validationCommand": "npm --prefix fixtures/agent-eval-workspace/work test",
+  "expectedFiles": ["src/money.js", "src/orders.js", "src/invoices.js"],
+  "successCriteria": [
+    "Money helper exports are renamed to formatCurrency and addMoney.",
+    "All imports/usages are updated across orders and invoices modules.",
+    "The fixture test command passes without behavior changes.",
+    "The final response reports validation and the touched files."
+  ]
+}

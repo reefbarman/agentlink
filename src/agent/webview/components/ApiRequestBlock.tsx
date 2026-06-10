@@ -1,3 +1,4 @@
+import type { RequestContextBreakdown } from "../../../shared/types.js";
 import { useState } from "preact/hooks";
 
 interface ApiRequestBlockProps {
@@ -10,6 +11,7 @@ interface ApiRequestBlockProps {
   outputTokens: number;
   durationMs: number;
   timeToFirstToken: number;
+  contextBreakdown?: RequestContextBreakdown;
 }
 
 export function ApiRequestBlock({
@@ -21,6 +23,7 @@ export function ApiRequestBlock({
   outputTokens,
   durationMs,
   timeToFirstToken,
+  contextBreakdown,
 }: ApiRequestBlockProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -79,6 +82,79 @@ export function ApiRequestBlock({
               <td class="api-key">Time to first token</td>
               <td class="api-value">{(timeToFirstToken / 1000).toFixed(2)}s</td>
             </tr>
+            {contextBreakdown && (
+              <>
+                <tr>
+                  <td class="api-key">Prompt estimate</td>
+                  <td class="api-value">
+                    {contextBreakdown.prompt.estimatedTokens.toLocaleString()}{" "}
+                    tokens ·{" "}
+                    {contextBreakdown.prompt.totalChars.toLocaleString()} chars
+                  </td>
+                </tr>
+                {contextBreakdown.prompt.sections.length > 0 && (
+                  <tr>
+                    <td class="api-key">Prompt sections</td>
+                    <td class="api-value api-breakdown-list">
+                      {contextBreakdown.prompt.sections.map((section) => (
+                        <div key={section.label}>
+                          {section.label}:{" "}
+                          {section.estimatedTokens.toLocaleString()} tokens
+                          {section.count !== undefined &&
+                            ` · ${section.count.toLocaleString()} items`}
+                        </div>
+                      ))}
+                    </td>
+                  </tr>
+                )}
+                {contextBreakdown.tools && (
+                  <>
+                    <tr>
+                      <td class="api-key">Tool schemas</td>
+                      <td class="api-value">
+                        {contextBreakdown.tools.estimatedTokens.toLocaleString()}{" "}
+                        tokens ·{" "}
+                        {contextBreakdown.tools.totalToolCount.toLocaleString()}{" "}
+                        tools
+                      </td>
+                    </tr>
+                    <tr>
+                      <td class="api-key">Native tools</td>
+                      <td class="api-value">
+                        {contextBreakdown.tools.native.estimatedTokens.toLocaleString()}{" "}
+                        tokens ·{" "}
+                        {contextBreakdown.tools.native.count?.toLocaleString() ??
+                          "0"}{" "}
+                        tools
+                      </td>
+                    </tr>
+                    {contextBreakdown.tools.mcp.totalToolCount > 0 && (
+                      <tr>
+                        <td class="api-key">MCP tools</td>
+                        <td class="api-value api-breakdown-list">
+                          <div>
+                            Total:{" "}
+                            {contextBreakdown.tools.mcp.estimatedTokens.toLocaleString()}{" "}
+                            tokens ·{" "}
+                            {contextBreakdown.tools.mcp.totalToolCount.toLocaleString()}{" "}
+                            tools ·{" "}
+                            {contextBreakdown.tools.mcp.totalServerCount.toLocaleString()}{" "}
+                            servers
+                          </div>
+                          {contextBreakdown.tools.mcp.servers.map((server) => (
+                            <div key={server.serverName}>
+                              {server.serverName}:{" "}
+                              {server.estimatedTokens.toLocaleString()} tokens ·{" "}
+                              {server.toolCount.toLocaleString()} tools
+                            </div>
+                          ))}
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                )}
+              </>
+            )}
           </table>
         </div>
       )}
