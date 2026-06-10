@@ -6,6 +6,7 @@ import {
   type ToolDispatchContext,
 } from "./toolAdapter.js";
 import { BUILT_IN_MODES } from "./modes.js";
+import { handleLoadRule } from "../tools/loadRule.js";
 
 // Mock all tool handlers so dispatchToolCall tests don't hit VS Code APIs
 vi.mock("../tools/readFile.js", () => ({
@@ -32,6 +33,11 @@ vi.mock("../tools/listFiles.js", () => ({
   handleListFiles: vi
     .fn()
     .mockResolvedValue({ content: [{ type: "text", text: "files" }] }),
+}));
+vi.mock("../tools/loadRule.js", () => ({
+  handleLoadRule: vi.fn().mockResolvedValue({
+    content: [{ type: "text", text: JSON.stringify({ rule_name: "rule" }) }],
+  }),
 }));
 vi.mock("../tools/searchFiles.js", () => ({
   handleSearchFiles: vi
@@ -163,6 +169,7 @@ describe("READ_ONLY_TOOLS", () => {
     expect(READ_ONLY_TOOLS.has("get_context")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_repo_map")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_module_neighbors")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("load_rule")).toBe(true);
     expect(READ_ONLY_TOOLS.has("list_files")).toBe(true);
     expect(READ_ONLY_TOOLS.has("search_files")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_diagnostics")).toBe(true);
@@ -201,6 +208,13 @@ describe("getAgentTools", () => {
     }
   });
 
+  it("does not emit duplicate tool names", () => {
+    for (const mode of [undefined, ...BUILT_IN_MODES]) {
+      const names = getAgentTools(mode).map((tool) => tool.name);
+      expect(new Set(names).size, mode?.slug ?? "default").toBe(names.length);
+    }
+  });
+
   it("does not include handshake", () => {
     const names = getAgentTools().map((t) => t.name);
     expect(names).not.toContain("handshake");
@@ -222,6 +236,7 @@ describe("getAgentTools", () => {
   it("includes the core file tools and foreground task status tool", () => {
     const names = getAgentTools().map((t) => t.name);
     expect(names).toContain("read_file");
+    expect(names).toContain("load_rule");
     expect(names).toContain("get_repo_map");
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("write_file");
@@ -260,6 +275,9 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("execute_command");
     expect(names).not.toContain("find_and_replace");
     expect(names).not.toContain("list_mcp_resources");
+    expect(names).not.toContain("load_rule");
+    expect(names).not.toContain("find_mcp_tools");
+    expect(names).not.toContain("call_mcp_tool");
     expect(names).not.toContain("ask_user");
   });
 
@@ -307,6 +325,19 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("apply_diff");
     expect(names).not.toContain("execute_command");
     expect(names).not.toContain("ask_user");
+  });
+
+  it("gates MCP discovery and calls to MCP-capable modes", () => {
+    const codeNames = getAgentTools(BUILT_IN_MODES[0]).map((t) => t.name);
+    const askNames = getAgentTools(BUILT_IN_MODES[2]).map((t) => t.name);
+    const reviewNames = getAgentTools(BUILT_IN_MODES[4]).map((t) => t.name);
+
+    expect(codeNames).toContain("find_mcp_tools");
+    expect(codeNames).toContain("call_mcp_tool");
+    expect(askNames).not.toContain("find_mcp_tools");
+    expect(askNames).not.toContain("call_mcp_tool");
+    expect(reviewNames).not.toContain("find_mcp_tools");
+    expect(reviewNames).not.toContain("call_mcp_tool");
   });
 
   it("includes structural repo map tools in all built-in mode-filtered tool sets", () => {
@@ -514,6 +545,41 @@ describe("dispatchToolCall", () => {
       type: "text",
       text: JSON.stringify({ ok: true }),
     });
+  });
+
+  it("loads advertised rules through the session rule allowlist", async () => {
+    const onFileRead = vi.fn();
+    const getAdvertisedRules = vi.fn(() => [
+      {
+        source: ".agentlink/rules/typescript.md",
+        filePath: "/workspace/.agentlink/rules/typescript.md",
+        summary: "TypeScript standards",
+      },
+    ]);
+
+    const result = await dispatchToolCall(
+      "load_rule",
+      { path: "/workspace/.agentlink/rules/typescript.md" },
+      { ...mockCtx, getAdvertisedRules, onFileRead },
+    );
+
+    expect(handleLoadRule).toHaveBeenCalledWith(
+      { path: "/workspace/.agentlink/rules/typescript.md" },
+      mockCtx.approvalManager,
+      mockCtx.approvalPanel,
+      mockCtx.sessionId,
+      [
+        {
+          source: ".agentlink/rules/typescript.md",
+          filePath: "/workspace/.agentlink/rules/typescript.md",
+          summary: "TypeScript standards",
+        },
+      ],
+    );
+    expect(onFileRead).toHaveBeenCalledWith(
+      "/workspace/.agentlink/rules/typescript.md",
+    );
+    expect(result.content[0]).toMatchObject({ type: "text" });
   });
 
   it("records suppressed final task status continuation", async () => {
@@ -850,6 +916,324 @@ describe("dispatchToolCall", () => {
       );
       expect(parsed.error).toContain("multiple_choice");
     });
+  });
+
+  it("discovers MCP tools with filtering and optional schemas", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List Linear issues",
+          input_schema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+          },
+        },
+        {
+          name: "notion__notion-search",
+          description: "Search Notion workspace",
+          input_schema: { type: "object", properties: {} },
+        },
+        {
+          name: "local_tool",
+          description: "Not an MCP tool",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+    };
+
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      { query: "issues", includeSchemas: true },
+      { ...mockCtx, mcpHub: mcpHub as any },
+    );
+
+    const parsed = JSON.parse(
+      (result.content[0] as { type: string; text: string }).text,
+    );
+    expect(parsed).toEqual({
+      tools: [
+        {
+          server: "linear",
+          tool: "list_issues",
+          name: "linear__list_issues",
+          description: "List Linear issues",
+          input_schema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+          },
+        },
+      ],
+      count: 1,
+      totalMatches: 1,
+      truncated: false,
+      schemaCount: 1,
+      schemaLimited: false,
+    });
+  });
+
+  it("limits broad MCP discovery schema output by default", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues in the user's Linear workspace",
+          input_schema: {
+            type: "object",
+            properties: { assignee: { type: "string" } },
+          },
+        },
+        {
+          name: "linear__list_issue_labels",
+          description:
+            "List available issue labels in a Linear workspace or team",
+          input_schema: {
+            type: "object",
+            properties: { team: { type: "string" } },
+          },
+        },
+      ]),
+    };
+
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      {
+        server: "linear",
+        query: "issue list",
+        includeSchemas: true,
+        limit: 10,
+      },
+      { ...mockCtx, mcpHub: mcpHub as any },
+    );
+
+    const parsed = JSON.parse(
+      (result.content[0] as { type: string; text: string }).text,
+    );
+    expect(parsed.tools).toHaveLength(2);
+    expect(parsed.tools[0].input_schema).toBeDefined();
+    expect(parsed.tools[1].input_schema).toBeUndefined();
+    expect(parsed.schemaCount).toBe(1);
+    expect(parsed.schemaLimited).toBe(true);
+  });
+
+  it("honors schemaLimit when including MCP discovery schemas", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues in the user's Linear workspace",
+          input_schema: {
+            type: "object",
+            properties: { a: { type: "string" } },
+          },
+        },
+        {
+          name: "linear__get_issue",
+          description: "Retrieve detailed information about an issue by ID",
+          input_schema: {
+            type: "object",
+            properties: { b: { type: "string" } },
+          },
+        },
+        {
+          name: "linear__list_issue_labels",
+          description:
+            "List available issue labels in a Linear workspace or team",
+          input_schema: {
+            type: "object",
+            properties: { c: { type: "string" } },
+          },
+        },
+      ]),
+    };
+
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      {
+        server: "linear",
+        query: "issue",
+        includeSchemas: true,
+        schemaLimit: 2,
+        limit: 10,
+      },
+      { ...mockCtx, mcpHub: mcpHub as any },
+    );
+
+    const parsed = JSON.parse(
+      (result.content[0] as { type: string; text: string }).text,
+    );
+    expect(
+      parsed.tools.filter(
+        (tool: { input_schema?: unknown }) => tool.input_schema,
+      ),
+    ).toHaveLength(2);
+    expect(parsed.schemaCount).toBe(2);
+    expect(parsed.schemaLimited).toBe(true);
+  });
+
+  it("ranks MCP discovery results using token overlap instead of exact substring order", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_projects",
+          description: "List projects in the user's Linear workspace",
+          input_schema: { type: "object", properties: {} },
+        },
+        {
+          name: "linear__list_issue_labels",
+          description:
+            "List available issue labels in a Linear workspace or team",
+          input_schema: { type: "object", properties: {} },
+        },
+        {
+          name: "linear__list_issue_statuses",
+          description: "List available issue statuses in a Linear team",
+          input_schema: { type: "object", properties: {} },
+        },
+        {
+          name: "linear__list_issues",
+          description:
+            'List issues in the user\'s Linear workspace. For my issues, use "me" as the assignee.',
+          input_schema: { type: "object", properties: {} },
+        },
+        {
+          name: "linear__get_issue",
+          description: "Retrieve detailed information about an issue by ID",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+    };
+
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      { server: "linear", query: "issue list recent", limit: 10 },
+      { ...mockCtx, mcpHub: mcpHub as any },
+    );
+
+    const parsed = JSON.parse(
+      (result.content[0] as { type: string; text: string }).text,
+    );
+    expect(parsed.tools[0]).toMatchObject({
+      server: "linear",
+      tool: "list_issues",
+      name: "linear__list_issues",
+    });
+    expect(parsed.tools.map((tool: { name: string }) => tool.name)).toContain(
+      "linear__get_issue",
+    );
+    expect(
+      parsed.tools.slice(1).map((tool: { name: string }) => tool.name),
+    ).toContain("linear__list_issue_labels");
+  });
+
+  it("allows call_mcp_tool bare tool names containing the MCP separator", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "server__name__tool",
+          description: "Tool with separator in bare name",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue({ toolPolicy: "allow" }),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+
+    await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "server", tool: "name__tool", input: { ok: true } },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        mcpHub: mcpHub as any,
+      },
+    );
+
+    expect(mcpHub.callTool).toHaveBeenCalledWith("server__name__tool", {
+      ok: true,
+    });
+  });
+
+  it("calls MCP tools through call_mcp_tool using the standard approval path", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+
+    const ctx: ToolDispatchContext = {
+      approvalManager: {
+        isMcpApproved: vi.fn().mockReturnValue(false),
+        approveMcpTool: vi.fn(),
+      } as any,
+      approvalPanel: {} as any,
+      sessionId: "test-session",
+      extensionUri: {} as any,
+      onApprovalRequest,
+      mcpHub: mcpHub as any,
+    };
+
+    const result = await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "list_issues", input: { query: "bug" } },
+      ctx,
+    );
+
+    expect(onApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mcp",
+        title: 'Allow MCP tool "list_issues" from "linear"?',
+      }),
+      "test-session",
+    );
+    expect(mcpHub.callTool).toHaveBeenCalledWith("linear__list_issues", {
+      query: "bug",
+    });
+    expect(result.uiMeta?.mcpApprovalPromotion).toEqual({
+      serverName: "linear",
+      bareToolName: "list_issues",
+      scopes: ["session", "project", "global"],
+    });
+  });
+
+  it("rejects unknown call_mcp_tool targets before requesting approval", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn(),
+    };
+
+    const result = await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "missing_tool", input: {} },
+      { ...mockCtx, onApprovalRequest, mcpHub: mcpHub as any },
+    );
+
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(mcpHub.callTool).not.toHaveBeenCalled();
+    expect((result.content[0] as { text: string }).text).toContain(
+      "MCP tool not found: linear__missing_tool",
+    );
   });
 
   it("attaches MCP approval promotion metadata after allow-once approvals", async () => {

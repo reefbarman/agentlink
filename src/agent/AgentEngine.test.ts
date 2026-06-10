@@ -21,6 +21,11 @@ const mocks = vi.hoisted(() => ({
   mockBuildPromptArtifacts: vi.fn().mockResolvedValue({
     systemPrompt: "mock system prompt",
     skills: [],
+    promptBreakdown: {
+      sections: [{ label: "test", chars: 18, estimatedTokens: 5 }],
+      totalChars: 18,
+      estimatedTokens: 5,
+    },
   }),
   mockSummarizeConversation: vi.fn(),
   mockGetEffectiveHistory: vi.fn((messages: unknown[]) => messages),
@@ -878,6 +883,125 @@ describe("AgentEngine", () => {
     });
   });
 
+  describe("tool assembly", () => {
+    it("omits deferred MCP tools from provider requests while retaining discovery/call meta-tools", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "content_blocks",
+          blocks: [{ type: "text", text: "ok" }],
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const liveMcpTools = [
+        {
+          name: "ddg-search__search",
+          description: "Search the web",
+          input_schema: { type: "object", properties: {} },
+        },
+        {
+          name: "linear__list_issues",
+          description: "List Linear issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ];
+
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolContext({
+        ...({} as ToolDispatchContext),
+        approvalManager: {} as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+        mcpHub: {
+          getToolDefs: () => liveMcpTools,
+          getServerConfig: (serverName: string) =>
+            serverName === "linear"
+              ? { toolDisclosure: "deferred" }
+              : undefined,
+        } as any,
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(streamCalls).toHaveLength(1);
+      const names = streamCalls[0]?.tools?.map((tool) => tool.name) ?? [];
+      expect(names).toContain("ddg-search__search");
+      expect(names).not.toContain("linear__list_issues");
+      expect(names).toContain("find_mcp_tools");
+      expect(names).toContain("call_mcp_tool");
+      expect(session.contextBreakdown.tools?.mcp.servers).toEqual([
+        expect.objectContaining({
+          serverName: "ddg-search",
+          toolCount: 1,
+        }),
+      ]);
+      expect(session.contextBreakdown.tools?.mcp.totalToolCount).toBe(1);
+      expect(session.mcpToolDisclosure?.deferredTools).toEqual([
+        expect.objectContaining({ name: "linear__list_issues" }),
+      ]);
+    });
+
+    it("recomputes MCP disclosure at request time when tools connect after session creation", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "content_blocks",
+          blocks: [{ type: "text", text: "ok" }],
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      expect(session.mcpToolDisclosure).toBeUndefined();
+
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolContext({
+        ...({} as ToolDispatchContext),
+        approvalManager: {} as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+        mcpHub: {
+          getToolDefs: () => [
+            {
+              name: "linear__list_issues",
+              description: "List Linear issues",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
+          getServerConfig: (serverName: string) =>
+            serverName === "linear"
+              ? { toolDisclosure: "deferred" }
+              : undefined,
+        } as any,
+      });
+
+      await collectEvents(engine.run(session));
+
+      const names = streamCalls[0]?.tools?.map((tool) => tool.name) ?? [];
+      expect(names).not.toContain("linear__list_issues");
+      expect(names).toContain("find_mcp_tools");
+      expect(names).toContain("call_mcp_tool");
+      expect(session.mcpToolDisclosure?.deferredTools).toEqual([
+        expect.objectContaining({ name: "linear__list_issues" }),
+      ]);
+      expect(session.contextBreakdown.tools?.mcp.totalToolCount).toBe(0);
+    });
+  });
+
   describe("token accounting", () => {
     it("reports api_request inputTokens as uncached + cache_read + cache_creation", async () => {
       const provider = makeMockProvider(
@@ -906,6 +1030,10 @@ describe("AgentEngine", () => {
       expect(session.totalInputTokens).toBe(50);
       expect(session.totalCacheReadTokens).toBe(9000);
       expect(session.totalCacheCreationTokens).toBe(1000);
+      expect(apiRequest.contextBreakdown?.prompt).toMatchObject({
+        totalChars: 18,
+        estimatedTokens: 5,
+      });
     });
 
     it("stores provider response id from usage events for future stateful codex turns", async () => {

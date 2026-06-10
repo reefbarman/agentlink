@@ -11,7 +11,10 @@ import type {
 } from "../agent/webview/types.js";
 
 import type { DetectedQuestion } from "./questionDetection.js";
-import type { McpApprovalPromotionMeta } from "./types.js";
+import type {
+  McpApprovalPromotionMeta,
+  RequestContextBreakdown,
+} from "./types.js";
 import {
   getFinalMessageContinueAction,
   type FinalMessageMarker,
@@ -61,6 +64,19 @@ function inferBgResultStatus(
   return "completed";
 }
 
+export interface LoadedInstructionDebugInfo {
+  source: string;
+  chars: number;
+  promptChars?: number;
+  kind?: "instruction" | "rule";
+  deferred?: boolean;
+  hasFrontmatter?: boolean;
+  alwaysApply?: boolean;
+  loadPath?: string;
+  summary?: string;
+  globs?: string[];
+}
+
 export interface AppState {
   messages: ChatMessage[];
   chatState: ChatState;
@@ -73,7 +89,7 @@ export interface AppState {
   systemPrompt: string | null;
   /** Running token estimate from the engine — updated between API calls. */
   estimatedTotalUsed: number;
-  loadedInstructions: Array<{ source: string; chars: number }> | null;
+  loadedInstructions: LoadedInstructionDebugInfo[] | null;
   todos: TodoItem[];
   modes: ModeInfo[];
   availableModels: WebviewModelInfo[];
@@ -115,7 +131,7 @@ export type AppAction =
       type: "SET_DEBUG_INFO";
       info: Record<string, string | number>;
       systemPrompt?: string;
-      loadedInstructions?: Array<{ source: string; chars: number }>;
+      loadedInstructions?: LoadedInstructionDebugInfo[];
     }
   | {
       type: "ADD_USER_MESSAGE";
@@ -151,6 +167,7 @@ export type AppAction =
       promptCacheRetention?: "in_memory" | "24h";
       storeResponseState?: boolean;
       providerResponseId?: string;
+      contextBreakdown?: RequestContextBreakdown;
     }
   | { type: "TOOL_START"; toolCallId: string; toolName: string }
   | { type: "TOOL_INPUT_DELTA"; toolCallId: string; partialJson: string }
@@ -1246,6 +1263,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         promptCacheRetention: action.promptCacheRetention,
         storeResponseState: action.storeResponseState,
         providerResponseId: action.providerResponseId,
+        contextBreakdown: action.contextBreakdown,
       };
       return {
         ...state,

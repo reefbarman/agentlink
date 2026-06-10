@@ -4,6 +4,7 @@ import type {
   AgentRuntimeError,
   SessionStatus,
 } from "./types.js";
+import type { RequestContextBreakdown } from "../shared/types.js";
 import type {
   ContentBlock,
   ReasoningEffort,
@@ -19,8 +20,10 @@ import type { AgentMode } from "./modes.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { SkillEntry } from "./skillLoader.js";
+import type { McpToolDisclosurePartition } from "./mcpToolDisclosure.js";
 import {
   buildPromptArtifacts,
+  type AdvertisedRuleEntry,
   type WorkspaceFolderInfo,
 } from "./systemPrompt.js";
 import { buildSessionTitleFromUserText } from "./sessionTitle.js";
@@ -32,6 +35,8 @@ export class AgentSession {
   createdAt: number;
   readonly cwd: string;
   systemPrompt: string;
+  contextBreakdown: RequestContextBreakdown;
+  mcpToolDisclosure?: McpToolDisclosurePartition;
 
   mode: string;
   /** Full mode definition (for tool filtering). Falls back to built-in 'code'. */
@@ -65,6 +70,8 @@ export class AgentSession {
   readonly filesRead = new Set<string>();
   /** Skills advertised in the current system prompt, keyed by path for allowlist validation. */
   private advertisedSkills = new Map<string, SkillEntry>();
+  /** Deferred rules advertised in the current system prompt, keyed by path for allowlist validation. */
+  private advertisedRules = new Map<string, AdvertisedRuleEntry>();
   /** Skill names explicitly loaded during this session and kept alive across condense. */
   readonly loadedSkills = new Set<string>();
   /** Total input tokens from the most recent API response: uncached + cache_read + cache_creation.
@@ -148,11 +155,13 @@ export class AgentSession {
     agentMode: AgentMode;
     config: AgentConfig;
     systemPrompt: string;
+    promptBreakdown: RequestContextBreakdown["prompt"];
     background?: boolean;
     cwd: string;
     activeFilePath?: string;
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
+    mcpToolDisclosure?: McpToolDisclosurePartition;
   }) {
     this.id = randomUUID();
     this.mode = opts.mode;
@@ -170,9 +179,11 @@ export class AgentSession {
     this.createdAt = Date.now();
     this.lastActiveAt = this.createdAt;
     this.systemPrompt = opts.systemPrompt;
+    this.contextBreakdown = { prompt: opts.promptBreakdown };
     this.activeFilePath = opts.activeFilePath;
     this.providerId = opts.providerId;
     this.workspaceFolders = opts.workspaceFolders;
+    this.mcpToolDisclosure = opts.mcpToolDisclosure;
   }
 
   static async create(opts: {
@@ -188,6 +199,7 @@ export class AgentSession {
     activeFilePath?: string;
     providerId?: string;
     workspaceFolders?: WorkspaceFolderInfo[];
+    mcpToolDisclosure?: McpToolDisclosurePartition;
   }): Promise<AgentSession> {
     const artifacts = await buildPromptArtifacts(opts.mode, opts.cwd, {
       devMode: opts.devMode,
@@ -197,6 +209,7 @@ export class AgentSession {
       isBackground: opts.isBackground,
       lightweight: opts.lightweight,
       workspaceFolders: opts.workspaceFolders,
+      mcpToolCatalog: opts.mcpToolDisclosure?.catalog,
     });
     const agentMode =
       opts.agentMode ??
@@ -207,13 +220,16 @@ export class AgentSession {
       agentMode,
       config: opts.config,
       systemPrompt: artifacts.systemPrompt,
+      promptBreakdown: artifacts.promptBreakdown,
       cwd: opts.cwd,
       background: opts.background,
       activeFilePath: opts.activeFilePath,
       providerId: opts.providerId,
       workspaceFolders: opts.workspaceFolders,
+      mcpToolDisclosure: opts.mcpToolDisclosure,
     });
     session.setAdvertisedSkills(artifacts.skills);
+    session.setAdvertisedRules(artifacts.advertisedRules);
     return session;
   }
 
@@ -232,9 +248,12 @@ export class AgentSession {
       providerId: this.providerId,
       model: this.model,
       workspaceFolders: this.workspaceFolders,
+      mcpToolCatalog: this.mcpToolDisclosure?.catalog,
     });
     this.systemPrompt = artifacts.systemPrompt;
+    this.contextBreakdown = { prompt: artifacts.promptBreakdown };
     this.setAdvertisedSkills(artifacts.skills);
+    this.setAdvertisedRules(artifacts.advertisedRules);
     this.resetProviderResponseState();
   }
 
@@ -250,6 +269,7 @@ export class AgentSession {
       providerId: this.providerId,
       model: this.model,
       workspaceFolders: this.workspaceFolders,
+      mcpToolCatalog: this.mcpToolDisclosure?.catalog,
     });
     const agentMode =
       opts?.agentMode ??
@@ -259,7 +279,9 @@ export class AgentSession {
     this.mode = mode;
     this.agentMode = agentMode;
     this.systemPrompt = artifacts.systemPrompt;
+    this.contextBreakdown = { prompt: artifacts.promptBreakdown };
     this.setAdvertisedSkills(artifacts.skills);
+    this.setAdvertisedRules(artifacts.advertisedRules);
     this.resetProviderResponseState();
     this.lastActiveAt = Date.now();
   }
@@ -465,6 +487,14 @@ export class AgentSession {
 
   getAdvertisedSkills(): SkillEntry[] {
     return Array.from(this.advertisedSkills.values());
+  }
+
+  setAdvertisedRules(rules: AdvertisedRuleEntry[] = []): void {
+    this.advertisedRules = new Map(rules.map((rule) => [rule.filePath, rule]));
+  }
+
+  getAdvertisedRules(): AdvertisedRuleEntry[] {
+    return Array.from(this.advertisedRules.values());
   }
 
   getLoadedSkills(): string[] {

@@ -1,4 +1,8 @@
-import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
+import type {
+  McpApprovalPromotionMeta,
+  RequestContextBreakdown,
+  ToolResult,
+} from "../shared/types.js";
 
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { MessageParam } from "./providers/types.js";
@@ -152,6 +156,7 @@ export type AgentEvent =
       promptCacheRetention?: "in_memory" | "24h";
       storeResponseState?: boolean;
       providerResponseId?: string;
+      contextBreakdown?: RequestContextBreakdown;
     }
   | {
       type: "warning";

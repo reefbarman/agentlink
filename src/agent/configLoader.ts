@@ -6,6 +6,18 @@ import * as path from "path";
 export interface InstructionBlock {
   source: string;
   content: string;
+  /** Whether this block came from a rules directory and can be disclosed lazily. */
+  kind?: "instruction" | "rule";
+  /** Absolute file path when the source can be loaded on demand via read_file. */
+  filePath?: string;
+  /** Whether the file included a leading YAML frontmatter block. */
+  hasFrontmatter?: boolean;
+  /** Rule-directory files with alwaysApply frontmatter remain inline. */
+  alwaysApply?: boolean;
+  /** Optional frontmatter description used in deferred rule catalogs. */
+  description?: string;
+  /** Optional frontmatter glob hints describing when a rule applies. */
+  globs?: string[];
 }
 
 export interface MemoryBlock extends InstructionBlock {
@@ -13,6 +25,119 @@ export interface MemoryBlock extends InstructionBlock {
 }
 
 const MEMORY_FILE_CHAR_CAP = 12_000;
+
+function stripMatchingQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length < 2) return trimmed;
+
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  return (first === '"' && last === '"') || (first === "'" && last === "'")
+    ? trimmed.slice(1, -1).trim()
+    : trimmed;
+}
+
+function splitOutsideBraces(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let braceDepth = 0;
+
+  for (const char of value) {
+    if (char === "{") braceDepth += 1;
+    if (char === "}" && braceDepth > 0) braceDepth -= 1;
+
+    if (char === "," && braceDepth === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  parts.push(current);
+  return parts;
+}
+
+function parseFrontmatter(content: string): {
+  frontmatter: Record<string, string | string[]>;
+  body: string;
+  hasFrontmatter: boolean;
+} {
+  if (!content.startsWith("---")) {
+    return { frontmatter: {}, body: content, hasFrontmatter: false };
+  }
+
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) {
+    return { frontmatter: {}, body: content, hasFrontmatter: false };
+  }
+
+  const frontmatter: Record<string, string | string[]> = {};
+  const lines = content.slice(3, end).trim().split("\n");
+  let currentListKey: string | undefined;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (currentListKey && trimmed.startsWith("- ")) {
+      const list = frontmatter[currentListKey];
+      const item = stripMatchingQuotes(trimmed.slice(2));
+      if (item) {
+        frontmatter[currentListKey] = Array.isArray(list)
+          ? [...list, item]
+          : [item];
+      }
+      continue;
+    }
+
+    currentListKey = undefined;
+    const colon = trimmed.indexOf(":");
+    if (colon === -1) continue;
+    const key = trimmed.slice(0, colon).trim();
+    const value = trimmed.slice(colon + 1).trim();
+    if (!key) continue;
+
+    if (!value) {
+      currentListKey = key;
+      frontmatter[key] = [];
+      continue;
+    }
+
+    frontmatter[key] = stripMatchingQuotes(value);
+  }
+
+  return {
+    frontmatter,
+    body: content.slice(end + 4).trim(),
+    hasFrontmatter: true,
+  };
+}
+
+function frontmatterString(
+  frontmatter: Record<string, string | string[]>,
+  key: string,
+): string | undefined {
+  const value = frontmatter[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseBoolean(value: string | undefined): boolean {
+  return value?.toLowerCase() === "true";
+}
+
+function parseGlobList(
+  value: string | string[] | undefined,
+): string[] | undefined {
+  const rawGlobs = Array.isArray(value)
+    ? value
+    : splitOutsideBraces(value ?? "");
+  const globs = rawGlobs
+    .map((glob) => stripMatchingQuotes(glob))
+    .filter(Boolean);
+  return globs.length > 0 ? globs : undefined;
+}
 
 /** Strip agentlink-injected instruction blocks from CLAUDE.md / AGENTS.md content. */
 function stripAgentlinkBlock(content: string): string {
@@ -58,8 +183,23 @@ async function readMdDirectory(dirPath: string): Promise<InstructionBlock[]> {
     const blocks: InstructionBlock[] = [];
     for (const file of mdFiles) {
       const filePath = path.join(dirPath, file);
-      const content = await safeReadFile(filePath);
-      if (content) blocks.push({ source: filePath, content });
+      const rawContent = await safeReadFile(filePath);
+      const { frontmatter, body, hasFrontmatter } =
+        parseFrontmatter(rawContent);
+      const content = body.trim();
+      if (content)
+        blocks.push({
+          source: filePath,
+          content,
+          kind: "rule",
+          filePath,
+          hasFrontmatter,
+          alwaysApply:
+            !hasFrontmatter ||
+            parseBoolean(frontmatterString(frontmatter, "alwaysApply")),
+          description: frontmatterString(frontmatter, "description"),
+          globs: parseGlobList(frontmatter.globs),
+        });
     }
     return blocks;
   } catch {
@@ -143,6 +283,12 @@ export async function loadAllInstructionBlocks(
     blocks.push({
       source: `~/.agents/rules/${path.basename(b.source)}`,
       content: b.content,
+      kind: "rule",
+      filePath: b.filePath,
+      hasFrontmatter: b.hasFrontmatter,
+      alwaysApply: b.alwaysApply,
+      description: b.description,
+      globs: b.globs,
     });
   }
 
@@ -162,6 +308,12 @@ export async function loadAllInstructionBlocks(
     blocks.push({
       source: `~/.claude/rules/${path.basename(b.source)}`,
       content: b.content,
+      kind: "rule",
+      filePath: b.filePath,
+      hasFrontmatter: b.hasFrontmatter,
+      alwaysApply: b.alwaysApply,
+      description: b.description,
+      globs: b.globs,
     });
   }
 
@@ -184,6 +336,12 @@ export async function loadAllInstructionBlocks(
     blocks.push({
       source: `~/.agentlink/rules/${path.basename(b.source)}`,
       content: b.content,
+      kind: "rule",
+      filePath: b.filePath,
+      hasFrontmatter: b.hasFrontmatter,
+      alwaysApply: b.alwaysApply,
+      description: b.description,
+      globs: b.globs,
     });
   }
 
@@ -210,6 +368,12 @@ export async function loadAllInstructionBlocks(
     blocks.push({
       source: `.agents/rules/${path.basename(b.source)}`,
       content: b.content,
+      kind: "rule",
+      filePath: b.filePath,
+      hasFrontmatter: b.hasFrontmatter,
+      alwaysApply: b.alwaysApply,
+      description: b.description,
+      globs: b.globs,
     });
   }
 
@@ -225,6 +389,12 @@ export async function loadAllInstructionBlocks(
     blocks.push({
       source: `.claude/rules/${path.basename(b.source)}`,
       content: b.content,
+      kind: "rule",
+      filePath: b.filePath,
+      hasFrontmatter: b.hasFrontmatter,
+      alwaysApply: b.alwaysApply,
+      description: b.description,
+      globs: b.globs,
     });
   }
 
@@ -242,6 +412,12 @@ export async function loadAllInstructionBlocks(
     blocks.push({
       source: `.agentlink/rules/${path.basename(b.source)}`,
       content: b.content,
+      kind: "rule",
+      filePath: b.filePath,
+      hasFrontmatter: b.hasFrontmatter,
+      alwaysApply: b.alwaysApply,
+      description: b.description,
+      globs: b.globs,
     });
   }
 

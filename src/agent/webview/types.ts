@@ -1,3 +1,10 @@
+import type {
+  McpApprovalPromotionMeta,
+  RequestContextBreakdown,
+} from "../../shared/types.js";
+
+import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
+
 /** A mode available for selection */
 export interface ModeInfo {
   slug: string;
@@ -144,6 +151,7 @@ export type ExtensionMessage =
       promptCacheRetention?: "in_memory" | "24h";
       storeResponseState?: boolean;
       providerResponseId?: string;
+      contextBreakdown?: RequestContextBreakdown;
     }
   | {
       type: "agentError";
@@ -229,7 +237,7 @@ export type ExtensionMessage =
       type: "agentDebugInfo";
       info: Record<string, string | number>;
       systemPrompt?: string;
-      loadedInstructions?: Array<{ source: string; chars: number }>;
+      loadedInstructions?: LoadedInstructionDebugInfo[];
     }
   | {
       type: "agentFileSearchResults";
@@ -458,6 +466,7 @@ export type ExtensionMessage =
       promptCacheRetention?: "in_memory" | "24h";
       storeResponseState?: boolean;
       providerResponseId?: string;
+      contextBreakdown?: RequestContextBreakdown;
     }
   | {
       type: "agentBgError";
@@ -513,8 +522,6 @@ export type ShowBgTranscriptMessage = {
   /** Raw AgentMessage[] from the backend session */
   messages: unknown[];
 };
-
-import type { McpApprovalPromotionMeta } from "../../shared/types.js";
 
 export interface ChatState {
   sessionId: string | null;
@@ -693,6 +700,7 @@ export interface ChatMessage {
     promptCacheRetention?: "in_memory" | "24h";
     storeResponseState?: boolean;
     providerResponseId?: string;
+    contextBreakdown?: RequestContextBreakdown;
   };
   /** Set when role === "condense" */
   condenseInfo?: {

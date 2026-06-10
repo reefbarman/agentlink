@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import picomatch from "picomatch";
 
+import { parseMcpToolName } from "../agent/mcpToolNames.js";
 import { tryGetFirstWorkspaceRoot, getRelativePath } from "../util/paths.js";
 import type { ConfigStore } from "./ConfigStore.js";
 
@@ -67,7 +68,7 @@ export class ApprovalManager {
 
   /** True if this tool (or its server) has been approved for this session. */
   isMcpApproved(sessionId: string, toolName: string): boolean {
-    const server = toolName.split("__")[0];
+    const server = parseMcpToolName(toolName)?.serverName ?? "";
     return (
       this.mcpApprovals.has(`${sessionId}:tool:${toolName}`) ||
       this.mcpApprovals.has(`${sessionId}:server:${server}`)

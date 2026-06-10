@@ -71,6 +71,14 @@ export const loadSkillSchema = {
     ),
 };
 
+export const loadRuleSchema = {
+  path: z
+    .string()
+    .describe(
+      "Absolute or workspace-relative path of a deferred rule file that was explicitly advertised in the current system prompt Rule Catalog.",
+    ),
+};
+
 export const getContextSchema = {
   path: z
     .string()

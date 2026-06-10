@@ -1,9 +1,10 @@
+import type { LoadedInstructionDebugInfo } from "../../../shared/chatProjection.js";
 import { useState } from "preact/hooks";
 
 interface DebugInfoProps {
   info: Record<string, string | number>;
   systemPrompt?: string | null;
-  loadedInstructions?: Array<{ source: string; chars: number }>;
+  loadedInstructions?: LoadedInstructionDebugInfo[];
 }
 
 const MAX_VALUE_LENGTH = 60;
@@ -36,8 +37,16 @@ export function DebugInfo({
   const [promptExpanded, setPromptExpanded] = useState(false);
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
 
-  const totalChars =
+  const totalSourceChars =
     loadedInstructions?.reduce((sum, i) => sum + i.chars, 0) ?? 0;
+  const totalPromptChars =
+    loadedInstructions?.reduce(
+      (sum, i) => sum + (i.promptChars ?? i.chars),
+      0,
+    ) ?? 0;
+  const deferredCount =
+    loadedInstructions?.filter((instruction) => instruction.deferred).length ??
+    0;
 
   return (
     <div class="debug-info">
@@ -78,21 +87,46 @@ export function DebugInfo({
                 <span>
                   Loaded Instructions ({loadedInstructions.length} file
                   {loadedInstructions.length !== 1 ? "s" : ""},{" "}
-                  {totalChars.toLocaleString()} chars)
+                  {totalPromptChars.toLocaleString()} body prompt chars
+                  {deferredCount > 0
+                    ? ` · ${deferredCount.toLocaleString()} deferred · ${totalSourceChars.toLocaleString()} source chars`
+                    : ""}
+                  )
                 </span>
               </button>
               {instructionsExpanded && (
                 <div class="debug-info-scroll">
                   <table>
                     <tbody>
-                      {loadedInstructions.map((inst) => (
-                        <tr key={inst.source}>
-                          <td class="debug-key">{inst.source}</td>
-                          <td class="debug-value">
-                            {inst.chars.toLocaleString()} chars
-                          </td>
-                        </tr>
-                      ))}
+                      {loadedInstructions.map((inst) => {
+                        const status = inst.deferred
+                          ? "deferred"
+                          : inst.alwaysApply
+                            ? inst.kind === "rule" && !inst.hasFrontmatter
+                              ? "inline · default"
+                              : "inline · alwaysApply"
+                            : "inline";
+                        const promptChars = inst.promptChars ?? inst.chars;
+                        const detailParts = [
+                          `${status}`,
+                          `${promptChars.toLocaleString()} body prompt chars`,
+                          `${inst.chars.toLocaleString()} source chars`,
+                          inst.summary ? `summary: ${inst.summary}` : undefined,
+                          inst.globs?.length
+                            ? `globs: ${inst.globs.join(", ")}`
+                            : undefined,
+                          inst.loadPath ? `load: ${inst.loadPath}` : undefined,
+                        ].filter(Boolean);
+
+                        return (
+                          <tr key={inst.source}>
+                            <td class="debug-key">{inst.source}</td>
+                            <td class="debug-value">
+                              <DebugValue value={detailParts.join(" · ")} />
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

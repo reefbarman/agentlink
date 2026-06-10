@@ -357,6 +357,7 @@ export function MessageBubble({
           outputTokens={message.apiRequest.outputTokens}
           durationMs={message.apiRequest.durationMs}
           timeToFirstToken={message.apiRequest.timeToFirstToken}
+          contextBreakdown={message.apiRequest.contextBreakdown}
         />
       )}
 

@@ -248,6 +248,7 @@ export class ActivityTraceRecorder {
             timeToFirstToken: event.timeToFirstToken,
             usedPreviousResponseId: event.usedPreviousResponseId,
             previousResponseIdFallback: event.previousResponseIdFallback,
+            contextBreakdown: event.contextBreakdown,
           },
         };
       case "condense_start":

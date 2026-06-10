@@ -21,6 +21,11 @@ import {
 } from "./CheckpointManager.js";
 import { providerRegistry } from "./providers/index.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
+import { parseMcpToolName } from "./mcpToolNames.js";
+import {
+  partitionMcpToolsForDisclosure,
+  type McpToolDisclosurePartition,
+} from "./mcpToolDisclosure.js";
 import { CODEX_CONDENSE_MODEL_FALLBACKS } from "./providers/codex/models.js";
 import {
   callOpenAiCompatibleChat,
@@ -259,6 +264,27 @@ export class AgentSessionManager {
     );
   }
 
+  private buildMcpToolDisclosure(): McpToolDisclosurePartition | undefined {
+    const mcpHub = this.toolCtx?.mcpHub;
+    if (!mcpHub) return undefined;
+    const tools = mcpHub.getToolDefs();
+    if (tools.length === 0) return undefined;
+    const serverNames = new Set(
+      tools
+        .map((tool) => parseMcpToolName(tool.name)?.serverName)
+        .filter((name): name is string => name !== undefined),
+    );
+    const serverConfigs = [...serverNames].map((serverName) => ({
+      serverName,
+      mode: mcpHub.getServerConfig(serverName)?.toolDisclosure,
+    }));
+    return partitionMcpToolsForDisclosure(tools, { serverConfigs });
+  }
+
+  private refreshMcpToolDisclosure(session: AgentSession): void {
+    session.mcpToolDisclosure = this.buildMcpToolDisclosure();
+  }
+
   getConfig(): AgentConfig {
     return this.config;
   }
@@ -282,6 +308,7 @@ export class AgentSessionManager {
       devMode: this.devMode,
       activeFilePath: opts?.activeFilePath,
       providerId,
+      mcpToolDisclosure: this.buildMcpToolDisclosure(),
     });
     this.sessions.set(session.id, session);
     this.foregroundId = session.id;
@@ -296,6 +323,7 @@ export class AgentSessionManager {
   async rebuildSystemPrompts(): Promise<void> {
     const fg = this.getForegroundSession();
     if (!fg) return;
+    this.refreshMcpToolDisclosure(fg);
     await fg.rebuildSystemPrompt({
       devMode: this.devMode,
       workspaceFolders: this.getWorkspaceFolders(),
@@ -452,6 +480,7 @@ export class AgentSessionManager {
         session.trackFileRead(filePath);
       },
       getAdvertisedSkills: () => session.getAdvertisedSkills(),
+      getAdvertisedRules: () => session.getAdvertisedRules(),
       onSkillLoad: (skillName) => session.trackLoadedSkill(skillName),
     };
 
@@ -877,6 +906,7 @@ export class AgentSessionManager {
     session.model = model;
     session.providerId = newProviderId;
     this.applyThresholdToSession(session);
+    this.refreshMcpToolDisclosure(session);
     await session.setMode(mode, opts);
 
     this.updateConfig({
@@ -908,19 +938,22 @@ export class AgentSessionManager {
     mcpServerNames: string[];
     activeSkills: string[];
   } {
-    const mcpToolDefs = this.toolCtx?.mcpHub?.getToolDefs() ?? [];
+    this.refreshMcpToolDisclosure(session);
+    const connectedMcpToolDefs = this.toolCtx?.mcpHub?.getToolDefs() ?? [];
+    const providerMcpToolDefs =
+      session.mcpToolDisclosure?.inlineTools ?? connectedMcpToolDefs;
     const rawTools = this.toolCtx
-      ? [...getAgentTools(session.agentMode, mcpToolDefs, false), todoTool]
+      ? [
+          ...getAgentTools(session.agentMode, providerMcpToolDefs, false),
+          todoTool,
+        ]
       : undefined;
     return {
       toolNames: rawTools?.map((t) => t.name) ?? [],
       mcpServerNames: [
         ...new Set(
-          mcpToolDefs
-            .map((t) => {
-              const sep = t.name.indexOf("__");
-              return sep === -1 ? "" : t.name.slice(0, sep);
-            })
+          connectedMcpToolDefs
+            .map((t) => parseMcpToolName(t.name)?.serverName ?? "")
             .filter((name) => name.length > 0),
         ),
       ],

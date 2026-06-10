@@ -10,6 +10,9 @@ import {
   READ_ONLY_TOOLS,
   type ToolDispatchContext,
 } from "./toolAdapter.js";
+import { buildToolContextBreakdown } from "./contextBreakdown.js";
+import { parseMcpToolName } from "./mcpToolNames.js";
+import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { handleToolError } from "../shared/types.js";
 import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
@@ -549,12 +552,33 @@ export class AgentEngine {
         // Include tools when dispatch context is available, filtered by mode.
         // Compute this before any condense path so both automatic and retry-triggered
         // condenses see the same preserved runtime context that future requests will use.
-        const mcpToolDefs = this.toolCtx?.mcpHub?.getToolDefs() ?? [];
+        const connectedMcpToolDefs = this.toolCtx?.mcpHub?.getToolDefs() ?? [];
+        if (this.toolCtx?.mcpHub && connectedMcpToolDefs.length > 0) {
+          const serverNames = new Set(
+            connectedMcpToolDefs
+              .map((tool) => parseMcpToolName(tool.name)?.serverName)
+              .filter((name): name is string => name !== undefined),
+          );
+          session.mcpToolDisclosure = partitionMcpToolsForDisclosure(
+            connectedMcpToolDefs,
+            {
+              serverConfigs: [...serverNames].map((serverName) => ({
+                serverName,
+                mode: this.toolCtx?.mcpHub?.getServerConfig(serverName)
+                  ?.toolDisclosure,
+              })),
+            },
+          );
+        } else {
+          session.mcpToolDisclosure = undefined;
+        }
+        const providerMcpToolDefs =
+          session.mcpToolDisclosure?.inlineTools ?? connectedMcpToolDefs;
         const rawTools = this.toolCtx
           ? [
               ...getAgentTools(
                 session.agentMode,
-                mcpToolDefs,
+                providerMcpToolDefs,
                 opts?.isBackground,
                 opts?.toolProfile,
               ),
@@ -565,11 +589,8 @@ export class AgentEngine {
           toolNames: rawTools?.map((t) => t.name) ?? [],
           mcpServerNames: [
             ...new Set(
-              mcpToolDefs
-                .map((t) => {
-                  const sep = t.name.indexOf("__");
-                  return sep === -1 ? "" : t.name.slice(0, sep);
-                })
+              connectedMcpToolDefs
+                .map((t) => parseMcpToolName(t.name)?.serverName ?? "")
                 .filter((name) => name.length > 0),
             ),
           ],
@@ -670,6 +691,11 @@ export class AgentEngine {
           cachedToolFingerprint = fingerprint;
         }
         const tools = rawTools ? cachedTools : undefined;
+        const contextBreakdown = {
+          ...session.contextBreakdown,
+          tools: buildToolContextBreakdown(rawTools),
+        };
+        session.contextBreakdown = contextBreakdown;
 
         let contentBlocks: ContentBlock[] = [];
         let inputTokens = 0;
@@ -1079,6 +1105,7 @@ export class AgentEngine {
           promptCacheRetention,
           storeResponseState,
           providerResponseId,
+          contextBreakdown,
         };
 
         // Enforce maxApiTurns: when the limit is reached and the model wants
@@ -1620,6 +1647,7 @@ export class AgentEngine {
                   sessionId: session.id,
                   trackerCtx,
                   getAdvertisedSkills: () => session.getAdvertisedSkills(),
+                  getAdvertisedRules: () => session.getAdvertisedRules(),
                   onSkillLoad: (skillName: string) =>
                     session.trackLoadedSkill(skillName),
                 },
@@ -1631,6 +1659,7 @@ export class AgentEngine {
               sessionId: session.id,
               trackerCtx,
               getAdvertisedSkills: () => session.getAdvertisedSkills(),
+              getAdvertisedRules: () => session.getAdvertisedRules(),
               onSkillLoad: (skillName: string) =>
                 session.trackLoadedSkill(skillName),
             }));

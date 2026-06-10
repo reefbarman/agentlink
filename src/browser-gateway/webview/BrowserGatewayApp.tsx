@@ -42,7 +42,10 @@ import { TranscriptView } from "../../agent/webview/components/TranscriptView";
 import { WriteCard } from "../../approvals/webview/components/WriteCard";
 import { getStreamingActivity } from "../../agent/webview/components/MessageBubble";
 
-import { agentMessagesToChatMessages } from "../../shared/chatProjection";
+import {
+  agentMessagesToChatMessages,
+  type LoadedInstructionDebugInfo,
+} from "../../shared/chatProjection";
 import {
   getFinalMessageContinueAction,
   getLatestAutoContinueAction,
@@ -191,7 +194,7 @@ type GatewaySnapshot = {
       todos: TodoItem[];
       debugInfo: Record<string, string | number> | null;
       systemPrompt: string | null;
-      loadedInstructions: Array<{ source: string; chars: number }> | null;
+      loadedInstructions: LoadedInstructionDebugInfo[] | null;
       restoringSession: boolean;
       contextBudget?: {
         contextWindow: number;

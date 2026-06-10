@@ -520,6 +520,16 @@ Load the full contents of an AgentLink skill file that was explicitly advertised
 
 Returns the skill file content and metadata needed for the agent to follow the skill instructions.
 
+### load_rule
+
+Load the full contents of a deferred local rule file that was explicitly advertised in the current built-in agent Rule Catalog. This is intentionally not a general-purpose file reader: it only accepts deferred rule paths that were listed for the active session.
+
+| Parameter | Type   | Description                                        |
+| --------- | ------ | -------------------------------------------------- |
+| `path`    | string | Advertised deferred rule file path to load exactly |
+
+Returns the rule file content with frontmatter stripped, plus metadata identifying the loaded rule.
+
 ### list_files
 
 List files and directories. Directories have a trailing `/` suffix.
@@ -1002,6 +1012,39 @@ Use this for larger tasks that benefit from explicit progress tracking.
 ## Built-in MCP client tools
 
 These are available to the built-in AgentLink chat when it connects out to other MCP servers from project/global MCP config.
+
+### find_mcp_tools
+
+Discover tools exposed by currently connected MCP servers.
+
+Use this when MCP tool schemas are progressively disclosed through a compact catalog instead of all being included in the main provider tool list.
+
+| Parameter        | Type     | Description                                                                                           |
+| ---------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `query`          | string?  | Case-insensitive search over server name, tool name, and description                                  |
+| `server`         | string?  | Restrict results to one MCP server name                                                               |
+| `includeSchemas` | boolean? | Include full input schemas for matching tools; defaults to `false`                                    |
+| `schemaLimit`    | number?  | Max returned tools that include schemas when `includeSchemas=true`; defaults to 1 and is capped at 20 |
+| `limit`          | number?  | Maximum tools to return; defaults to 50 and is capped at 200                                          |
+
+Response details:
+
+- `tools[]` contains `{ server, tool, name, description }`, plus `input_schema` for the top `schemaLimit` matches when requested.
+- `name` is the prefixed runtime tool name (`server__tool`); `tool` is the bare tool name to pass to `call_mcp_tool`.
+- `totalMatches` and `truncated` indicate whether more matches were available.
+- `schemaCount` and `schemaLimited` indicate how many full schemas were included and whether additional returned tools had schemas omitted.
+
+### call_mcp_tool
+
+Call a tool on a connected MCP server after discovering it with `find_mcp_tools`.
+
+This uses the same approval policy as directly exposed MCP tools, including session/project/global tool or server approvals.
+
+| Parameter | Type   | Description                                      |
+| --------- | ------ | ------------------------------------------------ |
+| `server`  | string | MCP server name                                  |
+| `tool`    | string | Bare MCP tool name without the `server__` prefix |
+| `input`   | object | Arguments object to pass to the MCP tool         |
 
 ### list_mcp_resources
 

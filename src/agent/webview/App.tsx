@@ -450,6 +450,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             promptCacheRetention: msg.promptCacheRetention,
             storeResponseState: msg.storeResponseState,
             providerResponseId: msg.providerResponseId,
+            contextBreakdown: msg.contextBreakdown,
           });
           break;
         case "agentError":
@@ -949,6 +950,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                       promptCacheRetention: msg.promptCacheRetention,
                       storeResponseState: msg.storeResponseState,
                       providerResponseId: msg.providerResponseId,
+                      contextBreakdown: msg.contextBreakdown,
                     },
                   ).messages,
                 }

@@ -57,6 +57,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Load the full contents of a skill file that was explicitly advertised in the current system prompt. Only valid for skill paths from the current session's skill list; not a general-purpose file reader.",
   },
+  load_rule: {
+    label: "Load advertised rule",
+    description:
+      "Load the full contents of a deferred local rule file that was explicitly advertised in the current system prompt Rule Catalog. Only valid for deferred rule paths from the current session's rule catalog; not a general-purpose file reader.",
+  },
   list_files: {
     label: "Directory listing",
     description:

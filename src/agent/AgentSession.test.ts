@@ -5,13 +5,27 @@ import type { AgentConfig } from "./types.js";
 import { AgentSession } from "./AgentSession.js";
 import type { ContentBlock } from "./providers/types.js";
 
+function makePromptArtifacts(systemPrompt: string) {
+  return {
+    systemPrompt,
+    skills: [],
+    advertisedRules: [],
+    promptBreakdown: {
+      sections: [
+        { label: "test", chars: systemPrompt.length, estimatedTokens: 1 },
+      ],
+      totalChars: systemPrompt.length,
+      estimatedTokens: 1,
+    },
+  };
+}
+
 // Mock prompt builders so create() doesn't hit the filesystem
 vi.mock("./systemPrompt.js", () => {
   const buildSystemPromptMock = vi.fn().mockResolvedValue("mock system prompt");
-  const buildPromptArtifactsMock = vi.fn().mockResolvedValue({
-    systemPrompt: "mock system prompt",
-    skills: [],
-  });
+  const buildPromptArtifactsMock = vi
+    .fn()
+    .mockResolvedValue(makePromptArtifacts("mock system prompt"));
   return {
     buildSystemPrompt: buildSystemPromptMock,
     buildPromptArtifacts: buildPromptArtifactsMock,
@@ -44,10 +58,9 @@ async function makeSession(
 describe("AgentSession", () => {
   beforeEach(() => {
     mockedBuildSystemPrompt.mockResolvedValue("mock system prompt");
-    mockedBuildPromptArtifacts.mockResolvedValue({
-      systemPrompt: "mock system prompt",
-      skills: [],
-    });
+    mockedBuildPromptArtifacts.mockResolvedValue(
+      makePromptArtifacts("mock system prompt"),
+    );
   });
 
   describe("creation", () => {
@@ -105,6 +118,32 @@ describe("AgentSession", () => {
     it("providerId is undefined when not specified", async () => {
       const session = await makeSession();
       expect(session.providerId).toBeUndefined();
+    });
+
+    it("passes MCP disclosure catalog to buildPromptArtifacts and stores the snapshot", async () => {
+      const mcpToolDisclosure = {
+        inlineTools: [],
+        deferredTools: [],
+        catalog: [
+          {
+            serverName: "linear",
+            toolCount: 46,
+            estimatedTokens: 10_214,
+            representativeTools: ["list_issues"],
+          },
+        ],
+      };
+
+      const session = await makeSession({ mcpToolDisclosure });
+
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "code",
+        "/test",
+        expect.objectContaining({
+          mcpToolCatalog: mcpToolDisclosure.catalog,
+        }),
+      );
+      expect(session.mcpToolDisclosure).toBe(mcpToolDisclosure);
     });
 
     it("passes providerId to buildPromptArtifacts on create", async () => {
@@ -451,10 +490,9 @@ describe("AgentSession", () => {
       session.addUserMessage("keep this context");
       const priorMessageCount = session.messageCount;
 
-      mockedBuildPromptArtifacts.mockResolvedValueOnce({
-        systemPrompt: "mock ask prompt",
-        skills: [],
-      });
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("mock ask prompt"),
+      );
       await session.setMode("ask");
 
       expect(session.mode).toBe("ask");
@@ -470,10 +508,9 @@ describe("AgentSession", () => {
     it("setMode passes stored providerId to buildPromptArtifacts", async () => {
       const session = await makeSession({ providerId: "codex" });
       mockedBuildPromptArtifacts.mockClear();
-      mockedBuildPromptArtifacts.mockResolvedValueOnce({
-        systemPrompt: "mock ask prompt",
-        skills: [],
-      });
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("mock ask prompt"),
+      );
       await session.setMode("ask");
       expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
         "ask",
@@ -487,10 +524,9 @@ describe("AgentSession", () => {
     it("passes stored providerId to buildPromptArtifacts", async () => {
       const session = await makeSession({ providerId: "codex" });
       mockedBuildPromptArtifacts.mockClear();
-      mockedBuildPromptArtifacts.mockResolvedValueOnce({
-        systemPrompt: "rebuilt prompt",
-        skills: [],
-      });
+      mockedBuildPromptArtifacts.mockResolvedValueOnce(
+        makePromptArtifacts("rebuilt prompt"),
+      );
       await session.rebuildSystemPrompt();
       expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
         "code",

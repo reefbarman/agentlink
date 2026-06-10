@@ -19,7 +19,9 @@ import type { AgentErrorActions, AgentEvent } from "./types.js";
 import type {
   BrowserGatewayThemeSnapshot,
   McpApprovalPromotionMeta,
+  RequestContextBreakdown,
 } from "../shared/types.js";
+import type { InstructionBlock } from "./configLoader.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { TodoItem } from "./todoTool.js";
 import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
@@ -37,7 +39,12 @@ import {
   persistMcpToolApproval,
 } from "./mcpConfig.js";
 import { loadCustomModes, getAllModes } from "./modes.js";
-import { buildSystemPrompt } from "./systemPrompt.js";
+import {
+  buildSystemPrompt,
+  formatRuleCatalogPath,
+  getRuleCatalogSummary,
+  shouldInlineInstructionBlock,
+} from "./systemPrompt.js";
 import { loadAllInstructionBlocks } from "./configLoader.js";
 import type {
   ApprovalRequest,
@@ -60,7 +67,38 @@ import {
   shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
   type AppState,
+  type LoadedInstructionDebugInfo,
 } from "../shared/chatProjection.js";
+
+function formatInstructionDebugInfo(
+  block: InstructionBlock,
+  cwd: string,
+  activeFilePath?: string,
+): LoadedInstructionDebugInfo {
+  const deferred = !shouldInlineInstructionBlock(block, cwd, {
+    activeFilePath,
+  });
+  const loadPath = block.filePath
+    ? formatRuleCatalogPath(block, cwd)
+    : undefined;
+  const summary =
+    block.kind === "rule"
+      ? getRuleCatalogSummary(block.content, block.description)
+      : undefined;
+
+  return {
+    source: block.source,
+    chars: block.content.length,
+    promptChars: deferred ? 0 : block.content.length,
+    kind: block.kind ?? "instruction",
+    deferred,
+    hasFrontmatter: block.hasFrontmatter,
+    alwaysApply: block.alwaysApply,
+    loadPath,
+    summary,
+    globs: block.globs,
+  };
+}
 
 /**
  * Webview protocol types — messages between extension and chat webview.
@@ -133,6 +171,7 @@ export type ExtensionToWebview =
       promptCacheRetention?: "in_memory" | "24h";
       storeResponseState?: boolean;
       providerResponseId?: string;
+      contextBreakdown?: RequestContextBreakdown;
     }
   | {
       type: "agentError";
@@ -457,7 +496,7 @@ export type ExtensionToWebview =
       type: "agentDebugInfo";
       info: Record<string, string | number>;
       systemPrompt?: string;
-      loadedInstructions?: Array<{ source: string; chars: number }>;
+      loadedInstructions?: LoadedInstructionDebugInfo[];
     }
   | {
       type: "showBgTranscript";
@@ -1947,7 +1986,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ok: boolean;
     info?: Record<string, string | number>;
     systemPrompt?: string;
-    loadedInstructions?: Array<{ source: string; chars: number }>;
+    loadedInstructions?: LoadedInstructionDebugInfo[];
   }> {
     const os = require("os");
 
@@ -1982,6 +2021,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       info[`env.${key}`] = displayValue;
     }
 
+    const activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
     const fg = this.sessionManager?.getForegroundSession();
     let systemPrompt = fg?.systemPrompt;
     if (!systemPrompt && this.cwd) {
@@ -1993,6 +2033,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           : undefined;
         systemPrompt = await buildSystemPrompt(mode, this.cwd, {
           providerId,
+          activeFilePath,
           workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
             (f) => ({ name: f.name, path: f.uri.fsPath }),
           ),
@@ -2002,20 +2043,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    let loadedInstructions:
-      | Array<{ source: string; chars: number }>
-      | undefined;
+    let loadedInstructions: LoadedInstructionDebugInfo[] | undefined;
     if (this.cwd) {
       try {
-        const activeFilePath =
-          vscode.window.activeTextEditor?.document.uri.fsPath;
         const blocks = await loadAllInstructionBlocks(this.cwd, {
           activeFilePath,
         });
-        loadedInstructions = blocks.map((b) => ({
-          source: b.source,
-          chars: b.content.length,
-        }));
+        loadedInstructions = blocks.map((block) =>
+          formatInstructionDebugInfo(block, this.cwd, activeFilePath),
+        );
       } catch (err) {
         this.log(`[warn] Failed to load instruction blocks for debug: ${err}`);
       }
@@ -3881,6 +3917,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           promptCacheRetention: extMsg.promptCacheRetention,
           storeResponseState: extMsg.storeResponseState,
           providerResponseId: extMsg.providerResponseId,
+          contextBreakdown: extMsg.contextBreakdown,
         });
         break;
 
@@ -4451,6 +4488,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           promptCacheRetention: event.promptCacheRetention,
           storeResponseState: event.storeResponseState,
           providerResponseId: event.providerResponseId,
+          contextBreakdown: event.contextBreakdown,
         });
         break;
 
@@ -5116,6 +5154,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Get system prompt from foreground session. If no foreground session
     // exists yet (fresh chat), build a fallback prompt for the default mode
     // so the Environment panel can still show the System Prompt section.
+    const activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
     const fg = this.sessionManager?.getForegroundSession();
     let systemPrompt = fg?.systemPrompt;
     if (!systemPrompt && this.cwd) {
@@ -5127,6 +5166,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           : undefined;
         systemPrompt = await buildSystemPrompt(mode, this.cwd, {
           providerId,
+          activeFilePath,
           workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
             (f) => ({ name: f.name, path: f.uri.fsPath }),
           ),
@@ -5137,20 +5177,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     // Load instruction blocks for the preview panel
-    let loadedInstructions:
-      | Array<{ source: string; chars: number }>
-      | undefined;
+    let loadedInstructions: LoadedInstructionDebugInfo[] | undefined;
     if (this.cwd) {
       try {
-        const activeFilePath =
-          vscode.window.activeTextEditor?.document.uri.fsPath;
         const blocks = await loadAllInstructionBlocks(this.cwd, {
           activeFilePath,
         });
-        loadedInstructions = blocks.map((b) => ({
-          source: b.source,
-          chars: b.content.length,
-        }));
+        loadedInstructions = blocks.map((block) =>
+          formatInstructionDebugInfo(block, this.cwd, activeFilePath),
+        );
       } catch (err) {
         this.log(`[warn] Failed to load instruction blocks for debug: ${err}`);
       }

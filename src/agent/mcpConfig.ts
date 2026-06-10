@@ -1,5 +1,5 @@
-import * as os from "os";
 import * as fs from "fs/promises";
+import * as os from "os";
 import * as path from "path";
 
 export interface McpServerConfig {
@@ -22,6 +22,15 @@ export interface McpServerConfig {
    * "allow"         — auto-approve all tools without prompting.
    */
   toolPolicy?: "ask" | "allow";
+  /**
+   * How this server's tool schemas should be disclosed to the model.
+   * Deferred tools are omitted from provider tool arrays and discovered/called
+   * through find_mcp_tools/call_mcp_tool.
+   * "auto" (default) — defer large servers over the disclosure threshold.
+   * "inline"         — always include full tool schemas.
+   * "deferred"       — advertise in a compact catalog instead of inlining schemas.
+   */
+  toolDisclosure?: "inline" | "deferred" | "auto";
   /**
    * Tools that are always auto-approved regardless of toolPolicy.
    * Use the bare tool name (without server prefix), e.g. "search_issues".
@@ -92,6 +101,7 @@ export async function loadMcpConfigs(cwd: string): Promise<McpServerConfig[]> {
     for (const [name, raw] of Object.entries(config.mcpServers)) {
       const entry = raw as McpServerConfig & {
         toolPolicy?: string;
+        toolDisclosure?: string;
         allowedTools?: string[];
       };
       const existing = merged.get(name);
@@ -110,6 +120,7 @@ export async function loadMcpConfigs(cwd: string): Promise<McpServerConfig[]> {
         timeout: existing?.timeout,
         headers: existing?.headers,
         toolPolicy: existing?.toolPolicy ?? "ask",
+        toolDisclosure: existing?.toolDisclosure ?? "auto",
         allowedTools: existing?.allowedTools,
       };
 
@@ -124,6 +135,14 @@ export async function loadMcpConfigs(cwd: string): Promise<McpServerConfig[]> {
       if (raw.headers !== undefined) next.headers = raw.headers;
       if (entry.toolPolicy !== undefined)
         next.toolPolicy = entry.toolPolicy === "allow" ? "allow" : "ask";
+      if (entry.toolDisclosure !== undefined) {
+        next.toolDisclosure =
+          entry.toolDisclosure === "inline" ||
+          entry.toolDisclosure === "deferred" ||
+          entry.toolDisclosure === "auto"
+            ? entry.toolDisclosure
+            : "auto";
+      }
       if (Array.isArray(entry.allowedTools)) {
         // Merge allowedTools — union of existing + new entries
         const existing_ = next.allowedTools ?? [];

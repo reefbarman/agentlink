@@ -20,6 +20,11 @@ const mocks = vi.hoisted(() => ({
   mockBuildPromptArtifacts: vi.fn().mockResolvedValue({
     systemPrompt: "mock system prompt",
     skills: [],
+    promptBreakdown: {
+      sections: [{ label: "test", chars: 18, estimatedTokens: 5 }],
+      totalChars: 18,
+      estimatedTokens: 5,
+    },
   }),
   getConfiguration: vi.fn(),
 }));

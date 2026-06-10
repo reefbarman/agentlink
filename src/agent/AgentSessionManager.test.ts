@@ -134,6 +134,61 @@ describe("AgentSessionManager condense thresholds", () => {
     );
   });
 
+  it("passes an MCP disclosure snapshot when MCP tools are connected", async () => {
+    mocks.getConfiguration.mockReturnValue({
+      get: () => ({}),
+      inspect: () => undefined,
+    });
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    mgr.setToolContext({
+      approvalManager: {} as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+      mcpHub: {
+        getToolDefs: () => [
+          {
+            name: "linear__list_issues",
+            description: "List issues",
+            input_schema: {
+              type: "object",
+              properties: { query: { type: "string" } },
+            },
+          },
+          {
+            name: "ddg-search__search",
+            description: "Search the web",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        getServerConfig: (serverName: string) =>
+          serverName === "linear" ? { toolDisclosure: "deferred" } : undefined,
+      } as any,
+    });
+
+    await mgr.createSession("code");
+
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mcpToolDisclosure: expect.objectContaining({
+          inlineTools: [
+            expect.objectContaining({ name: "ddg-search__search" }),
+          ],
+          deferredTools: [
+            expect.objectContaining({ name: "linear__list_issues" }),
+          ],
+          catalog: [
+            expect.objectContaining({
+              serverName: "linear",
+              toolCount: 1,
+              representativeTools: ["list_issues"],
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
   it("falls back to model-family defaults when there is no stored override", async () => {
     mocks.getConfiguration.mockReturnValue({
       get: () => ({}),

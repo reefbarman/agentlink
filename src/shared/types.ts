@@ -67,6 +67,43 @@ export type ToolResult = {
   };
 };
 
+export interface ContextBreakdownItem {
+  label: string;
+  chars: number;
+  estimatedTokens: number;
+  count?: number;
+}
+
+export interface McpServerToolBreakdown {
+  serverName: string;
+  chars: number;
+  estimatedTokens: number;
+  toolCount: number;
+}
+
+export interface ToolContextBreakdown {
+  totalToolCount: number;
+  totalChars: number;
+  estimatedTokens: number;
+  native: ContextBreakdownItem;
+  mcp: {
+    totalServerCount: number;
+    totalToolCount: number;
+    totalChars: number;
+    estimatedTokens: number;
+    servers: McpServerToolBreakdown[];
+  };
+}
+
+export interface RequestContextBreakdown {
+  prompt: {
+    sections: ContextBreakdownItem[];
+    totalChars: number;
+    estimatedTokens: number;
+  };
+  tools?: ToolContextBreakdown;
+}
+
 /** Create a successful ToolResult from a JSON-serializable payload. */
 export function successResult(payload: Record<string, unknown>): ToolResult {
   return {
