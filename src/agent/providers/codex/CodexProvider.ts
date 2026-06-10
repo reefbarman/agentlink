@@ -31,6 +31,7 @@ import type {
 import {
   openAiCodexAuthManager,
   type OpenAiCodexAuthManager,
+  type OpenAiCodexAuthMethod,
   type OpenAiCodexResolvedAuth,
 } from "./OpenAiCodexAuthManager.js";
 import {
@@ -38,7 +39,9 @@ import {
   CODEX_MODEL_MAP,
   getCodexModelCapabilities,
   getEndpointCaps,
+  isCodexModelServedOnChatgptBackend,
   listCodexModels,
+  remapToChatgptBackendModel,
 } from "./models.js";
 import {
   createOpenAiResponsesClient,
@@ -493,6 +496,13 @@ export class CodexProvider implements ModelProvider {
   private sessionId: string;
   private log: (msg: string) => void;
   private clients = new Map<string, OpenAI>();
+  /**
+   * Auth method of the most recent resolution, cached so the (synchronous)
+   * listModels() can hide models the active backend doesn't serve. Undefined
+   * until the first auth resolution; treated as OAuth-like (the common case)
+   * for filtering.
+   */
+  private lastResolvedAuthMethod: OpenAiCodexAuthMethod | undefined;
 
   constructor(
     authManager?: OpenAiCodexAuthManager,
@@ -501,6 +511,15 @@ export class CodexProvider implements ModelProvider {
     this.authManager = authManager ?? openAiCodexAuthManager;
     this.sessionId = randomUUID();
     this.log = log ?? (() => {});
+    // Warm the auth-method cache so listModels() filters correctly before the
+    // first request (API-key users keep the full model list; OAuth users get
+    // only the ChatGPT-backend-served subset).
+    void this.authManager
+      .getPreferredAuthMethod()
+      .then((method) => {
+        if (method) this.lastResolvedAuthMethod = method;
+      })
+      .catch(() => {});
   }
 
   async isAuthenticated(): Promise<boolean> {
@@ -512,7 +531,34 @@ export class CodexProvider implements ModelProvider {
   }
 
   listModels(): ModelInfo[] {
-    return listCodexModels(this.id);
+    const all = listCodexModels(this.id);
+    // The ChatGPT/Codex OAuth backend serves only a small current set; hide the
+    // API-key-only models so users can't pick one that 400s. Default to the
+    // OAuth-served subset until we've confirmed an API-key resolution (OAuth is
+    // the common case). The runtime remap still protects anything that slips by.
+    if (this.lastResolvedAuthMethod === "apiKey") return all;
+    return all.filter((m) => isCodexModelServedOnChatgptBackend(m.id));
+  }
+
+  /**
+   * When authed against the ChatGPT/Codex OAuth backend, transparently remap a
+   * requested model the backend doesn't serve to one it does (gpt-5.5, or the
+   * cheap model for mini/nano tiers). Without this, an unsupported model id
+   * comes back as a bare `400 status code (no body)` and fails the run. The
+   * API-key endpoint serves the full set, so it is never remapped.
+   */
+  private resolveEffectiveModel(
+    model: string,
+    auth: OpenAiCodexResolvedAuth,
+    context: string,
+  ): string {
+    if (auth.method !== "oauth") return model;
+    if (isCodexModelServedOnChatgptBackend(model)) return model;
+    const remapped = remapToChatgptBackendModel(model);
+    this.log(
+      `[codex] ${context}: model "${model}" is not served on the ChatGPT/Codex OAuth backend; using "${remapped}" instead`,
+    );
+    return remapped;
   }
 
   private async getModelAuthOrThrow(): Promise<OpenAiCodexResolvedAuth> {
@@ -527,6 +573,7 @@ export class CodexProvider implements ModelProvider {
         },
       );
     }
+    this.lastResolvedAuthMethod = auth.method;
     return auth;
   }
 
@@ -675,13 +722,14 @@ export class CodexProvider implements ModelProvider {
       );
     }
 
-    const modelDef = CODEX_MODEL_MAP.get(model);
+    let auth = await this.getModelAuthOrThrow();
+    const effectiveModel = this.resolveEffectiveModel(model, auth, "stream()");
+    const modelDef = CODEX_MODEL_MAP.get(effectiveModel);
     const reasoningEffort =
       requestedEffort === "none"
         ? undefined
         : (requestedEffort ?? modelDef?.defaultReasoningEffort ?? "medium");
 
-    let auth = await this.getModelAuthOrThrow();
     const attemptedOAuthAccountIds = new Set<string>();
     const refreshedOAuthAccountIds = new Set<string>();
     if (auth.method === "oauth" && auth.oauthAccountPoolId) {
@@ -690,7 +738,7 @@ export class CodexProvider implements ModelProvider {
 
     while (true) {
       const requestBody = this.buildRequestBody({
-        model,
+        model: effectiveModel,
         codexInput,
         systemPrompt,
         maxTokens,
@@ -718,7 +766,7 @@ export class CodexProvider implements ModelProvider {
         const result = await this.executeStream(
           requestBody,
           auth,
-          model,
+          effectiveModel,
           signal,
           streamState,
         );
@@ -808,13 +856,14 @@ export class CodexProvider implements ModelProvider {
 
     const codexInput = translateMessages(messages);
 
-    const modelDef = CODEX_MODEL_MAP.get(model);
+    let auth = await this.getModelAuthOrThrow();
+    const effectiveModel = this.resolveEffectiveModel(model, auth, "complete()");
+    const modelDef = CODEX_MODEL_MAP.get(effectiveModel);
     const reasoningEffort =
       requestedEffort === "none"
         ? undefined
         : (requestedEffort ?? modelDef?.defaultReasoningEffort ?? "medium");
 
-    let auth = await this.getModelAuthOrThrow();
     const attemptedOAuthAccountIds = new Set<string>();
     const refreshedOAuthAccountIds = new Set<string>();
     if (auth.method === "oauth" && auth.oauthAccountPoolId) {
@@ -823,7 +872,7 @@ export class CodexProvider implements ModelProvider {
 
     while (true) {
       const requestBody = this.buildRequestBody({
-        model,
+        model: effectiveModel,
         codexInput,
         systemPrompt,
         maxTokens,
@@ -856,7 +905,7 @@ export class CodexProvider implements ModelProvider {
         for await (const event of await this.executeStream(
           requestBody,
           auth,
-          model,
+          effectiveModel,
         )) {
           if (event.type === "text_delta") {
             text += event.text;

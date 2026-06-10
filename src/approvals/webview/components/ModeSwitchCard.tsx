@@ -1,7 +1,8 @@
-import { useCallback } from "preact/hooks";
-import type { RefObject } from "preact";
 import type { ApprovalRequest, DecisionMessage } from "../types.js";
+
 import { ApprovalLayout } from "./ApprovalLayout.js";
+import type { RefObject } from "preact";
+import { useCallback } from "preact/hooks";
 
 interface ModeSwitchCardProps {
   request: ApprovalRequest;
@@ -44,6 +45,7 @@ export function ModeSwitchCard({
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      purpose="Switch the agent mode"
       rulesContent={null}
       rulesModified={false}
       primaryLabel="Allow"

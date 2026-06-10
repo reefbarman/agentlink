@@ -183,6 +183,9 @@ describe("AgentSession", () => {
 
     it("appendToolResults appends tool results as a user message", async () => {
       const session = await makeSession();
+      session.appendAssistantTurn([
+        { type: "tool_use", id: "tu_123", name: "read_file", input: {} },
+      ]);
       const results = [
         {
           type: "tool_result" as const,
@@ -192,8 +195,22 @@ describe("AgentSession", () => {
       ];
       session.appendToolResults(results);
       const messages = session.getMessages();
-      expect(messages).toHaveLength(1);
-      expect(messages[0]).toEqual({ role: "user", content: results });
+      expect(messages).toHaveLength(2);
+      expect(messages[1]).toEqual({ role: "user", content: results });
+    });
+
+    it("getMessages drops tool results whose tool_use is missing from the prior assistant turn", async () => {
+      const session = await makeSession();
+      session.appendToolResults([
+        {
+          type: "tool_result" as const,
+          tool_use_id: "tu_orphan",
+          content: "stale",
+        },
+      ]);
+      expect(session.getMessages()).toHaveLength(0);
+      // Raw history is untouched — only the API view is sanitized.
+      expect(session.getAllMessages()).toHaveLength(1);
     });
 
     it("messageCount reflects added messages", async () => {

@@ -577,6 +577,31 @@ Create or overwrite a file. Opens a **diff view** in VS Code for the user to rev
 | `path`    | string | File path             |
 | `content` | string | Complete file content |
 
+### propose_memory
+
+Propose a cross-session memory/config update. This is the sanctioned path for durable learnings: the tool resolves the correct target, validates skill/command names and skill frontmatter, previews the proposed final file content, and always requires explicit user approval before writing. Approval can edit the final content or retarget tier/scope before accepting.
+
+| Parameter   | Type                                                 | Description                                                                   |
+| ----------- | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `tier`      | `"instructions" \| "skill" \| "command" \| "memory"` | Destination tier. Prefer instructions/skills/commands before memory fallback. |
+| `scope`     | `"global" \| "project"`                              | Write to user-global AgentLink config or the current project.                 |
+| `operation` | `"add" \| "update" \| "remove"`                      | Add new content, update existing content, or remove stale content.            |
+| `title`     | string                                               | Short approval-card label.                                                    |
+| `rationale` | string                                               | Why this should be remembered; shown to the user.                             |
+| `content`   | string                                               | Markdown entry/body. For `skill`, this must be the complete `SKILL.md`.       |
+| `name`      | string?                                              | Required for `skill` and `command`; lowercase hyphen identifier.              |
+| `replaces`  | string?                                              | Existing text to update/remove, matched with normalized whitespace.           |
+
+Targets:
+
+- `instructions` + `project` → existing root `AGENTS.md` / `AGENT.md` / `CLAUDE.md`, or creates `AGENTS.md`
+- `instructions` + `global` → `~/.agentlink/CLAUDE.md`
+- `skill` → `{scope}/.agentlink/skills/<name>/SKILL.md`
+- `command` → `{scope}/.agentlink/commands/<name>.md`
+- `memory` → `{scope}/.agentlink/memory.md`
+
+Responses include `status`, `path`, `tier`, `scope`, `operation`, and any new diagnostics. If `replaces` cannot be found, the error includes the current target content so the agent can retry accurately. Rejected approvals return `status: "rejected"` and any rejection reason.
+
 ### apply_diff
 
 Edit an existing file using search/replace blocks. Opens a diff view for review. Supports **multiple hunks** in a single call. Responses include per-block diagnostics for partial matches/failures, and pending-edit lock conflicts return a structured recovery hint instead of a bare timeout string.
@@ -1021,7 +1046,7 @@ AgentLink includes static routing policy for background agents (`src/agent/backg
 - **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and `get_background_result` only when ready to integrate.
 - **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Use explicit owned/forbidden paths in the spawn message.
 - **Read-only lanes**: `readonly-research` routes to ask mode with the `readonly-research` tool profile for pure lookup/exploration.
-- **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available.
+- **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available; when the opposite provider is Anthropic, Claude Fable 5 is preferred for Anthropic review candidates.
 - **Review complexity**: review spawns can explicitly set `modelTier`; otherwise review routing defaults to `balanced` for routine reviews and upgrades to `deep_reasoning` for complex reviews based on task/message heuristics.
 - **Fallback behavior**: deterministic fallback order is used when preferred candidates are unavailable or unauthenticated.
 - **Transparency**: routing decisions are returned by `spawn_background_agent`, logged as `[bg-route]`, and shown in background UI/debug info.

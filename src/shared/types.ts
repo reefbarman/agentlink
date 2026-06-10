@@ -11,7 +11,7 @@ export interface InlineApprovalChoice {
 }
 
 export interface InlineApprovalRequest {
-  kind: "mcp" | "write" | "rename" | "command";
+  kind: "mcp" | "write" | "rename" | "command" | "memory";
   title: string;
   detail?: string;
   choices: InlineApprovalChoice[];
@@ -40,6 +40,10 @@ export type OnApprovalRequest = (
       trustScope?: string;
       rulePattern?: string;
       ruleMode?: string;
+      editedContent?: string;
+      memoryTier?: import("../approvals/webview/types.js").MemoryTier;
+      memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+      memoryName?: string;
     }
 >;
 

@@ -59,7 +59,6 @@ const mocks = vi.hoisted(() => {
           pendingModeResume = null;
           return pending;
         }),
-        setPendingMedia: vi.fn(),
         autoTitle: vi.fn(),
         getAllMessages: vi.fn(() => []),
         abort: vi.fn(),
@@ -204,6 +203,30 @@ describe("AgentSessionManager background agents", () => {
     expect(summaries[0]).toContain("mode=");
     expect(summaries[0]).toContain("provider=");
     expect(summaries[0]).toContain("model=");
+  });
+
+  it("wraps background questions with context, session id, and task attribution", async () => {
+    const onQuestion = vi.fn().mockResolvedValue({ answers: {}, notes: {} });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({ ...toolCtx, onQuestion });
+
+    const spawned = await mgr.spawnBackground({
+      task: "review task",
+      message: "run",
+    });
+
+    const bgCtx = mocks.setToolContext.mock.calls.at(
+      -1,
+    )?.[0] as ToolDispatchContext;
+    expect(bgCtx.onQuestion).toBeDefined();
+    await bgCtx.onQuestion?.("Need input.", [], spawned.sessionId);
+
+    expect(onQuestion).toHaveBeenCalledWith(
+      "Need input.",
+      [],
+      spawned.sessionId,
+      "review task",
+    );
   });
 
   it("disables reasoning effort when the background route disables thinking", async () => {

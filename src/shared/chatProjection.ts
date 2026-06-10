@@ -90,6 +90,8 @@ export interface AppState {
   }>;
   questionRequest: {
     id: string;
+    /** Visible explanation shown above structured questions. */
+    context: string;
     questions: Question[];
     /** When set, the question is from a background agent with this task name. */
     backgroundTask?: string;
@@ -207,6 +209,7 @@ export type AppAction =
   | {
       type: "SET_QUESTION";
       id: string;
+      context: string;
       questions: Question[];
       backgroundTask?: string;
     }
@@ -448,7 +451,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           } else {
             blocks.push({ type: "text", text: block.text });
           }
-        } else if (block.type === "thinking" && block.thinking) {
+        } else if (block.type === "thinking" && block.thinking?.trim()) {
           blocks.push({
             type: "thinking",
             id: block.id ?? crypto.randomUUID(),
@@ -696,6 +699,12 @@ function applyFinalMarkerToLatestAssistant(
   return messages;
 }
 
+function normalizeAssistantBlocks(blocks: ContentBlock[]): ContentBlock[] {
+  return blocks.filter(
+    (block) => block.type !== "thinking" || block.text.trim().length > 0,
+  );
+}
+
 function completeIncompleteRuntimeBlocks(
   messages: ChatMessage[],
 ): ChatMessage[] {
@@ -705,25 +714,32 @@ function completeIncompleteRuntimeBlocks(
         ((b.type === "tool_call" || b.type === "skill_load") && !b.complete) ||
         (b.type === "thinking" && !b.complete),
     );
-    if (!hasIncomplete) return m;
+    if (!hasIncomplete) {
+      const normalized = normalizeAssistantBlocks(m.blocks);
+      return normalized.length === m.blocks.length
+        ? m
+        : { ...m, blocks: normalized };
+    }
     return {
       ...m,
-      blocks: m.blocks.map((b) => {
-        if (
-          (b.type === "tool_call" || b.type === "skill_load") &&
-          !b.complete
-        ) {
-          return {
-            ...b,
-            complete: true,
-            result: b.result || '{"status":"stopped"}',
-          };
-        }
-        if (b.type === "thinking" && !b.complete) {
-          return { ...b, complete: true };
-        }
-        return b;
-      }),
+      blocks: normalizeAssistantBlocks(
+        m.blocks.map((b) => {
+          if (
+            (b.type === "tool_call" || b.type === "skill_load") &&
+            !b.complete
+          ) {
+            return {
+              ...b,
+              complete: true,
+              result: b.result || '{"status":"stopped"}',
+            };
+          }
+          if (b.type === "thinking" && !b.complete) {
+            return { ...b, complete: true };
+          }
+          return b;
+        }),
+      ),
     };
   });
 }
@@ -970,10 +986,12 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
     case "THINKING_END": {
       const { msgs, last } = cloneLast(state.messages);
-      last.blocks = last.blocks.map((b) =>
-        b.type === "thinking" && b.id === action.thinkingId
-          ? { ...b, complete: true }
-          : b,
+      last.blocks = normalizeAssistantBlocks(
+        last.blocks.map((b) =>
+          b.type === "thinking" && b.id === action.thinkingId
+            ? { ...b, complete: true }
+            : b,
+        ),
       );
       return { ...state, messages: msgs };
     }
@@ -1567,6 +1585,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         ...state,
         questionRequest: {
           id: action.id,
+          context: action.context,
           questions: action.questions,
           ...(action.backgroundTask
             ? { backgroundTask: action.backgroundTask }

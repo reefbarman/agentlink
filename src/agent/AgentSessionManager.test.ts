@@ -30,7 +30,6 @@ const mocks = vi.hoisted(() => {
     consumePendingInterjection: vi.fn(() => null),
     queuePendingModeResume: vi.fn(),
     consumePendingModeResume: vi.fn(() => null),
-    setPendingMedia: vi.fn(),
     autoTitle: vi.fn(),
     getAllMessages: vi.fn(() => []),
     rebuildSystemPrompt: vi.fn(async () => {}),
@@ -376,7 +375,6 @@ describe("AgentSessionManager activity tracing", () => {
         (session as any).messageCount += 1;
         session.lastActiveAt = Date.now();
       });
-      (session as any).setPendingMedia = vi.fn();
       (session as any).autoTitle = vi.fn();
       (session as any).consumePendingInterjection = vi.fn(() => null);
       (session as any).consumePendingModeResume = vi.fn(() => null);
@@ -501,7 +499,6 @@ describe("AgentSessionManager checkpoints", () => {
       consumePendingInterjection: vi.fn(() => null),
       queuePendingModeResume: vi.fn(),
       consumePendingModeResume: vi.fn(() => null),
-      setPendingMedia: vi.fn(),
       autoTitle: vi.fn(),
       getAllMessages: vi.fn(() => sessionMessages),
       getLoadedSkills: vi.fn(() => []),

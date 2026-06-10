@@ -247,7 +247,7 @@ describe("BrowserGatewayServer", () => {
       filePath: "src/file.ts",
       writeOperation: "modify",
     });
-    hub.publishQuestionRequest("question-1", [
+    hub.publishQuestionRequest("question-1", "Need confirmation.", [
       {
         id: "q1",
         type: "yes_no",
@@ -345,6 +345,7 @@ describe("BrowserGatewayServer", () => {
         mcpStatusInfos: [],
         question: {
           id: "question-1",
+          context: "Need confirmation.",
           questions: [
             {
               id: "q1",
@@ -367,6 +368,7 @@ describe("BrowserGatewayServer", () => {
           {
             type: "agentQuestionRequest",
             id: "question-1",
+            context: "Need confirmation.",
             questions: [
               {
                 id: "q1",

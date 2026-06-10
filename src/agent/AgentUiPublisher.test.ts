@@ -48,7 +48,7 @@ describe("WebviewAgentUiPublisher", () => {
       writeOperation: "modify",
     });
     publisher.publishApprovalIdle();
-    publisher.publishQuestionRequest("question-1", [
+    publisher.publishQuestionRequest("question-1", "Pick the best option.", [
       {
         id: "q1",
         type: "multiple_choice",
@@ -75,6 +75,7 @@ describe("WebviewAgentUiPublisher", () => {
         {
           type: "agentQuestionRequest",
           id: "question-1",
+          context: "Pick the best option.",
           questions: [
             {
               id: "q1",
@@ -93,11 +94,17 @@ describe("WebviewAgentUiPublisher", () => {
     const publishMessage = vi.fn();
     const publisher = new WebviewAgentUiPublisher(publishMessage);
 
-    publisher.publishQuestionRequest("question-bg", [], "review_pr");
+    publisher.publishQuestionRequest(
+      "question-bg",
+      "Review needs input.",
+      [],
+      "review_pr",
+    );
 
     expect(publishMessage).toHaveBeenCalledWith({
       type: "agentQuestionRequest",
       id: "question-bg",
+      context: "Review needs input.",
       questions: [],
       backgroundTask: "review_pr",
     });
@@ -139,15 +146,17 @@ describe("InMemoryAgentUiEventHub", () => {
     expect(listener).toHaveBeenLastCalledWith({ type: "idle" });
     expect(hub.getSnapshot()).toEqual({ type: "idle" });
 
-    hub.publishQuestionRequest("question-3", []);
+    hub.publishQuestionRequest("question-3", "Need input.", []);
     expect(listener).toHaveBeenLastCalledWith({
       type: "agentQuestionRequest",
       id: "question-3",
+      context: "Need input.",
       questions: [],
     });
     expect(hub.getSnapshot()).toEqual({
       type: "agentQuestionRequest",
       id: "question-3",
+      context: "Need input.",
       questions: [],
     });
 
@@ -183,7 +192,7 @@ describe("FanoutAgentUiPublisher", () => {
       writeOperation: "modify",
     });
     publisher.publishApprovalIdle();
-    publisher.publishQuestionRequest("question-2", []);
+    publisher.publishQuestionRequest("question-2", "Fanout needs input.", []);
     publisher.publishQuestionCleared("question-2");
     publisher.publishQuestionProgress({
       id: "question-3",
@@ -203,6 +212,7 @@ describe("FanoutAgentUiPublisher", () => {
       expect(target.publishApprovalIdle).toHaveBeenCalledOnce();
       expect(target.publishQuestionRequest).toHaveBeenCalledWith(
         "question-2",
+        "Fanout needs input.",
         [],
         undefined,
       );

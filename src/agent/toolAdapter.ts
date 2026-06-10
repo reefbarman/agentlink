@@ -55,6 +55,7 @@ import { handleGoToTypeDefinition } from "../tools/goToTypeDefinition.js";
 import { handleListFiles } from "../tools/listFiles.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
 import { handleOpenFile } from "../tools/openFile.js";
+import { handleProposeMemory } from "../tools/proposeMemory.js";
 // --- Handler imports ---
 import { handleReadFile } from "../tools/readFile.js";
 import { handleRenameSymbol } from "../tools/renameSymbol.js";
@@ -133,6 +134,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   apply_diff: schemas.applyDiffSchema,
   find_and_replace: schemas.findAndReplaceSchema,
   rename_symbol: schemas.renameSymbolSchema,
+  propose_memory: schemas.proposeMemorySchema,
   open_file: schemas.openFileSchema,
   show_notification: schemas.showNotificationSchema,
   execute_command: schemas.executeCommandSchema,
@@ -243,10 +245,15 @@ const MCP_META_TOOLS: ToolDefinition[] = [
 const ASK_USER_TOOL: ToolDefinition = {
   name: "ask_user",
   description:
-    "Ask the user one or more structured questions and wait for their responses before continuing. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
+    "Ask the user one or more structured questions and wait for their responses before continuing. Always include `context`: visible user-facing text explaining why input is needed, the relevant trade-off/options, and your recommendation. Questions must be self-contained and must not rely on hidden thinking or prior invisible rationale. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
   input_schema: {
     type: "object",
     properties: {
+      context: {
+        type: "string",
+        description:
+          "Visible text shown above the questions. Must explain why input is needed, summarize relevant options/trade-offs, and include your recommendation. Do not rely on hidden thinking or prior invisible rationale.",
+      },
       questions: {
         type: "array",
         description:
@@ -318,7 +325,7 @@ const ASK_USER_TOOL: ToolDefinition = {
         },
       },
     },
-    required: ["questions"],
+    required: ["context", "questions"],
   },
 };
 
@@ -591,6 +598,7 @@ export function getAgentTools(
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
     .filter(([name]) => (__DEV_BUILD__ ? true : !DEV_FEEDBACK_TOOLS.has(name)))
+    .filter(([name]) => !(isBackground && name === "propose_memory"))
     .filter(
       ([name]) =>
         !allowed ||
@@ -670,6 +678,7 @@ export interface ToolDispatchContext {
   ) => Promise<{ approved: boolean; mode: string }>;
   onApprovalRequest?: import("../shared/types.js").OnApprovalRequest;
   onQuestion?: (
+    context: string,
     questions: import("../agent/webview/types.js").Question[],
     sessionId: string,
     /**
@@ -1011,6 +1020,11 @@ export async function dispatchToolCall(
         sessionId,
         onApprovalRequest,
       );
+    case "propose_memory":
+      return handleProposeMemory(
+        params as Parameters<typeof handleProposeMemory>[0],
+        approvalPanel,
+      );
 
     // --- Terminal ---
     case "execute_command":
@@ -1224,6 +1238,20 @@ export async function dispatchToolCall(
           ],
         };
       }
+      const context = String(params.context ?? "").trim();
+      if (!context) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error:
+                  "ask_user requires visible context so the user can answer without relying on hidden thinking.",
+              }),
+            },
+          ],
+        };
+      }
       const questions =
         params.questions as import("../agent/webview/types.js").Question[];
 
@@ -1261,7 +1289,7 @@ export async function dispatchToolCall(
         };
       }
 
-      const response = await ctx.onQuestion(questions, ctx.sessionId);
+      const response = await ctx.onQuestion(context, questions, ctx.sessionId);
       // Format as a readable responses array so Claude sees question + answer + note together
       const responses = questions.map((q) => {
         const answer = response.answers[q.id];
@@ -1303,7 +1331,7 @@ export async function dispatchToolCall(
         }
       }
 
-      const payload: Record<string, unknown> = { responses };
+      const payload: Record<string, unknown> = { context, responses };
       if (modeSwitched) payload.modeSwitched = modeSwitched;
       return {
         content: [{ type: "text", text: JSON.stringify(payload) }],

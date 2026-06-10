@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { getEffectiveHistory, summarizeConversation } from "./condense.js";
+import {
+  enforceToolResultAdjacency,
+  getEffectiveHistory,
+  injectSyntheticToolResults,
+  summarizeConversation,
+} from "./condense.js";
 import type { AgentMessage } from "./types.js";
 import type {
   CompleteRequest,
@@ -107,7 +112,7 @@ function makeCodexProvider(
   const provider: ModelProvider = {
     id: "codex",
     displayName: "Codex",
-    condenseModel: "gpt-5.4-nano",
+    condenseModel: "gpt-5.4-mini",
     async isAuthenticated() {
       return true;
     },
@@ -384,6 +389,73 @@ User wants to fix the condense resume bug for Codex after summarization.
     });
   });
 
+  it("does not insert the resume-context message between a tool_use and its tool_result", () => {
+    // Regression: a session condensed right before a tool turn looked like
+    // [summary, assistant(tool_use), user(tool_result), user(text)]. The
+    // resume-context message was inserted before the first user message —
+    // the tool_result carrier — splitting the pair. injectSyntheticToolResults
+    // then added a duplicate synthetic result and the API rejected the turn
+    // with "unexpected tool_use_id found in tool_result blocks".
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        isSummary: true,
+        condenseId: "condense-1",
+        content: [{ type: "text", text: "## Conversation Summary\n\nBody" }],
+      } as AgentMessage,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call_WySM7rgnznhP3z9b0deikuDm",
+            name: "set_task_status",
+            input: {},
+          },
+        ],
+      } as AgentMessage,
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call_WySM7rgnznhP3z9b0deikuDm",
+            content: "ok",
+          },
+        ],
+      } as AgentMessage,
+      {
+        role: "user",
+        content: "You stopped but there are still pending tasks. Continue.",
+      } as AgentMessage,
+    ];
+
+    const effective = injectSyntheticToolResults(getEffectiveHistory(messages));
+
+    // tool_use must still be immediately followed by its tool_result
+    // (allowing for consecutive user messages, which providers merge).
+    const assistantIdx = effective.findIndex((m) => m.role === "assistant");
+    const next = effective[assistantIdx + 1];
+    expect(next?.role).toBe("user");
+    const nextBlocks = Array.isArray(next?.content) ? next.content : [];
+    expect(
+      nextBlocks.filter((b) => b.type === "tool_result"),
+    ).toHaveLength(1);
+
+    // Exactly one tool_result for the call across the whole history —
+    // no synthetic duplicate.
+    const allResults = effective.flatMap((m) =>
+      Array.isArray(m.content)
+        ? m.content.filter((b) => b.type === "tool_result")
+        : [],
+    );
+    expect(allResults).toHaveLength(1);
+
+    // Resume context still present, after the tool_result.
+    const resumeIdx = effective.findIndex((m) => m.isResumeContext);
+    expect(resumeIdx).toBeGreaterThan(assistantIdx + 1);
+  });
+
   it("derives canonical user messages from array-content user messages", async () => {
     const { provider } = makeProvider(() => ({
       text: `<summary>
@@ -456,15 +528,15 @@ User wants to fix the condense resume bug for Codex after summarization.
     expect(result.error).toBeUndefined();
     expect(complete).toHaveBeenCalledTimes(1);
     const request = complete.mock.calls[0][0] as CompleteRequest;
-    expect(request.model).toBe("gpt-5.4-nano");
-    expect(result.metadata?.modelCandidates[0]).toBe("gpt-5.4-nano");
-    expect(result.metadata?.selectedModel).toBe("gpt-5.4-nano");
+    expect(request.model).toBe("gpt-5.4-mini");
+    expect(result.metadata?.modelCandidates[0]).toBe("gpt-5.4-mini");
+    expect(result.metadata?.selectedModel).toBe("gpt-5.4-mini");
     expect(result.metadata?.skippedModelCandidates).toBeUndefined();
   });
 
-  it("skips the nano Codex condense model and prefers the active model when the request is too large", async () => {
+  it("skips the mini Codex condense model and prefers the active model when the request is too large", async () => {
     const { provider, complete } = makeCodexProvider();
-    // Must exceed 80% of nano's 400K context (~320K tokens ≈ 1.28M chars)
+    // Must exceed 80% of mini's 400K context (~320K tokens ≈ 1.28M chars)
     const largeUserMessage = "x".repeat(1_300_000);
 
     const result = await summarizeConversation({
@@ -486,16 +558,16 @@ User wants to fix the condense resume bug for Codex after summarization.
     const request = complete.mock.calls[0][0] as CompleteRequest;
     expect(request.model).toBe("gpt-5.4");
     expect(result.metadata?.modelCandidates[0]).toBe("gpt-5.4");
-    expect(result.metadata?.modelCandidates).not.toContain("gpt-5.4-nano");
+    expect(result.metadata?.modelCandidates).not.toContain("gpt-5.4-mini");
     expect(result.metadata?.selectedModel).toBe("gpt-5.4");
     expect(result.metadata?.skippedModelCandidates).toEqual([
-      expect.objectContaining({ model: "gpt-5.4-nano" }),
+      expect.objectContaining({ model: "gpt-5.4-mini" }),
     ]);
   });
 
   it("retries the next Codex candidate after a context-window error", async () => {
     const { provider, complete } = makeCodexProvider((request) => {
-      if (request.model === "gpt-5.4-nano") {
+      if (request.model === "gpt-5.4-mini") {
         throw new Error(
           "Codex API error unknown: Your input exceeds the context window of this model.",
         );
@@ -526,11 +598,11 @@ User wants to fix the condense resume bug for Codex after summarization.
     });
 
     expect(result.error).toBeUndefined();
-    // nano fails → falls through to gpt-5.4-mini, then gpt-5.4 (active model),
-    // then remaining fallbacks. The first non-nano candidate that succeeds wins.
+    // mini fails → falls through to gpt-5.4 (active model), then remaining
+    // fallbacks. The first non-mini candidate that succeeds wins.
     expect(complete).toHaveBeenCalledTimes(2);
     expect((complete.mock.calls[0][0] as CompleteRequest).model).toBe(
-      "gpt-5.4-nano",
+      "gpt-5.4-mini",
     );
     expect((complete.mock.calls[1][0] as CompleteRequest).model).toBe(
       "gpt-5.4",
@@ -583,7 +655,7 @@ User wants to fix the condense resume bug for Codex after summarization.
     });
 
     expect(result.error).toBeUndefined();
-    // nano fails with context error → falls through to gpt-5.4 which succeeds.
+    // mini fails with context error → falls through to gpt-5.4 which succeeds.
     // No validation retry — just 2 model candidate calls.
     expect(complete).toHaveBeenCalledTimes(2);
     expect(result.summary).toBeTruthy();
@@ -630,5 +702,122 @@ User wants to fix the condense resume bug for Codex after summarization.
     expect(result.errorRetryable).toBe(true);
     expect(result.errorCode).toBe("oauth_usage_limit_exhausted");
     expect(result.errorActions).toEqual({ signInAnotherAccount: true });
+  });
+});
+
+describe("enforceToolResultAdjacency", () => {
+  const toolUse = (id: string) =>
+    ({ type: "tool_use" as const, id, name: "execute_command", input: {} });
+  const toolResult = (id: string, content = "ok") =>
+    ({ type: "tool_result" as const, tool_use_id: id, content });
+
+  it("keeps valid tool_use/tool_result pairs untouched", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "task" } as AgentMessage,
+      { role: "assistant", content: [toolUse("call_1")] } as AgentMessage,
+      { role: "user", content: [toolResult("call_1")] } as AgentMessage,
+    ];
+    expect(enforceToolResultAdjacency(messages)).toEqual(messages);
+  });
+
+  it("drops tool_results with no matching tool_use in the preceding assistant turn", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "task" } as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hi" }],
+      } as AgentMessage,
+      {
+        role: "user",
+        content: [toolResult("call_orphan"), { type: "text", text: "next" }],
+      } as AgentMessage,
+    ];
+    const repaired = enforceToolResultAdjacency(messages);
+    expect(repaired).toHaveLength(3);
+    expect(repaired[2].content).toEqual([{ type: "text", text: "next" }]);
+  });
+
+  it("removes a user message entirely when all its blocks were orphaned tool_results", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "task" } as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hi" }],
+      } as AgentMessage,
+      { role: "user", content: [toolResult("call_orphan")] } as AgentMessage,
+      { role: "user", content: "follow-up" } as AgentMessage,
+    ];
+    const repaired = enforceToolResultAdjacency(messages);
+    expect(repaired).toHaveLength(3);
+    expect(repaired[2]).toEqual({ role: "user", content: "follow-up" });
+  });
+
+  it("dedupes duplicate tool_results for one tool_use, keeping the last", () => {
+    // Shape produced by the resume-context insertion bug: a synthetic result
+    // injected ahead of the real one in a later consecutive user message.
+    const messages: AgentMessage[] = [
+      { role: "user", content: "task" } as AgentMessage,
+      { role: "assistant", content: [toolUse("call_1")] } as AgentMessage,
+      {
+        role: "user",
+        content: [
+          toolResult("call_1", "synthetic placeholder"),
+          { type: "text", text: "resume context" },
+        ],
+      } as AgentMessage,
+      {
+        role: "user",
+        content: [toolResult("call_1", "real result")],
+      } as AgentMessage,
+    ];
+    const repaired = enforceToolResultAdjacency(messages);
+    const results = repaired.flatMap((m) =>
+      Array.isArray(m.content)
+        ? m.content.filter((b) => b.type === "tool_result")
+        : [],
+    );
+    expect(results).toHaveLength(1);
+    expect((results[0] as { content?: unknown }).content).toBe("real result");
+    // The resume-context text survives even though its sibling block was cut.
+    expect(
+      repaired.some(
+        (m) =>
+          Array.isArray(m.content) &&
+          m.content.some(
+            (b) =>
+              b.type === "text" &&
+              (b as { text: string }).text === "resume context",
+          ),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps tool_results in later consecutive user messages (providers merge them)", () => {
+    const messages: AgentMessage[] = [
+      { role: "assistant", content: [toolUse("call_1")] } as AgentMessage,
+      { role: "user", content: [{ type: "text", text: "note" }] } as AgentMessage,
+      { role: "user", content: [toolResult("call_1")] } as AgentMessage,
+    ];
+    const repaired = enforceToolResultAdjacency(messages);
+    expect(repaired).toHaveLength(3);
+    expect(repaired[2].content).toEqual([toolResult("call_1")]);
+  });
+
+  it("scopes pairing to the most recent assistant turn", () => {
+    const messages: AgentMessage[] = [
+      { role: "assistant", content: [toolUse("call_1")] } as AgentMessage,
+      { role: "user", content: [toolResult("call_1")] } as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+      } as AgentMessage,
+      // Stale duplicate referencing a tool_use from an earlier turn.
+      { role: "user", content: [toolResult("call_1")] } as AgentMessage,
+      { role: "user", content: "next" } as AgentMessage,
+    ];
+    const repaired = enforceToolResultAdjacency(messages);
+    expect(repaired).toHaveLength(4);
+    expect(repaired[1].content).toEqual([toolResult("call_1")]);
+    expect(repaired[3]).toEqual({ role: "user", content: "next" });
   });
 });

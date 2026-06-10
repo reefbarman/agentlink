@@ -279,6 +279,43 @@ export const writeFileSchema = {
   content: z.string().describe("Complete file content to write"),
 };
 
+export const proposeMemorySchema = {
+  tier: z
+    .enum(["instructions", "skill", "command", "memory"])
+    .describe(
+      "Destination tier: instructions for durable rules, skill for reusable workflows, command for slash-command prompts, memory for lower-authority facts/gotchas.",
+    ),
+  scope: z
+    .enum(["global", "project"])
+    .describe("Global user memory/config or current project memory/config."),
+  operation: z
+    .enum(["add", "update", "remove"])
+    .describe("Whether to add, update, or remove remembered content."),
+  title: z.string().describe("Short label shown on the approval card"),
+  rationale: z
+    .string()
+    .describe(
+      "Why this should be persisted across sessions; shown to the user.",
+    ),
+  content: z
+    .string()
+    .describe(
+      "Markdown content to add or the replacement body for update/remove operations. For skills, pass the complete SKILL.md content.",
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      "Required for skill and command tiers. Lowercase hyphen identifier used for skill directory or command filename.",
+    ),
+  replaces: z
+    .string()
+    .optional()
+    .describe(
+      "Existing entry/section text to replace or remove. Matched with normalized whitespace.",
+    ),
+};
+
 export const applyDiffSchema = {
   path: z
     .string()

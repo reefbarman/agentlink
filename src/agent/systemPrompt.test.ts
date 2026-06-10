@@ -285,6 +285,52 @@ describe("buildSystemPrompt", () => {
     expect(result).not.toContain("Custom Instructions");
   });
 
+  it("includes global and project memory as lower-authority durable context", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".agentlink"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, ".agentlink", "memory.md"),
+      "global preference",
+    );
+    fs.mkdirSync(path.join(tmpDir, ".agentlink"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".agentlink", "memory.md"),
+      "project convention",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("## Memory");
+    expect(result).toContain(
+      "lower authority than system/developer instructions",
+    );
+    expect(result).toContain(
+      "# Memory (~/.agentlink/memory.md):\nglobal preference",
+    );
+    expect(result).toContain(
+      "# Memory (.agentlink/memory.md):\nproject convention",
+    );
+    expect(result.indexOf("global preference")).toBeLessThan(
+      result.indexOf("project convention"),
+    );
+  });
+
+  it("omits memory section when no memory files exist", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).not.toContain("## Memory");
+  });
+
+  it("caps each memory file to recent content", async () => {
+    fs.mkdirSync(path.join(tmpDir, ".agentlink"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".agentlink", "memory.md"),
+      `OMITTED_PREFIX${"old".repeat(5_000)}RECENT_MEMORY`,
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("RECENT_MEMORY");
+    expect(result).toContain("Earlier content omitted:");
+    expect(result).not.toContain("OMITTED_PREFIX");
+  });
+
   it("includes skills section when a skill exists in .agentlink/skills/", async () => {
     const skillDir = path.join(tmpDir, ".agentlink", "skills", "my-skill");
     fs.mkdirSync(skillDir, { recursive: true });
@@ -299,9 +345,43 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("SKILL.md");
   });
 
-  it("omits skills section when no skills exist", async () => {
+  it("includes bundled skills when no user or project skills exist", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
-    expect(result).not.toContain("<skills>");
+    expect(result).toContain("<skills>");
+    expect(result).toContain("skill-writing");
+    expect(result).toContain("resources/builtin-skills/skill-writing/SKILL.md");
+  });
+
+  it("lets project skills override bundled skills by name", async () => {
+    const skillDir = path.join(tmpDir, ".agentlink", "skills", "skill-writing");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: skill-writing\ndescription: Project override\n---\n# Project skill writing\n",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("Project override");
+    expect(result).toContain(
+      path.join(tmpDir, ".agentlink", "skills", "skill-writing", "SKILL.md"),
+    );
+    expect(result).not.toContain(
+      "resources/builtin-skills/skill-writing/SKILL.md",
+    );
+  });
+
+  it("ignores mode-incompatible overrides when a bundled skill is visible", async () => {
+    const skillDir = path.join(tmpDir, ".agentlink", "skills", "skill-writing");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: skill-writing\ndescription: Review-only override\nmodeSlugs: review\n---\n# Review skill writing\n",
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain("skill-writing");
+    expect(result).toContain("resources/builtin-skills/skill-writing/SKILL.md");
+    expect(result).not.toContain("Review-only override");
   });
 
   it("excludes skills whose modeSlugs do not include the current mode", async () => {
@@ -333,7 +413,21 @@ describe("buildSystemPrompt", () => {
       providerId: "anthropic",
     });
     expect(result).toContain("Provider-Specific Behavior");
-    expect(result).toContain("Be concise");
+    expect(result).toContain("Visible progress and rationale");
+    expect(result).toContain("do not rely on hidden thinking");
+  });
+
+  it("gives anthropic models high-level code tool guidance", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      providerId: "anthropic",
+      model: "claude-fable-5",
+    });
+    expect(result).toContain("Tool selection");
+    expect(result).toContain("highest-level code intelligence tool");
+    expect(result).toContain("Go directly to `get_context`");
+    expect(result).toContain("prefer `get_context` over `read_file`");
+    expect(result).toContain("`codebase_search` first for unknown locations");
+    expect(result).toContain("`search_files` for exact matches only");
   });
 
   it("prefers get_context directly when a file path is already known", async () => {
@@ -399,6 +493,7 @@ describe("buildSystemPrompt", () => {
     expect(result).not.toContain("Rich Output");
     expect(result).not.toContain("Custom Instructions");
     expect(result).not.toContain("project rules");
+    expect(result).not.toContain("Memory");
     expect(result).not.toContain("System Information");
     expect(result).not.toContain("Provider-Specific Behavior");
     expect(result).not.toContain("Do not manufacture disagreement");

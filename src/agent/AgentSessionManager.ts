@@ -568,20 +568,19 @@ export class AgentSessionManager {
     // webview already drained the queue and sent this message via agentSend,
     // the old interjection would otherwise be re-emitted mid-turn as a duplicate.
     session.consumePendingInterjection();
+    // Pasted images/PDFs are stored on the message itself so they're injected
+    // into every API call (the API is stateless) and survive session restore.
     session.addUserMessage(text, {
       displayText: opts?.displayText,
       isSlashCommand: opts?.isSlashCommand === true,
       slashCommandLabel: opts?.slashCommandLabel,
       origin: opts?.origin,
+      images: opts?.images,
+      documents: opts?.documents,
     });
-
-    // Store pasted images/PDFs bound to the just-added user message index.
-    // These are injected into the API call by AgentEngine, not stored in history.
-    const msgIndex = session.messageCount - 1;
-    session.setPendingMedia(msgIndex, opts?.images, opts?.documents);
     if (opts?.images?.length || opts?.documents?.length) {
       this.log?.(
-        `[media] setPendingMedia at rawIndex=${msgIndex} images=${opts?.images?.length ?? 0} documents=${opts?.documents?.length ?? 0} totalRawMessages=${session.messageCount}`,
+        `[media] attached media to user message: images=${opts?.images?.length ?? 0} documents=${opts?.documents?.length ?? 0} totalRawMessages=${session.messageCount}`,
       );
     }
 
@@ -1422,8 +1421,8 @@ export class AgentSessionManager {
       onGetBackgroundResult: undefined,
       onKillBackground: undefined,
       onQuestion: baseCtx.onQuestion
-        ? (questions, bgSessionId) =>
-            baseCtx.onQuestion!(questions, bgSessionId, task)
+        ? (context, questions, bgSessionId) =>
+            baseCtx.onQuestion!(context, questions, bgSessionId, task)
         : undefined,
     };
 

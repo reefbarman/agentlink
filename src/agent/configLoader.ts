@@ -1,5 +1,5 @@
-import * as os from "os";
 import * as fs from "fs/promises";
+import * as os from "os";
 import * as path from "path";
 
 /** A loaded instruction block with its source for display/debugging. */
@@ -7,6 +7,12 @@ export interface InstructionBlock {
   source: string;
   content: string;
 }
+
+export interface MemoryBlock extends InstructionBlock {
+  omittedChars: number;
+}
+
+const MEMORY_FILE_CHAR_CAP = 12_000;
 
 /** Strip agentlink-injected instruction blocks from CLAUDE.md / AGENTS.md content. */
 function stripAgentlinkBlock(content: string): string {
@@ -27,6 +33,21 @@ async function safeReadFile(filePath: string): Promise<string> {
     if (code === "ENOENT" || code === "EISDIR") return "";
     throw err;
   }
+}
+
+function capMemoryContent(content: string): {
+  content: string;
+  omittedChars: number;
+} {
+  if (content.length <= MEMORY_FILE_CHAR_CAP) {
+    return { content, omittedChars: 0 };
+  }
+
+  const omittedChars = content.length - MEMORY_FILE_CHAR_CAP;
+  return {
+    content: content.slice(-MEMORY_FILE_CHAR_CAP).trimStart(),
+    omittedChars,
+  };
 }
 
 /** Read all *.md files in a directory, sorted alphabetically. Returns InstructionBlocks. */
@@ -273,6 +294,54 @@ export async function loadAllInstructions(
   if (blocks.length === 0) return "";
   return blocks
     .map((b) => `# Instructions (${b.source}):\n${b.content}`)
+    .join("\n\n");
+}
+
+/**
+ * Load durable memory notes from explicit memory.md files only.
+ *
+ * Memory is intentionally separate from instruction precedence: AGENTS/CLAUDE
+ * should carry durable rules, while memory.md is a capped lower-authority note
+ * stream for preferences and observations that are not yet instruction-worthy.
+ */
+export async function loadMemoryBlocks(cwd: string): Promise<MemoryBlock[]> {
+  const home = os.homedir();
+  const candidates = [
+    {
+      source: "~/.agentlink/memory.md",
+      filePath: path.join(home, ".agentlink", "memory.md"),
+    },
+    {
+      source: ".agentlink/memory.md",
+      filePath: path.join(cwd, ".agentlink", "memory.md"),
+    },
+  ];
+
+  const blocks: MemoryBlock[] = [];
+  for (const candidate of candidates) {
+    const content = await safeReadFile(candidate.filePath);
+    if (!content) continue;
+    blocks.push({
+      source: candidate.source,
+      ...capMemoryContent(content),
+    });
+  }
+
+  return blocks;
+}
+
+export async function loadMemory(cwd: string): Promise<string> {
+  const blocks = await loadMemoryBlocks(cwd);
+  if (blocks.length === 0) return "";
+
+  return blocks
+    .map((block) => {
+      const capNote =
+        block.omittedChars > 0
+          ? `\n\n[Earlier content omitted: ${block.omittedChars} characters exceeded the per-file memory cap.]`
+          : "";
+      return `# Memory (${block.source}):\n${block.content}${capNote}`;
+    })
     .join("\n\n");
 }
 

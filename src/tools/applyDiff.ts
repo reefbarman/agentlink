@@ -9,6 +9,7 @@ import {
 } from "../integrations/DiffViewProvider.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
 import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
 import {
@@ -763,13 +764,16 @@ export async function handleApplyDiff(
     const isArchitectPlanFile =
       mode === "architect" && inWorkspace && relPath.startsWith("plans/");
 
+    const isProtectedMemoryPath = isMemoryProtectedPath(filePath);
+
     // Auto-approve check (includes recent single-use approvals within TTL)
     const canAutoApprove =
-      masterBypass ||
-      isArchitectPlanFile ||
-      (inWorkspace
-        ? approvalManager.isAgentWriteApproved(sessionId, filePath)
-        : approvalManager.isFileWriteApproved(sessionId, filePath));
+      !isProtectedMemoryPath &&
+      (masterBypass ||
+        isArchitectPlanFile ||
+        (inWorkspace
+          ? approvalManager.isAgentWriteApproved(sessionId, filePath)
+          : approvalManager.isFileWriteApproved(sessionId, filePath)));
 
     if (canAutoApprove) {
       // Use file lock to prevent concurrent auto-approved writes from

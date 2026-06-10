@@ -15,6 +15,7 @@ import type { SubCommandEntry } from "../approvals/webview/types.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { validateCommand } from "../util/pipeValidator.js";
 import { validateInteractiveCommand } from "../util/interactiveValidator.js";
+import { validateProtectedWriteCommand } from "../util/protectedWriteValidator.js";
 import { Semaphore } from "../util/Semaphore.js";
 
 /** Serializes the approval-check phase so pending dialogs block other commands. */
@@ -75,6 +76,28 @@ export async function handleExecuteCommand(
 
     let commandToRun = params.command;
     let approvalFollowUp: string | undefined;
+
+    // Reject protected instruction/memory writes before masterBypass or force=true
+    // can skip the normal command approval path.
+    const protectedWriteViolation = validateProtectedWriteCommand(
+      params.command,
+      cwd,
+    );
+    if (protectedWriteViolation) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "rejected",
+              command: params.command,
+              reason: protectedWriteViolation.message,
+              protected_path: protectedWriteViolation.protectedPath,
+            }),
+          },
+        ],
+      };
+    }
 
     // Reject disallowed command patterns (direct head/tail/cat/grep, piped filtering)
     const commandViolation = validateCommand(params.command);
@@ -163,6 +186,26 @@ export async function handleExecuteCommand(
 
         if (approvalResult.editedCommand) {
           commandToRun = approvalResult.editedCommand;
+          const editedProtectedWriteViolation = validateProtectedWriteCommand(
+            commandToRun,
+            cwd,
+          );
+          if (editedProtectedWriteViolation) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "rejected",
+                    command: commandToRun,
+                    original_command: params.command,
+                    reason: editedProtectedWriteViolation.message,
+                    protected_path: editedProtectedWriteViolation.protectedPath,
+                  }),
+                },
+              ],
+            };
+          }
         }
 
         approvalFollowUp = approvalResult.followUp;

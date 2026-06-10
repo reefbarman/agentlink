@@ -687,6 +687,7 @@ describe("dispatchToolCall", () => {
       const result = await dispatchToolCall(
         "ask_user",
         {
+          context: "I need your input to choose the next step.",
           questions: [
             {
               id: "choice",
@@ -705,6 +706,11 @@ describe("dispatchToolCall", () => {
       );
 
       // Mode switch was triggered silently (third arg `true`)
+      expect(onQuestion).toHaveBeenCalledWith(
+        "I need your input to choose the next step.",
+        expect.any(Array),
+        "test-session",
+      );
       expect(onModeSwitch).toHaveBeenCalledWith(
         "architect",
         expect.stringContaining("Plan first"),
@@ -714,8 +720,12 @@ describe("dispatchToolCall", () => {
       const text = (result.content[0] as { type: "text"; text: string }).text;
       const parsed = JSON.parse(text);
       expect(parsed.modeSwitched).toBe("architect");
+      expect(parsed.context).toBe("I need your input to choose the next step.");
       expect(parsed.responses).toEqual([
-        { question: "How should we proceed?", answer: "Plan first" },
+        {
+          question: "How should we proceed?",
+          answer: "Plan first",
+        },
       ]);
     });
 
@@ -735,6 +745,7 @@ describe("dispatchToolCall", () => {
       const result = await dispatchToolCall(
         "ask_user",
         {
+          context: "I need your input to choose the next step.",
           questions: [
             {
               id: "choice",
@@ -755,12 +766,38 @@ describe("dispatchToolCall", () => {
       expect(parsed.modeSwitched).toBeUndefined();
     });
 
+    it("rejects ask_user calls without visible context", async () => {
+      const onQuestion = vi.fn();
+      const ctx: ToolDispatchContext = { ...mockCtx, onQuestion };
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              question: "How should we proceed?",
+              options: ["Plan first", "Just implement"],
+            },
+          ],
+        },
+        ctx,
+      );
+
+      expect(onQuestion).not.toHaveBeenCalled();
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed.error).toContain("requires visible context");
+    });
+
     it("rejects ask_user calls with multiple modeSwitch questions", async () => {
       const onQuestion = vi.fn();
       const ctx: ToolDispatchContext = { ...mockCtx, onQuestion };
       const result = await dispatchToolCall(
         "ask_user",
         {
+          context: "I need your input to choose the next step.",
           questions: [
             {
               id: "a",
@@ -794,6 +831,7 @@ describe("dispatchToolCall", () => {
       const result = await dispatchToolCall(
         "ask_user",
         {
+          context: "I need your input to choose the next step.",
           questions: [
             {
               id: "a",

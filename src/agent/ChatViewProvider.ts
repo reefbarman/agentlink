@@ -248,7 +248,9 @@ export type ExtensionToWebview =
   | {
       type: "agentQuestionRequest";
       id: string;
+      context: string;
       questions: import("./webview/types.js").Question[];
+      backgroundTask?: string;
     }
   | { type: "agentQuestionCleared"; id: string }
   | {
@@ -511,6 +513,20 @@ type ContextBudget = NonNullable<ChatState["contextBudget"]>;
 const RESTORE_TAIL_TURNS = 8;
 const RESTORE_BACKFILL_BATCH_TURNS = 12;
 
+/**
+ * Drop attached media (base64 images/PDFs) before sending raw messages to a
+ * UI surface — transcripts only render text, and the payloads can be megabytes.
+ */
+function stripMediaForTransport(
+  messages: import("./types.js").AgentMessage[],
+): import("./types.js").AgentMessage[] {
+  return messages.map((m) => {
+    if (!m.media) return m;
+    const { media: _media, ...rest } = m;
+    return rest;
+  });
+}
+
 function countUserTurns(messages: import("./types.js").AgentMessage[]): number {
   let count = 0;
   for (const m of messages) {
@@ -635,6 +651,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             trustScope?: string;
             rulePattern?: string;
             ruleMode?: string;
+            editedContent?: string;
+            memoryTier?: import("../approvals/webview/types.js").MemoryTier;
+            memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+            memoryName?: string;
           },
     ) => void
   >();
@@ -1351,7 +1371,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   public requestApproval(
     request: {
-      kind: "mcp" | "write" | "rename" | "command" | "mode-switch";
+      kind: "mcp" | "write" | "rename" | "command" | "mode-switch" | "memory";
       title: string;
       detail?: string;
       choices: Array<{
@@ -1373,6 +1393,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         trustScope?: string;
         rulePattern?: string;
         ruleMode?: string;
+        editedContent?: string;
+        memoryTier?: import("../approvals/webview/types.js").MemoryTier;
+        memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+        memoryName?: string;
       }
   > {
     const id = request.id ?? randomUUID();
@@ -1499,6 +1523,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           command: request.title,
           mcpDetail: request.detail,
         };
+      case "memory":
+        return {
+          kind: "memory",
+          id,
+          command: request.title,
+          mcpDetail: request.detail,
+        };
       default:
         return {
           kind: request.kind as ApprovalRequest["kind"],
@@ -1514,6 +1545,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Called by the ask_user tool handler in toolAdapter.
    */
   public requestQuestion(
+    context: string,
     questions: import("./webview/types.js").Question[],
     sessionId: string,
     backgroundTask?: string,
@@ -1533,7 +1565,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           notes: (raw.notes as Record<string, string>) ?? {},
         });
       });
-      this.uiPublisher.publishQuestionRequest(id, questions, backgroundTask);
+      this.uiPublisher.publishQuestionRequest(
+        id,
+        context,
+        questions,
+        backgroundTask,
+      );
     });
   }
 
@@ -1546,6 +1583,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     ruleMode?: string;
     rules?: Array<{ pattern: string; mode: string; scope: string }>;
     trustScope?: string;
+    editedContent?: string;
+    memoryTier?: import("../approvals/webview/types.js").MemoryTier;
+    memoryScope?: import("../approvals/webview/types.js").MemoryScope;
+    memoryName?: string;
     followUp?: string;
   }): boolean {
     const id = msg.id;
@@ -1559,6 +1600,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         trustScope: msg.trustScope ?? undefined,
         rulePattern: msg.rulePattern ?? undefined,
         ruleMode: msg.ruleMode ?? undefined,
+        editedContent: msg.editedContent ?? undefined,
+        memoryTier: msg.memoryTier ?? undefined,
+        memoryScope: msg.memoryScope ?? undefined,
+        memoryName: msg.memoryName ?? undefined,
       });
       return true;
     }
@@ -1577,6 +1622,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ruleMode: msg.ruleMode ?? undefined,
       rules: msg.rules as DecisionMessage["rules"],
       trustScope: msg.trustScope ?? undefined,
+      editedContent: msg.editedContent ?? undefined,
+      memoryTier: msg.memoryTier ?? undefined,
+      memoryScope: msg.memoryScope ?? undefined,
+      memoryName: msg.memoryName ?? undefined,
       followUp: msg.followUp ?? undefined,
     };
     respond(decision);
@@ -2150,7 +2199,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       transcript: {
         sessionId,
         task: session.title ?? "Background Agent",
-        messages: session.getAllMessages(),
+        messages: stripMediaForTransport(session.getAllMessages()),
       },
     };
   }
@@ -2250,7 +2299,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Watch instruction files for system prompt hot-reload
     const instructionPattern = new vscode.RelativePattern(
       cwd,
-      "{AGENTS.md,AGENT.md,CLAUDE.md,AGENTS.local.md,.claude/CLAUDE.md,.agentlink/CLAUDE.md,.agents/rules/**/*.md,.agentlink/rules/**/*.md,.agentlink/rules-*/**/*.md,.agents/rules-*/**/*.md,**/AGENTS.md,**/AGENT.md,**/AGENTS.local.md}",
+      "{AGENTS.md,AGENT.md,CLAUDE.md,AGENTS.local.md,.claude/CLAUDE.md,.agentlink/CLAUDE.md,.agentlink/memory.md,.agents/rules/**/*.md,.agentlink/rules/**/*.md,.agentlink/rules-*/**/*.md,.agents/rules-*/**/*.md,**/AGENTS.md,**/AGENT.md,**/AGENTS.local.md}",
     );
     const instructionWatcher =
       vscode.workspace.createFileSystemWatcher(instructionPattern);
@@ -2981,6 +3030,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               }>
             | undefined,
           trustScope: msg.trustScope as string | undefined,
+          editedContent: msg.editedContent as string | undefined,
+          memoryTier: msg.memoryTier as
+            | import("../approvals/webview/types.js").MemoryTier
+            | undefined,
+          memoryScope: msg.memoryScope as
+            | import("../approvals/webview/types.js").MemoryScope
+            | undefined,
+          memoryName: msg.memoryName as string | undefined,
           followUp: msg.followUp as string | undefined,
         });
         break;
@@ -3175,7 +3232,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               type: "showBgTranscript",
               sessionId,
               task: session.title ?? "Background Agent",
-              messages: session.getAllMessages(),
+              messages: stripMediaForTransport(session.getAllMessages()),
             });
           } else {
             vscode.window.showWarningMessage(
@@ -3926,6 +3983,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.applyProjectedAction({
           type: "SET_QUESTION",
           id: extMsg.id,
+          context: extMsg.context,
           questions: extMsg.questions,
           ...(extMsg.backgroundTask
             ? { backgroundTask: extMsg.backgroundTask }
@@ -4127,6 +4185,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       questionRequest: this.projectedForegroundState.questionRequest
         ? {
             id: this.projectedForegroundState.questionRequest.id,
+            context: this.projectedForegroundState.questionRequest.context,
             questions:
               this.projectedForegroundState.questionRequest.questions.map(
                 (question) => ({ ...question }),

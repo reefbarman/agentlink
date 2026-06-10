@@ -40,8 +40,25 @@ const CLAUDE_REASONING_EFFORTS = [
   "max",
 ] as const satisfies readonly ReasoningEffort[];
 
+const CLAUDE_FABLE_REASONING_EFFORTS = [
+  "low",
+  "medium",
+  "high",
+  "max",
+] as const satisfies readonly ReasoningEffort[];
+
 const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
   {
+    "claude-fable-5": {
+      supportsThinking: true,
+      supportsCaching: true,
+      supportsImages: true,
+      supportsToolUse: true,
+      contextWindow: 1_000_000,
+      maxOutputTokens: 128_000,
+      reasoningEfforts: [...CLAUDE_FABLE_REASONING_EFFORTS],
+      defaultReasoningEffort: "high",
+    },
     "claude-opus-4-8": {
       supportsThinking: true,
       supportsCaching: true,
@@ -110,6 +127,7 @@ export class AnthropicProvider implements ModelProvider {
 
   listModels(): ModelInfo[] {
     return [
+      this.makeModelInfo("claude-fable-5", "Claude Fable 5"),
       this.makeModelInfo("claude-sonnet-4-6", "Claude Sonnet 4.6"),
       this.makeModelInfo("claude-opus-4-8", "Claude Opus 4.8"),
       this.makeModelInfo("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
@@ -215,6 +233,7 @@ export class AnthropicProvider implements ModelProvider {
         text: string;
         name?: string;
         signature?: string;
+        thinkingStarted?: boolean;
       }
     >();
 
@@ -232,13 +251,12 @@ export class AnthropicProvider implements ModelProvider {
           const idx = event.index;
 
           if (block.type === "thinking") {
-            const thinkingId = randomUUID();
             blockBuffers.set(idx, {
               type: "thinking",
-              id: thinkingId,
+              id: randomUUID(),
               text: "",
+              thinkingStarted: false,
             });
-            yield { type: "thinking_start", thinkingId };
           } else if (block.type === "text") {
             blockBuffers.set(idx, { type: "text", text: "" });
           } else if (block.type === "tool_use") {
@@ -265,11 +283,17 @@ export class AnthropicProvider implements ModelProvider {
             event.delta.type === "thinking_delta" &&
             buf?.type === "thinking"
           ) {
-            buf.text += event.delta.thinking;
+            const delta = event.delta.thinking;
+            if (!delta) break;
+            buf.text += delta;
+            if (!buf.thinkingStarted) {
+              buf.thinkingStarted = true;
+              yield { type: "thinking_start", thinkingId: buf.id! };
+            }
             yield {
               type: "thinking_delta",
               thinkingId: buf.id!,
-              text: event.delta.thinking,
+              text: delta,
             };
           } else if (
             event.delta.type === "text_delta" &&
@@ -303,12 +327,16 @@ export class AnthropicProvider implements ModelProvider {
           const buf = blockBuffers.get(idx);
 
           if (buf?.type === "thinking") {
-            yield { type: "thinking_end", thinkingId: buf.id! };
-            contentBlocks.push({
-              type: "thinking",
-              thinking: buf.text,
-              signature: buf.signature ?? "",
-            } satisfies ContentBlock);
+            if (buf.thinkingStarted) {
+              yield { type: "thinking_end", thinkingId: buf.id! };
+            }
+            if (buf.text.trim()) {
+              contentBlocks.push({
+                type: "thinking",
+                thinking: buf.text,
+                signature: buf.signature ?? "",
+              } satisfies ContentBlock);
+            }
           } else if (buf?.type === "text") {
             contentBlocks.push({
               type: "text",
@@ -381,7 +409,9 @@ export class AnthropicProvider implements ModelProvider {
     const requestParams: Anthropic.MessageCreateParams = {
       model,
       max_tokens: maxTokens,
-      ...(temperature !== undefined ? { temperature } : {}),
+      ...(temperature !== undefined && !supportsAdaptiveThinking(model)
+        ? { temperature }
+        : {}),
       system: systemPrompt,
       messages: mergeConsecutiveUserMessages(
         sanitizeMessagesForAnthropicReplay(messages).messages,
@@ -451,7 +481,11 @@ export class AnthropicProvider implements ModelProvider {
 // ── Helpers (moved from AgentEngine.ts) ──
 
 function supportsAdaptiveThinking(model: string): boolean {
-  return model === "claude-opus-4-8" || model === "claude-sonnet-4-6";
+  return (
+    model === "claude-fable-5" ||
+    model === "claude-opus-4-8" ||
+    model === "claude-sonnet-4-6"
+  );
 }
 
 export interface AnthropicReplaySanitizationResult {

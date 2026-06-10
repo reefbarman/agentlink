@@ -27,6 +27,17 @@ export interface AgentRuntimeError {
 }
 
 export type AgentMessage = MessageParam & {
+  /**
+   * Pasted media (images/PDFs) attached to this user message. Kept out of
+   * `content` so user turns stay string-typed (turn counting, checkpoints,
+   * titles rely on that); AgentEngine injects these as image/document blocks
+   * into every API request so the model retains access across turns. Persisted
+   * with the message; dropped from API requests once the message is condensed.
+   */
+  media?: {
+    images: Array<{ name: string; mimeType: string; base64: string }>;
+    documents: Array<{ name: string; mimeType: string; base64: string }>;
+  };
   isSummary?: boolean;
   isResumeContext?: boolean;
   condenseId?: string;

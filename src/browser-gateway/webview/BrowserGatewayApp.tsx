@@ -31,6 +31,7 @@ import { BackgroundSessionStrip } from "../../agent/webview/components/Backgroun
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
 import { InputArea } from "../../agent/webview/components/InputArea";
 import { McpCard } from "../../approvals/webview/components/McpCard";
+import { MemoryCard } from "../../approvals/webview/components/MemoryCard";
 import { ModeSwitchCard } from "../../approvals/webview/components/ModeSwitchCard";
 import { PathCard } from "../../approvals/webview/components/PathCard";
 import { QuestionCard } from "../../agent/webview/components/QuestionCard";
@@ -117,6 +118,7 @@ type GatewaySnapshot = {
     approval: ApprovalRequest | null;
     question: {
       id: string;
+      context: string;
       questions: Question[];
       backgroundTask?: string;
     } | null;
@@ -181,6 +183,7 @@ type GatewaySnapshot = {
       }>;
       questionRequest: {
         id: string;
+        context: string;
         questions: Question[];
         backgroundTask?: string;
       } | null;
@@ -370,7 +373,6 @@ export function BrowserGatewayApp({
   const [selectedInstanceId, setSelectedInstanceId] =
     useState(currentInstanceId);
   const selectedInstanceIdRef = useRef(currentInstanceId);
-  const userSelectedInstanceRef = useRef(false);
   const touchTabPointerRef = useRef<{
     instanceId: string;
     pointerId: number;
@@ -378,10 +380,7 @@ export function BrowserGatewayApp({
     y: number;
   } | null>(null);
 
-  function selectInstance(instanceId: string, userSelected = false): void {
-    if (userSelected) {
-      userSelectedInstanceRef.current = true;
-    }
+  function selectInstance(instanceId: string): void {
     selectedInstanceIdRef.current = instanceId;
     setSelectedInstanceId(instanceId);
   }
@@ -860,36 +859,22 @@ export function BrowserGatewayApp({
     }
   }
 
+  /**
+   * Selection only ever changes automatically when the current selection is
+   * missing from the instance list (initial load or a closed window) — never
+   * to chase whichever instance is busy; the tab status styling signals that.
+   */
   function selectPreferredInstanceId(
-    instances: Array<{
-      instanceId: string;
-      status?: BrowserGatewayInstanceStatusSummary;
-    }>,
+    instances: Array<{ instanceId: string }>,
     currentServerInstanceId: string,
   ): string {
     const currentSelectedInstanceId = selectedInstanceIdRef.current;
-    const selectedInstanceStillExists = instances.some(
-      (instance) => instance.instanceId === currentSelectedInstanceId,
-    );
     if (
-      userSelectedInstanceRef.current &&
       currentSelectedInstanceId.trim() &&
-      selectedInstanceStillExists
+      instances.some(
+        (instance) => instance.instanceId === currentSelectedInstanceId,
+      )
     ) {
-      return currentSelectedInstanceId;
-    }
-
-    const activeInstance = instances.find(
-      (instance) =>
-        instance.status?.kind === "awaiting_approval" ||
-        instance.status?.kind === "working" ||
-        instance.status?.kind === "error",
-    );
-
-    if (activeInstance) {
-      return activeInstance.instanceId;
-    }
-    if (currentSelectedInstanceId.trim() && selectedInstanceStillExists) {
       return currentSelectedInstanceId;
     }
     return currentServerInstanceId || instances[0]?.instanceId || "";
@@ -912,10 +897,16 @@ export function BrowserGatewayApp({
           status?: BrowserGatewayInstanceStatusSummary;
         }>;
       };
-      setInstanceOptions(data.instances);
+      // Keep tab order stable regardless of registry write order.
+      const instances = [...data.instances].sort(
+        (a, b) =>
+          a.workspaceName.localeCompare(b.workspaceName) ||
+          a.instanceId.localeCompare(b.instanceId),
+      );
+      setInstanceOptions(instances);
       const nextSelectedInstanceId = routeByInstance
-        ? selectPreferredInstanceId(data.instances, data.currentInstanceId)
-        : data.currentInstanceId || data.instances[0]?.instanceId || "";
+        ? selectPreferredInstanceId(instances, data.currentInstanceId)
+        : data.currentInstanceId || instances[0]?.instanceId || "";
       if (nextSelectedInstanceId !== selectedInstanceIdRef.current) {
         selectInstance(nextSelectedInstanceId);
       }
@@ -1207,7 +1198,7 @@ export function BrowserGatewayApp({
       e.clientY - touchStart.y,
     );
     if (moved <= 8) {
-      selectInstance(instanceId, true);
+      selectInstance(instanceId);
     }
   };
 
@@ -2190,7 +2181,7 @@ export function BrowserGatewayApp({
               aria-selected={active}
               class={`instance-tab instance-tab-${instanceStatus.kind}${active ? " active" : ""}`}
               id={`instance-tab-${instance.instanceId}`}
-              onClick={() => selectInstance(instance.instanceId, true)}
+              onClick={() => selectInstance(instance.instanceId)}
               onPointerCancel={(e) =>
                 handleInstancePointerCancel(e as unknown as PointerEvent)
               }
@@ -2542,6 +2533,7 @@ export function BrowserGatewayApp({
                 <QuestionCard
                   key={visibleQuestion.id}
                   id={visibleQuestion.id}
+                  context={visibleQuestion.context}
                   questions={visibleQuestion.questions}
                   backgroundTask={visibleQuestion.backgroundTask}
                   modes={modes}
@@ -2630,6 +2622,12 @@ export function BrowserGatewayApp({
                     />
                   ) : visibleApproval.kind === "mcp" ? (
                     <McpCard
+                      request={visibleApproval}
+                      submit={handleForwardedApprovalSubmit}
+                      followUpRef={forwardedFollowUpRef}
+                    />
+                  ) : visibleApproval.kind === "memory" ? (
+                    <MemoryCard
                       request={visibleApproval}
                       submit={handleForwardedApprovalSubmit}
                       followUpRef={forwardedFollowUpRef}

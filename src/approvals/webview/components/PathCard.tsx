@@ -1,7 +1,8 @@
-import { useState, useCallback } from "preact/hooks";
-import type { RefObject } from "preact";
 import type { ApprovalRequest, DecisionMessage } from "../types.js";
+import { useCallback, useState } from "preact/hooks";
+
 import { ApprovalLayout } from "./ApprovalLayout.js";
+import type { RefObject } from "preact";
 
 const MODES = ["prefix", "exact", "glob"] as const;
 const SCOPES = ["session", "project", "global", "skip"] as const;
@@ -106,6 +107,7 @@ export function PathCard({ request, submit, followUpRef }: PathCardProps) {
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      purpose="Read or access a path outside the workspace"
       rulesContent={rulesJsx}
       rulesModified={!isSkipped}
       primaryLabel="Allow Once"

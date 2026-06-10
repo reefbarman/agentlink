@@ -20,6 +20,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "rename_symbol",
     "get_code_actions",
     "apply_code_action",
+    "propose_memory",
   ],
   command: [
     "execute_command",

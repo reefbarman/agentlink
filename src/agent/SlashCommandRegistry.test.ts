@@ -36,6 +36,37 @@ afterEach(() => {
 });
 
 describe("SlashCommandRegistry", () => {
+  it("exposes /remember as a prompt command", async () => {
+    const registry = new SlashCommandRegistry(tmpDir, "code");
+    await registry.reload();
+
+    const command = registry.getAll().find((cmd) => cmd.name === "remember");
+    expect(command).toMatchObject({
+      source: "builtin",
+      builtin: false,
+    });
+    expect(command?.body).toContain("propose_memory");
+    expect(command?.body).toContain("highest appropriate tier");
+  });
+
+  it("exposes bundled skills as slash commands", async () => {
+    const registry = new SlashCommandRegistry(tmpDir, "code");
+    await registry.reload();
+
+    const command = registry
+      .getAll()
+      .find((cmd) => cmd.name === "skill:skill-writing");
+    expect(command).toMatchObject({
+      source: "skill",
+      builtin: false,
+    });
+    expect(command?.description).toContain("Agent Skills");
+    expect(command?.skillPath).toContain(
+      path.join("resources", "builtin-skills", "skill-writing", "SKILL.md"),
+    );
+    expect(command?.body).toContain("load_skill");
+  });
+
   it("exposes detected skills as slash commands", async () => {
     const skillPath = writeSkill(
       path.join(tmpDir, ".agents", "skills"),

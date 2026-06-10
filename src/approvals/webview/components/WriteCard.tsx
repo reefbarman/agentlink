@@ -1,7 +1,8 @@
-import { useState, useCallback } from "preact/hooks";
-import type { RefObject } from "preact";
 import type { ApprovalRequest, DecisionMessage } from "../types.js";
+import { useCallback, useState } from "preact/hooks";
+
 import { ApprovalLayout } from "./ApprovalLayout.js";
+import type { RefObject } from "preact";
 
 const MODES = ["glob", "prefix", "exact"] as const;
 const SCOPES = ["session", "project", "global", "skip"] as const;
@@ -23,6 +24,7 @@ export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
   const filePath = request.filePath ?? "";
   const operation = request.writeOperation ?? "modify";
   const outsideWorkspace = request.outsideWorkspace ?? false;
+  const purpose = `${operation === "create" ? "Create" : "Modify"} ${outsideWorkspace ? "a file outside the workspace" : "a file"}`;
 
   const [trustScope, setTrustScope] = useState<(typeof TRUST_SCOPES)[number]>(
     outsideWorkspace ? "pattern" : "all-files",
@@ -152,6 +154,7 @@ export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      purpose={purpose}
       rulesContent={rulesJsx}
       rulesModified={!isSkipped}
       primaryLabel="Accept"

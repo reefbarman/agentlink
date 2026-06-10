@@ -48,6 +48,15 @@ export interface SlashCommandInfo {
 }
 
 /** A question posed by the agent via the ask_user tool */
+export interface QuestionRequest {
+  id: string;
+  /** Visible explanation shown above structured questions. */
+  context: string;
+  questions: Question[];
+  /** When set, the question is from a background agent with this task name. */
+  backgroundTask?: string;
+}
+
 export interface Question {
   id: string;
   type:
@@ -292,13 +301,9 @@ export type ExtensionMessage =
       pattern?: string;
       error?: string;
     }
-  | {
+  | ({
       type: "agentQuestionRequest";
-      id: string;
-      questions: Question[];
-      /** When set, the question is from a background agent with this task name. */
-      backgroundTask?: string;
-    }
+    } & QuestionRequest)
   | { type: "agentQuestionCleared"; id: string }
   | {
       type: "agentQuestionProgress";

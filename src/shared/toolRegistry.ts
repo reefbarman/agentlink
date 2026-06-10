@@ -72,6 +72,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Create a new file or overwrite an existing file. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. Benefits from VS Code's format-on-save. Returns any user edits and new diagnostics.",
   },
+  propose_memory: {
+    label: "Propose durable memory",
+    description:
+      "Propose an approved cross-session memory/config update. Resolves the correct global or project target across instructions, skills, commands, and memory.md, validates the proposal, and always requires explicit user approval before writing.",
+  },
   apply_diff: {
     label: "Search/replace with diff review",
     description:

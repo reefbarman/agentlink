@@ -113,12 +113,12 @@ textarea {
 
 .browser-instance-tabs {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   min-height: 35px;
   padding: 0 12px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
+  /* Container background shows through as a separator between wrapped rows. */
+  row-gap: 1px;
   background: var(--vscode-editorGroupHeader-tabsBackground, var(--ag-panel-2));
   border-bottom: 1px solid
     var(--vscode-editorGroupHeader-tabsBorder, var(--ag-border));
@@ -129,7 +129,7 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  align-self: stretch;
+  height: 35px;
   gap: 10px;
   min-width: 150px;
   max-width: 240px;
@@ -1145,6 +1145,7 @@ pre {
   }
 
   .instance-tab {
+    height: 32px;
     min-width: 132px;
     max-width: 72vw;
     padding: 0 8px;

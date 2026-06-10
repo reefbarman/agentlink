@@ -1,9 +1,12 @@
-import { useState } from "preact/hooks";
 import type { ComponentChildren, RefObject } from "preact";
+
+import { useState } from "preact/hooks";
 
 export interface ApprovalLayoutProps {
   queuePosition?: number;
   queueTotal?: number;
+  /** Short description of what capability/action needs approval. */
+  purpose: string;
   /** Card-specific content (terminal box, file card, rename display, path) */
   children: ComponentChildren;
   /** Rules editor JSX, rendered inside collapsible section */
@@ -23,6 +26,7 @@ export interface ApprovalLayoutProps {
 export function ApprovalLayout({
   queuePosition,
   queueTotal,
+  purpose,
   children,
   rulesContent,
   rulesModified,
@@ -49,9 +53,17 @@ export function ApprovalLayout({
       <div class="approval-card-scroll">
         {/* Header */}
         <div class="header">
-          <span class="header-title">
-            <span class="codicon codicon-warning" /> APPROVAL REQUIRED
-          </span>
+          <div
+            class="header-text"
+            role="heading"
+            aria-level={2}
+            aria-label={`Approval required: ${purpose}`}
+          >
+            <span class="header-title">
+              <span class="codicon codicon-warning" /> Approval required
+            </span>
+            <span class="header-purpose">{purpose}</span>
+          </div>
           {badge && <span class="badge">{badge}</span>}
         </div>
 

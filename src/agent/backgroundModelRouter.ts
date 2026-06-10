@@ -7,6 +7,7 @@ import type {
 
 import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
+import { CODEX_DEFAULT_MODEL } from "./providers/codex/models.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
 interface TaskRouteRule {
@@ -100,7 +101,8 @@ function scoreModel(model: ModelInfo, tier: ModelTier): number {
     (caps.supportsToolUse ? 20 : 0);
 
   const cheapHints = /haiku|spark|mini|lite/;
-  const deepHints = /opus|max|5\.3|sonnet|pro/;
+  const deepHints = /fable|mythos|opus|max|5\.3|sonnet|pro/;
+  const isFable = /fable/.test(id);
   const isOpus = /opus/.test(id);
   const isSonnet = /sonnet/.test(id);
 
@@ -110,6 +112,7 @@ function scoreModel(model: ModelInfo, tier: ModelTier): number {
       (caps.supportsThinking ? 120 : -120) +
       (deepHints.test(id) ? 80 : 0) +
       (cheapHints.test(id) ? -100 : 0) +
+      (isFable ? 60 : 0) +
       (isOpus ? 30 : 0) +
       (isSonnet ? 10 : 0)
     );
@@ -130,6 +133,7 @@ function scoreModel(model: ModelInfo, tier: ModelTier): number {
     (caps.supportsThinking ? 30 : 0) +
     (cheapHints.test(id) ? 20 : 0) +
     (deepHints.test(id) ? 20 : 0) +
+    (isFable ? 60 : 0) +
     (isSonnet ? 25 : 0) +
     (isOpus ? -10 : 0)
   );
@@ -271,7 +275,16 @@ export async function resolveBackgroundRoute(
     const ranked = [...candidates].sort(
       (a, b) => scoreModel(b, modelTier) - scoreModel(a, modelTier),
     );
-    const picked = ranked[0];
+    let picked = ranked[0];
+
+    // On the codex/gpt side, default non-cheap background work to gpt-5.5 rather
+    // than letting the heuristic land on a larger-context but OAuth-unavailable
+    // model (e.g. gpt-5.4-pro, which the ChatGPT backend rejects). Cheap-tier
+    // tasks keep their scored pick (the mini model).
+    if (picked.provider === "codex" && modelTier !== "cheap") {
+      const codexDefault = candidates.find((m) => m.id === CODEX_DEFAULT_MODEL);
+      if (codexDefault) picked = codexDefault;
+    }
 
     const preferredHit = preferredAuthenticated.includes(picked.provider);
     const fallbackUsed = !preferredHit;

@@ -9,7 +9,11 @@ import type {
   ReasoningEffort,
   TextBlock,
 } from "./providers/types.js";
-import { getEffectiveHistory, injectSyntheticToolResults } from "./condense.js";
+import {
+  enforceToolResultAdjacency,
+  getEffectiveHistory,
+  injectSyntheticToolResults,
+} from "./condense.js";
 
 import type { AgentMode } from "./modes.js";
 import { BUILT_IN_MODES } from "./modes.js";
@@ -138,19 +142,6 @@ export class AgentSession {
     reason?: string;
     followUp?: string;
   } | null = null;
-
-  /**
-   * Turn-bound media attachments (images + PDFs).
-   * Keyed by message index so media survives retries and isn't confused with interjections.
-   * Non-persistent — ephemeral within the running session.
-   */
-  private _pendingMedia = new Map<
-    number,
-    {
-      images: Array<{ name: string; mimeType: string; base64: string }>;
-      documents: Array<{ name: string; mimeType: string; base64: string }>;
-    }
-  >();
 
   private constructor(opts: {
     mode: string;
@@ -284,8 +275,15 @@ export class AgentSession {
    * plus persisted runtime-error notes that are for local context only.
    */
   getMessages(): AgentMessage[] {
-    return injectSyntheticToolResults(
-      getEffectiveHistory(this.messages).filter((m) => !m.runtimeError),
+    // enforceToolResultAdjacency is the last line of defense: after all
+    // history transforms (condense slicing, resume-context insertion,
+    // synthetic results), every tool_result must still pair 1:1 with a
+    // tool_use in the immediately preceding assistant turn or providers
+    // reject the request with a 400.
+    return enforceToolResultAdjacency(
+      injectSyntheticToolResults(
+        getEffectiveHistory(this.messages).filter((m) => !m.runtimeError),
+      ),
     );
   }
 
@@ -312,11 +310,21 @@ export class AgentSession {
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       origin?: "vscode" | "browser";
+      images?: Array<{ name: string; mimeType: string; base64: string }>;
+      documents?: Array<{ name: string; mimeType: string; base64: string }>;
     },
   ): void {
     this.messages.push({
       role: "user",
       content: text,
+      ...(opts?.images?.length || opts?.documents?.length
+        ? {
+            media: {
+              images: opts.images ?? [],
+              documents: opts.documents ?? [],
+            },
+          }
+        : {}),
       ...(opts &&
       (opts.displayText ||
         opts.isSlashCommand ||
@@ -676,34 +684,6 @@ export class AgentSession {
     const pending = this._pendingModeResume;
     this._pendingModeResume = null;
     return pending;
-  }
-
-  /** Store pending media (images/PDFs) bound to a specific message index. */
-  setPendingMedia(
-    messageIndex: number,
-    images?: Array<{ name: string; mimeType: string; base64: string }>,
-    documents?: Array<{ name: string; mimeType: string; base64: string }>,
-  ): void {
-    const imgs = images?.length ? images : [];
-    const docs = documents?.length ? documents : [];
-    if (imgs.length > 0 || docs.length > 0) {
-      this._pendingMedia.set(messageIndex, { images: imgs, documents: docs });
-    }
-  }
-
-  /** Get pending media for a specific message index. Non-destructive — safe across retries. */
-  getPendingMedia(messageIndex: number):
-    | {
-        images: Array<{ name: string; mimeType: string; base64: string }>;
-        documents: Array<{ name: string; mimeType: string; base64: string }>;
-      }
-    | undefined {
-    return this._pendingMedia.get(messageIndex);
-  }
-
-  /** Clear all pending media. Call after the engine successfully processes the turn. */
-  clearPendingMedia(): void {
-    this._pendingMedia.clear();
   }
 
   createAbortController(): AbortController {

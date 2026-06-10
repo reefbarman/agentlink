@@ -383,7 +383,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
-  it("renders instance tabs with status and selects an active instance by default", async () => {
+  it("keeps the current instance selected instead of jumping to an active one", async () => {
     render(
       h(BrowserGatewayApp, {
         authToken: "test-token",
@@ -398,17 +398,38 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
 
     const workspaceTab = screen.getByRole("tab", { name: /Workspace/ });
-    const workerTab = screen.getByRole("tab", { name: /Worker/ });
+    const workerTab = await screen.findByRole("tab", { name: /Worker/ });
+
+    // Worker is "working" in the default mock, but selection must stay put.
+    await waitFor(() => {
+      expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+    });
+    expect(workerTab.getAttribute("aria-selected")).toBe("false");
+
+    fireEvent.click(workerTab);
 
     await waitFor(() => {
       expect(workerTab.getAttribute("aria-selected")).toBe("true");
     });
+  });
 
-    fireEvent.click(workspaceTab);
+  it("renders instance tabs sorted by name regardless of response order", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
 
+    // The default mock lists Workspace before Worker; tabs sort by name.
     await waitFor(() => {
-      expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+      expect(screen.getAllByRole("tab")).toHaveLength(2);
     });
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs[0]?.textContent).toContain("Worker");
+    expect(tabs[1]?.textContent).toContain("Workspace");
   });
 
   it("renders pending diffs in the Review pane", async () => {
@@ -765,19 +786,19 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     );
 
     const workspaceTab = await screen.findByRole("tab", { name: /Workspace/ });
-    const workerTab = screen.getByRole("tab", { name: /Worker/ });
+    const workerTab = await screen.findByRole("tab", { name: /Worker/ });
 
     await waitFor(() => {
-      expect(workerTab.getAttribute("aria-selected")).toBe("true");
+      expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
     });
 
-    fireEvent.pointerDown(workspaceTab, {
+    fireEvent.pointerDown(workerTab, {
       pointerType: "touch",
       pointerId: 1,
       clientX: 12,
       clientY: 8,
     });
-    fireEvent.pointerUp(workspaceTab, {
+    fireEvent.pointerUp(workerTab, {
       pointerType: "touch",
       pointerId: 1,
       clientX: 14,
@@ -785,7 +806,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
 
     await waitFor(() => {
-      expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+      expect(workerTab.getAttribute("aria-selected")).toBe("true");
     });
   });
 
@@ -800,27 +821,27 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     );
 
     const workspaceTab = await screen.findByRole("tab", { name: /Workspace/ });
-    const workerTab = screen.getByRole("tab", { name: /Worker/ });
+    const workerTab = await screen.findByRole("tab", { name: /Worker/ });
 
     await waitFor(() => {
-      expect(workerTab.getAttribute("aria-selected")).toBe("true");
+      expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
     });
 
-    fireEvent.pointerDown(workspaceTab, {
+    fireEvent.pointerDown(workerTab, {
       pointerType: "touch",
       pointerId: 1,
       clientX: 12,
       clientY: 8,
     });
-    fireEvent.pointerUp(workspaceTab, {
+    fireEvent.pointerUp(workerTab, {
       pointerType: "touch",
       pointerId: 1,
       clientX: 32,
       clientY: 28,
     });
 
-    expect(workerTab.getAttribute("aria-selected")).toBe("true");
-    expect(workspaceTab.getAttribute("aria-selected")).toBe("false");
+    expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+    expect(workerTab.getAttribute("aria-selected")).toBe("false");
   });
 
   it("recovers from a stale bootstrap instance id before fetching routed sessions", async () => {
@@ -842,13 +863,15 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input]) =>
-          String(input).includes("/api/sessions?instanceId=instance-2"),
+          String(input).includes("/api/sessions?instanceId=instance-1"),
         ),
       ).toBe(true);
     });
 
     expect(
-      screen.getByRole("tab", { name: /Worker/ }).getAttribute("aria-selected"),
+      screen
+        .getByRole("tab", { name: /Workspace/ })
+        .getAttribute("aria-selected"),
     ).toBe("true");
   });
 

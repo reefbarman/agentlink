@@ -1,9 +1,14 @@
+import * as path from "path";
 import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { resolveAndOpenDocument, toPosition } from "./languageFeatures.js";
-import { getRelativePath } from "../util/paths.js";
+import { getRelativePath, tryGetFirstWorkspaceRoot } from "../util/paths.js";
+import {
+  anyMemoryProtectedPath,
+  isMemoryProtectedPath,
+} from "../approvals/protectedPaths.js";
 
 import { type ToolResult } from "../shared/types.js";
 
@@ -182,9 +187,53 @@ export async function handleApplyCodeAction(
 
     const action = actions[params.index];
     const changedFiles: string[] = [];
+    const cachedTargetPath = path.isAbsolute(cachedActions.path)
+      ? cachedActions.path
+      : path.resolve(
+          tryGetFirstWorkspaceRoot() ?? process.cwd(),
+          cachedActions.path,
+        );
+    const cachedTargetIsProtected = isMemoryProtectedPath(cachedTargetPath);
+
+    if (cachedTargetIsProtected && action.command) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "rejected",
+              action: action.title,
+              reason:
+                "Code action includes an executable command while targeting a protected instructions/memory file. Command side effects cannot be preflighted; use write_file/apply_diff with explicit user approval or propose_memory instead.",
+              protected_files: [getRelativePath(cachedTargetPath)],
+            }),
+          },
+        ],
+      };
+    }
 
     // Apply workspace edit if present
     if (action.edit) {
+      const editFiles = action.edit.entries().map(([uri]) => uri.fsPath);
+      if (anyMemoryProtectedPath(editFiles)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "rejected",
+                action: action.title,
+                reason:
+                  "Code action edits a protected instructions/memory file. Use write_file/apply_diff with explicit user approval or propose_memory instead.",
+                protected_files: editFiles
+                  .filter((filePath) => anyMemoryProtectedPath([filePath]))
+                  .map((filePath) => getRelativePath(filePath)),
+              }),
+            },
+          ],
+        };
+      }
+
       const success = await vscode.workspace.applyEdit(action.edit);
       if (!success) {
         return {

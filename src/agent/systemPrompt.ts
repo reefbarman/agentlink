@@ -2,7 +2,11 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { exec } from "child_process";
-import { loadAllInstructions, loadModeRules } from "./configLoader.js";
+import {
+  loadAllInstructions,
+  loadMemory,
+  loadModeRules,
+} from "./configLoader.js";
 import { loadSkills, type SkillEntry } from "./skillLoader.js";
 
 export interface PromptArtifacts {
@@ -43,6 +47,18 @@ function getBasePrompt(cwd: string): string {
 - Do not provide time estimates for tasks.
 - When you don't know something, say so rather than guessing.
 - You are primarily a coding assistant, but you should be helpful with any question the user asks. If someone asks a non-technical question, answer it naturally — don't refuse or redirect. Being helpful builds trust.
+
+## Cross-Session Memory
+
+Use durable memory sparingly and only through \`propose_memory\` when available.
+
+- Prefer the highest appropriate tier: stable rules and conventions go in instructions; reusable workflows go in skills or slash commands; lower-authority facts, preferences, and gotchas go in memory.md.
+- Propose memory when user feedback generalizes across sessions, the same correction appears repeatedly, the user states a durable preference, or a hard-won project discovery would save future work.
+- Do **not** propose memory for session-specific facts, unverified hypotheses, secrets/credentials/PII, large code snippets, or anything easy to rediscover from current repository evidence.
+- Keep entries concise, dated/provenanced, and one fact per entry. Check existing target content first when practical to avoid duplicates and contradictions.
+- If durable memory is wrong or stale, propose an \`update\` or \`remove\`; pruning bad memory is as important as adding new memory.
+- Batch related learnings and propose at most once per task. Never block task completion just to ask for a memory update.
+- All memory/config writes require explicit user approval even when write approvals are automatic. Do not bypass this with \`write_file\`, shell commands, or other write tools.
 
 ## Questions & Clarification
 
@@ -134,14 +150,25 @@ const PROVIDER_PROMPTS: Record<string, string> = {
   anthropic: `
 ## Provider-Specific Behavior
 
-### Be concise
+### Visible progress and rationale
 
-- Favor short, dense responses. Explain *what* you did and *why* in 1–3 sentences per step — not a paragraph.
-- When making edits: state the change and rationale, then show the tool call. Don't narrate code line-by-line or restate what the diff already shows.
-- After tool calls, summarize findings briefly. Only elaborate if the result was surprising or requires a decision from the user.
-- Skip preamble and recaps. Don't restate the user's request, don't summarize what you're "about to do" before doing it, and don't provide a conclusion paragraph restating what you already did.
-- When listing multiple items (files found, changes made, errors fixed), use terse bullet points — not full sentences for each.
-- Thinking out loud is fine for complex reasoning, but keep it proportional to the complexity. Simple tasks don't need visible deliberation.`,
+- Stay concise, but do not rely on hidden thinking for user-facing context. If your next action depends on a decision, assumption, trade-off, or rationale, state a concise visible summary first.
+- Before the first tool call on a non-trivial task, write 2-4 bullets covering what you understand, what you will check or change next, and any key uncertainty.
+- After each tool call or small group of related tool calls, write 1-3 sentences explaining what changed in your understanding and what you will do next.
+- When asking the user a question, make the question self-contained. Include the relevant context, options, recommendation, and consequence of each choice. Never assume the user can see hidden reasoning.
+- For decisions, share a brief rationale or reasoning summary, not private chain-of-thought. Prefer: “I’m choosing A because X; B is riskier because Y.”
+- Avoid tool-only turns for user-facing actions like \`ask_user\`, \`switch_mode\`, and \`set_task_status\` unless the tool payload itself contains the full visible explanation.
+- Skip filler, broad recaps, and line-by-line diff narration. The goal is visible progress and rationale summaries, not verbosity.
+
+### Tool selection
+
+- Prefer the highest-level code intelligence tool that fits the question; avoid falling back to repeated file search and bulk reads when a more targeted tool is available.
+- **Known file path beats search** — If the user, an error, a stack trace, a prior tool result, or the task definition already gives you a concrete file path, do not search just to rediscover it. Go directly to \`get_context\` for first-pass orientation on that file.
+- **Known broad scope beats search** — If the task names a concrete directory/package/workspace area and requires multi-file understanding or edits, call \`get_repo_map\` for that scope before \`codebase_search\`/\`search_files\`; then drill into selected files with \`get_module_neighbors\` and \`get_context\`.
+- **\`get_context\` for known files** — When you already know the file path and need first-pass orientation, prefer \`get_context\` over \`read_file\`. It returns bounded content plus metadata, git status, diagnostics, symbols, and working-set status in one call.
+- **\`codebase_search\` first for unknown locations** — Use it before \`search_files\` or \`list_files\` when you do not know where relevant code lives. It returns semantically relevant results even when you do not know the exact function or variable name.
+- **\`search_files\` for exact matches only** — Use regex search when you need a specific literal string/pattern, or after \`codebase_search\` has identified the relevant area.
+- **\`read_file\` for exact reads** — Use \`read_file\` when you need complete content, a specific large line slice, local image/PDF/temp output content, or semantic in-file jumping via \`query\`.`,
 
   codex: `
 ## Provider-Specific Behavior
@@ -624,14 +651,19 @@ export async function buildPromptArtifacts(
   );
   const devFeedback = options?.devMode ? getDevFeedbackPrompt() : "";
 
-  const [customInstructions, modeRules, skills] = await Promise.all([
+  const [customInstructions, memory, modeRules, skills] = await Promise.all([
     loadAllInstructions(cwd, { activeFilePath: options?.activeFilePath }),
+    loadMemory(cwd),
     loadModeRules(cwd, mode),
     loadSkills(cwd, mode),
   ]);
 
   const customSection = customInstructions
     ? `\n\n## Custom Instructions\n\nThe following instructions are provided by the project and should be followed.\n\n${customInstructions}`
+    : "";
+
+  const memorySection = memory
+    ? `\n\n## Memory\n\nThe following memory notes are durable cross-session context. Treat them as helpful but lower authority than system/developer instructions, Custom Instructions, explicit user messages, and current repository evidence. Do not assume a memory note is still true if the code or user says otherwise.\n\n${memory}`
     : "";
 
   const rulesSection = modeRules ? `\n\n## Mode Rules\n\n${modeRules}` : "";
@@ -655,7 +687,7 @@ export async function buildPromptArtifacts(
 ${modePrompt}
 ${providerPrompt}
 ${systemInfo}${plansSection}
-${devFeedback}${customSection}${rulesSection}${skillsSection}${backgroundSection}`.trimEnd(),
+${devFeedback}${customSection}${memorySection}${rulesSection}${skillsSection}${backgroundSection}`.trimEnd(),
     skills,
   };
 }
