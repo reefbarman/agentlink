@@ -157,13 +157,36 @@ function normalizeReasoningEffort(
   return supported[0] ?? "none";
 }
 
-/** Estimate the character size of a set of tool results (for token estimation). */
-function estimateToolResultChars(toolResults: ToolCallResult[]): number {
-  return toolResults.reduce(
-    (n, tr) =>
-      n +
-      JSON.stringify(toolResultToContent(tr.result, undefined, tr.toolName))
-        .length,
+function estimateContentCharsForTokens(value: unknown): number {
+  if (typeof value === "string") return value.length;
+  if (value === null || value === undefined) return 0;
+  if (typeof value !== "object") return String(value).length;
+
+  if (Array.isArray(value)) {
+    return value.reduce(
+      (n, item) => n + estimateContentCharsForTokens(item),
+      0,
+    );
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.type === "image" || record.type === "document") {
+    return 1_024;
+  }
+
+  return Object.entries(record).reduce(
+    (n, [key, nested]) =>
+      n + key.length + estimateContentCharsForTokens(nested),
+    0,
+  );
+}
+
+/** Estimate the character size of a set of tool result contents. */
+function estimateToolResultContentChars(
+  contents: Array<string | ContentBlock[]>,
+): number {
+  return contents.reduce(
+    (n, content) => n + estimateContentCharsForTokens(content),
     0,
   );
 }
@@ -537,6 +560,7 @@ export class AgentEngine {
       let retryCount = 0;
       let emptyResponseRetryCount = 0;
       let emptyResponseCondenseAttempted = false;
+      let contextTooLongCondenseAttempted = false;
       let thinkingSignatureRetryAttempted = false;
       let toolPairingRepairAttempts = 0;
       const MAX_TOOL_PAIRING_REPAIR_ATTEMPTS = 2;
@@ -1003,19 +1027,25 @@ export class AgentEngine {
               (streamErr as { code?: string }).code ===
                 "context_window_exceeded");
           if (isContextTooLong) {
-            yield {
-              type: "warning",
-              message:
-                "Context limit exceeded — condensing conversation and retrying…",
-            };
-            yield* this.condenseSession(
-              session,
-              true,
-              provider,
-              preservedContext,
-            );
-            if (signal.aborted) break;
-            continue;
+            if (!contextTooLongCondenseAttempted) {
+              contextTooLongCondenseAttempted = true;
+              yield {
+                type: "warning",
+                message:
+                  "Context limit exceeded — condensing conversation and retrying…",
+              };
+              const condensed = yield* this.condenseSession(
+                session,
+                true,
+                provider,
+                preservedContext,
+              );
+              if (signal.aborted) break;
+              if (condensed) {
+                continue;
+              }
+            }
+            throw streamErr;
           }
 
           // Auth errors: try refreshing credentials before failing.
@@ -1193,15 +1223,17 @@ export class AgentEngine {
               message:
                 "Empty responses persisted — condensing conversation and retrying…",
             };
-            yield* this.condenseSession(
+            const condensed = yield* this.condenseSession(
               session,
               true,
               provider,
               preservedContext,
             );
             if (signal.aborted) break;
-            emptyResponseRetryCount = 0;
-            continue;
+            if (condensed) {
+              emptyResponseRetryCount = 0;
+              continue;
+            }
           }
 
           yield {
@@ -1434,20 +1466,21 @@ export class AgentEngine {
           yield { type: "final_marker", marker: finalMarkerForTurn };
           pendingFinalMarker = null;
         }
+        const toolResultContents = toolResults.map((tr) =>
+          toolResultToContent(tr.result, tr.tool_use_id, tr.toolName),
+        );
         session.appendToolResults(
-          toolResults.map((tr) => ({
+          toolResults.map((tr, index) => ({
             type: "tool_result" as const,
             tool_use_id: tr.tool_use_id,
-            content: toolResultToContent(
-              tr.result,
-              tr.tool_use_id,
-              tr.toolName,
-            ),
+            content: toolResultContents[index]!,
           })),
         );
 
         // Feed estimated token size of tool results to the running accumulator.
-        session.addEstimatedTokens(estimateToolResultChars(toolResults));
+        session.addEstimatedTokens(
+          estimateToolResultContentChars(toolResultContents),
+        );
 
         // Internal tools (todo_write) don't flow through executeToolCalls, so emit
         // their completion events now. Dispatch-tool completion events are emitted
@@ -1808,7 +1841,7 @@ export class AgentEngine {
     isAutomatic: boolean,
     provider?: ModelProvider,
     preservedContext?: { toolNames: string[]; mcpServerNames?: string[] },
-  ): AsyncGenerator<AgentEvent> {
+  ): AsyncGenerator<AgentEvent, boolean> {
     const condenseStartedAt = Date.now();
     yield { type: "condense_start", isAutomatic };
 
@@ -1840,7 +1873,7 @@ export class AgentEngine {
         code: result.errorCode,
         actions: result.errorActions,
       };
-      return;
+      return false;
     }
 
     const condenseDurationMs = Date.now() - condenseStartedAt;
@@ -1862,11 +1895,12 @@ export class AgentEngine {
     );
 
     session.replaceMessages(messagesWithUiHints);
-    // Reset lastInputTokens to estimated post-condense value so we don't immediately re-trigger
+    // Reset token accounting to the estimated post-condense request size so we
+    // don't immediately re-trigger from stale post-response estimates.
     session.lastInputTokens = result.newInputTokens;
-    // Clear output and cache-read tokens; post-condense estimates have no prior-turn component.
     session.lastOutputTokens = 0;
     session.lastCacheReadTokens = 0;
+    session.estimatedAccumulatedTokens = 0;
 
     yield {
       type: "condense",
@@ -1877,5 +1911,6 @@ export class AgentEngine {
       metadata: result.metadata,
       durationMs: condenseDurationMs,
     };
+    return true;
   }
 }

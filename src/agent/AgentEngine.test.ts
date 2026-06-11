@@ -189,6 +189,7 @@ describe("AgentEngine", () => {
             prevInputTokens: 173_000,
             newInputTokens: 20_000,
           };
+          return true;
         });
 
       const events = await collectEvents(engine.run(session));
@@ -226,6 +227,7 @@ describe("AgentEngine", () => {
             prevInputTokens: 183_000,
             newInputTokens: 20_000,
           };
+          return true;
         });
 
       await collectEvents(engine.run(session));
@@ -249,6 +251,7 @@ describe("AgentEngine", () => {
             prevInputTokens: 183_000,
             newInputTokens: 20_000,
           };
+          return true;
         });
 
       await collectEvents(engine.run(session));
@@ -1423,6 +1426,72 @@ describe("AgentEngine", () => {
       expect(streamCalls[1]?.messages[0]).toEqual(expectedImageMessage);
     });
 
+    it("does not count tool-result image base64 as raw text for auto-condense estimates", async () => {
+      let callCount = 0;
+      let estimateBeforeSecondRequest = 0;
+      let session: AgentSession;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        callCount += 1;
+        if (callCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_image",
+                name: "call_mcp_tool",
+                input: { server: "image", tool: "snapshot", input: {} },
+              },
+            ],
+          };
+        } else {
+          estimateBeforeSecondRequest = session.estimatedAccumulatedTokens;
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "done" }],
+          };
+        }
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      session = await makeSession();
+      session.addUserMessage("inspect this image");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const condenseSpy = vi.spyOn(engine, "condenseSession");
+      engine.setToolContext({
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+        mcpHub: {
+          getToolDefs() {
+            return [];
+          },
+          getServerConfig() {
+            return { toolPolicy: "allow" };
+          },
+          callTool: vi.fn().mockResolvedValue({
+            content: [
+              {
+                type: "image",
+                data: "a".repeat(900_000),
+                mimeType: "image/png",
+              },
+            ],
+          }),
+        } as unknown as ToolDispatchContext["mcpHub"],
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(callCount).toBe(2);
+      expect(condenseSpy).not.toHaveBeenCalled();
+      expect(estimateBeforeSecondRequest).toBeGreaterThan(0);
+      expect(estimateBeforeSecondRequest).toBeLessThan(1_000);
+    });
+
     it("auto-retries Codex processing errors and still marks exhausted failures retryable", async () => {
       let attempts = 0;
       const provider = makeMockProvider();
@@ -1784,8 +1853,9 @@ describe("AgentEngine", () => {
       // Intercept condenseSession to track it and mark condenseCalled
       const originalCondense = (engine as any).condenseSession;
       (engine as any).condenseSession = async function* (...args: any[]) {
-        yield* originalCondense.apply(engine, args);
+        const result = yield* originalCondense.apply(engine, args);
         condenseCalled = true;
+        return result;
       };
 
       const events = await collectEvents(engine.run(session));
@@ -1805,7 +1875,7 @@ describe("AgentEngine", () => {
   });
 
   describe("condenseSession", () => {
-    it("clears lastOutputTokens and lastCacheReadTokens after successful condense", async () => {
+    it("clears stale token accounting after successful condense", async () => {
       mocks.mockSummarizeConversation.mockResolvedValue({
         messages: [{ role: "user", content: "summary", isSummary: true }],
         summary: "summary",
@@ -1818,6 +1888,7 @@ describe("AgentEngine", () => {
       session.lastInputTokens = 180_000;
       session.lastOutputTokens = 5_000;
       session.lastCacheReadTokens = 100_000;
+      session.addEstimatedTokens(120_000);
 
       const engine = new AgentEngine(makeRegistry());
       const events = await collectEvents(engine.condenseSession(session, true));
@@ -1826,6 +1897,8 @@ describe("AgentEngine", () => {
       expect(session.lastInputTokens).toBe(12_000);
       expect(session.lastOutputTokens).toBe(0);
       expect(session.lastCacheReadTokens).toBe(0);
+      expect(session.estimatedAccumulatedTokens).toBe(0);
+      expect(session.estimatedInputUsed).toBe(12_000);
     });
 
     it("propagates structured condense error metadata", async () => {
