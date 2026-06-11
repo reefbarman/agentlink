@@ -622,6 +622,90 @@ describe("AgentSessionManager checkpoints", () => {
     );
   });
 
+  it("creates a checkpoint when a queued message is injected mid-turn", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    const messages: AgentMessage[] = [];
+    (session as any).messageCount = 0;
+    (session as any).isAborted = false;
+    (session as any).lastActiveAt = 123;
+    (session as any).getAllMessages = vi.fn(() => messages);
+    (session as any).addUserMessage = vi.fn((text: string) => {
+      messages.push({ role: "user", content: text });
+      (session as any).messageCount = messages.length;
+      session.lastActiveAt += 1;
+    });
+    (session as any).consumePendingInterjection = vi.fn(() => null);
+    (session as any).consumePendingModeResume = vi.fn(() => null);
+    (session as any).autoTitle = vi.fn();
+
+    const checkpointManager = {
+      createCheckpoint: vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: "cp-before-interjection",
+          commitHash: "hash-before-interjection",
+          turnIndex: 1,
+          createdAt: 111,
+        })
+        .mockResolvedValueOnce({
+          id: "cp-after-interjection",
+          commitHash: "hash-after-interjection",
+          turnIndex: 2,
+          createdAt: 222,
+        }),
+    };
+    (mgr as any).checkpointManager = checkpointManager;
+
+    const engine = {
+      run: vi.fn(async function* () {
+        messages.push({ role: "user", content: "queued prompt" });
+        (session as any).messageCount = messages.length;
+        session.lastActiveAt += 1;
+        yield {
+          type: "user_interjection",
+          text: "queued prompt",
+          queueId: "queue-1",
+        };
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+    (mgr as any).engine = engine;
+
+    const onEvent = vi.fn();
+    mgr.onEvent = onEvent;
+
+    await mgr.sendMessage(session.id, "first prompt", session.mode);
+
+    expect(checkpointManager.createCheckpoint).toHaveBeenCalledTimes(2);
+    expect(checkpointManager.createCheckpoint).toHaveBeenNthCalledWith(1, 1);
+    expect(checkpointManager.createCheckpoint).toHaveBeenNthCalledWith(2, 2);
+    expect(mgr.getCheckpoints(session.id)).toEqual([
+      expect.objectContaining({
+        id: "cp-before-interjection",
+        turnIndex: 1,
+      }),
+      expect.objectContaining({
+        id: "cp-after-interjection",
+        turnIndex: 2,
+      }),
+    ]);
+    expect(onEvent).toHaveBeenCalledWith(
+      session.id,
+      expect.objectContaining({
+        type: "checkpoint_created",
+        checkpointId: "cp-before-interjection",
+        turnIndex: 1,
+      }),
+    );
+  });
+
   it("reverts to the selected checkpoint snapshot and persists checkpoint metadata", async () => {
     const sessionMessages: AgentMessage[] = [
       { role: "user", content: "first prompt" },
