@@ -38,7 +38,7 @@ describe("QuestionCard helpers", () => {
 });
 
 describe("QuestionCard rendering", () => {
-  it("renders visible context above the current question", () => {
+  it("does not render shared context inside the question card", () => {
     render(
       h(QuestionCard, {
         id: "question-1",
@@ -58,11 +58,37 @@ describe("QuestionCard rendering", () => {
     );
 
     expect(
-      screen.getByText(
+      screen.queryByText(
         "I found two viable paths and recommend the safer provider fix.",
       ),
-    ).toBeTruthy();
+    ).toBeNull();
+    expect(screen.queryByText("Agent needs input:")).toBeNull();
     expect(screen.getByText("Which scope should I implement?")).toBeTruthy();
+  });
+
+  it("renders question-specific context without shared context", () => {
+    render(
+      h(QuestionCard, {
+        id: "question-1",
+        context: "Shared intro for the whole ask.",
+        questions: [
+          {
+            id: "scope",
+            type: "multiple_choice",
+            context: "Scope context with the local recommendation.",
+            question: "Which scope should I implement?",
+            options: ["Provider fix", "UI-only fix"],
+            recommended: "Provider fix",
+          },
+        ],
+        onSubmit: vi.fn(),
+      }),
+    );
+
+    expect(
+      screen.getByText("Scope context with the local recommendation."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Shared intro for the whole ask.")).toBeNull();
   });
 
   it("keeps navigation outside the scrollable question body", () => {
@@ -74,6 +100,7 @@ describe("QuestionCard rendering", () => {
           {
             id: "scope",
             type: "multiple_choice",
+            context: "Long question context ".repeat(200),
             question: "Which scope should I implement?",
             options: ["Provider fix", "UI-only fix"],
             recommended: "Provider fix",
@@ -88,7 +115,13 @@ describe("QuestionCard rendering", () => {
 
     expect(body).toBeTruthy();
     expect(nav).toBeTruthy();
-    expect(body?.contains(screen.getByText(/Long context/))).toBe(true);
+    expect(body?.contains(screen.getByText(/Long question context/))).toBe(
+      true,
+    );
+    expect(body?.querySelector(".question-options")?.textContent).toContain(
+      "Provider fix",
+    );
+    expect(body?.querySelector(".question-other-input")).toBeTruthy();
     expect(body?.contains(nav)).toBe(false);
   });
 });

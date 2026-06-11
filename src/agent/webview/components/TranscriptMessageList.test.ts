@@ -148,3 +148,85 @@ describe("TranscriptMessageList final marker rendering", () => {
     expect(finalRegion?.querySelector(".tool-call-block")).toBeNull();
   });
 });
+
+describe("TranscriptMessageList background result rendering", () => {
+  it("renders background agent results as top-level chat rows", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "assistant-with-bg-result",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [
+          { type: "text", text: "I am checking the foreground path." },
+          {
+            type: "tool_call",
+            id: "tool-bg-result",
+            name: "get_background_result",
+            inputJson: JSON.stringify({ sessionId: "bg-1" }),
+            result: "Looks good overall.",
+            complete: true,
+          },
+          {
+            type: "bg_agent_result",
+            sessionId: "bg-1",
+            task: "Review implementation",
+            status: "completed",
+            resultText: "Looks good overall.",
+            summary: "No blocking issues found.",
+          },
+          { type: "text", text: "I will incorporate that result." },
+        ],
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const rows = Array.from(container.querySelectorAll(".assistant-message"));
+    expect(rows).toHaveLength(3);
+    expect(rows[0].textContent).toContain(
+      "I am checking the foreground path.",
+    );
+    expect(rows[1].textContent).toContain("Background Result");
+    expect(rows[1].textContent).toContain("Review implementation");
+    expect(rows[1].textContent).toContain("No blocking issues found.");
+    expect(rows[1].textContent).toContain("Looks good overall.");
+    expect(rows[2].textContent).toContain("I will incorporate that result.");
+    expect(container.querySelector(".tool-group-block")).toBeNull();
+  });
+
+  it("keeps the streaming indicator on the foreground assistant row", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "assistant-streaming-with-bg-result",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [
+          { type: "text", text: "Foreground work is still in progress." },
+          {
+            type: "bg_agent_result",
+            sessionId: "bg-2",
+            task: "Check tests",
+            status: "completed",
+            resultText: "Tests look covered.",
+          },
+        ],
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: true }),
+    );
+
+    const indicator = container.querySelector(".streaming-indicator");
+    const activeRow = indicator?.closest(".assistant-message");
+    const rows = Array.from(container.querySelectorAll(".assistant-message"));
+    expect(indicator).toBeTruthy();
+    expect(activeRow).toBe(rows[0]);
+    expect(activeRow?.textContent).not.toContain("Background Result");
+    expect(rows[1].textContent).toContain("Background Result");
+  });
+});

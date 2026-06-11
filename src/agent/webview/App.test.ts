@@ -90,6 +90,69 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
+  it("adds a visible background result block when get_background_result completes", () => {
+    const bgSessionId = "bg-result-live";
+    const task = "Review implementation";
+    const resultText = "The background review found no blocking issues.";
+
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "run review",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-spawn-bg",
+      toolName: "spawn_background_agent",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-spawn-bg",
+      toolName: "spawn_background_agent",
+      result: JSON.stringify({ sessionId: bgSessionId }),
+      durationMs: 12,
+      input: { task, message: "Review the implementation." },
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-bg-result",
+      toolName: "get_background_result",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-bg-result",
+      toolName: "get_background_result",
+      result: resultText,
+      durationMs: 20,
+      input: { sessionId: bgSessionId },
+    });
+
+    const assistant = state.messages[state.messages.length - 1];
+    expect(assistant?.role).toBe("assistant");
+    expect(assistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "tool-bg-result",
+          name: "get_background_result",
+          result: resultText,
+          complete: true,
+        }),
+        {
+          type: "bg_agent_result",
+          sessionId: bgSessionId,
+          task,
+          status: "completed",
+          resultText,
+          summary: undefined,
+        },
+      ]),
+    );
+  });
+
   it("marks incomplete tool calls complete when the turn errors", () => {
     const toolCallId = "tool-error-stop";
 
@@ -215,6 +278,87 @@ describe("webview App reducer background agent launch blocks", () => {
       result: JSON.stringify({ total_lines: 10 }),
       complete: true,
       durationMs: 6,
+    });
+  });
+
+  it("posts ask_user shared context as an assistant chat message", () => {
+    const state = reducer(initialState, {
+      type: "SET_QUESTION",
+      id: "question-1",
+      context: "I found two viable paths and recommend the provider fix.",
+      questions: [
+        {
+          id: "scope",
+          type: "multiple_choice",
+          question: "Which scope should I implement?",
+          options: ["Provider fix", "UI-only fix"],
+        },
+      ],
+    });
+
+    expect(state.questionRequest).toMatchObject({
+      id: "question-1",
+      context: "I found two viable paths and recommend the provider fix.",
+    });
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({
+      id: "question-context-question-1",
+      role: "assistant",
+      blocks: [
+        {
+          type: "text",
+          text: "I found two viable paths and recommend the provider fix.",
+        },
+      ],
+    });
+
+    const repeated = reducer(state, {
+      type: "SET_QUESTION",
+      id: "question-1",
+      context: "I found two viable paths and recommend the provider fix.",
+      questions: [],
+    });
+    expect(repeated.messages).toHaveLength(1);
+  });
+
+  it("restores ask_user shared context as assistant text", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "What next?" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-ask-user",
+            name: "ask_user",
+            input: {
+              context: "Shared **markdown** context for the decision.",
+              questions: [
+                {
+                  id: "scope",
+                  type: "multiple_choice",
+                  question: "Which scope?",
+                  options: ["A", "B"],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    const assistant = restored[1];
+    expect(assistant?.role).toBe("assistant");
+    expect(assistant?.blocks[0]).toEqual({
+      type: "text",
+      text: "Shared **markdown** context for the decision.",
+    });
+    expect(assistant?.blocks[1]).toMatchObject({
+      type: "tool_call",
+      id: "tool-ask-user",
+      name: "ask_user",
     });
   });
 
@@ -719,7 +863,7 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
-  it("projects persisted final markers and hides set_task_status tool calls", async () => {
+  it("projects persisted final markers with expandable set_task_status tool input", async () => {
     const { agentMessagesToChatMessages } = await import("./App");
 
     const restored = agentMessagesToChatMessages([
@@ -771,7 +915,90 @@ describe("webview App reducer background agent launch blocks", () => {
         label: "Implement this",
         prompt: "Please implement this plan.",
       },
+      toolCall: {
+        id: "final-1",
+        name: "set_task_status",
+        inputJson: JSON.stringify({ status: "waiting_for_user" }),
+        result: '{"ok":true}',
+      },
     });
+  });
+
+  it("keeps unhosted set_task_status calls visible during historical projection", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "give me a prompt" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "rejected-final",
+            name: "set_task_status",
+            input: {
+              status: "completed",
+              summary: "Here’s the prompt.",
+            },
+          },
+          {
+            type: "tool_use",
+            id: "final-ok",
+            name: "set_task_status",
+            input: {
+              status: "completed",
+              summary: "Prompt provided above.",
+            },
+          },
+        ],
+        uiHint: {
+          finalMarker: {
+            status: "completed",
+            source: "tool",
+            summary: "Prompt provided above.",
+            toolCall: {
+              id: "final-ok",
+              name: "set_task_status",
+              inputJson: JSON.stringify({
+                status: "completed",
+                summary: "Prompt provided above.",
+              }),
+            },
+          },
+        },
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "rejected-final",
+            content: '{"error":"Final summary promises an artifact"}',
+          },
+          {
+            type: "tool_result",
+            tool_use_id: "final-ok",
+            content: '{"ok":true}',
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored).toHaveLength(2);
+    expect(restored[1]?.blocks).toEqual([
+      {
+        type: "tool_call",
+        id: "rejected-final",
+        name: "set_task_status",
+        inputJson: JSON.stringify({
+          status: "completed",
+          summary: "Here’s the prompt.",
+        }),
+        result: '{"error":"Final summary promises an artifact"}',
+        complete: true,
+      },
+    ]);
+    expect(restored[1]?.finalMarker?.toolCall?.id).toBe("final-ok");
   });
 
   it("preserves marker-only final messages during historical projection", async () => {
@@ -820,6 +1047,15 @@ describe("webview App reducer background agent launch blocks", () => {
         status: "completed",
         source: "tool",
         summary: "One-shot test complete.",
+        toolCall: {
+          id: "final-only-1",
+          name: "set_task_status",
+          inputJson: JSON.stringify({
+            status: "completed",
+            summary: "One-shot test complete.",
+          }),
+          result: '{"ok":true}',
+        },
       },
     });
   });
@@ -1095,6 +1331,39 @@ describe("webview App reducer background agent launch blocks", () => {
       role: "user",
       content: "hello from remote",
       origin: "browser",
+    });
+  });
+
+  it("restores pasted image media as display previews", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      {
+        role: "user",
+        content: "[1 image attached]\nPlease inspect",
+        media: {
+          images: [
+            {
+              name: "screenshot.png",
+              mimeType: "image/png",
+              base64: "abc123",
+            },
+          ],
+          documents: [],
+        },
+      },
+    ] as unknown[]);
+
+    expect(restored).toHaveLength(1);
+    expect(restored[0]?.displayMedia).toEqual({
+      images: [
+        {
+          name: "screenshot.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,abc123",
+        },
+      ],
+      documents: [],
     });
   });
 

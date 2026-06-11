@@ -22,7 +22,10 @@ import type {
   RequestContextBreakdown,
 } from "../shared/types.js";
 import type { InstructionBlock } from "./configLoader.js";
-import type { FinalMessageMarker } from "../shared/finalStatus.js";
+import {
+  getFinalMessageContinueAction,
+  type FinalMessageMarker,
+} from "../shared/finalStatus.js";
 import type { TodoItem } from "./todoTool.js";
 import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
 import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
@@ -69,6 +72,41 @@ import {
   type AppState,
   type LoadedInstructionDebugInfo,
 } from "../shared/chatProjection.js";
+import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
+
+type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
+type RawDisplayImage = { name: string; mimeType: string; base64: string };
+type RawDisplayDocument = { name: string; mimeType: string; base64?: string };
+
+function hasFinalContinueAction(message: ChatMessage): boolean {
+  return Boolean(
+    message.finalMarker && getFinalMessageContinueAction(message.finalMarker),
+  );
+}
+
+function mediaToDisplayMedia(
+  media:
+    | {
+        images?: RawDisplayImage[];
+        documents?: RawDisplayDocument[];
+      }
+    | undefined,
+): DisplayMedia | undefined {
+  if (!media?.images?.length && !media?.documents?.length) return undefined;
+  return {
+    images:
+      media.images?.map((image) => ({
+        name: image.name,
+        mimeType: image.mimeType,
+        src: `data:${image.mimeType};base64,${image.base64}`,
+      })) ?? [],
+    documents:
+      media.documents?.map((document) => ({
+        name: document.name,
+        mimeType: document.mimeType,
+      })) ?? [],
+  };
+}
 
 function formatInstructionDebugInfo(
   block: InstructionBlock,
@@ -482,6 +520,7 @@ export type ExtensionToWebview =
       displayText?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
+      displayMedia?: DisplayMedia;
     }
   | {
       type: "agentCommittedUserMessage";
@@ -491,6 +530,7 @@ export type ExtensionToWebview =
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       origin?: "vscode" | "browser";
+      displayMedia?: DisplayMedia;
     }
   | {
       type: "agentDebugInfo";
@@ -1488,6 +1528,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           id,
           filePath,
           writeOperation: isCreate ? "create" : "modify",
+          detail: request.detail,
         };
       }
       case "rename": {
@@ -1759,6 +1800,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       isSlashCommand,
       slashCommandLabel,
       origin: "browser",
+      displayMedia: mediaToDisplayMedia({ images, documents }),
     });
 
     mgr
@@ -3606,6 +3648,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (hasFinalContinueAction(lastMsg)) {
+      this.projectedDetectRequest = null;
+      this.projectedLastDetectKey = null;
+      this.applyProjectedAction({
+        type: "SET_DETECTED_QUESTION",
+        detectedQuestion: null,
+      });
+      return;
+    }
+
     const assistantText = (lastMsg.blocks ?? [])
       .filter((b) => b.type === "text")
       .map((b) => b.text)
@@ -3672,6 +3724,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const currentLast = state.messages[state.messages.length - 1];
     if (!currentLast || currentLast.id !== messageId) return;
     if (state.dismissedDetectedQuestionIds.includes(messageId)) return;
+    if (hasFinalContinueAction(currentLast)) {
+      this.applyProjectedAction({
+        type: "SET_DETECTED_QUESTION",
+        detectedQuestion: null,
+      });
+      return;
+    }
 
     let nextDetected = detected;
     if (fallback) {
@@ -4104,6 +4163,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           slashCommandLabel:
             extMsg.slashCommandLabel ??
             (extMsg.isSlashCommand ? extMsg.displayText : undefined),
+          displayMedia: extMsg.displayMedia,
         });
         this.applyProjectedAction({
           type: "REMOVE_FROM_QUEUE",
@@ -4120,6 +4180,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             extMsg.slashCommandLabel ??
             (extMsg.isSlashCommand ? extMsg.displayText : undefined),
           origin: extMsg.origin,
+          displayMedia: extMsg.displayMedia,
         });
         break;
 
@@ -4606,6 +4667,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           displayText: event.displayText,
           isSlashCommand: event.isSlashCommand,
           slashCommandLabel: event.slashCommandLabel,
+          displayMedia: mediaToDisplayMedia({
+            images: event.images,
+            documents: event.documents,
+          }),
         });
         break;
 
@@ -4795,11 +4860,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         transcriptLines.push(`## ${role}`);
         transcriptLines.push(``);
         if (typeof msg.content === "string") {
-          transcriptLines.push(msg.content);
+          transcriptLines.push(stripMemoryCandidateReminders(msg.content));
         } else if (Array.isArray(msg.content)) {
           for (const block of msg.content) {
             if (block.type === "text") {
-              transcriptLines.push(block.text);
+              transcriptLines.push(stripMemoryCandidateReminders(block.text));
             } else if (block.type === "tool_use") {
               transcriptLines.push(
                 `**Tool call:** ${block.name}\n\`\`\`json\n${JSON.stringify(block.input, null, 2)}\n\`\`\``,

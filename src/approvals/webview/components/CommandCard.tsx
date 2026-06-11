@@ -31,6 +31,7 @@ interface SuggestState {
   error?: string;
   pattern?: string;
   kind?: "regex" | "prefix";
+  hiddenPrefix?: boolean;
 }
 
 /**
@@ -244,28 +245,19 @@ export function CommandCard({
     [onSuggestRegex, originalCommand, rules, updateRule],
   );
 
-  const handleSuggestPrefix = useCallback(
-    (index: number, prefix: string) => {
-      const current = rules[index];
-      if (!current) return;
-      updateRule(index, {
-        ...current,
-        mode: "prefix",
-        scope: current.scope === "skip" ? "session" : current.scope,
-      });
-      setSuggestStates((prev) => ({
-        ...prev,
-        [index]: { status: "idle", pattern: prefix, kind: "prefix" },
-      }));
-    },
-    [rules, updateRule],
-  );
-
   const handleSelectPrefix = useCallback((index: number, prefix: string) => {
     setSuggestStates((prev) => {
       const current = prev[index];
-      if (!current) return prev;
-      return { ...prev, [index]: { ...current, pattern: prefix } };
+      return {
+        ...prev,
+        [index]: {
+          ...current,
+          status: "idle",
+          pattern: prefix,
+          kind: "prefix",
+          hiddenPrefix: false,
+        },
+      };
     });
   }, []);
 
@@ -284,35 +276,68 @@ export function CommandCard({
             : commandTokenPrefixes(entry.command);
           const canSuggestPrefix = tokenPrefixes.length > 1;
           const prefixSuggestion = tokenPrefixes[0]?.prefix ?? "";
+          const explicitSuggestion =
+            state.pattern &&
+            ((state.kind === "prefix" && rule.mode === "prefix") ||
+              (state.kind === "regex" && rule.mode === "regex"))
+              ? state.pattern
+              : undefined;
+          const autoPrefixSuggestion =
+            canSuggestPrefix &&
+            rule.mode === "prefix" &&
+            !state.hiddenPrefix &&
+            !explicitSuggestion
+              ? prefixSuggestion
+              : undefined;
+          const shownSuggestedPattern =
+            explicitSuggestion ?? autoPrefixSuggestion;
+          const shownSuggestKind =
+            explicitSuggestion && state.kind
+              ? state.kind
+              : autoPrefixSuggestion
+                ? ("prefix" as const)
+                : state.kind;
+          const handleRowChange = (value: RuleEntry) => {
+            updateRule(i, value);
+            if (value.mode !== "prefix" && state.kind === "prefix") {
+              setSuggestStates((prev) => ({
+                ...prev,
+                [i]: { status: "idle" },
+              }));
+            }
+          };
           return (
             <RuleRow
               key={i}
               entry={entry}
               value={rule}
               modeGroupName={`mode-${i}-${entry.command}`}
-              onChange={(v) => updateRule(i, v)}
+              onChange={handleRowChange}
               onSuggestRegex={
                 onSuggestRegex
                   ? () => handleSuggestRegex(i, entry.command)
                   : undefined
               }
-              onSuggestPrefix={
-                canSuggestPrefix
-                  ? () => handleSuggestPrefix(i, prefixSuggestion)
-                  : undefined
-              }
-              prefixSuggestion={canSuggestPrefix ? prefixSuggestion : undefined}
               prefixTokens={canSuggestPrefix ? tokenPrefixes : undefined}
               onSelectPrefix={(p) => handleSelectPrefix(i, p)}
-              suggestKind={state.kind}
-              suggestedPattern={state.pattern}
+              suggestKind={shownSuggestKind}
+              suggestedPattern={shownSuggestedPattern}
               onAcceptSuggestion={
-                state.pattern
+                shownSuggestedPattern
                   ? () => {
-                      updateRule(i, { ...rule, pattern: state.pattern! });
+                      updateRule(i, {
+                        ...rule,
+                        pattern: shownSuggestedPattern,
+                        mode:
+                          shownSuggestKind === "prefix" ? "prefix" : rule.mode,
+                        scope: rule.scope === "skip" ? "session" : rule.scope,
+                      });
                       setSuggestStates((prev) => ({
                         ...prev,
-                        [i]: { status: "idle" },
+                        [i]: {
+                          status: "idle",
+                          hiddenPrefix: shownSuggestKind === "prefix",
+                        },
                       }));
                     }
                   : undefined
@@ -320,7 +345,10 @@ export function CommandCard({
               onDismissSuggestion={() =>
                 setSuggestStates((prev) => ({
                   ...prev,
-                  [i]: { status: "idle" },
+                  [i]: {
+                    status: "idle",
+                    hiddenPrefix: shownSuggestKind === "prefix",
+                  },
                 }))
               }
               suggestStatus={state.status}

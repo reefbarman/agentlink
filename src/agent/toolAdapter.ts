@@ -28,6 +28,7 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { McpClientHub } from "./McpClientHub.js";
+import type { Question } from "./webview/types.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import type { ToolResult } from "../shared/types.js";
 import { getToolsForMode } from "./toolPermissions.js";
@@ -36,6 +37,7 @@ import { handleCloseTerminals } from "../tools/closeTerminals.js";
 import { handleDeleteFeedback } from "../tools/deleteFeedback.js";
 import { handleExecuteCommand } from "../tools/executeCommand.js";
 import { handleFindAndReplace } from "../tools/findAndReplace.js";
+import { handleGenerateImage } from "../tools/generateImage.js";
 import { handleGetCallHierarchy } from "../tools/getCallHierarchy.js";
 import { handleGetCompletions } from "../tools/getCompletions.js";
 import { handleGetContext } from "../tools/context/getContext.js";
@@ -136,6 +138,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   search_files: schemas.searchFilesSchema,
   get_diagnostics: schemas.getDiagnosticsSchema,
   write_file: schemas.writeFileSchema,
+  generate_image: schemas.generateImageSchema,
   apply_diff: schemas.applyDiffSchema,
   find_and_replace: schemas.findAndReplaceSchema,
   rename_symbol: schemas.renameSymbolSchema,
@@ -225,6 +228,41 @@ const CALL_MCP_TOOL: ToolDefinition = {
   },
 };
 
+function skillAllowlistAllowsMcpServer(
+  allowlist: Set<string> | undefined,
+  serverName: string,
+): boolean {
+  if (!allowlist) return true;
+  return (
+    allowlist.has(serverName) ||
+    allowlist.has(`${serverName}__*`) ||
+    allowlist.has(`${serverName}.*`)
+  );
+}
+
+function skillAllowlistAllowsMcpTool(
+  allowlist: Set<string> | undefined,
+  fullToolName: string,
+): boolean {
+  if (!allowlist) return true;
+  const parsed = parseMcpToolName(fullToolName);
+  if (!parsed) return allowlist.has(fullToolName);
+  return (
+    allowlist.has(fullToolName) ||
+    skillAllowlistAllowsMcpServer(allowlist, parsed.serverName)
+  );
+}
+
+function skillAllowlistHasMcpTargets(
+  allowlist: Set<string> | undefined,
+  mcpToolDefs: ToolDefinition[] | undefined,
+): boolean {
+  if (!allowlist || !mcpToolDefs?.length) return false;
+  return mcpToolDefs.some((tool) =>
+    skillAllowlistAllowsMcpTool(allowlist, tool.name),
+  );
+}
+
 const MCP_META_TOOLS: ToolDefinition[] = [
   {
     name: "find_mcp_tools",
@@ -308,14 +346,14 @@ const MCP_META_TOOLS: ToolDefinition[] = [
 const ASK_USER_TOOL: ToolDefinition = {
   name: "ask_user",
   description:
-    "Ask the user one or more structured questions and wait for their responses before continuing. Always include `context`: visible user-facing text explaining why input is needed, the relevant trade-off/options, and your recommendation. Questions must be self-contained and must not rely on hidden thinking or prior invisible rationale. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
+    "Ask the user one or more structured questions and wait for their responses before continuing. Prefer `questions[].context`: visible user-facing text for that specific question explaining why input is needed, the relevant trade-off/options, and your recommendation. Use top-level `context` only for a brief shared intro that applies to every question. For multi-question asks, split context across the individual questions instead of delivering one large block. Questions must be self-contained and must not rely on hidden thinking or prior invisible rationale. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
   input_schema: {
     type: "object",
     properties: {
       context: {
         type: "string",
         description:
-          "Visible text shown above the questions. Must explain why input is needed, summarize relevant options/trade-offs, and include your recommendation. Do not rely on hidden thinking or prior invisible rationale.",
+          "Optional brief shared intro shown above the questions. Use only for context that applies to every question; put question-specific rationale in questions[].context.",
       },
       questions: {
         type: "array",
@@ -344,6 +382,11 @@ const ASK_USER_TOOL: ToolDefinition = {
             question: {
               type: "string",
               description: "The question text shown to the user",
+            },
+            context: {
+              type: "string",
+              description:
+                "Visible context shown with this specific question. Prefer this over top-level context, especially when asking multiple questions. Explain the local trade-off/options and include your recommendation when relevant.",
             },
             options: {
               type: "array",
@@ -388,7 +431,7 @@ const ASK_USER_TOOL: ToolDefinition = {
         },
       },
     },
-    required: ["context", "questions"],
+    required: ["questions"],
   },
 };
 
@@ -396,7 +439,7 @@ const ASK_USER_TOOL: ToolDefinition = {
 const SET_TASK_STATUS_TOOL: ToolDefinition = {
   name: "set_task_status",
   description:
-    "Mark the current turn's final status. Use only when your response is final: completed, waiting_for_user, blocked, or cancelled. Do not call before ask_user or for intermediate progress updates. The summary is the user-facing final response itself, not a meta-description of what you did — never write 'Explained X', 'Answered Y', or similar past-tense recaps; put the actual explanation/answer there (or in a preceding text message). For code-modifying work, structure the summary around what changed, why it matters, validation run or skipped, and concrete follow-up. Optionally include a short continuation button label and prompt when the user can safely continue with one click.",
+    "Mark the current turn's final status. Use only when your response is final: completed, waiting_for_user, blocked, or cancelled. Do not call before ask_user or for intermediate progress updates. The summary is the user-facing final response itself, not a meta-description of what you did. If the user asked for a concrete artifact (prompt, code, command, plan, review, answer), that artifact must be visible either in normal text before this tool call or fully inside summary. Never use summary as a teaser such as 'Here is the prompt' or 'See below'; content after this tool call is not a reliable place to deliver the answer. For code-modifying work, structure the summary around what changed, why it matters, validation run or skipped, and concrete follow-up. Optionally include a short continuation button label and prompt when the user can safely continue with one click.",
   input_schema: {
     type: "object",
     properties: {
@@ -407,7 +450,7 @@ const SET_TASK_STATUS_TOOL: ToolDefinition = {
       summary: {
         type: "string",
         description:
-          "The user-facing final response itself, shown with the marker. Markdown is rendered. Must contain the actual substance the user asked for — the answer, explanation, findings, or result — not a meta-description of what you did. Never write 'Explained X', 'Answered Y', 'Reviewed Z', or similar past-tense recaps; either put the content here directly, or write it as a preceding text message and keep the summary brief. For non-trivial code-modifying work, structure as what changed (key files/behavior), why it matters, validation run, validation skipped with reasons, and concrete follow-up. Use 3-6 bullets or 1-2 short paragraphs for non-trivial work; do not reduce meaningful work to 'Done' or 'All set'. Keep it final and avoid open-ended questions or generic offers for further assistance.",
+          "The user-facing final response itself, shown with the marker. Markdown is rendered. Must contain the actual substance the user asked for — the answer, explanation, findings, artifact, or result — not a meta-description of what you did. If the summary says 'here is', 'below', 'paste this', 'the prompt is', or otherwise promises an artifact, the complete artifact must be included in this same summary (for example, in a fenced code block) unless it was already sent as normal visible text before the tool call. Never rely on text after set_task_status to provide missing content. Never write 'Explained X', 'Answered Y', 'Reviewed Z', or similar past-tense recaps. For non-trivial code-modifying work, structure as what changed (key files/behavior), why it matters, validation run, validation skipped with reasons, and concrete follow-up. Use 3-6 bullets or 1-2 short paragraphs for non-trivial work; do not reduce meaningful work to 'Done' or 'All set'. Keep it final and avoid open-ended questions or generic offers for further assistance.",
       },
       continueLabel: {
         type: "string",
@@ -579,6 +622,8 @@ export interface BgStatusResult {
  * Named tool profiles that restrict the tool set for specific background task types.
  * Each profile is an allowlist of tool names from the native tool registry.
  */
+const MCP_ENABLED_TOOL_PROFILES = new Set(["review", "readonly-research"]);
+
 const TOOL_PROFILES: Record<string, Set<string>> = {
   review: new Set([
     "read_file",
@@ -644,17 +689,28 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
  * MCP tools (prefixed 'server__tool') are passed as external Anthropic.Tool objects.
  * When isBackground is true, background agent management tools are excluded.
  * When toolProfile is set, further restricts to only the tools in that profile.
+ * When skillAllowedTools is set, further restricts normal tools after a skill
+ * with allowed-tools frontmatter has been loaded. Hidden control tools stay
+ * available so the agent can ask questions, finish, switch mode, or load another skill.
  */
 export function getAgentTools(
   mode?: AgentMode,
   mcpToolDefs?: ToolDefinition[],
   isBackground?: boolean,
   toolProfile?: string,
+  skillAllowedTools?: string[],
+  allMcpToolDefsForSkillAllowlist?: ToolDefinition[],
 ): ToolDefinition[] {
   const mcpToolNames = (mcpToolDefs ?? []).map((t) => t.name);
   const allowed = mode ? getToolsForMode(mode, mcpToolNames) : null;
   const profileAllowlist = toolProfile
     ? (TOOL_PROFILES[toolProfile] ?? new Set<string>())
+    : undefined;
+  const profileAllowsMcp = Boolean(
+    toolProfile && MCP_ENABLED_TOOL_PROFILES.has(toolProfile),
+  );
+  const skillAllowlist = skillAllowedTools
+    ? new Set(skillAllowedTools)
     : undefined;
 
   const nativeTools = Object.entries(TOOL_SCHEMAS)
@@ -664,27 +720,46 @@ export function getAgentTools(
     .filter(([name]) => !(isBackground && name === "propose_memory"))
     .filter(
       ([name]) =>
+        Boolean(profileAllowlist) ||
         !allowed ||
         allowed.has(name) ||
         (__DEV_BUILD__ && DEV_FEEDBACK_TOOLS.has(name)),
     )
     .filter(([name]) => !profileAllowlist || profileAllowlist.has(name))
+    .filter(([name]) => !skillAllowlist || skillAllowlist.has(name))
     .map(([name, zodSchema]) => ({
       name,
       description: TOOL_REGISTRY[name]?.description ?? name,
       input_schema: zodSchemaToJsonSchema(zodSchema),
     }));
 
-  // Append MCP tools if the mode allows the 'mcp' group (and not restricted by profile)
+  // Restrictive profiles are authoritative: native tools come from the profile
+  // allowlist, and selected background profiles can opt into MCP explicitly,
+  // while still blocking native write/shell tools, nested background spawning,
+  // and foreground-only controls.
   const canUseMcpTools =
-    !profileAllowlist && (!mode || mode.toolGroups.includes("mcp"));
-  const allowedMcpTools = canUseMcpTools && mcpToolDefs ? mcpToolDefs : [];
+    profileAllowsMcp ||
+    (!profileAllowlist && (!mode || mode.toolGroups.includes("mcp")));
+  const allowedMcpTools =
+    canUseMcpTools && mcpToolDefs
+      ? skillAllowlist
+        ? mcpToolDefs.filter((tool) =>
+            skillAllowlistAllowsMcpTool(skillAllowlist, tool.name),
+          )
+        : mcpToolDefs
+      : [];
+  const skillAllowsMcpTargets = skillAllowlistHasMcpTargets(
+    skillAllowlist,
+    allMcpToolDefsForSkillAllowlist ?? mcpToolDefs,
+  );
 
-  // MCP client meta-tools follow the same mode gate as direct MCP tools and are
-  // excluded when a tool profile is active — profiles are meant to be restrictive.
+  // MCP client meta-tools follow the same gate as direct MCP tools.
   // Background agents are excluded from switch_mode and spawn tools to prevent
   // inadvertent foreground mode changes and nested spawning.
-  const metaTools = canUseMcpTools ? MCP_META_TOOLS : [];
+  const metaTools =
+    canUseMcpTools && (!skillAllowlist || skillAllowsMcpTargets)
+      ? MCP_META_TOOLS
+      : [];
   const hiddenAgentTools = profileAllowlist
     ? []
     : [
@@ -708,7 +783,9 @@ export function getAgentTools(
     ...hiddenAgentTools,
     ...allowedMcpTools,
     ...metaTools,
-    ...(canUseMcpTools ? [CALL_MCP_TOOL] : []),
+    ...(canUseMcpTools && (!skillAllowlist || skillAllowsMcpTargets)
+      ? [CALL_MCP_TOOL]
+      : []),
     ...(profileAllowlist ? [] : [ASK_USER_TOOL]),
     ...(isBackground || profileAllowlist
       ? []
@@ -732,6 +809,43 @@ function jsonTextResult(value: unknown): ToolResult {
 
 function errorTextResult(error: string): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify({ error }) }] };
+}
+
+function isTeaserOnlyFinalSummary(summary: string): boolean {
+  const normalized = summary
+    .toLowerCase()
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+
+  const startsLikeTeaser =
+    /^(?:you'?re right\s*[—-]\s*)?(?:here(?:'s| is)|below is|paste this|copy this)\b/.test(
+      normalized,
+    );
+  const namesArtifact =
+    /\b(prompt|answer|command|snippet|code|plan|review|message|response|text|artifact)\b/.test(
+      normalized,
+    );
+  if (!startsLikeTeaser || !namesArtifact) return false;
+
+  const hasObviousPayload =
+    summary.includes("```") ||
+    /`[^`]+`/.test(summary) ||
+    /:\s*\S.{24,}/s.test(summary) ||
+    summary.split(/\r?\n/).some((line) => {
+      const trimmed = line.trim();
+      if (trimmed.length < 40) return false;
+      const normalizedLine = trimmed
+        .toLowerCase()
+        .replace(/[‘’]/g, "'")
+        .replace(/\s+/g, " ")
+        .trim();
+      return !/^(?:you'?re right\s*[—-]\s*)?(?:here(?:'s| is)|below is|paste this|copy this)\b/.test(
+        normalizedLine,
+      );
+    });
+  return !hasObviousPayload;
 }
 
 function clampToolLimit(value: unknown): number {
@@ -805,6 +919,7 @@ function scoreMcpToolDiscovery(
 function discoverMcpTools(
   mcpHub: McpClientHub,
   params: Record<string, unknown>,
+  skillAllowlist?: Set<string>,
 ): ToolResult {
   const queryTokens = discoveryTokens(String(params.query ?? ""));
   const serverFilter = String(params.server ?? "").trim();
@@ -827,6 +942,7 @@ function discoverMcpTools(
       };
     })
     .filter((tool): tool is NonNullable<typeof tool> => tool !== null)
+    .filter((tool) => skillAllowlistAllowsMcpTool(skillAllowlist, tool.name))
     .filter((tool) => !serverFilter || tool.server === serverFilter)
     .map((tool) => ({
       tool,
@@ -850,6 +966,15 @@ function discoverMcpTools(
     schemaCount: includeSchemas ? Math.min(tools.length, schemaLimit) : 0,
     schemaLimited: includeSchemas && tools.length > schemaLimit,
   });
+}
+
+export interface SessionImageReference {
+  id: string;
+  name: string;
+  mimeType: string;
+  base64: string;
+  messageIndex: number;
+  imageIndex: number;
 }
 
 export interface ToolDispatchContext {
@@ -886,6 +1011,8 @@ export interface ToolDispatchContext {
   ) => Promise<QuestionResponse>;
   /** Called whenever the agent reads a file — used to track files for folded context on condense */
   onFileRead?: (filePath: string) => void;
+  /** Returns recent user-attached images available to this session's model context. */
+  getSessionImages?: () => SessionImageReference[];
   /** Returns the set of skills explicitly advertised to the current session. */
   getAdvertisedSkills?: () => Array<{ name: string; skillPath: string }>;
   /** Returns the set of deferred rules explicitly advertised to the current session. */
@@ -909,6 +1036,8 @@ export interface ToolDispatchContext {
     sessionId: string,
     reason?: string,
   ) => { killed: boolean; partialOutput?: string };
+  /** Active skill tool allowlist, enforced for direct and deferred MCP dispatch. */
+  skillAllowedTools?: string[];
   /** Records the intended final marker for the current foreground turn. */
   onFinalStatus?: (marker: FinalMessageMarker) => void;
 }
@@ -932,8 +1061,17 @@ export async function dispatchToolCall(
     trackerCtx,
   } = ctx;
 
+  const skillAllowlist = ctx.skillAllowedTools
+    ? new Set(ctx.skillAllowedTools)
+    : undefined;
+
   // Route MCP tools (prefixed with 'servername__') to the MCP hub
   if (McpClientHub.isMcpTool(toolName)) {
+    if (!skillAllowlistAllowsMcpTool(skillAllowlist, toolName)) {
+      return errorTextResult(
+        `MCP tool is not allowed by the active skill allowed-tools allowlist: ${toolName}`,
+      );
+    }
     if (!mcpHub) {
       return {
         content: [
@@ -1118,6 +1256,12 @@ export async function dispatchToolCall(
           ],
         };
       }
+      let summary =
+        typeof params.summary === "string" ? params.summary.trim() : "";
+      if (isTeaserOnlyFinalSummary(summary)) {
+        summary =
+          "Task status was set, but the final summary only promised an artifact and did not include it. Expand the `set_task_status` tool input below to inspect what the agent attempted to send.";
+      }
       const continueLabel =
         typeof params.continueLabel === "string"
           ? params.continueLabel.trim()
@@ -1130,9 +1274,7 @@ export async function dispatchToolCall(
       const marker: FinalMessageMarker = {
         status,
         source: "tool",
-        ...(typeof params.summary === "string" && params.summary.trim()
-          ? { summary: params.summary.trim() }
-          : {}),
+        ...(summary ? { summary } : {}),
         ...(suppressContinue ? { continueActionSuppressed: true } : {}),
         ...(!suppressContinue && continueLabel && continuePrompt
           ? { continueAction: { label: continueLabel, prompt: continuePrompt } }
@@ -1219,6 +1361,14 @@ export async function dispatchToolCall(
         sessionId,
         onApprovalRequest,
         ctx.mode,
+      );
+    case "generate_image":
+      return handleGenerateImage(
+        params,
+        approvalManager,
+        sessionId,
+        onApprovalRequest,
+        ctx.getSessionImages,
       );
     case "apply_diff":
       return handleApplyDiff(
@@ -1389,7 +1539,7 @@ export async function dispatchToolCall(
 
     case "find_mcp_tools": {
       if (!mcpHub) return errorTextResult("MCP hub not available");
-      return discoverMcpTools(mcpHub, params);
+      return discoverMcpTools(mcpHub, params, skillAllowlist);
     }
 
     case "call_mcp_tool": {
@@ -1405,6 +1555,11 @@ export async function dispatchToolCall(
         );
       }
       const toolName = `${server}__${tool}`;
+      if (!skillAllowlistAllowsMcpTool(skillAllowlist, toolName)) {
+        return errorTextResult(
+          `MCP tool is not allowed by the active skill allowed-tools allowlist: ${toolName}`,
+        );
+      }
       if (!mcpHub.getToolDefs().some((toolDef) => toolDef.name === toolName)) {
         return errorTextResult(
           `MCP tool not found: ${toolName}. Use find_mcp_tools to discover available tools.`,
@@ -1421,7 +1576,11 @@ export async function dispatchToolCall(
 
     case "list_mcp_resources": {
       if (!mcpHub) return errorTextResult("MCP hub not available");
-      const resources = mcpHub.getAllResources();
+      const resources = mcpHub
+        .getAllResources()
+        .filter((resource) =>
+          skillAllowlistAllowsMcpServer(skillAllowlist, resource.serverName),
+        );
       return {
         content: [{ type: "text", text: JSON.stringify(resources, null, 2) }],
       };
@@ -1429,15 +1588,22 @@ export async function dispatchToolCall(
 
     case "read_mcp_resource": {
       if (!mcpHub) return errorTextResult("MCP hub not available");
-      return mcpHub.readResource(
-        String(params.server ?? ""),
-        String(params.uri ?? ""),
-      );
+      const server = String(params.server ?? "").trim();
+      if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
+        return errorTextResult(
+          `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
+        );
+      }
+      return mcpHub.readResource(server, String(params.uri ?? ""));
     }
 
     case "list_mcp_prompts": {
       if (!mcpHub) return errorTextResult("MCP hub not available");
-      const prompts = mcpHub.getAllPrompts();
+      const prompts = mcpHub
+        .getAllPrompts()
+        .filter((prompt) =>
+          skillAllowlistAllowsMcpServer(skillAllowlist, prompt.serverName),
+        );
       return {
         content: [{ type: "text", text: JSON.stringify(prompts, null, 2) }],
       };
@@ -1445,12 +1611,14 @@ export async function dispatchToolCall(
 
     case "get_mcp_prompt": {
       if (!mcpHub) return errorTextResult("MCP hub not available");
+      const server = String(params.server ?? "").trim();
+      if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
+        return errorTextResult(
+          `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
+        );
+      }
       const args = params.arguments as Record<string, string> | undefined;
-      return mcpHub.getPrompt(
-        String(params.server ?? ""),
-        String(params.name ?? ""),
-        args,
-      );
+      return mcpHub.getPrompt(server, String(params.name ?? ""), args);
     }
 
     case "ask_user": {
@@ -1465,21 +1633,30 @@ export async function dispatchToolCall(
         };
       }
       const context = String(params.context ?? "").trim();
-      if (!context) {
+      const rawQuestions: unknown[] = Array.isArray(params.questions)
+        ? params.questions
+        : [];
+      const questions: Question[] = rawQuestions.map((question: unknown) => {
+        const q = question as Question;
+        return {
+          ...q,
+          context: typeof q.context === "string" ? q.context.trim() : q.context,
+        };
+      });
+      const hasQuestionContext = questions.some((q) => q.context?.trim());
+      if (!context && !hasQuestionContext) {
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
                 error:
-                  "ask_user requires visible context so the user can answer without relying on hidden thinking.",
+                  "ask_user requires visible context, either top-level context or questions[].context, so the user can answer without relying on hidden thinking.",
               }),
             },
           ],
         };
       }
-      const questions =
-        params.questions as import("../agent/webview/types.js").Question[];
 
       // Reject calls that include modeSwitch on more than one question or on
       // unsupported question types — keeps a single, unambiguous mode change
@@ -1524,6 +1701,7 @@ export async function dispatchToolCall(
           question: q.question,
           answer: answer ?? null,
         };
+        if (q.context) entry.context = q.context;
         if (note) entry.note = note;
         return entry;
       });

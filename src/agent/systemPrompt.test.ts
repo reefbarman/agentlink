@@ -606,6 +606,31 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("SKILL.md");
   });
 
+  it("includes skill allowed-tools and invocation metadata", async () => {
+    const skillDir = path.join(tmpDir, ".agentlink", "skills", "safe-review");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: safe-review",
+        "description: Safe review",
+        "invocation: manual",
+        "allowed-tools:",
+        "  - read_file",
+        "  - search_files",
+        "---",
+        "# Instructions",
+      ].join("\n"),
+    );
+
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain('allowed-tools="read_file,search_files"');
+    expect(result).toContain('invocation="manual"');
+    expect(result).toContain('If a skill has `invocation="manual"`');
+    expect(result).toContain("If a loaded skill declares `allowed-tools`");
+  });
+
   it("includes bundled skills when no user or project skills exist", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain("<skills>");
@@ -626,6 +651,10 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("load the `cross-session-memory` skill");
     expect(result).toContain("durable preference");
     expect(result).toContain("Never bypass approval");
+    expect(result).toContain("[memory-candidate]");
+    expect(result).toContain(
+      "Persistence always requires explicit user approval",
+    );
     expect(result).not.toContain(
       "Prefer Mermaid for architecture, data flow, schemas, relationships, and workflows.",
     );
@@ -766,6 +795,35 @@ describe("buildSystemPrompt", () => {
         count: 2,
       }),
     );
+  });
+
+  it("includes MCP capability hints when catalog entries declare capabilities", async () => {
+    const artifacts = await buildPromptArtifacts("code", tmpDir, {
+      mcpToolCatalog: [
+        {
+          serverName: "ddg-search",
+          toolCount: 2,
+          estimatedTokens: 500,
+          representativeTools: ["search", "fetch_content"],
+          capabilities: ["web-search"],
+        },
+        {
+          serverName: "chrome-devtools",
+          toolCount: 29,
+          estimatedTokens: 5_238,
+          representativeTools: ["navigate", "click", "screenshot"],
+          capabilities: ["browser-automation"],
+        },
+      ],
+    });
+
+    expect(artifacts.systemPrompt).toContain("### MCP capability hints");
+    expect(artifacts.systemPrompt).toContain("web-search (ddg-search)");
+    expect(artifacts.systemPrompt).toContain("prefer checking the web");
+    expect(artifacts.systemPrompt).toContain(
+      "browser-automation (chrome-devtools)",
+    );
+    expect(artifacts.systemPrompt).toContain("verifying in the browser");
   });
 
   it("omits the MCP tool catalog section when none is provided", async () => {

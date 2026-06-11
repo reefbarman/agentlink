@@ -16,6 +16,7 @@ import {
   shouldDropSessionScopedEvent,
 } from "../../shared/chatProjection.js";
 import {
+  getFinalMessageContinueAction,
   getLatestAutoContinueAction,
   getLatestFinalMessageMarker,
 } from "../../shared/finalStatus.js";
@@ -53,6 +54,28 @@ import { getStreamingActivity } from "./components/MessageBubble";
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
 
+type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
+type SendImage = { name: string; mimeType: string; base64: string };
+type SendDocument = { name: string; mimeType: string; base64?: string };
+
+function mediaToDisplayMedia(
+  images: SendImage[],
+  documents: SendDocument[],
+): DisplayMedia | undefined {
+  if (images.length === 0 && documents.length === 0) return undefined;
+  return {
+    images: images.map((image) => ({
+      name: image.name,
+      mimeType: image.mimeType,
+      src: `data:${image.mimeType};base64,${image.base64}`,
+    })),
+    documents: documents.map((document) => ({
+      name: document.name,
+      mimeType: document.mimeType,
+    })),
+  };
+}
+
 function captureVsCodeThemeSnapshot(): {
   cssVariables: Record<string, string>;
   colorScheme: "light" | "dark" | "hc" | "hc-light";
@@ -80,6 +103,12 @@ function captureVsCodeThemeSnapshot(): {
     cssVariables,
     colorScheme,
   };
+}
+
+function hasFinalContinueAction(message: ChatMessage): boolean {
+  return Boolean(
+    message.finalMarker && getFinalMessageContinueAction(message.finalMarker),
+  );
 }
 
 interface VsCodeApi {
@@ -491,6 +520,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             );
             const imagesCombined = queue.flatMap((q) => q.images ?? []);
             const documentsCombined = queue.flatMap((q) => q.documents ?? []);
+            const displayMediaCombined = mediaToDisplayMedia(
+              imagesCombined,
+              documentsCombined,
+            );
             messageQueueRef.current = [];
             dispatch({ type: "CLEAR_QUEUE" });
             const isSlashCombined =
@@ -504,6 +537,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 text: displayCombined,
                 isSlashCommand: isSlashCombined,
                 slashCommandLabel: slashCommandLabelCombined,
+                displayMedia: displayMediaCombined,
               });
               vscodeApi.postMessage({
                 command: "agentSend",
@@ -750,6 +784,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               ((msg.isSlashCommand as boolean | undefined)
                 ? (msg.displayText as string | undefined)
                 : undefined),
+            displayMedia: msg.displayMedia,
           });
           dispatch({ type: "REMOVE_FROM_QUEUE", id: msg.queueId });
           messageQueueRef.current = messageQueueRef.current.filter(
@@ -769,6 +804,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 ? (msg.displayText as string | undefined)
                 : undefined),
             origin: msg.origin as "vscode" | "browser" | undefined,
+            displayMedia: msg.displayMedia,
           });
           break;
 
@@ -1099,6 +1135,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           }
           const currentLast = snapshot.messages[snapshot.messages.length - 1];
           if (!currentLast || currentLast.id !== active.messageId) break;
+          if (hasFinalContinueAction(currentLast)) {
+            dispatch({ type: "SET_DETECTED_QUESTION", detectedQuestion: null });
+            break;
+          }
 
           let detected = msg.detected;
           if (msg.fallback) {
@@ -1165,6 +1205,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             mimeType: m.mimeType,
             base64: m.base64,
           })) ?? [];
+      const displayMedia = mediaToDisplayMedia(images, documents);
 
       // Build display text with media indicators
       const isSlashCommand = slashCommandLabel !== undefined;
@@ -1199,6 +1240,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           attachments: attachments.length > 0 ? attachments : undefined,
           images: images.length > 0 ? images : undefined,
           documents: documents.length > 0 ? documents : undefined,
+          displayMedia,
         });
         // Notify extension about this queued item so it can inject it ASAP
         // between tool batches. Only the first pending item will be used.
@@ -1224,6 +1266,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         text: displayWithMedia,
         isSlashCommand,
         slashCommandLabel,
+        displayMedia,
       });
       // Log media being sent for debugging
       if (images.length > 0 || documents.length > 0) {
@@ -1308,6 +1351,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     }
 
     if (state.dismissedDetectedQuestionIds.includes(lastMsg.id)) {
+      dispatch({ type: "SET_DETECTED_QUESTION", detectedQuestion: null });
+      return;
+    }
+
+    if (hasFinalContinueAction(lastMsg)) {
       dispatch({ type: "SET_DETECTED_QUESTION", detectedQuestion: null });
       return;
     }

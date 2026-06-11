@@ -214,12 +214,13 @@ export class AnthropicProvider implements ModelProvider {
     ) {
       const params = requestParams as unknown as Record<string, unknown>;
       if (supportsAdaptiveThinking(model)) {
-        params.thinking = { type: "adaptive" };
+        params.thinking = { type: "adaptive", display: "summarized" };
         params.output_config = { effort: requestedEffort };
       } else if (thinking) {
         params.thinking = {
           type: "enabled",
           budget_tokens: thinking.budgetTokens,
+          display: "summarized",
         };
       }
     }
@@ -424,7 +425,7 @@ export class AnthropicProvider implements ModelProvider {
     const requestedEffort = reasoningEffort ?? "high";
     if (requestedEffort !== "none" && supportsAdaptiveThinking(model)) {
       const params = requestParams as unknown as Record<string, unknown>;
-      params.thinking = { type: "adaptive" };
+      params.thinking = { type: "adaptive", display: "summarized" };
       params.output_config = { effort: requestedEffort };
     }
 

@@ -1,8 +1,15 @@
 // Shared types between ApprovalPanelProvider (Node) and approval webview (browser).
 
+export type CommandTierLevel = "safe" | "sensitive" | "dangerous";
+
 export interface SubCommandEntry {
   /** The raw sub-command text */
   command: string;
+  /** Static safety-tier classification for this sub-command. */
+  tier?: {
+    tier: CommandTierLevel;
+    reason: string;
+  };
   /** If an existing rule already matches this sub-command */
   existingRule?: {
     pattern: string;
@@ -43,6 +50,8 @@ export interface ApprovalRequest {
   affectedFiles?: Array<{ path: string; changes: number }>;
   /** For renames: total number of changes across all files */
   totalChanges?: number;
+  /** Optional human-readable detail for custom approval cards. */
+  detail?: string;
   /** Queue position info */
   queuePosition?: number;
   queueTotal?: number;

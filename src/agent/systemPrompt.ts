@@ -91,6 +91,8 @@ Use durable memory sparingly and only through \`propose_memory\` when available.
 
 When the user states a durable preference, repeats a correction, or a hard-won learning would help future sessions, load the \`cross-session-memory\` skill for add/update/remove guidance.
 
+Be proactive about surfacing durable memory candidates, but never persist anything automatically. If a \`[memory-candidate]\` system reminder appears, treat it as a detection hint only: complete the user's actual request first, then classify the candidate and call \`propose_memory\` only when it is durable, grounded, non-sensitive, and not ordinary task detail. Persistence always requires explicit user approval.
+
 ## Questions & Clarification
 
 Ask clarifying questions before acting unless you are 100% certain about intent, scope, and constraints. This applies to all modes and task types.
@@ -117,7 +119,7 @@ Responses support GitHub-flavored Markdown plus Mermaid and Vega/Vega-Lite. Load
 
 You must call \`set_task_status\` immediately before any final response that completes, pauses, blocks, or cancels the current user ask. This is the only way the UI can render final-status styling; there is no automatic fallback. Use \`completed\` when the ask is satisfied, \`waiting_for_user\` when you need input or permission, \`blocked\` when you cannot proceed, and \`cancelled\` if work was stopped.
 
-The \`summary\` is the user-facing final response itself, not a meta-description of what you did. Never write meta-descriptions like "Explained X", "Answered the question about Y", "Provided the requested information", or "Walked through how Z works" — those describe the response instead of being the response, and the user is left with nothing to read. The actual content the user asked for must appear somewhere visible: either as a normal text message before the \`set_task_status\` call, or fully inside \`summary\` (markdown is rendered there). One of those two slots must carry the substance; the other can be omitted or kept brief. If you find yourself writing a summary that starts with a past-tense verb describing your own action ("Explained…", "Answered…", "Reviewed…", "Investigated…"), stop and put the actual explanation/answer/review/findings there instead.
+The \`summary\` is the user-facing final response itself, not a meta-description of what you did. Never write meta-descriptions like "Explained X", "Answered the question about Y", "Provided the requested information", or "Walked through how Z works" — those describe the response instead of being the response, and the user is left with nothing to read. The actual content the user asked for must appear somewhere visible: either as a normal text message before the \`set_task_status\` call, or fully inside \`summary\` (markdown is rendered there). One of those two slots must carry the substance; the other can be omitted or kept brief. If the user asked for a concrete artifact such as a prompt, command, code snippet, plan, review, or answer, include that artifact verbatim in normal text before calling \`set_task_status\` or inside \`summary\`. Do **not** write teaser text like "Here is the prompt", "Paste this", "See below", or "The answer is:" unless the promised content is included in the same visible message or summary. Never rely on text after \`set_task_status\` to provide the missing artifact; this tool should be the final visible action for the turn. If you find yourself writing a summary that starts with a past-tense verb describing your own action ("Explained…", "Answered…", "Reviewed…", "Investigated…"), stop and put the actual explanation/answer/review/findings there instead.
 
 For turns that modify code or run commands, the summary should usually include:
 
@@ -487,17 +489,26 @@ function getSkillsSection(skills: SkillEntry[]): string {
   if (skills.length === 0) return "";
 
   const items = skills
-    .map(
-      (s) =>
-        `<skill name="${s.name}" path="${s.skillPath}">\n${s.description}\n</skill>`,
-    )
+    .map((s) => {
+      const attrs = [
+        `name="${s.name}"`,
+        `path="${s.skillPath}"`,
+        s.allowedTools?.length
+          ? `allowed-tools="${s.allowedTools.join(",")}"`
+          : undefined,
+        s.invocation ? `invocation="${s.invocation}"` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return `<skill ${attrs}>\n${s.description}\n</skill>`;
+    })
     .join("\n");
 
   return `
 
 ## Skills
 
-You have access to the following skills. Before each response, check if any skill matches the user's request. If one matches, call \`load_skill\` with the skill's \`path\` to load its full instructions, then follow them. If no skill matches, respond normally — skills are optional enhancements, not required steps.
+You have access to the following skills. Before each response, check if any skill matches the user's request. If one matches, call \`load_skill\` with the skill's \`path\` to load its full instructions, then follow them. If a skill has \`invocation="manual"\`, load it only when the user explicitly asks for that skill or workflow. If a loaded skill declares \`allowed-tools\`, those tools become the active tool restriction for subsequent turns while you are following that skill. If no skill matches, respond normally — skills are optional enhancements, not required steps.
 
 <skills>
 ${items}

@@ -49,6 +49,10 @@ import {
 } from "./modelCondenseThresholds.js";
 import { resolveModelForMode } from "./modeModelPreferences.js";
 import { summarizeTextForPreview } from "../shared/textSummary.js";
+import {
+  applyMemoryCandidateNudge,
+  countMemoryNudges,
+} from "../shared/memoryCandidates.js";
 import type {
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
@@ -208,6 +212,54 @@ export class AgentSessionManager {
       session?.background ? "background_agent" : "foreground_agent",
     );
     this.onEvent?.(sessionId, event);
+  }
+
+  private async ensureCheckpointForTurn(
+    session: AgentSession,
+    turnIndex: number,
+    opts?: { refreshExisting?: boolean },
+  ): Promise<Checkpoint | null> {
+    if (turnIndex <= 0 || !this.checkpointManager) return null;
+
+    const existingBefore = this.checkpoints.get(session.id) ?? [];
+    const existingMatch = existingBefore.find(
+      (checkpoint) => checkpoint.turnIndex === turnIndex,
+    );
+    if (existingMatch && !opts?.refreshExisting) {
+      return null;
+    }
+
+    const checkpoint = await this.checkpointManager.createCheckpoint(turnIndex);
+    if (!checkpoint) return null;
+
+    const existingAfter = this.checkpoints.get(session.id) ?? [];
+    const existingIndex = existingAfter.findIndex(
+      (candidate) => candidate.turnIndex === turnIndex,
+    );
+
+    if (existingIndex !== -1) {
+      if (!opts?.refreshExisting) {
+        return null;
+      }
+      const refreshed: Checkpoint = {
+        ...existingAfter[existingIndex],
+        commitHash: checkpoint.commitHash,
+        createdAt: checkpoint.createdAt,
+      };
+      const next = [...existingAfter];
+      next[existingIndex] = refreshed;
+      this.checkpoints.set(session.id, next);
+      return refreshed;
+    }
+
+    const next = [...existingAfter, checkpoint];
+    this.checkpoints.set(session.id, next);
+    this.recordAndEmitEvent(session.id, {
+      type: "checkpoint_created",
+      checkpointId: checkpoint.id,
+      turnIndex,
+    });
+    return checkpoint;
   }
 
   private getEngine(): AgentEngine {
@@ -578,20 +630,9 @@ export class AgentSessionManager {
     const turnIndex = session
       .getAllMessages()
       .filter((m) => m.role === "user" && typeof m.content === "string").length;
-    const checkpoint =
-      turnIndex > 0
-        ? ((await this.checkpointManager?.createCheckpoint(turnIndex)) ?? null)
-        : null;
-    if (checkpoint) {
-      const existing = this.checkpoints.get(session.id) ?? [];
-      existing.push(checkpoint);
-      this.checkpoints.set(session.id, existing);
-      this.recordAndEmitEvent(session.id, {
-        type: "checkpoint_created",
-        checkpointId: checkpoint.id,
-        turnIndex,
-      });
-    }
+    await this.ensureCheckpointForTurn(session, turnIndex, {
+      refreshExisting: true,
+    });
 
     // Clear any stale pending interjection from the previous run — if the
     // webview already drained the queue and sent this message via agentSend,
@@ -599,8 +640,23 @@ export class AgentSessionManager {
     session.consumePendingInterjection();
     // Pasted images/PDFs are stored on the message itself so they're injected
     // into every API call (the API is stateless) and survive session restore.
-    session.addUserMessage(text, {
-      displayText: opts?.displayText,
+    const priorUserTexts = session
+      .getAllMessages()
+      .filter(
+        (message): message is AgentMessage & { content: string } =>
+          message.role === "user" && typeof message.content === "string",
+      )
+      .map((message) => message.content);
+    const memoryNudge =
+      opts?.isSlashCommand === true || text.trim().length === 0
+        ? { text, nudged: false }
+        : applyMemoryCandidateNudge(
+            text,
+            priorUserTexts,
+            countMemoryNudges(priorUserTexts),
+          );
+    session.addUserMessage(memoryNudge.text, {
+      displayText: opts?.displayText ?? (memoryNudge.nudged ? text : undefined),
       isSlashCommand: opts?.isSlashCommand === true,
       slashCommandLabel: opts?.slashCommandLabel,
       origin: opts?.origin,
@@ -670,22 +726,7 @@ export class AgentSessionManager {
                 .filter(
                   (m) => m.role === "user" && typeof m.content === "string",
                 ).length - 1;
-            const interjectionCheckpoint =
-              interjectionTurnIndex >= 0
-                ? ((await this.checkpointManager?.createCheckpoint(
-                    interjectionTurnIndex,
-                  )) ?? null)
-                : null;
-            if (interjectionCheckpoint) {
-              const existing = this.checkpoints.get(session.id) ?? [];
-              existing.push(interjectionCheckpoint);
-              this.checkpoints.set(session.id, existing);
-              this.recordAndEmitEvent(session.id, {
-                type: "checkpoint_created",
-                checkpointId: interjectionCheckpoint.id,
-                turnIndex: interjectionTurnIndex,
-              });
-            }
+            await this.ensureCheckpointForTurn(session, interjectionTurnIndex);
           }
         }
 
@@ -734,6 +775,14 @@ export class AgentSessionManager {
           session.status = "streaming";
           continue;
         }
+
+        const completedTurnIndex = session
+          .getAllMessages()
+          .filter(
+            (m) => m.role === "user" && typeof m.content === "string",
+          ).length;
+        await this.ensureCheckpointForTurn(session, completedTurnIndex);
+        this.saveSession(session.id);
 
         // Emit the deferred done
         this.recordAndEmitEvent(session.id, {
@@ -1058,13 +1107,9 @@ export class AgentSessionManager {
       .filter((m) => m.role === "user" && typeof m.content === "string").length;
     if (turnIndex === 0) return null;
 
-    const checkpoint = await this.checkpointManager.createCheckpoint(turnIndex);
-    if (!checkpoint) return null;
-
-    const existing = this.checkpoints.get(session.id) ?? [];
-    existing.push(checkpoint);
-    this.checkpoints.set(session.id, existing);
-    return checkpoint;
+    return this.ensureCheckpointForTurn(session, turnIndex, {
+      refreshExisting: true,
+    });
   }
 
   /**
@@ -1118,7 +1163,10 @@ export class AgentSessionManager {
           userCount++;
         }
       }
-      if (keepUntil === allMessages.length) {
+      if (
+        keepUntil === allMessages.length &&
+        userCount !== checkpoint.turnIndex
+      ) {
         // turnIndex points past the current transcript, so this checkpoint is stale or corrupt.
         return { ok: false };
       }

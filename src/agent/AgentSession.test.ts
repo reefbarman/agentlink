@@ -187,6 +187,28 @@ describe("AgentSession", () => {
   });
 
   describe("messages", () => {
+    it("clears active skill tool restrictions when a new user message starts", async () => {
+      mockedBuildPromptArtifacts.mockResolvedValue({
+        ...makePromptArtifacts("mock system prompt"),
+        skills: [
+          {
+            name: "safe-review",
+            description: "Safe review",
+            skillPath: "/test/.agentlink/skills/safe-review/SKILL.md",
+            allowedTools: ["read_file"],
+          },
+        ],
+      });
+      const session = await makeSession();
+
+      session.trackLoadedSkill("safe-review");
+      expect(session.getActiveSkillAllowedTools()).toEqual(["read_file"]);
+
+      session.addUserMessage("new task");
+      expect(session.getActiveSkillAllowedTools()).toBeUndefined();
+      expect(session.getLoadedSkills()).toEqual(["safe-review"]);
+    });
+
     it("addUserMessage appends a user message", async () => {
       const session = await makeSession();
       session.addUserMessage("hello");

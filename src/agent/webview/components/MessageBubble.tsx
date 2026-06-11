@@ -1,4 +1,5 @@
 import type { ChatMessage, ContentBlock } from "../types";
+import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
 import { useCallback, useEffect, useState } from "preact/hooks";
 
 import { ApiRequestBlock } from "./ApiRequestBlock";
@@ -8,6 +9,7 @@ import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ComponentChild } from "preact";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
+import type { FinalMarkerToolCall } from "../../../shared/finalStatus";
 import { PairingCodeBlock } from "./PairingCodeBlock";
 import { QuestionAnswerBlock } from "./QuestionAnswerBlock";
 import { SkillLoadBlock } from "./SkillLoadBlock";
@@ -120,6 +122,7 @@ export function MessageBubble({
       );
     }
     const { files, mediaLabel, cleanText } = parseAttachments(message.content);
+    const displayMedia = message.displayMedia;
     const slashLabel = message.slashCommandLabel;
     const hasSlashLabel = Boolean(message.isSlashCommand && slashLabel);
     const isStandaloneSlashCommand =
@@ -127,7 +130,8 @@ export function MessageBubble({
       cleanText.length > 0 &&
       cleanText === slashLabel &&
       files.length === 0 &&
-      mediaLabel === null;
+      mediaLabel === null &&
+      !displayMedia;
 
     if (isStandaloneSlashCommand) {
       return (
@@ -142,7 +146,8 @@ export function MessageBubble({
       files.length > 0 ||
       mediaLabel !== null ||
       hasSlashLabel ||
-      message.origin === "browser";
+      message.origin === "browser" ||
+      Boolean(displayMedia);
 
     return (
       <div class="message user-message">
@@ -151,6 +156,7 @@ export function MessageBubble({
             <UserAttachments
               files={files}
               mediaLabel={mediaLabel}
+              displayMedia={displayMedia}
               slashLabel={hasSlashLabel ? slashLabel : undefined}
               remote={message.origin === "browser"}
               onOpenFile={onOpenFile}
@@ -166,15 +172,24 @@ export function MessageBubble({
   // Hide spawn_background_agent tool_call — it's replaced by the bg_agent block.
   // Keep get_background_status/result/kill visible so users can see what the foreground
   // agent is doing (e.g. waiting for bg results vs actually stuck).
+  const finalMarkerToolId = message.finalMarker?.toolCall?.id;
   const blocks = (message.blocks ?? []).filter(
-    (b) => !(b.type === "tool_call" && b.name === "spawn_background_agent"),
+    (b) =>
+      !(b.type === "tool_call" && b.name === "spawn_background_agent") &&
+      !(b.type === "tool_call" && b.id === finalMarkerToolId),
   );
   const lastIdx = blocks.length - 1;
+  const blockSegments = segmentBlocks(blocks);
 
   // Show dots while streaming — always visible at the bottom until response completes.
   // This ensures there's always a visible loading indicator during any streaming gap.
   const showDots = streaming;
   const finalMarker = !streaming ? message.finalMarker : undefined;
+  const finalContinueAction = finalMarker
+    ? getFinalMessageContinueAction(finalMarker)
+    : undefined;
+  const hasVisibleFinalContinueAction =
+    Boolean(finalContinueAction) && Boolean(onFinalMarkerContinue);
   const finalRegionClass = finalMarker
     ? `assistant-final-region assistant-final-region-${finalMarker.status}`
     : undefined;
@@ -182,7 +197,20 @@ export function MessageBubble({
   return (
     <div class="message assistant-message">
       <div class="assistant-blocks">
-        {blocks.map((block, i) => {
+        {blockSegments.map((segment) => {
+          if (segment.kind === "tool_group") {
+            return (
+              <ToolCallGroup
+                key={`group-${segment.blocks[0].id}`}
+                blocks={segment.blocks}
+                onOpenFile={onOpenFile}
+                onPromoteMcpToolApproval={onPromoteMcpToolApproval}
+              />
+            );
+          }
+
+          const block = segment.block;
+          const blockIndex = segment.index;
           switch (block.type) {
             case "thinking":
               return <ThinkingBlock key={block.id} block={block} />;
@@ -198,10 +226,10 @@ export function MessageBubble({
             case "skill_load":
               return <SkillLoadBlock key={block.id} block={block} />;
             case "text": {
-              const isActiveStream = streaming && i === lastIdx;
+              const isActiveStream = streaming && blockIndex === lastIdx;
               return (
                 <TextBlock
-                  key={`text-${i}`}
+                  key={`text-${blockIndex}`}
                   text={block.text}
                   streaming={isActiveStream}
                   showCopy={!isActiveStream}
@@ -242,7 +270,9 @@ export function MessageBubble({
                 />
               );
             case "question_answer":
-              return <QuestionAnswerBlock key={`qa-${i}`} block={block} />;
+              return (
+                <QuestionAnswerBlock key={`qa-${blockIndex}`} block={block} />
+              );
             case "pairing_code":
               return (
                 <PairingCodeBlock
@@ -279,8 +309,8 @@ export function MessageBubble({
           <div class={finalRegionClass}>
             <FinalMarkerHeader marker={finalMarker} />
             {(finalMarker.summary ||
-              (getFinalMessageContinueAction(finalMarker) &&
-                onFinalMarkerContinue)) && (
+              finalMarker.toolCall ||
+              hasVisibleFinalContinueAction) && (
               <FinalMarkerActions
                 marker={finalMarker}
                 onContinue={onFinalMarkerContinue}
@@ -294,6 +324,7 @@ export function MessageBubble({
 
       {!streaming &&
         detectedQuestion &&
+        !hasVisibleFinalContinueAction &&
         (() => {
           const visibleOptions = showAllDetectedOptions
             ? detectedQuestion.options
@@ -439,6 +470,9 @@ function FinalMarkerActions({
           <span>{marker.autoContinueStopReason}</span>
         </div>
       )}
+      {marker.toolCall && (
+        <FinalMarkerToolCallBlock toolCall={marker.toolCall} />
+      )}
       {action && onContinue && (
         <button
           class="final-marker-continue"
@@ -449,6 +483,28 @@ function FinalMarkerActions({
           {action.label}
         </button>
       )}
+    </div>
+  );
+}
+
+function FinalMarkerToolCallBlock({
+  toolCall,
+}: {
+  toolCall: FinalMarkerToolCall;
+}) {
+  return (
+    <div class="final-marker-tool-call">
+      <ToolCallBlock
+        toolCall={{
+          type: "tool_call",
+          id: toolCall.id,
+          name: toolCall.name,
+          inputJson: toolCall.inputJson,
+          result: toolCall.result ?? "",
+          complete: true,
+          durationMs: toolCall.durationMs,
+        }}
+      />
     </div>
   );
 }
@@ -489,61 +545,150 @@ function parseAttachments(content: string): {
 function UserAttachments({
   files,
   mediaLabel,
+  displayMedia,
   slashLabel,
   remote,
   onOpenFile,
 }: {
   files: string[];
   mediaLabel: string | null;
+  displayMedia?: ChatMessage["displayMedia"];
   slashLabel?: string;
   remote?: boolean;
   onOpenFile?: (path: string, line?: number) => void;
 }) {
-  if (files.length === 0 && !mediaLabel && !slashLabel && !remote) return null;
+  const [selectedImage, setSelectedImage] = useState<
+    NonNullable<ChatMessage["displayMedia"]>["images"][number] | null
+  >(null);
+
+  useEffect(() => {
+    if (!selectedImage) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedImage(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedImage]);
+
+  if (
+    files.length === 0 &&
+    !mediaLabel &&
+    !displayMedia &&
+    !slashLabel &&
+    !remote
+  ) {
+    return null;
+  }
+  const showChipRow =
+    files.length > 0 ||
+    Boolean(mediaLabel) ||
+    Boolean(slashLabel) ||
+    Boolean(remote);
 
   return (
-    <div class="user-attachments">
-      {files.map((filePath) => {
-        const name = filePath.split("/").pop() ?? filePath;
-        return (
-          <span
-            key={filePath}
-            class="user-attachment-chip"
-            title={filePath}
-            onClick={
-              onOpenFile
-                ? (e: MouseEvent) => {
-                    e.preventDefault();
-                    onOpenFile(filePath);
-                  }
-                : undefined
-            }
-            style={onOpenFile ? { cursor: "pointer" } : undefined}
+    <>
+      {displayMedia?.images && displayMedia.images.length > 0 && (
+        <div class="user-image-previews">
+          {displayMedia.images.map((image, index) => {
+            const label = image.name || `attached image ${index + 1}`;
+            return (
+              <button
+                key={`${image.name}-${index}`}
+                class="user-image-preview-button"
+                type="button"
+                title={`Open ${label}`}
+                aria-label={`Open ${label}`}
+                onClick={() => setSelectedImage(image)}
+              >
+                <img
+                  class="user-image-preview"
+                  src={image.src}
+                  alt={image.name || `Attached image ${index + 1}`}
+                />
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {showChipRow && (
+        <div class="user-attachments">
+          {files.map((filePath) => {
+            const name = filePath.split("/").pop() ?? filePath;
+            return (
+              <span
+                key={filePath}
+                class="user-attachment-chip"
+                title={filePath}
+                onClick={
+                  onOpenFile
+                    ? (e: MouseEvent) => {
+                        e.preventDefault();
+                        onOpenFile(filePath);
+                      }
+                    : undefined
+                }
+                style={onOpenFile ? { cursor: "pointer" } : undefined}
+              >
+                <i class="codicon codicon-file" />
+                <span class="user-attachment-chip-name">{name}</span>
+              </span>
+            );
+          })}
+          {mediaLabel && (
+            <span class="user-attachment-chip user-attachment-media">
+              <i class="codicon codicon-file-media" />
+              <span class="user-attachment-chip-name">{mediaLabel}</span>
+            </span>
+          )}
+          {slashLabel && (
+            <span class="user-attachment-chip user-attachment-slash-command">
+              <i class="codicon codicon-terminal" />
+              <span class="user-attachment-chip-name">{slashLabel}</span>
+            </span>
+          )}
+          {remote && (
+            <span class="user-attachment-chip user-attachment-remote">
+              <i class="codicon codicon-device-mobile" />
+              <span class="user-attachment-chip-name">Remote</span>
+            </span>
+          )}
+        </div>
+      )}
+      {selectedImage && (
+        <div
+          class="user-image-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={selectedImage.name || "Attached image preview"}
+          onClick={() => setSelectedImage(null)}
+        >
+          <div
+            class="user-image-lightbox-content"
+            onClick={(event) => event.stopPropagation()}
           >
-            <i class="codicon codicon-file" />
-            <span class="user-attachment-chip-name">{name}</span>
-          </span>
-        );
-      })}
-      {mediaLabel && (
-        <span class="user-attachment-chip user-attachment-media">
-          <i class="codicon codicon-file-media" />
-          <span class="user-attachment-chip-name">{mediaLabel}</span>
-        </span>
+            <div class="user-image-lightbox-header">
+              <span class="user-image-lightbox-title">
+                {selectedImage.name || "Attached image"}
+              </span>
+              <button
+                class="icon-button user-image-lightbox-close"
+                type="button"
+                title="Close"
+                aria-label="Close image preview"
+                onClick={() => setSelectedImage(null)}
+              >
+                <i class="codicon codicon-close" />
+              </button>
+            </div>
+            <img
+              class="user-image-lightbox-image"
+              src={selectedImage.src}
+              alt={selectedImage.name || "Attached image"}
+            />
+          </div>
+        </div>
       )}
-      {slashLabel && (
-        <span class="user-attachment-chip user-attachment-slash-command">
-          <i class="codicon codicon-terminal" />
-          <span class="user-attachment-chip-name">{slashLabel}</span>
-        </span>
-      )}
-      {remote && (
-        <span class="user-attachment-chip user-attachment-remote">
-          <i class="codicon codicon-device-mobile" />
-          <span class="user-attachment-chip-name">Remote</span>
-        </span>
-      )}
-    </div>
+    </>
   );
 }
 

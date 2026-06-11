@@ -587,6 +587,25 @@ Create or overwrite a file. Opens a **diff view** in VS Code for the user to rev
 | `path`    | string | File path             |
 | `content` | string | Complete file content |
 
+### generate_image
+
+Generate PNG images through OpenAI/Codex auth and save them into the workspace. With ChatGPT/Codex OAuth, usage consumes the active account's image-generation quota; with an OpenAI API key, usage is billed to the API key. The tool always shows an approval prompt before generation because quota/billing is consumed before files are written.
+
+| Parameter               | Type               | Description                                                                                                                                                                                                          |
+| ----------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`                | string             | Prompt describing the image or images to generate                                                                                                                                                                    |
+| `output_path`           | string?            | Workspace-relative PNG file path or output directory. Defaults to `generated-images/`. Must resolve inside workspace.                                                                                                |
+| `size`                  | string?            | Optional requested size/aspect hint, e.g. `1024x1024`, `1536x1024`, or `1024x1536`                                                                                                                                   |
+| `count`                 | number?            | Number of images to generate. Default: 1. Maximum: 4                                                                                                                                                                 |
+| `reference_image_paths` | string[]?          | Workspace-local PNG/JPEG/GIF/WebP files to use as generation references                                                                                                                                              |
+| `reference_image_ids`   | string[]?          | IDs of prior user-attached images in the current built-in agent session. Prefer `use_recent_images` for images the user just provided. Explicit IDs follow `image_N` attachment order and errors list available IDs. |
+| `use_recent_images`     | boolean \| number? | Use recent user-attached images as references. Prefer this when the user asks to use an image they already provided. `true` uses up to 4 recent images; a number uses that many.                                     |
+| `timeout_seconds`       | number?            | Overall timeout in seconds. Default and maximum: 300                                                                                                                                                                 |
+
+**Approval prompt:** shows the generation prompt, requested size/count, reference image labels, output paths, and billing/quota note. Approving uses the standard write-card `accept` decision; rejecting returns `User denied image generation` and the planned output paths.
+
+**Response includes:** `status`, `model`, `billing`, `requested_count`, `generated_count`, `reference_images` metadata, generated `images` with paths/byte counts, and Codex stream `event_types`. Image bytes are written to workspace files and are not inlined into the chat/tool result.
+
 ### propose_memory
 
 Propose a cross-session memory/config update. This is the sanctioned path for durable learnings: the tool resolves the correct target, validates skill/command names and skill frontmatter, previews the proposed final file content, and always requires explicit user approval before writing. Approval can edit the final content or retarget tier/scope before accepting.
@@ -819,7 +838,7 @@ By default, AgentLink reuses an existing idle terminal for sequential commands. 
 
 Output is capped to the **last 200 lines** by default. Full output is saved to a temp file (returned as `output_file`) for on-demand access via `read_file`. Use `output_head`, `output_tail`, or `output_grep` to customize filtering.
 
-Common response fields include `terminal_id` (for reuse/polling), `output`, and `output_file`. When a foreground command times out, AgentLink returns `timed_out: true` and a `terminal_id` so you can continue with `get_terminal_output` instead of re-running the command.
+Common response fields include `terminal_id` (for reuse/polling), `output`, and `output_file`. When a foreground command times out, AgentLink returns `timed_out: true` and a `terminal_id` so you can continue with `get_terminal_output` instead of re-running the command. Approved commands include `approval: { by: ... }` in the response (`master_bypass`, `explicit_rule`, `recent_approval`, `tier`, `human`, or `human_edited`) and show an audit badge in the chat transcript. Tier auto-approvals also include the legacy-compatible `auto_approved: { by: "tier", tier, threshold }` field.
 
 | Parameter             | Type     | Description                                                                                                                                             |
 | --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1197,6 +1216,20 @@ When an agent runs a command, the approval panel shows the command in a terminal
 #### Per-Sub-Command Rules
 
 For compound commands (e.g. `npm install && npm test`), the approval panel splits the command into individual sub-commands, each with its own rule row.
+
+#### Tiered Command Auto-Approval
+
+`agentlink.commandAutoApproveTier` controls an optional local static classifier for `execute_command` calls that do not already match an explicit command rule:
+
+| Setting     | Behavior                                                                                                                                                                                                                     |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`       | Prompt unless an explicit command rule or recent single-use approval applies.                                                                                                                                                |
+| `safe`      | **Default.** Auto-approve recognized read-only commands such as `ls`, `git status`, `git diff`, `rg`, and version checks. Mutations still prompt.                                                                            |
+| `sensitive` | Also auto-approve workspace-local mutations, project toolchain commands (`npm install`, `npm test`, builds), and unrecognized plain commands. This trusts the workspace's scripts/tooling to run without per-command review. |
+
+Commands classified as `dangerous` always prompt unless covered by `masterBypass` or an explicit/recent approval. Dangerous includes destructive commands (`rm`, `git reset --hard`, `git clean`), privileged commands (`sudo`), external/network commands (`curl`, `wget`, `ssh`, `git push`), writes outside the workspace, secret-path reads, and opaque shell constructs such as command substitution, heredocs, env-assignment prefixes, and inline interpreter execution (`bash -c`, `python -c`, `node -e`).
+
+Approval cards show the classifier's tier per sub-command. Executed commands include approval metadata in the tool result and show badges such as `approved · rule`, `approved · human`, or `auto · <tier>` in the transcript for auditability.
 
 ### Outside-Workspace Path Access
 

@@ -1,3 +1,12 @@
+import type {
+  CompleteRequest,
+  CompleteResult,
+  ModelCapabilities,
+  ModelInfo,
+  ModelProvider,
+  ProviderStreamEvent,
+  StreamRequest,
+} from "./providers/types.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   enforceToolResultAdjacency,
@@ -5,16 +14,8 @@ import {
   injectSyntheticToolResults,
   summarizeConversation,
 } from "./condense.js";
+
 import type { AgentMessage } from "./types.js";
-import type {
-  CompleteRequest,
-  CompleteResult,
-  ModelCapabilities,
-  ModelInfo,
-  ModelProvider,
-  StreamRequest,
-  ProviderStreamEvent,
-} from "./providers/types.js";
 
 const TEST_MODEL = "claude-sonnet-4-6";
 
@@ -174,6 +175,43 @@ describe("summarizeConversation", () => {
     expect(String(finalMessage.content)).toContain("- codebase_search");
     expect(String(finalMessage.content)).toContain("- linear");
     expect(String(finalMessage.content)).toContain("- notion");
+  });
+
+  it("strips memory candidate reminders from condense canonical user messages", async () => {
+    const { provider, complete } = makeProvider();
+    const result = await summarizeConversation({
+      messages: [
+        {
+          role: "user",
+          content:
+            "Fix issue\n\n<system-reminder>\n[memory-candidate] hidden nudge\nNever store this meta text.\n</system-reminder>",
+        } as AgentMessage,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Looking now." }],
+        } as AgentMessage,
+      ],
+      provider,
+      systemPrompt: "system prompt",
+      isAutomatic: true,
+      preservedContext: {
+        toolNames: ["read_file"],
+        mcpServerNames: [],
+      },
+    });
+
+    const request = complete.mock.calls[0][0] as CompleteRequest;
+    const finalMessage = request.messages[request.messages.length - 1];
+    expect(String(finalMessage.content)).toContain(
+      'Latest user message: "Fix issue"',
+    );
+    expect(String(finalMessage.content)).not.toContain("[memory-candidate]");
+    expect(String(finalMessage.content)).not.toContain("hidden nudge");
+
+    const summary = result.messages[result.messages.length - 1];
+    const content = summary.content as Array<{ type: string; text?: string }>;
+    expect(content[0]?.text).toContain('Latest user message: "Fix issue"');
+    expect(content[0]?.text).not.toContain("[memory-candidate]");
   });
 
   it("includes preserved runtime context in post-condense token estimates", async () => {
@@ -438,9 +476,7 @@ User wants to fix the condense resume bug for Codex after summarization.
     const next = effective[assistantIdx + 1];
     expect(next?.role).toBe("user");
     const nextBlocks = Array.isArray(next?.content) ? next.content : [];
-    expect(
-      nextBlocks.filter((b) => b.type === "tool_result"),
-    ).toHaveLength(1);
+    expect(nextBlocks.filter((b) => b.type === "tool_result")).toHaveLength(1);
 
     // Exactly one tool_result for the call across the whole history —
     // no synthetic duplicate.
@@ -706,10 +742,17 @@ User wants to fix the condense resume bug for Codex after summarization.
 });
 
 describe("enforceToolResultAdjacency", () => {
-  const toolUse = (id: string) =>
-    ({ type: "tool_use" as const, id, name: "execute_command", input: {} });
-  const toolResult = (id: string, content = "ok") =>
-    ({ type: "tool_result" as const, tool_use_id: id, content });
+  const toolUse = (id: string) => ({
+    type: "tool_use" as const,
+    id,
+    name: "execute_command",
+    input: {},
+  });
+  const toolResult = (id: string, content = "ok") => ({
+    type: "tool_result" as const,
+    tool_use_id: id,
+    content,
+  });
 
   it("keeps valid tool_use/tool_result pairs untouched", () => {
     const messages: AgentMessage[] = [
@@ -795,7 +838,10 @@ describe("enforceToolResultAdjacency", () => {
   it("keeps tool_results in later consecutive user messages (providers merge them)", () => {
     const messages: AgentMessage[] = [
       { role: "assistant", content: [toolUse("call_1")] } as AgentMessage,
-      { role: "user", content: [{ type: "text", text: "note" }] } as AgentMessage,
+      {
+        role: "user",
+        content: [{ type: "text", text: "note" }],
+      } as AgentMessage,
       { role: "user", content: [toolResult("call_1")] } as AgentMessage,
     ];
     const repaired = enforceToolResultAdjacency(messages);

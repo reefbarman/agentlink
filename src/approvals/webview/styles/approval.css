@@ -210,6 +210,23 @@ body {
   align-items: center;
   gap: 4px;
 }
+.approval-detail-text {
+  background: var(
+    --vscode-textCodeBlock-background,
+    var(--vscode-editor-background)
+  );
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  padding: 10px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: -4px 0 16px;
+  max-height: 240px;
+  overflow: auto;
+}
 
 /* ── Command box (path approvals) ────────────────────────────────────── */
 
@@ -540,6 +557,18 @@ body {
   color: #000;
   white-space: nowrap;
   flex-shrink: 0;
+}
+.rule-row-tier-badge.tier-safe {
+  background: var(--vscode-terminal-ansiGreen, #4ec9b0);
+  color: #000;
+}
+.rule-row-tier-badge.tier-sensitive {
+  background: var(--vscode-editorWarning-foreground, #cca700);
+  color: #000;
+}
+.rule-row-tier-badge.tier-dangerous {
+  background: var(--vscode-editorError-foreground, #f14c4c);
+  color: #fff;
 }
 .rule-row-input-line {
   display: flex;

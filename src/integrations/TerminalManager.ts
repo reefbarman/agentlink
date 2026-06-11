@@ -146,6 +146,22 @@ export interface CommandResult {
   command_modified?: boolean;
   original_command?: string;
   follow_up?: string;
+  approval?:
+    | { by: "master_bypass" }
+    | { by: "explicit_rule" }
+    | { by: "recent_approval" }
+    | {
+        by: "tier";
+        tier: "safe" | "sensitive" | "dangerous";
+        threshold: "safe" | "sensitive";
+      }
+    | { by: "human" }
+    | { by: "human_edited" };
+  auto_approved?: {
+    by: "tier";
+    tier: "safe" | "sensitive" | "dangerous";
+    threshold: "safe" | "sensitive";
+  };
   timed_out?: boolean;
   execution_mode?: "shell_integration" | "send_text";
   verification_hint?: string;

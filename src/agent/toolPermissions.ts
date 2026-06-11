@@ -18,6 +18,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "apply_diff",
     "find_and_replace",
     "rename_symbol",
+    "generate_image",
     "get_code_actions",
     "apply_code_action",
     "propose_memory",

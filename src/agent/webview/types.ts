@@ -74,6 +74,8 @@ export interface Question {
     | "scale"
     | "confirmation";
   question: string;
+  /** Visible explanation shown with this specific question. */
+  context?: string;
   options?: string[];
   /** The option value the agent recommends (must match one of the options strings) */
   recommended?: string;
@@ -370,6 +372,8 @@ export type ExtensionMessage =
       isSlashCommand?: boolean;
       /** Slash command label rendered in the inline command chip */
       slashCommandLabel?: string;
+      /** Display-only previews for pasted or dropped media. */
+      displayMedia?: ChatMessage["displayMedia"];
     }
   | {
       type: "agentCommittedUserMessage";
@@ -379,6 +383,8 @@ export type ExtensionMessage =
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       origin?: "vscode" | "browser";
+      /** Display-only previews for pasted or dropped media. */
+      displayMedia?: ChatMessage["displayMedia"];
     }
   | {
       type: "agentBgSessionsUpdate";
@@ -667,6 +673,11 @@ export interface ChatMessage {
   slashCommandLabel?: string;
   /** Set when the user message originated from a remote browser client */
   origin?: "vscode" | "browser";
+  /** Display-only previews for pasted or dropped media attached to a user turn. */
+  displayMedia?: {
+    images: Array<{ name: string; mimeType: string; src: string }>;
+    documents: Array<{ name: string; mimeType: string }>;
+  };
   /**
    * Checkpoint ID rendered on the user message immediately preceding that
    * checkpoint snapshot.

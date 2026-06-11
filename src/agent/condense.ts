@@ -35,6 +35,7 @@ import {
   treeSitterChunkFile,
   isTreeSitterSupported,
 } from "../indexer/treeSitterChunker.js";
+import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -573,14 +574,14 @@ function extractCanonicalUserMessages(messages: AgentMessage[]): string[] {
     .filter((m) => m.role === "user" && !m.isSummary && !m.isResumeContext)
     .map((m) => {
       if (typeof m.content === "string") {
-        return m.content.trim();
+        return stripMemoryCandidateReminders(m.content).trim();
       }
       if (!Array.isArray(m.content)) {
         return "";
       }
       return m.content
         .filter((block): block is TextBlock => block.type === "text")
-        .map((block) => block.text.trim())
+        .map((block) => stripMemoryCandidateReminders(block.text).trim())
         .filter((text) => text.length > 0)
         .join("\n")
         .trim();

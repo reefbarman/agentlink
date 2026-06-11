@@ -177,13 +177,19 @@ describe("AgentSessionManager condense thresholds", () => {
           deferredTools: [
             expect.objectContaining({ name: "linear__list_issues" }),
           ],
-          catalog: [
+          catalog: expect.arrayContaining([
+            expect.objectContaining({
+              serverName: "ddg-search",
+              toolCount: 1,
+              representativeTools: ["search"],
+              capabilities: ["web-search"],
+            }),
             expect.objectContaining({
               serverName: "linear",
               toolCount: 1,
               representativeTools: ["list_issues"],
             }),
-          ],
+          ]),
         }),
       }),
     );
@@ -520,6 +526,102 @@ describe("AgentSessionManager checkpoints", () => {
     });
   });
 
+  it("creates an idempotent checkpoint for each completed user turn", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    const messages: AgentMessage[] = [];
+    (session as any).messageCount = 0;
+    (session as any).isAborted = false;
+    (session as any).lastActiveAt = 123;
+    (session as any).getAllMessages = vi.fn(() => messages);
+    (session as any).addUserMessage = vi.fn((text: string) => {
+      messages.push({ role: "user", content: text });
+      (session as any).messageCount = messages.length;
+      session.lastActiveAt += 1;
+    });
+    (session as any).consumePendingInterjection = vi.fn(() => null);
+    (session as any).consumePendingModeResume = vi.fn(() => null);
+    (session as any).autoTitle = vi.fn();
+
+    const checkpointManager = {
+      createCheckpoint: vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: "cp-turn-1",
+          commitHash: "hash-1",
+          turnIndex: 1,
+          createdAt: 111,
+        })
+        .mockResolvedValueOnce({
+          id: "cp-turn-1-refresh",
+          commitHash: "hash-1-refreshed",
+          turnIndex: 1,
+          createdAt: 222,
+        })
+        .mockResolvedValueOnce({
+          id: "cp-turn-2",
+          commitHash: "hash-2",
+          turnIndex: 2,
+          createdAt: 333,
+        }),
+    };
+    (mgr as any).checkpointManager = checkpointManager;
+
+    const engine = {
+      run: vi.fn(async function* () {
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+    (mgr as any).engine = engine;
+
+    const onEvent = vi.fn();
+    mgr.onEvent = onEvent;
+
+    await mgr.sendMessage(session.id, "first prompt", session.mode);
+    await mgr.sendMessage(session.id, "second prompt", session.mode);
+
+    expect(checkpointManager.createCheckpoint).toHaveBeenCalledTimes(3);
+    expect(checkpointManager.createCheckpoint).toHaveBeenNthCalledWith(1, 1);
+    expect(checkpointManager.createCheckpoint).toHaveBeenNthCalledWith(2, 1);
+    expect(checkpointManager.createCheckpoint).toHaveBeenNthCalledWith(3, 2);
+    expect(mgr.getCheckpoints(session.id)).toEqual([
+      expect.objectContaining({
+        id: "cp-turn-1",
+        commitHash: "hash-1-refreshed",
+        turnIndex: 1,
+        createdAt: 222,
+      }),
+      expect.objectContaining({
+        id: "cp-turn-2",
+        commitHash: "hash-2",
+        turnIndex: 2,
+        createdAt: 333,
+      }),
+    ]);
+    expect(onEvent).toHaveBeenCalledWith(
+      session.id,
+      expect.objectContaining({
+        type: "checkpoint_created",
+        checkpointId: "cp-turn-1",
+        turnIndex: 1,
+      }),
+    );
+    expect(onEvent).toHaveBeenCalledWith(
+      session.id,
+      expect.objectContaining({
+        type: "checkpoint_created",
+        checkpointId: "cp-turn-2",
+        turnIndex: 2,
+      }),
+    );
+  });
+
   it("reverts to the selected checkpoint snapshot and persists checkpoint metadata", async () => {
     const sessionMessages: AgentMessage[] = [
       { role: "user", content: "first prompt" },
@@ -654,5 +756,232 @@ describe("AgentSessionManager checkpoints", () => {
       { role: "user", content: "first prompt" },
       { role: "assistant", content: "first answer" },
     ]);
+  });
+
+  it("accepts reverting to a checkpoint at the current transcript tail", async () => {
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "second prompt" },
+      { role: "assistant", content: "second answer" },
+    ];
+
+    const replaceMessages = vi.fn((messages: AgentMessage[]) => {
+      sessionMessages.splice(0, sessionMessages.length, ...messages);
+    });
+
+    const session: any = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      providerId: undefined,
+      autoCondenseThreshold: 0.9,
+      title: "Checkpoint test",
+      background: false,
+      status: "idle",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      currentTool: undefined,
+      addUserMessage: vi.fn(),
+      appendRuntimeError: vi.fn(),
+      consumePendingInterjection: vi.fn(() => null),
+      queuePendingModeResume: vi.fn(),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+      getAllMessages: vi.fn(() => sessionMessages),
+      getLoadedSkills: vi.fn(() => []),
+      replaceMessages,
+      restoreFromStore: vi.fn((data: { messages: AgentMessage[] }) => {
+        sessionMessages.splice(0, sessionMessages.length, ...data.messages);
+      }),
+      rebuildSystemPrompt: vi.fn(async () => {}),
+      lastActiveAt: 123,
+      createdAt: 100,
+    };
+    mocks.createSession.mockResolvedValueOnce(session);
+
+    const save = vi.fn();
+    const store = {
+      save,
+      get: vi.fn(() => ({
+        id: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        title: "Checkpoint test",
+        messageCount: 4,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        createdAt: 100,
+        lastActiveAt: 123,
+        schemaVersion: 1,
+      })),
+      loadMessages: vi.fn(() => sessionMessages),
+      loadMetadata: vi.fn(() => ({
+        schemaVersion: 1,
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        checkpoints: [
+          {
+            id: "cp-tail",
+            commitHash: "hash-tail",
+            turnIndex: 2,
+            createdAt: 222,
+          },
+        ],
+      })),
+      list: vi.fn(() => []),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    await mgr.loadPersistedSession("session-1");
+
+    const checkpointManager = {
+      revertToCheckpoint: vi.fn(async () => true),
+    };
+    (mgr as any).checkpointManager = checkpointManager;
+
+    const result = await mgr.revertToCheckpoint("session-1", "cp-tail");
+
+    expect(result).toEqual({ ok: true, restoredPrompt: undefined });
+    expect(replaceMessages).toHaveBeenCalledWith([
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "second prompt" },
+      { role: "assistant", content: "second answer" },
+    ]);
+    expect(save).toHaveBeenCalled();
+  });
+});
+
+describe("AgentSessionManager memory candidate nudges", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getConfiguration.mockReturnValue({
+      get: () => undefined,
+      inspect: () => undefined,
+    });
+  });
+
+  async function makeSendHarness() {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    const messages: AgentMessage[] = [];
+    (session as any).messageCount = 0;
+    (session as any).isAborted = false;
+    (session as any).lastActiveAt = 123;
+    (session as any).getAllMessages = vi.fn(() => messages);
+    (session as any).addUserMessage = vi.fn((text: string, opts?: unknown) => {
+      messages.push({
+        role: "user",
+        content: text,
+        uiHint: opts
+          ? { userMessage: opts as Record<string, unknown> }
+          : undefined,
+      } as AgentMessage);
+      (session as any).messageCount = messages.length;
+      session.lastActiveAt += 1;
+    });
+    (session as any).consumePendingInterjection = vi.fn(() => null);
+    (session as any).consumePendingModeResume = vi.fn(() => null);
+    (session as any).autoTitle = vi.fn();
+
+    (mgr as any).checkpointManager = { createCheckpoint: vi.fn() };
+    (mgr as any).engine = {
+      run: vi.fn(async function* () {
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+    mgr.onEvent = vi.fn();
+    return { mgr, session };
+  }
+
+  it("stores a model-facing memory reminder while preserving display text", async () => {
+    const { mgr, session } = await makeSendHarness();
+    const text = "Going forward, always ask me before switching modes.";
+
+    await mgr.sendMessage(session.id, text, session.mode);
+
+    expect((session as any).addUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("[memory-candidate]"),
+      expect.objectContaining({ displayText: text }),
+    );
+  });
+
+  it("skips slash commands but not media messages with real text", async () => {
+    const { mgr, session } = await makeSendHarness();
+
+    await mgr.sendMessage(
+      session.id,
+      "Going forward, always ask me before switching modes.",
+      session.mode,
+      { isSlashCommand: true },
+    );
+    expect((session as any).addUserMessage).toHaveBeenLastCalledWith(
+      "Going forward, always ask me before switching modes.",
+      expect.objectContaining({ isSlashCommand: true }),
+    );
+
+    await mgr.sendMessage(
+      session.id,
+      "Going forward, always ask me before switching modes.",
+      session.mode,
+      { images: [{ name: "a.png", mimeType: "image/png", base64: "abc" }] },
+    );
+    expect((session as any).addUserMessage).toHaveBeenLastCalledWith(
+      expect.stringContaining("[memory-candidate]"),
+      expect.objectContaining({
+        images: [{ name: "a.png", mimeType: "image/png", base64: "abc" }],
+      }),
+    );
+  });
+
+  it("respects the per-session nudge cap", async () => {
+    const { mgr, session } = await makeSendHarness();
+
+    await mgr.sendMessage(
+      session.id,
+      "Going forward, always ask me before mode switches.",
+      session.mode,
+    );
+    await mgr.sendMessage(
+      session.id,
+      "In the future, always ask me before running release commands.",
+      session.mode,
+    );
+    await mgr.sendMessage(
+      session.id,
+      "Remember to always ask me before deleting files.",
+      session.mode,
+    );
+
+    const calls = (session as any).addUserMessage.mock.calls as Array<
+      [string, unknown]
+    >;
+    expect(
+      calls.filter(([content]) => content.includes("[memory-candidate]"))
+        .length,
+    ).toBe(2);
+    expect(calls.at(-1)?.[0]).toBe(
+      "Remember to always ask me before deleting files.",
+    );
   });
 });

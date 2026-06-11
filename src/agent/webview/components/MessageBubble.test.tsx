@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+import { initialState, reducer } from "../App";
 
 import type { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
@@ -78,6 +79,55 @@ describe("MessageBubble slash-command rendering", () => {
       screen.queryByText("[Attached: src/agent/webview/App.tsx]"),
     ).toBeNull();
     expect(screen.getByText("Please inspect this file")).toBeTruthy();
+  });
+
+  it("renders attached image previews above user message text", () => {
+    const message: ChatMessage = {
+      id: "user-image",
+      role: "user",
+      content: "[1 image attached]\nPlease inspect this screenshot",
+      timestamp: Date.now(),
+      blocks: [],
+      displayMedia: {
+        images: [
+          {
+            name: "screenshot.png",
+            mimeType: "image/png",
+            src: "data:image/png;base64,abc123",
+          },
+        ],
+        documents: [],
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    const preview = container.querySelector(
+      ".user-image-preview",
+    ) as HTMLImageElement;
+    expect(preview).toBeTruthy();
+    expect(preview.src).toBe("data:image/png;base64,abc123");
+    expect(preview.alt).toBe("screenshot.png");
+    expect(screen.getByText("1 image attached")).toBeTruthy();
+    expect(screen.getByText("Please inspect this screenshot")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open screenshot.png" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "screenshot.png" });
+    expect(dialog).toBeTruthy();
+    const fullPreview = container.querySelector(
+      ".user-image-lightbox-image",
+    ) as HTMLImageElement;
+    expect(fullPreview).toBeTruthy();
+    expect(fullPreview.src).toBe("data:image/png;base64,abc123");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: "screenshot.png" }),
+    ).toBeNull();
   });
 
   it("renders inline @path mentions as clickable file links in user text", () => {
@@ -173,6 +223,44 @@ describe("MessageBubble slash-command rendering", () => {
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     expect(onAnswer).toHaveBeenCalledWith("Yes, proceed with test updates.");
     expect(onDismiss).toHaveBeenCalledWith("assistant-1");
+  });
+
+  it("does not render detected question fallback when a final Continue CTA is visible", () => {
+    const message: ChatMessage = {
+      id: "assistant-final-with-detected-question",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [{ type: "text", text: "Should I continue?" }],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "Ready to continue.",
+      },
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        detectedQuestion={{
+          messageId: "assistant-final-with-detected-question",
+          kind: "yes_no",
+          prompt: "Should I continue?",
+          options: [
+            { label: "Yes", payload: "Yes" },
+            { label: "No", payload: "No" },
+          ],
+        }}
+        onDetectedQuestionAnswer={vi.fn()}
+        onDismissDetectedQuestion={vi.fn()}
+        onFinalMarkerContinue={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+    expect(screen.queryByText("Detected choice prompt")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Yes" })).toBeNull();
   });
 
   it("collapses detected question options after the first 6 and expands on demand", () => {
@@ -530,6 +618,15 @@ describe("MessageBubble slash-command rendering", () => {
         status: "completed",
         source: "tool",
         summary: "Done — the final summary only should be highlighted.",
+        toolCall: {
+          id: "final-1",
+          name: "set_task_status",
+          inputJson: JSON.stringify({
+            status: "completed",
+            summary: "Done — the final summary only should be highlighted.",
+          }),
+          result: JSON.stringify({ ok: true }),
+        },
       },
     };
 
@@ -546,7 +643,95 @@ describe("MessageBubble slash-command rendering", () => {
       "Done — the final summary only should be highlighted.",
     );
     expect(finalRegion?.textContent).not.toContain("I will verify this first.");
-    expect(finalRegion?.querySelector(".tool-call-block")).toBeNull();
+    const finalTool = finalRegion?.querySelector(".tool-call-block");
+    expect(finalTool).toBeTruthy();
+    expect(finalTool?.textContent).toContain("set_task_status");
+    expect(finalTool?.textContent).not.toContain('"status"');
+
+    const finalToolHeader = finalRegion?.querySelector(
+      ".final-marker-tool-call .tool-call-header",
+    );
+    expect(finalToolHeader).toBeTruthy();
+    fireEvent.click(finalToolHeader!);
+    expect(finalRegion?.textContent).toContain('"status"');
+    expect(finalRegion?.textContent).toContain('"completed"');
+    expect(finalRegion?.textContent).toContain('"summary"');
+  });
+
+  it("renders completed tool groups while keeping the running tool standalone", () => {
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "inspect",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-1",
+      toolName: "read_file",
+    });
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-1",
+      toolName: "read_file",
+      result: JSON.stringify({ ok: true }),
+      durationMs: 5,
+      input: { path: "src/one.ts" },
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-2",
+      toolName: "search_files",
+    });
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-2",
+      toolName: "search_files",
+      result: JSON.stringify({ total_matches: 2 }),
+      durationMs: 7,
+      input: { regex: "needle", path: "src" },
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-3",
+      toolName: "execute_command",
+    });
+
+    const assistant = state.messages[state.messages.length - 1] as ChatMessage;
+    const { rerender } = render(
+      <MessageBubble message={assistant} streaming={true} />,
+    );
+
+    const groupButton = screen.getByRole("button", {
+      name: /tools explored 1 file, 1 search/i,
+    });
+    expect(groupButton.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      screen.getByRole("button", { name: /execute_command/i }),
+    ).toBeTruthy();
+
+    fireEvent.click(groupButton);
+    expect(groupButton.getAttribute("aria-expanded")).toBe("true");
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-3",
+      toolName: "execute_command",
+      result: JSON.stringify({ exit_code: 0 }),
+      durationMs: 9,
+      input: { command: "npm test" },
+    });
+
+    rerender(
+      <MessageBubble
+        message={state.messages[state.messages.length - 1] as ChatMessage}
+        streaming={false}
+      />,
+    );
+
+    expect(groupButton.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.queryAllByRole("button", { name: /execute_command/i }),
+    ).toHaveLength(1);
   });
 
   it("renders MCP approval promotion actions for completed tool calls", () => {

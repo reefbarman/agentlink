@@ -6,6 +6,7 @@ import {
   type ToolDispatchContext,
 } from "./toolAdapter.js";
 import { BUILT_IN_MODES } from "./modes.js";
+import type { ToolDefinition } from "./providers/types.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 
 // Mock all tool handlers so dispatchToolCall tests don't hit VS Code APIs
@@ -163,6 +164,27 @@ const mockCtx: ToolDispatchContext = {
   onApprovalRequest: mockOnApprovalRequest,
 };
 
+const ddgMcpTools: ToolDefinition[] = [
+  {
+    name: "ddg-search__search",
+    description: "Search the web using DuckDuckGo.",
+    input_schema: {
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    },
+  },
+  {
+    name: "ddg-search__fetch_content",
+    description: "Fetch and extract the main text content from a webpage.",
+    input_schema: {
+      type: "object",
+      properties: { url: { type: "string" } },
+      required: ["url"],
+    },
+  },
+];
+
 describe("READ_ONLY_TOOLS", () => {
   it("includes expected read-only tools", () => {
     expect(READ_ONLY_TOOLS.has("read_file")).toBe(true);
@@ -256,7 +278,12 @@ describe("getAgentTools", () => {
   });
 
   it("restricts tools when toolProfile is set to 'review'", () => {
-    const reviewTools = getAgentTools(undefined, undefined, true, "review");
+    const reviewTools = getAgentTools(
+      BUILT_IN_MODES[4],
+      ddgMcpTools,
+      true,
+      "review",
+    );
     const names = reviewTools.map((t) => t.name);
     // Should include read-only review tools
     expect(names).toContain("read_file");
@@ -269,22 +296,25 @@ describe("getAgentTools", () => {
     expect(names).toContain("get_hover");
     expect(names).toContain("get_symbols");
     expect(names).toContain("get_references");
-    // Should NOT include write tools, command tools, or MCP meta tools
+    // Should include MCP discovery/call tools and directly exposed ddg tools.
+    expect(names).toContain("find_mcp_tools");
+    expect(names).toContain("call_mcp_tool");
+    expect(names).toContain("ddg-search__search");
+    expect(names).toContain("ddg-search__fetch_content");
+
+    // Should NOT include write tools, command tools, or foreground-only helpers.
     expect(names).not.toContain("write_file");
     expect(names).not.toContain("apply_diff");
     expect(names).not.toContain("execute_command");
     expect(names).not.toContain("find_and_replace");
-    expect(names).not.toContain("list_mcp_resources");
     expect(names).not.toContain("load_rule");
-    expect(names).not.toContain("find_mcp_tools");
-    expect(names).not.toContain("call_mcp_tool");
     expect(names).not.toContain("ask_user");
   });
 
   it("restricts tools when toolProfile is set to 'readonly-research'", () => {
     const tools = getAgentTools(
-      undefined,
-      undefined,
+      BUILT_IN_MODES[2],
+      ddgMcpTools,
       true,
       "readonly-research",
     );
@@ -300,6 +330,10 @@ describe("getAgentTools", () => {
     expect(names).toContain("go_to_type_definition");
     expect(names).toContain("get_call_hierarchy");
     expect(names).toContain("get_inlay_hints");
+    expect(names).toContain("find_mcp_tools");
+    expect(names).toContain("call_mcp_tool");
+    expect(names).toContain("ddg-search__search");
+    expect(names).toContain("ddg-search__fetch_content");
 
     expect(names).not.toContain("write_file");
     expect(names).not.toContain("apply_diff");
@@ -311,7 +345,7 @@ describe("getAgentTools", () => {
   });
 
   it("restricts tools when toolProfile is set to 'btw'", () => {
-    const tools = getAgentTools(undefined, undefined, true, "btw");
+    const tools = getAgentTools(BUILT_IN_MODES[2], ddgMcpTools, true, "btw");
     const names = tools.map((t) => t.name);
 
     expect(names).toContain("read_file");
@@ -325,6 +359,117 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("apply_diff");
     expect(names).not.toContain("execute_command");
     expect(names).not.toContain("ask_user");
+    expect(names).not.toContain("find_mcp_tools");
+    expect(names).not.toContain("call_mcp_tool");
+    expect(names).not.toContain("ddg-search__search");
+    expect(names).not.toContain("ddg-search__fetch_content");
+  });
+
+  it("restricts normal tools to the active skill allowed-tools allowlist", () => {
+    const names = getAgentTools(
+      BUILT_IN_MODES[0],
+      ddgMcpTools,
+      false,
+      undefined,
+      ["read_file"],
+    ).map((t) => t.name);
+
+    expect(names).toContain("read_file");
+    expect(names).not.toContain("ddg-search__search");
+    expect(names).not.toContain("write_file");
+    expect(names).not.toContain("execute_command");
+    expect(names).not.toContain("find_mcp_tools");
+    expect(names).not.toContain("call_mcp_tool");
+    expect(names).toContain("load_skill");
+    expect(names).toContain("ask_user");
+    expect(names).toContain("set_task_status");
+  });
+
+  it("allows skill allowlists to reference full MCP tool names", () => {
+    const names = getAgentTools(
+      BUILT_IN_MODES[0],
+      ddgMcpTools,
+      false,
+      undefined,
+      ["ddg-search__fetch_content"],
+    ).map((t) => t.name);
+
+    expect(names).toContain("ddg-search__fetch_content");
+    expect(names).not.toContain("ddg-search__search");
+    expect(names).toContain("find_mcp_tools");
+    expect(names).toContain("call_mcp_tool");
+  });
+
+  it("allows skill allowlists to reference MCP servers for deferred calls", () => {
+    const names = getAgentTools(
+      BUILT_IN_MODES[0],
+      ddgMcpTools,
+      false,
+      undefined,
+      ["ddg-search"],
+    ).map((t) => t.name);
+
+    expect(names).toContain("ddg-search__search");
+    expect(names).toContain("ddg-search__fetch_content");
+    expect(names).toContain("find_mcp_tools");
+    expect(names).toContain("call_mcp_tool");
+  });
+
+  it("does not treat native-looking allowlist entries as MCP bare tool grants", () => {
+    const names = getAgentTools(
+      BUILT_IN_MODES[0],
+      [
+        {
+          name: "filesystem__read_file",
+          description: "Read file through MCP",
+          input_schema: { type: "object", properties: {} },
+        },
+      ],
+      false,
+      undefined,
+      ["read_file"],
+    ).map((t) => t.name);
+
+    expect(names).toContain("read_file");
+    expect(names).not.toContain("filesystem__read_file");
+    expect(names).not.toContain("find_mcp_tools");
+    expect(names).not.toContain("call_mcp_tool");
+  });
+
+  it("allows skill allowlists to reference MCP server wildcards", () => {
+    const names = getAgentTools(
+      BUILT_IN_MODES[0],
+      ddgMcpTools,
+      false,
+      undefined,
+      ["ddg-search__*"],
+    ).map((t) => t.name);
+
+    expect(names).toContain("ddg-search__search");
+    expect(names).toContain("ddg-search__fetch_content");
+    expect(names).toContain("call_mcp_tool");
+  });
+
+  it("exposes deferred MCP meta-tools when active skill allowlist names a deferred MCP target", () => {
+    const deferredOnlyMcpTools: ToolDefinition[] = [
+      {
+        name: "linear__list_issues",
+        description: "List issues",
+        input_schema: { type: "object", properties: {} },
+      },
+    ];
+    const names = getAgentTools(
+      BUILT_IN_MODES[0],
+      [],
+      false,
+      undefined,
+      ["linear__list_issues"],
+      deferredOnlyMcpTools,
+    ).map((t) => t.name);
+
+    expect(names).not.toContain("linear__list_issues");
+    expect(names).toContain("find_mcp_tools");
+    expect(names).toContain("call_mcp_tool");
   });
 
   it("gates MCP discovery and calls to MCP-capable modes", () => {
@@ -582,6 +727,88 @@ describe("dispatchToolCall", () => {
     expect(result.content[0]).toMatchObject({ type: "text" });
   });
 
+  it("replaces teaser-only final summaries with a diagnostic", async () => {
+    const onFinalStatus = vi.fn();
+    const result = await dispatchToolCall(
+      "set_task_status",
+      {
+        status: "completed",
+        summary: "Here’s a ready-to-paste prompt for the next agent.",
+      },
+      { ...mockCtx, onFinalStatus },
+    );
+
+    expect(onFinalStatus).toHaveBeenCalledWith({
+      status: "completed",
+      source: "tool",
+      summary: expect.stringContaining("only promised an artifact"),
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: JSON.stringify({ ok: true }),
+    });
+  });
+
+  it("does not replace concise self-contained final summaries", async () => {
+    const onFinalStatus = vi.fn();
+    await dispatchToolCall(
+      "set_task_status",
+      {
+        status: "completed",
+        summary: "The answer is 42.",
+      },
+      { ...mockCtx, onFinalStatus },
+    );
+
+    expect(onFinalStatus).toHaveBeenCalledWith({
+      status: "completed",
+      source: "tool",
+      summary: "The answer is 42.",
+    });
+  });
+
+  it("allows final task status summaries that include inline command artifacts", async () => {
+    const onFinalStatus = vi.fn();
+    await dispatchToolCall(
+      "set_task_status",
+      {
+        status: "completed",
+        summary: "Paste this command: `npm test`.",
+      },
+      { ...mockCtx, onFinalStatus },
+    );
+
+    expect(onFinalStatus).toHaveBeenCalledWith({
+      status: "completed",
+      source: "tool",
+      summary: "Paste this command: `npm test`.",
+    });
+  });
+
+  it("allows final task status summaries that include the promised artifact", async () => {
+    const onFinalStatus = vi.fn();
+    const result = await dispatchToolCall(
+      "set_task_status",
+      {
+        status: "completed",
+        summary:
+          "Paste this prompt into the next agent:\n\n```text\nDesign and implement the memory feature.\n```",
+      },
+      { ...mockCtx, onFinalStatus },
+    );
+
+    expect(onFinalStatus).toHaveBeenCalledWith({
+      status: "completed",
+      source: "tool",
+      summary:
+        "Paste this prompt into the next agent:\n\n```text\nDesign and implement the memory feature.\n```",
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: JSON.stringify({ ok: true }),
+    });
+  });
+
   it("records suppressed final task status continuation", async () => {
     const onFinalStatus = vi.fn();
     const result = await dispatchToolCall(
@@ -735,6 +962,18 @@ describe("dispatchToolCall", () => {
   });
 
   describe("ask_user", () => {
+    it("describes per-question context as the preferred shape", () => {
+      const askUserTool = getAgentTools().find(
+        (tool) => tool.name === "ask_user",
+      );
+
+      expect(askUserTool?.description).toContain("questions[].context");
+      expect(askUserTool?.description).toContain(
+        "split context across the individual questions",
+      );
+      expect(askUserTool?.input_schema.required).toEqual(["questions"]);
+    });
+
     it("performs a silent mode switch when the user's answer is mapped", async () => {
       const onQuestion = vi.fn().mockResolvedValue({
         answers: { choice: "Plan first" },
@@ -832,6 +1071,51 @@ describe("dispatchToolCall", () => {
       expect(parsed.modeSwitched).toBeUndefined();
     });
 
+    it("accepts visible context on individual questions", async () => {
+      const onQuestion = vi.fn().mockResolvedValue({
+        answers: { choice: "Provider fix" },
+        notes: {},
+      });
+      const ctx: ToolDispatchContext = { ...mockCtx, onQuestion };
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              context: "This choice affects how much shared code changes.",
+              question: "How should we proceed?",
+              options: ["Provider fix", "UI-only fix"],
+              recommended: "Provider fix",
+            },
+          ],
+        },
+        ctx,
+      );
+
+      expect(onQuestion).toHaveBeenCalledWith(
+        "",
+        [
+          expect.objectContaining({
+            id: "choice",
+            context: "This choice affects how much shared code changes.",
+          }),
+        ],
+        "test-session",
+      );
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed.responses).toEqual([
+        {
+          question: "How should we proceed?",
+          context: "This choice affects how much shared code changes.",
+          answer: "Provider fix",
+        },
+      ]);
+    });
+
     it("rejects ask_user calls without visible context", async () => {
       const onQuestion = vi.fn();
       const ctx: ToolDispatchContext = { ...mockCtx, onQuestion };
@@ -855,6 +1139,7 @@ describe("dispatchToolCall", () => {
         (result.content[0] as { type: "text"; text: string }).text,
       );
       expect(parsed.error).toContain("requires visible context");
+      expect(parsed.error).toContain("questions[].context");
     });
 
     it("rejects ask_user calls with multiple modeSwitch questions", async () => {
@@ -970,6 +1255,115 @@ describe("dispatchToolCall", () => {
       schemaCount: 1,
       schemaLimited: false,
     });
+  });
+
+  it("filters MCP discovery results by the active skill allowlist", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List Linear issues",
+          input_schema: { type: "object", properties: {} },
+        },
+        {
+          name: "notion__notion-search",
+          description: "Search Notion workspace",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+    };
+
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      { query: "", limit: 10 },
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        skillAllowedTools: ["linear__list_issues"],
+      },
+    );
+
+    const parsed = JSON.parse(
+      (result.content[0] as { type: string; text: string }).text,
+    );
+    expect(parsed.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "linear__list_issues",
+    ]);
+    expect(parsed.totalMatches).toBe(1);
+  });
+
+  it("filters MCP resources and prompts by active skill server allowlist", async () => {
+    const mcpHub = {
+      getAllResources: vi.fn().mockReturnValue([
+        { serverName: "linear", uri: "linear://issues" },
+        { serverName: "notion", uri: "notion://pages" },
+      ]),
+      getAllPrompts: vi.fn().mockReturnValue([
+        { serverName: "linear", name: "issue-summary" },
+        { serverName: "notion", name: "page-summary" },
+      ]),
+    };
+
+    const resources = await dispatchToolCall(
+      "list_mcp_resources",
+      {},
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        skillAllowedTools: ["linear"],
+      },
+    );
+    const prompts = await dispatchToolCall(
+      "list_mcp_prompts",
+      {},
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        skillAllowedTools: ["linear"],
+      },
+    );
+
+    expect(JSON.parse((resources.content[0] as { text: string }).text)).toEqual(
+      [{ serverName: "linear", uri: "linear://issues" }],
+    );
+    expect(JSON.parse((prompts.content[0] as { text: string }).text)).toEqual([
+      { serverName: "linear", name: "issue-summary" },
+    ]);
+  });
+
+  it("rejects MCP resource and prompt reads outside the active skill server allowlist", async () => {
+    const mcpHub = {
+      readResource: vi.fn(),
+      getPrompt: vi.fn(),
+    };
+
+    const resource = await dispatchToolCall(
+      "read_mcp_resource",
+      { server: "notion", uri: "notion://pages" },
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        skillAllowedTools: ["linear"],
+      },
+    );
+    const prompt = await dispatchToolCall(
+      "get_mcp_prompt",
+      { server: "notion", name: "page-summary" },
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        skillAllowedTools: ["linear"],
+      },
+    );
+
+    expect(mcpHub.readResource).not.toHaveBeenCalled();
+    expect(mcpHub.getPrompt).not.toHaveBeenCalled();
+    expect((resource.content[0] as { text: string }).text).toContain(
+      "not allowed by the active skill allowed-tools allowlist",
+    );
+    expect((prompt.content[0] as { text: string }).text).toContain(
+      "not allowed by the active skill allowed-tools allowlist",
+    );
   });
 
   it("limits broad MCP discovery schema output by default", async () => {
@@ -1155,6 +1549,104 @@ describe("dispatchToolCall", () => {
 
     expect(mcpHub.callTool).toHaveBeenCalledWith("server__name__tool", {
       ok: true,
+    });
+  });
+
+  it("rejects call_mcp_tool targets outside the active skill allowlist", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+        {
+          name: "linear__delete_issue",
+          description: "Delete issue",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn(),
+    };
+
+    const result = await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "delete_issue", input: { id: "LIN-1" } },
+      {
+        ...mockCtx,
+        onApprovalRequest,
+        mcpHub: mcpHub as any,
+        skillAllowedTools: ["linear__list_issues"],
+      },
+    );
+
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(mcpHub.callTool).not.toHaveBeenCalled();
+    expect((result.content[0] as { text: string }).text).toContain(
+      "not allowed by the active skill allowed-tools allowlist",
+    );
+  });
+
+  it("rejects direct MCP tools that only match a native-looking bare allowlist entry", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+    const mcpHub = {
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn(),
+    };
+
+    const result = await dispatchToolCall(
+      "filesystem__read_file",
+      { path: "secret.txt" },
+      {
+        ...mockCtx,
+        onApprovalRequest,
+        mcpHub: mcpHub as any,
+        skillAllowedTools: ["read_file"],
+      },
+    );
+
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    expect(mcpHub.callTool).not.toHaveBeenCalled();
+    expect((result.content[0] as { text: string }).text).toContain(
+      "not allowed by the active skill allowed-tools allowlist",
+    );
+  });
+
+  it("allows call_mcp_tool targets inside the active skill MCP server allowlist", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+
+    await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "list_issues", input: { query: "bug" } },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        onApprovalRequest,
+        mcpHub: mcpHub as any,
+        skillAllowedTools: ["linear"],
+      },
+    );
+
+    expect(onApprovalRequest).toHaveBeenCalled();
+    expect(mcpHub.callTool).toHaveBeenCalledWith("linear__list_issues", {
+      query: "bug",
     });
   });
 

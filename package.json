@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.13.45",
+  "version": "1.16.10",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -453,6 +453,21 @@
           "default": 60,
           "minimum": 0,
           "description": "Seconds to remember a single-use command approval (run-once / accept). Repeat identical commands within this window are auto-approved. Set to 0 to disable."
+        },
+        "agentlink.commandAutoApproveTier": {
+          "type": "string",
+          "enum": [
+            "off",
+            "safe",
+            "sensitive"
+          ],
+          "default": "safe",
+          "enumDescriptions": [
+            "Every command not covered by an explicit command rule prompts for approval (current behavior).",
+            "Auto-approve read-only commands (ls, git status, rg, version checks). Anything that mutates state still prompts.",
+            "Also auto-approve workspace-local mutations, project toolchain commands (npm install/test, builds), and unrecognized plain commands. This trusts your project's scripts and tooling to run without per-command review. Destructive, external, privileged, or obfuscated commands always prompt."
+          ],
+          "description": "Auto-approve agent terminal commands classified at or below this safety tier. Dangerous commands (rm, sudo, git push, network egress, writes outside the workspace, inline interpreter code) always require approval regardless of this setting. Explicit command rules, recent single-use approvals, and masterBypass take precedence."
         },
         "agentlink.worktreeDirectorySuffix": {
           "type": "string",

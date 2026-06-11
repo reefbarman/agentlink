@@ -9,15 +9,18 @@ const SCOPE_LABELS: Record<string, string> = {
   skip: "Skip",
 };
 
+const TIER_LABELS = {
+  safe: "Safe",
+  sensitive: "Sensitive",
+  dangerous: "Dangerous",
+} as const;
+
 interface RuleRowProps {
   entry: SubCommandEntry;
   value: RuleEntry;
   modeGroupName: string;
   onChange: (value: RuleEntry) => void;
   onSuggestRegex?: () => void;
-  onSuggestPrefix?: () => void;
-  /** Suggested prefix value (the initial command) shown in the prefix button. */
-  prefixSuggestion?: string;
   /** Command broken into tokens with their cumulative prefixes, for the picker. */
   prefixTokens?: Array<{ token: string; prefix: string }>;
   /** Select a different prefix boundary (command vs. sub-command vs. …). */
@@ -37,8 +40,6 @@ export function RuleRow({
   modeGroupName,
   onChange,
   onSuggestRegex,
-  onSuggestPrefix,
-  prefixSuggestion,
   prefixTokens,
   onSelectPrefix,
   onAcceptSuggestion,
@@ -51,7 +52,6 @@ export function RuleRow({
   const hasExisting = !!entry.existingRule;
   const isSkipped = value.scope === "skip";
   const canSuggest = !!onSuggestRegex;
-  const canSuggestPrefix = !!onSuggestPrefix && !!prefixSuggestion;
   const isSuggesting = suggestStatus === "loading";
 
   return (
@@ -60,6 +60,14 @@ export function RuleRow({
         <span class="rule-row-label">
           Matching command: <code>{entry.command}</code>
         </span>
+        {entry.tier && (
+          <span
+            class={`rule-row-badge rule-row-tier-badge tier-${entry.tier.tier}`}
+            title={entry.tier.reason}
+          >
+            {TIER_LABELS[entry.tier.tier]}
+          </span>
+        )}
         {hasExisting && (
           <span class="rule-row-badge">
             Matched: {entry.existingRule!.scope}
@@ -105,19 +113,6 @@ export function RuleRow({
                   <span>{isSuggesting ? "Suggesting…" : "Safe regex"}</span>
                 </button>
               )}
-              {mode === "prefix" && canSuggestPrefix && (
-                <button
-                  type="button"
-                  class="rule-suggest-btn"
-                  onClick={onSuggestPrefix}
-                  title="Match just the initial command, so any command starting with it is approved"
-                >
-                  <span class="codicon codicon-lightbulb" />
-                  <span>
-                    Just <code>{prefixSuggestion}</code>
-                  </span>
-                </button>
-              )}
             </label>
           ))}
         </div>
@@ -148,7 +143,9 @@ export function RuleRow({
               <span class="codicon codicon-close" />
             </button>
           </div>
-          {suggestKind === "prefix" && prefixTokens && prefixTokens.length > 0 ? (
+          {suggestKind === "prefix" &&
+          prefixTokens &&
+          prefixTokens.length > 0 ? (
             <>
               <div class="rule-prefix-tokens">
                 {prefixTokens.map((t) => (

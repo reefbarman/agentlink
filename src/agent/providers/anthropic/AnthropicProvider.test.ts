@@ -100,6 +100,42 @@ describe("AnthropicProvider capabilities", () => {
     expect(events).toContainEqual({ type: "content_blocks", blocks: [] });
   });
 
+  it("requests summarized adaptive thinking for streaming calls", async () => {
+    const stream = vi.fn(async function* () {
+      yield {
+        type: "message_start",
+        message: { usage: { input_tokens: 1 } },
+      };
+      yield {
+        type: "message_delta",
+        usage: { output_tokens: 1 },
+      };
+    });
+    const testProvider = new AnthropicProvider();
+    (testProvider as unknown as { client: unknown }).client = {
+      messages: { stream },
+    };
+
+    for await (const _event of testProvider.stream({
+      model: "claude-fable-5",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 64,
+      reasoningEffort: "high",
+    })) {
+      // Drain stream.
+    }
+
+    expect(stream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-fable-5",
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("emits thinking only after receiving non-empty thinking deltas", async () => {
     const testProvider = new AnthropicProvider();
     (testProvider as unknown as { client: unknown }).client = {
@@ -196,7 +232,7 @@ describe("AnthropicProvider capabilities", () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "claude-fable-5",
-        thinking: { type: "adaptive" },
+        thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "high" },
       }),
     );

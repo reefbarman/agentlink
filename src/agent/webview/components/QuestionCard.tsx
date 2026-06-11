@@ -1,6 +1,8 @@
 import type { ModeInfo, Question } from "../types";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
+import { StreamingText } from "./StreamingText";
+
 export interface QuestionProgress {
   step: number;
   answers: Record<string, string | string[] | number | boolean | undefined>;
@@ -86,7 +88,6 @@ export function normalizeQuestionAnswer(
 
 export function QuestionCard({
   id,
-  context,
   questions,
   onSubmit,
   remoteProgress,
@@ -127,6 +128,7 @@ export function QuestionCard({
   }, [step, answers, notes, onProgressChange]);
 
   const q = questions[step];
+  const questionContext = q.context?.trim() ?? "";
   const isLast = step === questions.length - 1;
   const currentAnswer = answers[q.id];
   const currentNote = notes[q.id] ?? "";
@@ -203,7 +205,12 @@ export function QuestionCard({
         </div>
       )}
       <div class="question-body">
-        <div class="question-context">{context || "Agent needs input:"}</div>
+        {questionContext && (
+          <QuestionMarkdown
+            className="question-context"
+            text={questionContext}
+          />
+        )}
 
         {questions.length > 1 && (
           <div class="question-progress">
@@ -219,7 +226,7 @@ export function QuestionCard({
           </div>
         )}
 
-        <div class="question-text">{q.question}</div>
+        <QuestionMarkdown className="question-text" text={q.question} />
 
         <QuestionInput
           question={q}
@@ -280,6 +287,20 @@ export function QuestionCard({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function QuestionMarkdown({
+  className,
+  text,
+}: {
+  className: string;
+  text: string;
+}) {
+  return (
+    <div class={className}>
+      <StreamingText text={text} streaming={false} />
     </div>
   );
 }

@@ -20,6 +20,34 @@ import {
   type FinalMessageMarker,
 } from "./finalStatus.js";
 
+type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
+type RawImageMedia = { name: string; mimeType: string; base64: string };
+type RawDocumentMedia = { name: string; mimeType: string; base64?: string };
+
+function mediaToDisplayMedia(
+  media:
+    | {
+        images?: RawImageMedia[];
+        documents?: RawDocumentMedia[];
+      }
+    | undefined,
+): DisplayMedia | undefined {
+  if (!media?.images?.length && !media?.documents?.length) return undefined;
+  return {
+    images:
+      media.images?.map((image) => ({
+        name: image.name,
+        mimeType: image.mimeType,
+        src: `data:${image.mimeType};base64,${image.base64}`,
+      })) ?? [],
+    documents:
+      media.documents?.map((document) => ({
+        name: document.name,
+        mimeType: document.mimeType,
+      })) ?? [],
+  };
+}
+
 function parseLoadSkillResult(result: string): {
   skillName?: string;
   path?: string;
@@ -53,6 +81,35 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
+function getAskUserContextFromInput(input: unknown): string {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return "";
+  const context = (input as Record<string, unknown>).context;
+  return typeof context === "string" ? context.trim() : "";
+}
+
+function addQuestionContextMessage(
+  messages: ChatMessage[],
+  questionId: string,
+  context: string,
+): ChatMessage[] {
+  const trimmed = context.trim();
+  if (!trimmed) return messages;
+
+  const messageId = `question-context-${questionId}`;
+  if (messages.some((message) => message.id === messageId)) return messages;
+
+  return [
+    ...messages,
+    {
+      id: messageId,
+      role: "assistant" as const,
+      content: "",
+      timestamp: Date.now(),
+      blocks: [{ type: "text" as const, text: trimmed }],
+    },
+  ];
+}
+
 function inferBgResultStatus(
   resultText: string,
 ): "completed" | "error" | "cancelled" {
@@ -62,6 +119,47 @@ function inferBgResultStatus(
     return normalized.includes("cancel") ? "cancelled" : "error";
   }
   return "completed";
+}
+
+function getBgSessionIdFromToolInput(
+  input: unknown,
+  fallbackInputJson?: string,
+): string | undefined {
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    const sessionId = (input as Record<string, unknown>).sessionId;
+    if (typeof sessionId === "string" && sessionId) return sessionId;
+  }
+
+  if (!fallbackInputJson) return undefined;
+  const parsed = parseJsonObject(fallbackInputJson);
+  const sessionId = parsed?.sessionId;
+  return typeof sessionId === "string" && sessionId ? sessionId : undefined;
+}
+
+function findBgTaskForSession(
+  messages: ChatMessage[],
+  currentBlocks: ContentBlock[],
+  sessionId: string,
+): string {
+  for (let i = currentBlocks.length - 1; i >= 0; i--) {
+    const candidate = currentBlocks[i];
+    if (candidate.type === "bg_agent" && candidate.sessionId === sessionId) {
+      return candidate.task;
+    }
+  }
+
+  for (let msgIdx = messages.length - 1; msgIdx >= 0; msgIdx--) {
+    const prior = messages[msgIdx];
+    if (prior.role !== "assistant") continue;
+    for (let blockIdx = prior.blocks.length - 1; blockIdx >= 0; blockIdx--) {
+      const candidate = prior.blocks[blockIdx];
+      if (candidate.type === "bg_agent" && candidate.sessionId === sessionId) {
+        return candidate.task;
+      }
+    }
+  }
+
+  return "Background Agent";
 }
 
 export interface LoadedInstructionDebugInfo {
@@ -101,8 +199,9 @@ export interface AppState {
     isSlashCommand?: boolean;
     slashCommandLabel?: string;
     attachments?: string[];
-    images?: Array<{ name: string; mimeType: string; base64: string }>;
-    documents?: Array<{ name: string; mimeType: string; base64: string }>;
+    images?: RawImageMedia[];
+    documents?: RawDocumentMedia[];
+    displayMedia?: DisplayMedia;
   }>;
   questionRequest: {
     id: string;
@@ -138,6 +237,7 @@ export type AppAction =
       text: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
+      displayMedia?: DisplayMedia;
     }
   | {
       type: "ADD_COMMITTED_USER_MESSAGE";
@@ -145,6 +245,7 @@ export type AppAction =
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       origin?: "vscode" | "browser";
+      displayMedia?: DisplayMedia;
     }
   | { type: "THINKING_START"; thinkingId: string }
   | { type: "THINKING_DELTA"; thinkingId: string; text: string }
@@ -211,8 +312,9 @@ export type AppAction =
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       attachments?: string[];
-      images?: Array<{ name: string; mimeType: string; base64: string }>;
-      documents?: Array<{ name: string; mimeType: string; base64: string }>;
+      images?: RawImageMedia[];
+      documents?: RawDocumentMedia[];
+      displayMedia?: DisplayMedia;
     }
   | { type: "EDIT_QUEUE_MESSAGE"; id: string; text: string }
   | { type: "REMOVE_FROM_QUEUE"; id: string }
@@ -222,6 +324,7 @@ export type AppAction =
       text: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
+      displayMedia?: DisplayMedia;
     }
   | {
       type: "SET_QUESTION";
@@ -372,6 +475,10 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
     const m = msg as {
       role: string;
       content: unknown;
+      media?: {
+        images?: RawImageMedia[];
+        documents?: RawDocumentMedia[];
+      };
       isSummary?: boolean;
       uiHint?: {
         userMessage?: {
@@ -445,12 +552,19 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
             hint?.slashCommandLabel ??
             (hint?.isSlashCommand ? hint.displayText : undefined),
           origin: hint?.origin,
+          displayMedia: mediaToDisplayMedia(m.media),
         });
       }
       // Skip tool_result arrays — they're internal and shouldn't be displayed
     } else if (m.role === "assistant") {
       const blocks: ContentBlock[] = [];
       const contentArr = Array.isArray(m.content) ? m.content : [];
+      const finalMarker = attachFinalMarkerToolCall(
+        m.uiHint?.finalMarker,
+        contentArr,
+        toolResults,
+      );
+      const finalMarkerToolId = finalMarker?.toolCall?.id;
       for (const block of contentArr as Array<{
         type: string;
         text?: string;
@@ -478,9 +592,18 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         } else if (block.type === "tool_use") {
           const toolId = block.id ?? crypto.randomUUID();
           const toolName = block.name ?? "";
-          if (toolName === "set_task_status") continue;
           const toolResult = toolResults.get(toolId) ?? "";
           const inputJson = JSON.stringify(block.input ?? {});
+          if (toolName === "set_task_status" && toolId === finalMarkerToolId) {
+            continue;
+          }
+          const askUserContext =
+            toolName === "ask_user"
+              ? getAskUserContextFromInput(block.input)
+              : "";
+          if (askUserContext) {
+            blocks.push({ type: "text", text: askUserContext });
+          }
 
           if (toolName === "load_skill") {
             const parsed = parseLoadSkillResult(toolResult);
@@ -640,7 +763,6 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                 ),
             )
           : blocks;
-      const finalMarker = m.uiHint?.finalMarker;
       if (visibleBlocks.length > 0 || hasRuntimeError || finalMarker) {
         result.push({
           id: crypto.randomUUID(),
@@ -700,6 +822,34 @@ function cloneLast(messages: ChatMessage[]): {
   };
   msgs[msgs.length - 1] = last;
   return { msgs, last };
+}
+
+function attachFinalMarkerToolCall(
+  marker: FinalMessageMarker | undefined | null,
+  contentArr: Array<{
+    type: string;
+    id?: string;
+    name?: string;
+    input?: unknown;
+  }>,
+  toolResults: Map<string, string>,
+): FinalMessageMarker | undefined {
+  if (!marker || marker.toolCall) return marker ?? undefined;
+  const finalTool = [...contentArr]
+    .reverse()
+    .find(
+      (block) => block.type === "tool_use" && block.name === "set_task_status",
+    );
+  if (!finalTool?.id) return marker;
+  return {
+    ...marker,
+    toolCall: {
+      id: finalTool.id,
+      name: "set_task_status",
+      inputJson: JSON.stringify(finalTool.input ?? {}),
+      result: toolResults.get(finalTool.id),
+    },
+  };
 }
 
 function applyFinalMarkerToLatestAssistant(
@@ -928,6 +1078,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           blocks: [],
           isSlashCommand: action.isSlashCommand,
           slashCommandLabel: action.slashCommandLabel,
+          displayMedia: action.displayMedia,
         },
         {
           id: crypto.randomUUID(),
@@ -1014,9 +1165,6 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_START": {
-      if (action.toolName === "set_task_status") {
-        return { ...state, statusOverride: null };
-      }
       const all = ensureAssistant(state.messages);
       const { msgs, last } = cloneLast(all);
       last.blocks.push(
@@ -1041,7 +1189,6 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_INPUT_DELTA": {
-      // set_task_status is an invisible meta-tool, so it has no visible block to update.
       // Search backwards for the message containing this tool_call (same
       // rationale as TOOL_COMPLETE — events can push new messages).
       let tiIdx = state.messages.length - 1;
@@ -1070,7 +1217,6 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_COMPLETE": {
-      if (action.toolName === "set_task_status") return state;
       // Search ALL messages for the matching tool_call — not just the last one.
       // Events like ADD_ANNOTATION, ADD_INTERJECTION, BG_AGENT_DONE, or ADD_CONDENSE
       // can push new messages between TOOL_START and TOOL_COMPLETE, leaving the
@@ -1148,6 +1294,38 @@ export function reducer(state: AppState, action: AppAction): AppState {
           }
         } catch {
           // ignore parse error
+        }
+      }
+
+      // When get_background_result completes, add a visible result block so
+      // the output is not only available inside the raw tool-call details.
+      if (action.toolName === "get_background_result") {
+        const toolBlock = target.blocks.find(
+          (b) => b.type === "tool_call" && b.id === action.toolCallId,
+        );
+        const sessionId = getBgSessionIdFromToolInput(
+          action.input,
+          toolBlock?.type === "tool_call" ? toolBlock.inputJson : undefined,
+        );
+
+        if (sessionId) {
+          const alreadyAdded = target.blocks.some(
+            (b) => b.type === "bg_agent_result" && b.sessionId === sessionId,
+          );
+          if (!alreadyAdded) {
+            target.blocks = [
+              ...target.blocks,
+              {
+                type: "bg_agent_result",
+                sessionId,
+                task: findBgTaskForSession(msgs, target.blocks, sessionId),
+                status: inferBgResultStatus(action.result),
+                resultText: action.result || undefined,
+                summary: undefined,
+              },
+            ];
+            msgs[targetIdx] = target;
+          }
         }
       }
 
@@ -1286,8 +1464,30 @@ export function reducer(state: AppState, action: AppAction): AppState {
         todos: Array.isArray(action.todos) ? action.todos : [],
       };
 
-    case "SET_FINAL_MARKER":
-      return { ...state, pendingFinalMarker: action.marker };
+    case "SET_FINAL_MARKER": {
+      if (!action.marker) return { ...state, pendingFinalMarker: null };
+      const finalTool = [...state.messages]
+        .reverse()
+        .flatMap((message) => [...message.blocks].reverse())
+        .find(
+          (block) =>
+            block.type === "tool_call" && block.name === "set_task_status",
+        );
+      const marker =
+        finalTool?.type === "tool_call"
+          ? {
+              ...action.marker,
+              toolCall: {
+                id: finalTool.id,
+                name: "set_task_status" as const,
+                inputJson: finalTool.inputJson,
+                result: finalTool.result,
+                durationMs: finalTool.durationMs,
+              },
+            }
+          : action.marker;
+      return { ...state, pendingFinalMarker: marker };
+    }
 
     case "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS":
       return {
@@ -1468,6 +1668,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
             ...(action.attachments ? { attachments: action.attachments } : {}),
             ...(action.images ? { images: action.images } : {}),
             ...(action.documents ? { documents: action.documents } : {}),
+            ...(action.displayMedia
+              ? { displayMedia: action.displayMedia }
+              : {}),
           },
         ],
       };
@@ -1510,6 +1713,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           blocks: [],
           isSlashCommand: action.isSlashCommand,
           slashCommandLabel: action.slashCommandLabel,
+          displayMedia: action.displayMedia,
         },
         {
           id: crypto.randomUUID(),
@@ -1549,6 +1753,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           isSlashCommand: action.isSlashCommand,
           slashCommandLabel: action.slashCommandLabel,
           origin: action.origin,
+          displayMedia: action.displayMedia ?? previousMessage.displayMedia,
         };
         const appliedPending = applyCheckpoints(
           updatedMessages,
@@ -1576,6 +1781,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           isSlashCommand: action.isSlashCommand,
           slashCommandLabel: action.slashCommandLabel,
           origin: action.origin,
+          displayMedia: action.displayMedia,
         },
         {
           id: crypto.randomUUID(),
@@ -1598,9 +1804,15 @@ export function reducer(state: AppState, action: AppAction): AppState {
       };
     }
 
-    case "SET_QUESTION":
+    case "SET_QUESTION": {
+      const messages = addQuestionContextMessage(
+        state.messages,
+        action.id,
+        action.context,
+      );
       return {
         ...state,
+        messages,
         questionRequest: {
           id: action.id,
           context: action.context,
@@ -1610,6 +1822,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
             : {}),
         },
       };
+    }
 
     case "CLEAR_QUESTION":
       return { ...state, questionRequest: null };

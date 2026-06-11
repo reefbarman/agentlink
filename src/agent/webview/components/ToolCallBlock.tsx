@@ -3,7 +3,7 @@ import { useCallback, useMemo, useState } from "preact/hooks";
 import type { ContentBlock } from "../types";
 import { InlineDiff } from "./InlineDiff";
 
-type ToolCallData = ContentBlock & { type: "tool_call" };
+export type ToolCallData = ContentBlock & { type: "tool_call" };
 
 interface ToolCallBlockProps {
   toolCall: ToolCallData;
@@ -16,7 +16,7 @@ interface ToolCallBlockProps {
 }
 
 /** Format duration as human-readable string. */
-function fmtDuration(ms: number): string {
+export function fmtDuration(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
@@ -32,7 +32,8 @@ function tryParseJson(json: string): Record<string, unknown> | null {
 /** A summary part — either plain text or a clickable file link. */
 type SummaryPart =
   | { type: "text"; text: string }
-  | { type: "file"; display: string; path: string; line?: number };
+  | { type: "file"; display: string; path: string; line?: number }
+  | { type: "badge"; text: string; title?: string };
 
 /** Generate a smart one-liner summary for known tools. */
 function getToolSummary(
@@ -54,6 +55,10 @@ function getToolSummary(
       const lines = extractField(result, "total_lines");
       const suffix = lines ? ` (${lines} lines)` : "";
       return [filePart(path), { type: "text", text: suffix }];
+    }
+    case "get_context": {
+      const path = String(p.path ?? "");
+      return [filePart(path)];
     }
     case "list_files": {
       const dir = String(p.path ?? ".");
@@ -107,17 +112,23 @@ function getToolSummary(
     case "execute_command": {
       const cmd = String(p.command ?? "");
       const exitCode = extractField(result, "exit_code");
-      // Reserve space for exit badge prefix; truncate command to fit
-      const maxLen = exitCode !== null && exitCode !== "0" ? 48 : 60;
+      const resultPayload = parseResultObject(result);
+      const approvalBadge = getCommandApprovalBadge(resultPayload);
+      // Reserve space for exit/approval badges; truncate command to fit
+      const maxLen =
+        exitCode !== null && exitCode !== "0" ? 48 : approvalBadge ? 50 : 60;
       const cmdText =
         cmd.length > maxLen ? cmd.slice(0, maxLen - 3) + "..." : cmd;
+      const parts: SummaryPart[] = [];
       if (exitCode !== null && exitCode !== "0") {
-        return [
-          { type: "text", text: `\x00exit:${exitCode}` }, // sentinel for exit badge — rendered before command
-          { type: "text", text: " " + cmdText },
-        ];
+        parts.push({ type: "text", text: `\x00exit:${exitCode}` }); // sentinel for exit badge — rendered before command
       }
-      return [{ type: "text", text: cmdText }];
+      if (approvalBadge) parts.push({ type: "badge", ...approvalBadge });
+      parts.push({
+        type: "text",
+        text: `${parts.length ? " " : ""}${cmdText}`,
+      });
+      return parts;
     }
     case "get_terminal_output":
       return [
@@ -353,6 +364,57 @@ function tokenizeJson(src: string): Token[] {
   return tokens;
 }
 
+function getCommandApprovalBadge(
+  resultPayload: Record<string, unknown> | null,
+): { text: string; title: string } | null {
+  const approval = resultPayload?.approval;
+  if (approval && typeof approval === "object" && "by" in approval) {
+    const record = approval as Record<string, unknown>;
+    switch (record.by) {
+      case "master_bypass":
+        return { text: "approved · bypass", title: "Approved by masterBypass" };
+      case "explicit_rule":
+        return { text: "approved · rule", title: "Approved by command rule" };
+      case "recent_approval":
+        return {
+          text: "approved · recent",
+          title: "Approved by recent single-use approval TTL",
+        };
+      case "tier":
+        return typeof record.tier === "string"
+          ? {
+              text: `auto · ${record.tier}`,
+              title: "Auto-approved by command safety tier",
+            }
+          : null;
+      case "human":
+        return { text: "approved · human", title: "Approved manually" };
+      case "human_edited":
+        return {
+          text: "approved · edited",
+          title: "Approved manually after editing the command",
+        };
+      default:
+        return null;
+    }
+  }
+
+  const autoApproved = resultPayload?.auto_approved;
+  if (
+    autoApproved &&
+    typeof autoApproved === "object" &&
+    "by" in autoApproved &&
+    (autoApproved as Record<string, unknown>).by === "tier" &&
+    typeof (autoApproved as Record<string, unknown>).tier === "string"
+  ) {
+    return {
+      text: `auto · ${String((autoApproved as Record<string, unknown>).tier)}`,
+      title: "Auto-approved by command safety tier",
+    };
+  }
+  return null;
+}
+
 function parseResultObject(result: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(result);
@@ -487,7 +549,8 @@ export function ToolCallBlock({
   }
 
   const hasSummary = summaryParts.some(
-    (p) => p.type === "file" || (p.type === "text" && p.text),
+    (p) =>
+      p.type === "file" || p.type === "badge" || (p.type === "text" && p.text),
   );
   const mcpApprovalPromotion = toolCall.mcpApprovalPromotion;
   const availablePromotionScopes =
@@ -528,6 +591,14 @@ export function ToolCallBlock({
                   >
                     {part.display}
                   </a>
+                ) : part.type === "badge" ? (
+                  <span
+                    key={i}
+                    class="tool-auto-approval-badge"
+                    title={part.title}
+                  >
+                    {part.text}
+                  </span>
                 ) : (
                   <span key={i}>{part.text}</span>
                 ),

@@ -581,6 +581,8 @@ export class AgentEngine {
                 providerMcpToolDefs,
                 opts?.isBackground,
                 opts?.toolProfile,
+                session.getActiveSkillAllowedTools(),
+                connectedMcpToolDefs,
               ),
               todoTool,
             ]
@@ -654,6 +656,8 @@ export class AgentEngine {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
+              images: interjection.images,
+              documents: interjection.documents,
             };
           }
         }
@@ -1272,6 +1276,28 @@ export class AgentEngine {
           onFinalStatus: (marker) => {
             pendingFinalMarker = marker;
           },
+          getSessionImages: () => {
+            const images: import("./toolAdapter.js").SessionImageReference[] =
+              [];
+            for (const [messageIndex, message] of session
+              .getAllMessages()
+              .entries()) {
+              if (message.role !== "user" || !message.media?.images?.length) {
+                continue;
+              }
+              message.media.images.forEach((image, imageIndex) => {
+                images.push({
+                  id: `image_${images.length + 1}`,
+                  name: image.name,
+                  mimeType: image.mimeType,
+                  base64: image.base64,
+                  messageIndex,
+                  imageIndex,
+                });
+              });
+            }
+            return images;
+          },
         };
 
         // Execute tools (parallel for read-only, sequential for write)
@@ -1492,6 +1518,8 @@ export class AgentEngine {
               displayText: interjection.displayText,
               isSlashCommand: interjection.isSlashCommand === true,
               slashCommandLabel: interjection.slashCommandLabel,
+              images: interjection.images,
+              documents: interjection.documents,
             };
           }
         }
@@ -1650,6 +1678,7 @@ export class AgentEngine {
                   getAdvertisedRules: () => session.getAdvertisedRules(),
                   onSkillLoad: (skillName: string) =>
                     session.trackLoadedSkill(skillName),
+                  skillAllowedTools: session.getActiveSkillAllowedTools(),
                 },
               ),
               forcePromise,
@@ -1662,6 +1691,7 @@ export class AgentEngine {
               getAdvertisedRules: () => session.getAdvertisedRules(),
               onSkillLoad: (skillName: string) =>
                 session.trackLoadedSkill(skillName),
+              skillAllowedTools: session.getActiveSkillAllowedTools(),
             }));
         return {
           tool_use_id: call.id,

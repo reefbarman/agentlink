@@ -4,6 +4,14 @@ export type FinalMessageStatus =
   | "blocked"
   | "cancelled";
 
+export interface FinalMarkerToolCall {
+  id: string;
+  name: "set_task_status";
+  inputJson: string;
+  result?: string;
+  durationMs?: number;
+}
+
 export interface FinalMessageMarker {
   status: FinalMessageStatus;
   summary?: string;
@@ -11,6 +19,8 @@ export interface FinalMessageMarker {
   continueAction?: FinalMessageContinueAction;
   continueActionSuppressed?: boolean;
   autoContinueStopReason?: string;
+  /** Raw set_task_status invocation shown in the final marker inspector. */
+  toolCall?: FinalMarkerToolCall;
 }
 
 export interface FinalMessageContinueAction {

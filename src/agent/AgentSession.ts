@@ -74,6 +74,8 @@ export class AgentSession {
   private advertisedRules = new Map<string, AdvertisedRuleEntry>();
   /** Skill names explicitly loaded during this session and kept alive across condense. */
   readonly loadedSkills = new Set<string>();
+  /** Most recently loaded advertised skill, used for allowed-tools restriction. */
+  private activeSkillName: string | undefined;
   /** Total input tokens from the most recent API response: uncached + cache_read + cache_creation.
    *  This represents actual context window usage (used for condense threshold check & context bar). */
   lastInputTokens = 0;
@@ -336,6 +338,7 @@ export class AgentSession {
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
     },
   ): void {
+    this.activeSkillName = undefined;
     this.messages.push({
       role: "user",
       content: text,
@@ -489,6 +492,13 @@ export class AgentSession {
     return Array.from(this.advertisedSkills.values());
   }
 
+  getActiveSkillAllowedTools(): string[] | undefined {
+    if (!this.activeSkillName) return undefined;
+    return Array.from(this.advertisedSkills.values()).find(
+      (skill) => skill.name === this.activeSkillName,
+    )?.allowedTools;
+  }
+
   setAdvertisedRules(rules: AdvertisedRuleEntry[] = []): void {
     this.advertisedRules = new Map(rules.map((rule) => [rule.filePath, rule]));
   }
@@ -502,7 +512,10 @@ export class AgentSession {
   }
 
   trackLoadedSkill(skillName: string): void {
-    if (skillName.trim()) this.loadedSkills.add(skillName.trim());
+    const trimmed = skillName.trim();
+    if (!trimmed) return;
+    this.loadedSkills.add(trimmed);
+    this.activeSkillName = trimmed;
   }
 
   addUsage(

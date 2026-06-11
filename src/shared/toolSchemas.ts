@@ -287,6 +287,50 @@ export const writeFileSchema = {
   content: z.string().describe("Complete file content to write"),
 };
 
+export const generateImageSchema = {
+  prompt: z
+    .string()
+    .describe("Prompt describing the image or images to generate."),
+  output_path: z
+    .string()
+    .optional()
+    .describe(
+      "Workspace-relative PNG file path or output directory. Defaults to ./generated-images/ with unique filenames. Must resolve inside the workspace.",
+    ),
+  size: z
+    .string()
+    .optional()
+    .describe(
+      "Optional requested size/aspect hint, e.g. 1024x1024, 1536x1024, or 1024x1536. The Codex backend may choose the closest supported size.",
+    ),
+  count: z.coerce
+    .number()
+    .optional()
+    .describe("Number of images to generate. Default: 1. Maximum: 4."),
+  reference_image_paths: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Workspace-relative or absolute paths to local reference images (PNG, JPEG, GIF, or WebP) to guide generation. Paths must resolve inside the workspace.",
+    ),
+  reference_image_ids: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "IDs of prior user-attached images from this session to use as generation references. Prefer use_recent_images when the user says to use an image they just provided; explicit IDs follow image_N attachment order and errors list available IDs.",
+    ),
+  use_recent_images: z
+    .union([z.boolean(), z.coerce.number()])
+    .optional()
+    .describe(
+      "Use recent user-attached images from this session as references. Prefer this when the user asks to use an image they already provided. Pass true for up to 4 recent images, or a number for that many recent images.",
+    ),
+  timeout_seconds: z.coerce
+    .number()
+    .optional()
+    .describe("Overall timeout in seconds. Default and maximum: 300."),
+};
+
 export const proposeMemorySchema = {
   tier: z
     .enum(["instructions", "skill", "command", "memory"])

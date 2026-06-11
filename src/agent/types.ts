@@ -188,6 +188,8 @@ export type AgentEvent =
       displayText?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
+      images?: Array<{ name: string; mimeType: string; base64: string }>;
+      documents?: Array<{ name: string; mimeType: string; base64: string }>;
     };
 
 // --- Session types ---

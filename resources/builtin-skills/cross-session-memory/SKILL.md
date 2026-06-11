@@ -13,9 +13,21 @@ Use durable memory sparingly and only through `propose_memory` when available. A
 
 Never bypass this flow by editing memory, instruction, skill, or command files directly with filesystem tools.
 
+## Classify before proposing
+
+Before calling `propose_memory`, classify the candidate:
+
+- **Durable user preference** — stable preference about how the user wants the agent to work. Prefer global `memory` only when clearly user-general; otherwise use project scope.
+- **Project-specific gotcha/fact** — stable repo-specific fact or hard-won learning. Prefer project `memory`.
+- **Reusable workflow/skill candidate** — repeated procedure that should be loaded on demand. Use `skill` only when the workflow is clear enough to be reusable; otherwise propose concise project `memory`.
+- **Instruction/rule candidate** — stable rule or convention the agent should always follow. Use `instructions` only when high authority is clearly warranted.
+- **Low-confidence / do-not-store** — transient, unverified, sensitive, already covered, or ordinary task detail. Do not propose.
+
+Do not persist arbitrary user claims without grounding. Prefer project memory for repo-specific facts; prefer global memory only for stable user preferences. Keep entries concise, scoped, and easy to revise.
+
 ## What belongs where
 
-Prefer the highest appropriate tier:
+Prefer the highest appropriate tier only when the candidate clearly warrants that authority; otherwise default to the narrowest low-authority durable target:
 
 1. `instructions` — stable rules and conventions the agent should always follow.
 2. `skill` — reusable workflows or procedures that should be loaded on demand.
@@ -31,6 +43,7 @@ Propose memory when at least one applies:
 - The user states a durable preference.
 - A hard-won project discovery would save future work.
 - Existing durable memory is wrong or stale and should be updated or removed.
+- A `[memory-candidate]` reminder flags a possible durable learning and it passes the validation checklist below.
 
 Do not propose memory for:
 

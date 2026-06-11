@@ -178,6 +178,9 @@ export function WriteCard({ request, submit, followUpRef }: WriteCardProps) {
           </div>
         )}
       </div>
+      {request.detail && (
+        <pre class="approval-detail-text">{request.detail}</pre>
+      )}
     </ApprovalLayout>
   );
 }

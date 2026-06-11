@@ -187,6 +187,63 @@ describe("ChatViewProvider session state sync", () => {
     expect(projected?.detectedQuestion?.kind).toBe("single_choice");
   });
 
+  it("does not request projected detected question for final messages with Continue", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const projectExtensionMessage = (msg: Record<string, unknown>) => {
+      (
+        provider as unknown as {
+          projectExtensionMessage: (msg: Record<string, unknown>) => void;
+        }
+      ).projectExtensionMessage.call(provider, msg);
+    };
+
+    projectExtensionMessage({
+      type: "agentSessionLoaded",
+      sessionId: "session-1",
+      title: "Session 1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Should I continue?" }],
+          uiHint: {
+            finalMarker: {
+              status: "completed",
+              source: "tool",
+              summary: "Ready for the next step.",
+            },
+          },
+        },
+      ],
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      userTurnOffset: 0,
+      hasMoreBefore: false,
+    });
+
+    const projectedDetectRequest = (
+      provider as unknown as {
+        projectedDetectRequest: {
+          requestId: string;
+          messageId: string;
+          assistantText: string;
+        } | null;
+      }
+    ).projectedDetectRequest;
+
+    expect(projectedDetectRequest).toBeNull();
+    expect(
+      provider.getBrowserProjectedForegroundState()?.detectedQuestion,
+    ).toBeUndefined();
+  });
+
   it("uses heuristic fallback for projected detected question when async detection falls back", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 

@@ -14,6 +14,10 @@ export interface SkillEntry {
   description: string;
   /** Absolute path to the SKILL.md file — passed to the model so it can load_skill it */
   skillPath: string;
+  /** Optional tool allowlist declared by SKILL.md frontmatter. */
+  allowedTools?: string[];
+  /** Optional invocation mode declared by SKILL.md frontmatter. */
+  invocation?: "auto" | "manual";
 }
 
 interface RawSkill extends SkillEntry {
@@ -21,24 +25,115 @@ interface RawSkill extends SkillEntry {
   modeSlugs?: string[];
 }
 
-/** Parse YAML frontmatter key-value pairs. Returns {} if no frontmatter block present. */
-function parseFrontmatter(content: string): Record<string, string> {
+type FrontmatterValue = string | string[];
+
+/**
+ * Parse the small YAML frontmatter subset used by skills.
+ * Supports scalar `key: value`, comma/JSON-ish inline lists, and block lists:
+ *
+ * allowed-tools:
+ *   - read_file
+ *   - search_files
+ */
+export function parseFrontmatter(
+  content: string,
+): Record<string, FrontmatterValue> {
   if (!content.startsWith("---")) return {};
   const end = content.indexOf("\n---", 3);
   if (end === -1) return {};
-  const fm: Record<string, string> = {};
-  for (const line of content.slice(3, end).trim().split("\n")) {
+
+  const fm: Record<string, FrontmatterValue> = {};
+  let currentListKey: string | undefined;
+
+  for (const rawLine of content.slice(3, end).split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    if (currentListKey && line.startsWith("-")) {
+      const value = stripYamlScalar(line.slice(1).trim());
+      if (value) {
+        const existing = fm[currentListKey];
+        fm[currentListKey] = [
+          ...(Array.isArray(existing) ? existing : []),
+          value,
+        ];
+      }
+      continue;
+    }
+
+    currentListKey = undefined;
     const colon = line.indexOf(":");
     if (colon === -1) continue;
-    fm[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
+
+    const key = line.slice(0, colon).trim();
+    const value = line.slice(colon + 1).trim();
+    if (!key) continue;
+
+    if (!value) {
+      fm[key] = [];
+      currentListKey = key;
+      continue;
+    }
+
+    fm[key] = parseFrontmatterValue(value);
   }
   return fm;
 }
 
-function parseModeSlugs(value: string | undefined): string[] | undefined {
-  if (!value) return undefined;
-  const slugs = value.split(/[\s,]+/).filter(Boolean);
-  return slugs.length > 0 ? slugs : undefined;
+function stripYamlScalar(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length < 2) return trimmed;
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function parseFrontmatterValue(value: string): FrontmatterValue {
+  const trimmed = stripYamlScalar(value);
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed.slice(1, -1).split(",").map(stripYamlScalar).filter(Boolean);
+  }
+  return trimmed;
+}
+
+function asString(value: FrontmatterValue | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function asStringArray(
+  value: FrontmatterValue | undefined,
+): string[] | undefined {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") return value.split(/[\s,]+/).filter(Boolean);
+  return undefined;
+}
+
+function parseModeSlugs(
+  value: FrontmatterValue | undefined,
+): string[] | undefined {
+  const slugs = asStringArray(value);
+  return slugs && slugs.length > 0 ? slugs : undefined;
+}
+
+function parseAllowedTools(
+  value: FrontmatterValue | undefined,
+): string[] | undefined {
+  const tools = asStringArray(value)
+    ?.map((tool) => tool.trim())
+    .filter(Boolean);
+  return tools && tools.length > 0 ? tools : undefined;
+}
+
+function parseInvocation(
+  value: FrontmatterValue | undefined,
+): "auto" | "manual" | undefined {
+  const raw = asString(value)?.trim().toLowerCase();
+  if (raw === "auto" || raw === "automatic") return "auto";
+  if (raw === "manual" || raw === "manual-only") return "manual";
+  return undefined;
 }
 
 /**
@@ -55,10 +150,21 @@ async function scanSkillsDir(dir: string): Promise<Map<string, RawSkill>> {
       try {
         const raw = await fs.readFile(skillMd, "utf-8");
         const fm = parseFrontmatter(raw);
-        const name = fm.name ?? entry.name;
-        const description = fm.description ?? "";
+        const name = asString(fm.name) ?? entry.name;
+        const description = asString(fm.description) ?? "";
         const modeSlugs = parseModeSlugs(fm.modeSlugs);
-        result.set(name, { name, description, skillPath: skillMd, modeSlugs });
+        const allowedTools = parseAllowedTools(
+          fm["allowed-tools"] ?? fm.allowedTools,
+        );
+        const invocation = parseInvocation(fm.invocation ?? fm["activation"]);
+        result.set(name, {
+          name,
+          description,
+          skillPath: skillMd,
+          modeSlugs,
+          allowedTools,
+          invocation,
+        });
       } catch {
         // SKILL.md missing or unreadable — skip
       }
@@ -124,10 +230,12 @@ export async function loadSkills(
   }
 
   return Array.from(merged.values()).map(
-    ({ name, description, skillPath }) => ({
+    ({ name, description, skillPath, allowedTools, invocation }) => ({
       name,
       description,
       skillPath,
+      allowedTools,
+      invocation,
     }),
   );
 }

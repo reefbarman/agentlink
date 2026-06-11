@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as os from "os";
 
-import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
+import { getWorkspaceRoots, tryGetFirstWorkspaceRoot } from "../util/paths.js";
 import { getTerminalManager } from "../integrations/TerminalManager.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
@@ -11,6 +11,11 @@ import {
   splitCompoundCommand,
   expandSubCommands,
 } from "../approvals/commandSplitter.js";
+import {
+  classifyCommand,
+  isTierAtOrBelow,
+  type CommandTier,
+} from "../approvals/commandTierClassifier.js";
 import type { SubCommandEntry } from "../approvals/webview/types.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { validateCommand } from "../util/pipeValidator.js";
@@ -20,6 +25,14 @@ import { Semaphore } from "../util/Semaphore.js";
 
 /** Serializes the approval-check phase so pending dialogs block other commands. */
 const approvalGate = new Semaphore(1);
+
+type CommandApprovalAudit =
+  | { by: "master_bypass" }
+  | { by: "explicit_rule" }
+  | { by: "recent_approval" }
+  | { by: "tier"; tier: CommandTier; threshold: "safe" | "sensitive" }
+  | { by: "human" }
+  | { by: "human_edited" };
 
 import { type ToolResult } from "../shared/types.js";
 
@@ -76,6 +89,12 @@ export async function handleExecuteCommand(
 
     let commandToRun = params.command;
     let approvalFollowUp: string | undefined;
+    let approvalAudit: CommandApprovalAudit | undefined = masterBypass
+      ? { by: "master_bypass" }
+      : undefined;
+    let autoApprovedByTier:
+      | { tier: CommandTier; threshold: "safe" | "sensitive" }
+      | undefined;
 
     // Reject protected instruction/memory writes before masterBypass or force=true
     // can skip the normal command approval path.
@@ -165,6 +184,7 @@ export async function handleExecuteCommand(
           sessionId,
           params.reason,
           cwd,
+          getWorkspaceRoots(),
         );
 
         if (!approvalResult.approved) {
@@ -186,29 +206,17 @@ export async function handleExecuteCommand(
 
         if (approvalResult.editedCommand) {
           commandToRun = approvalResult.editedCommand;
-          const editedProtectedWriteViolation = validateProtectedWriteCommand(
+          const editedValidation = validateCommandBeforeExecution(
             commandToRun,
             cwd,
+            params.command,
           );
-          if (editedProtectedWriteViolation) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    status: "rejected",
-                    command: commandToRun,
-                    original_command: params.command,
-                    reason: editedProtectedWriteViolation.message,
-                    protected_path: editedProtectedWriteViolation.protectedPath,
-                  }),
-                },
-              ],
-            };
-          }
+          if (editedValidation) return editedValidation;
         }
 
         approvalFollowUp = approvalResult.followUp;
+        approvalAudit = approvalResult.approval;
+        autoApprovedByTier = approvalResult.autoApprovedByTier;
       } finally {
         releaseGate();
       }
@@ -275,6 +283,18 @@ export async function handleExecuteCommand(
       result.command = commandToRun;
     }
 
+    if (approvalAudit) {
+      result.approval = approvalAudit;
+    }
+
+    if (autoApprovedByTier) {
+      result.auto_approved = {
+        by: "tier",
+        tier: autoApprovedByTier.tier,
+        threshold: autoApprovedByTier.threshold,
+      };
+    }
+
     if (approvalFollowUp) {
       result.follow_up = approvalFollowUp;
     }
@@ -320,13 +340,16 @@ async function approveSubCommands(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
-  reason?: string,
-  cwd?: string,
+  reason: string | undefined,
+  cwd: string,
+  workspaceRoots: string[],
 ): Promise<{
   approved: boolean;
   reason?: string;
   editedCommand?: string;
   followUp?: string;
+  approval?: CommandApprovalAudit;
+  autoApprovedByTier?: { tier: CommandTier; threshold: "safe" | "sensitive" };
 }> {
   // Expand wrappers: ["cd /foo", "sudo npm install"] → ["cd /foo", "sudo", "npm install"]
   const expanded = expandSubCommands(subCommands);
@@ -336,9 +359,27 @@ async function approveSubCommands(
   const allApproved = expanded.every((sub) =>
     approvalManager.isCommandApproved(sessionId, sub),
   );
-  if (allApproved || approvalPanel.isRecentlyApproved("command", fullCommand)) {
-    return { approved: true };
+  if (allApproved) {
+    return { approved: true, approval: { by: "explicit_rule" } };
   }
+  if (approvalPanel.isRecentlyApproved("command", fullCommand)) {
+    return { approved: true, approval: { by: "recent_approval" } };
+  }
+
+  const threshold = vscode.workspace
+    .getConfiguration("agentlink")
+    .get<"off" | "safe" | "sensitive">("commandAutoApproveTier", "off");
+  const tierInfo = classifyCommand(fullCommand, { cwd, workspaceRoots });
+  if (threshold !== "off" && isTierAtOrBelow(tierInfo.tier, threshold)) {
+    return {
+      approved: true,
+      approval: { by: "tier", tier: tierInfo.tier, threshold },
+      autoApprovedByTier: { tier: tierInfo.tier, threshold },
+    };
+  }
+  const tierByCommand = new Map(
+    tierInfo.perSubCommand.map((entry) => [entry.command, entry.result]),
+  );
 
   // Build enriched entries for ALL sub-commands (even already-approved ones)
   const entries: SubCommandEntry[] = expanded.map((cmd) => {
@@ -351,9 +392,10 @@ async function approveSubCommands(
           mode: match.rule.mode,
           scope: match.scope,
         },
+        tier: tierByCommand.get(cmd),
       };
     }
-    return { command: cmd };
+    return { command: cmd, tier: tierByCommand.get(cmd) };
   });
 
   // Show dialog with full command + enriched sub-command entries
@@ -389,9 +431,74 @@ async function approveSubCommands(
   if (response.editedCommand) {
     return {
       approved: true,
+      approval: { by: "human_edited" },
       editedCommand: response.editedCommand,
       followUp: response.followUp,
     };
   }
-  return { approved: true, followUp: response.followUp };
+  return {
+    approved: true,
+    approval: { by: "human" },
+    followUp: response.followUp,
+  };
+}
+
+function validateCommandBeforeExecution(
+  command: string,
+  cwd: string,
+  originalCommand?: string,
+): ToolResult | null {
+  const protectedWriteViolation = validateProtectedWriteCommand(command, cwd);
+  if (protectedWriteViolation) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "rejected",
+            command,
+            ...(originalCommand && { original_command: originalCommand }),
+            reason: protectedWriteViolation.message,
+            protected_path: protectedWriteViolation.protectedPath,
+          }),
+        },
+      ],
+    };
+  }
+
+  const commandViolation = validateCommand(command);
+  if (commandViolation) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "rejected",
+            command,
+            ...(originalCommand && { original_command: originalCommand }),
+            reason: commandViolation.message,
+          }),
+        },
+      ],
+    };
+  }
+
+  const interactiveViolation = validateInteractiveCommand(command);
+  if (interactiveViolation) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "rejected",
+            command,
+            ...(originalCommand && { original_command: originalCommand }),
+            reason: interactiveViolation.message,
+          }),
+        },
+      ],
+    };
+  }
+
+  return null;
 }

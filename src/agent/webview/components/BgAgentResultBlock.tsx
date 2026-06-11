@@ -1,7 +1,5 @@
-import { DetailBlock } from "../../../shared/ui/Meta";
 import { StreamingText } from "./StreamingText";
 import { summarizeTextForPreview } from "../../../shared/textSummary";
-import { useState } from "preact/hooks";
 
 interface BgAgentResultBlockProps {
   sessionId: string;
@@ -20,14 +18,12 @@ export function BgAgentResultBlock({
   summary,
   onOpenTranscript,
 }: BgAgentResultBlockProps) {
-  const [expanded, setExpanded] = useState(false);
-
   const statusClass =
     status === "completed"
-      ? "tool-success"
+      ? "bg-agent-result-completed"
       : status === "error"
-        ? "tool-error"
-        : "tool-warning";
+        ? "bg-agent-result-error"
+        : "bg-agent-result-cancelled";
 
   const icon =
     status === "completed"
@@ -43,54 +39,42 @@ export function BgAgentResultBlock({
         ? "failed"
         : "cancelled";
 
-  const preview = !expanded
-    ? summary?.trim() ||
-      summarizeTextForPreview(resultText, {
-        maxLength: 220,
-        minSentenceLength: 20,
-      }) ||
-      null
-    : null;
+  const visibleSummary =
+    summary?.trim() ||
+    summarizeTextForPreview(resultText, {
+      maxLength: 220,
+      minSentenceLength: 20,
+    }) ||
+    null;
 
   return (
-    <div class={`tool-call-block ${statusClass}`}>
-      <button
-        class="tool-call-header"
-        onClick={() => setExpanded(!expanded)}
-        type="button"
-      >
-        <i
-          class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
-        />
-        <i class={`codicon tool-call-status-icon ${icon}`} />
-        <span class="tool-call-name">Background Result</span>
-        <span class="tool-call-summary">
+    <div class={`bg-agent-result-block ${statusClass}`}>
+      <div class="bg-agent-result-header">
+        <i class={`codicon ${icon}`} />
+        <span class="bg-agent-result-title">Background Result</span>
+        <span class="bg-agent-result-task">
           {task} — {statusText}
         </span>
-      </button>
-      {preview && <div class="bg-result-preview">{preview}</div>}
+      </div>
 
-      {expanded && (
-        <div class="tool-call-details">
-          {resultText ? (
-            <div class="bg-result-content">
-              <StreamingText text={resultText} streaming={false} />
-            </div>
-          ) : (
-            <DetailBlock label="Output" className="tool-call-section">
-              <pre class="tool-call-code">No output available.</pre>
-            </DetailBlock>
-          )}
-          <button
-            class="bg-agent-transcript-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenTranscript?.(sessionId);
-            }}
-          >
-            <i class="codicon codicon-open-preview" /> View Full Transcript
-          </button>
-        </div>
+      {visibleSummary && <div class="bg-result-preview">{visibleSummary}</div>}
+
+      <div class="bg-result-content">
+        {resultText ? (
+          <StreamingText text={resultText} streaming={false} />
+        ) : (
+          <div class="bg-result-empty">No output available.</div>
+        )}
+      </div>
+
+      {onOpenTranscript && (
+        <button
+          class="bg-agent-transcript-btn"
+          onClick={() => onOpenTranscript(sessionId)}
+          type="button"
+        >
+          <i class="codicon codicon-open-preview" /> View Full Transcript
+        </button>
       )}
     </div>
   );

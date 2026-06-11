@@ -1,5 +1,5 @@
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, ContentBlock } from "../types";
 import { CheckpointRow } from "./CheckpointRow";
 import { CondenseRow } from "./CondenseRow";
 import type { DetectedQuestion } from "../questionDetection";
@@ -40,6 +40,135 @@ interface TranscriptMessageListProps {
   ) => void;
 }
 
+interface TranscriptRow {
+  key: string;
+  message: ChatMessage;
+  sourceMessage: ChatMessage;
+  bgAgentResultOnly: boolean;
+}
+
+type BgAgentResultContentBlock = Extract<
+  ContentBlock,
+  { type: "bg_agent_result" }
+>;
+
+function isTopLevelChatBlock(
+  block: ContentBlock,
+): block is BgAgentResultContentBlock {
+  return block.type === "bg_agent_result";
+}
+
+function cloneAssistantSegment(
+  source: ChatMessage,
+  id: string,
+  blocks: ContentBlock[],
+): ChatMessage {
+  const { apiRequest, error, finalMarker, ...base } = source;
+  void apiRequest;
+  void error;
+  void finalMarker;
+  return {
+    ...base,
+    id,
+    blocks,
+  };
+}
+
+function isBackgroundResultToolCall(
+  block: ContentBlock,
+  sessionId: string,
+): boolean {
+  if (block.type !== "tool_call" || block.name !== "get_background_result") {
+    return false;
+  }
+  try {
+    const input = JSON.parse(block.inputJson) as { sessionId?: unknown };
+    return input.sessionId === sessionId;
+  } catch {
+    return false;
+  }
+}
+
+function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
+  if (
+    message.role !== "assistant" ||
+    !message.blocks.some(isTopLevelChatBlock)
+  ) {
+    return [
+      {
+        key: message.id,
+        message,
+        sourceMessage: message,
+        bgAgentResultOnly: false,
+      },
+    ];
+  }
+
+  const rows: TranscriptRow[] = [];
+  let pendingBlocks: ContentBlock[] = [];
+  let pendingStart = 0;
+
+  const pushPending = (endIndex: number) => {
+    if (pendingBlocks.length === 0) return;
+    rows.push({
+      key: `${message.id}:segment:${pendingStart}-${endIndex}`,
+      message: cloneAssistantSegment(
+        message,
+        `${message.id}:segment:${pendingStart}-${endIndex}`,
+        pendingBlocks,
+      ),
+      sourceMessage: message,
+      bgAgentResultOnly: false,
+    });
+    pendingBlocks = [];
+  };
+
+  message.blocks.forEach((block, index) => {
+    if (!isTopLevelChatBlock(block)) {
+      if (pendingBlocks.length === 0) pendingStart = index;
+      pendingBlocks.push(block);
+      return;
+    }
+
+    pendingBlocks = pendingBlocks.filter(
+      (pendingBlock) => !isBackgroundResultToolCall(pendingBlock, block.sessionId),
+    );
+    pushPending(index);
+    const id = `${message.id}:bg-agent-result:${block.sessionId}:${index}`;
+    rows.push({
+      key: id,
+      message: cloneAssistantSegment(message, id, [block]),
+      sourceMessage: message,
+      bgAgentResultOnly: true,
+    });
+    pendingStart = index + 1;
+  });
+
+  pushPending(message.blocks.length);
+
+  let metadataTarget = -1;
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (!rows[i].bgAgentResultOnly) {
+      metadataTarget = i;
+      break;
+    }
+  }
+  const targetIndex = metadataTarget >= 0 ? metadataTarget : rows.length - 1;
+  if (targetIndex >= 0) {
+    rows[targetIndex] = {
+      ...rows[targetIndex],
+      message: {
+        ...rows[targetIndex].message,
+        finalMarker: message.finalMarker,
+        apiRequest: message.apiRequest,
+        error: message.error,
+      },
+    };
+  }
+
+  return rows;
+}
+
 export function TranscriptMessageList({
   messages,
   streaming,
@@ -61,23 +190,38 @@ export function TranscriptMessageList({
   onRevertCheckpoint,
   onViewCheckpointDiff,
 }: TranscriptMessageListProps) {
+  const rows = messages.flatMap(splitTopLevelChatBlocks);
+  const lastMessage = messages[messages.length - 1];
+  let streamingRowKey: string | null = null;
+  if (streaming && lastMessage?.role === "assistant") {
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const row = rows[i];
+      if (row.sourceMessage !== lastMessage) continue;
+      if (!row.bgAgentResultOnly) {
+        streamingRowKey = row.key;
+        break;
+      }
+      if (!streamingRowKey) streamingRowKey = row.key;
+    }
+  }
+
   return (
     <>
-      {messages.map((msg) =>
+      {rows.map(({ key, message: msg, sourceMessage, bgAgentResultOnly }) =>
         msg.role === "condense" ? (
-          <CondenseRow key={msg.id} message={msg} />
+          <CondenseRow key={key} message={msg} />
         ) : msg.role === "warning" ? (
           <WarningRow
-            key={msg.id}
+            key={key}
             message={msg}
             onRetry={
-              msg === messages[messages.length - 1] && msg.error
+              sourceMessage === lastMessage && msg.error
                 ? onRetry
                 : undefined
             }
           />
         ) : (
-          <Fragment key={msg.id}>
+          <Fragment key={key}>
             {msg.role === "user" && msg.checkpointId && onRevertCheckpoint && (
               <CheckpointRow
                 checkpointId={msg.checkpointId}
@@ -88,39 +232,40 @@ export function TranscriptMessageList({
             )}
             <MessageBubble
               message={msg}
-              streaming={
-                streaming &&
-                msg === messages[messages.length - 1] &&
-                msg.role === "assistant"
-              }
+              streaming={streamingRowKey === key && msg.role === "assistant"}
               detectedQuestion={
                 msg.role === "assistant" &&
-                detectedQuestion?.messageId === msg.id
+                !bgAgentResultOnly &&
+                detectedQuestion?.messageId === sourceMessage.id
                   ? detectedQuestion
                   : null
               }
               onDetectedQuestionAnswer={onDetectedQuestionAnswer}
-              onDismissDetectedQuestion={onDismissDetectedQuestion}
+              onDismissDetectedQuestion={
+                detectedQuestion?.messageId === sourceMessage.id
+                  ? () => onDismissDetectedQuestion?.(sourceMessage.id)
+                  : onDismissDetectedQuestion
+              }
               onOpenFile={onOpenFile}
               onPromoteMcpToolApproval={onPromoteMcpToolApproval}
               onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
               onRetry={
-                msg === messages[messages.length - 1] && msg.error
+                sourceMessage === lastMessage && msg.error
                   ? onRetry
                   : undefined
               }
               onSignIn={
-                msg === messages[messages.length - 1] && msg.error
+                sourceMessage === lastMessage && msg.error
                   ? onSignIn
                   : undefined
               }
               onSignInAnotherAccount={
-                msg === messages[messages.length - 1] && msg.error
+                sourceMessage === lastMessage && msg.error
                   ? onSignInAnotherAccount
                   : undefined
               }
               onCondense={
-                msg === messages[messages.length - 1] && msg.error
+                sourceMessage === lastMessage && msg.error
                   ? onCondense
                   : undefined
               }

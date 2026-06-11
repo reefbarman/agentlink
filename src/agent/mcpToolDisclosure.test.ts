@@ -1,5 +1,6 @@
 import {
   DEFAULT_MCP_DISCLOSURE_TOKEN_THRESHOLD,
+  buildMcpToolCatalogSection,
   partitionMcpToolsForDisclosure,
 } from "./mcpToolDisclosure.js";
 import { describe, expect, it } from "vitest";
@@ -55,6 +56,8 @@ describe("partitionMcpToolsForDisclosure", () => {
         toolCount: 2,
         estimatedTokens: expect.any(Number),
         representativeTools: ["alpha", "beta"],
+        capabilities: undefined,
+        deferred: true,
       },
     ]);
   });
@@ -138,6 +141,80 @@ describe("partitionMcpToolsForDisclosure", () => {
 
     expect(partition.inlineTools.map((t) => t.name)).toEqual(["auto__small"]);
     expect(partition.deferredTools).toHaveLength(0);
+  });
+
+  it("adds capability-only catalog entries for known inline MCP servers", () => {
+    const partition = partitionMcpToolsForDisclosure(
+      [
+        tool("ddg-search__search"),
+        tool("ddg-search__fetch_content"),
+        tool("linear__list_issues"),
+      ],
+      { perServerTokenThreshold: 10_000 },
+    );
+
+    expect(partition.inlineTools.map((t) => t.name)).toEqual([
+      "ddg-search__search",
+      "ddg-search__fetch_content",
+      "linear__list_issues",
+    ]);
+    expect(partition.deferredTools).toHaveLength(0);
+    expect(partition.catalog).toEqual([
+      expect.objectContaining({
+        serverName: "ddg-search",
+        capabilities: ["web-search"],
+        deferred: false,
+      }),
+    ]);
+
+    const section = buildMcpToolCatalogSection(partition.catalog);
+    expect(section).toContain("ddg-search: 2 tools, tools available directly");
+    expect(section).not.toContain("ddg-search: 2 tools, ~");
+  });
+
+  it("injects web-search and browser-automation capability hints", () => {
+    const partition = partitionMcpToolsForDisclosure(
+      [
+        tool("ddg-search__search"),
+        tool("ddg-search__fetch_content"),
+        tool("chrome-devtools__navigate"),
+        tool("chrome-devtools__screenshot"),
+      ],
+      { perServerTokenThreshold: 1 },
+    );
+
+    const section = buildMcpToolCatalogSection(partition.catalog);
+    expect(section).toContain(
+      "chrome-devtools: 2 tools, ~83 schema tokens deferred",
+    );
+    expect(section).toContain(
+      "ddg-search: 2 tools, ~80 schema tokens deferred",
+    );
+    expect(section).toContain("MCP capability hints");
+    expect(section).toContain("web-search (ddg-search)");
+    expect(section).toContain("prefer checking the web");
+    expect(section).toContain("browser-automation (chrome-devtools)");
+    expect(section).toContain("verifying in the browser");
+  });
+
+  it("detects capabilities from all tool names, not just representative names", () => {
+    const partition = partitionMcpToolsForDisclosure(
+      [
+        tool("chrome-devtools__aaa"),
+        tool("chrome-devtools__bbb"),
+        tool("chrome-devtools__ccc"),
+        tool("chrome-devtools__ddd"),
+        tool("chrome-devtools__eee"),
+        tool("chrome-devtools__screenshot"),
+      ],
+      { perServerTokenThreshold: 1, representativeToolLimit: 5 },
+    );
+
+    expect(partition.catalog[0]).toMatchObject({
+      serverName: "chrome-devtools",
+      representativeTools: ["aaa", "bbb", "ccc", "ddd", "eee"],
+      capabilities: ["browser-automation"],
+    });
   });
 
   it("limits and sorts representative tool names", () => {

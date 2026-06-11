@@ -77,6 +77,11 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Create a new file or overwrite an existing file. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. Benefits from VS Code's format-on-save. Returns any user edits and new diagnostics.",
   },
+  generate_image: {
+    label: "Generate image",
+    description:
+      "Generate PNG images via OpenAI/Codex auth and save them into the workspace. Uses ChatGPT/Codex OAuth image quota when signed in with OAuth, or OpenAI API-key billing when using an API key. Always requests approval before generation because quota is consumed before files are written.",
+  },
   propose_memory: {
     label: "Propose durable memory",
     description:
