@@ -1400,6 +1400,8 @@ export async function dispatchToolCall(
       return handleProposeMemory(
         params as Parameters<typeof handleProposeMemory>[0],
         approvalPanel,
+        onApprovalRequest,
+        sessionId,
       );
 
     // --- Terminal ---

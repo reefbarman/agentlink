@@ -496,6 +496,10 @@ export class DiffViewProvider {
     }
   }
 
+  getEditedContent(): string | undefined {
+    return this.activeDiffEditor?.document.getText();
+  }
+
   async saveChanges(): Promise<DiffResult> {
     if (!this.relPath || !this.newContent || !this.activeDiffEditor) {
       return { status: "accepted", path: this.relPath ?? "" };

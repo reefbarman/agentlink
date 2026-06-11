@@ -37,9 +37,6 @@ export function MemoryCard({ request, submit, followUpRef }: MemoryCardProps) {
     request.memoryScope ?? "project",
   );
   const [name, setName] = useState(request.memoryName ?? "");
-  const [editedContent, setEditedContent] = useState(
-    request.memoryProposedContent ?? request.memoryContent ?? "",
-  );
 
   const operation = request.memoryOperation ?? "add";
   const targetPath = request.memoryTargetPath ?? request.filePath ?? "";
@@ -62,22 +59,12 @@ export function MemoryCard({ request, submit, followUpRef }: MemoryCardProps) {
     submit({
       id: request.id,
       decision: "accept",
-      editedContent,
       memoryTier: tier,
       memoryScope: scope,
       memoryName: name.trim() || undefined,
       followUp: followUpRef.current?.trim() || undefined,
     });
-  }, [
-    editedContent,
-    followUpRef,
-    name,
-    nameMissing,
-    request.id,
-    scope,
-    submit,
-    tier,
-  ]);
+  }, [followUpRef, name, nameMissing, request.id, scope, submit, tier]);
 
   const handleReject = useCallback(
     (reason?: string) => {
@@ -167,16 +154,19 @@ export function MemoryCard({ request, submit, followUpRef }: MemoryCardProps) {
           </div>
         )}
 
-        <div class="field memory-content-field">
-          <label>Proposed target file content</label>
-          <textarea
-            class="text-input textarea memory-content-editor"
-            value={editedContent}
-            rows={12}
-            onInput={(e) =>
-              setEditedContent((e.target as HTMLTextAreaElement).value)
-            }
-          />
+        {request.memoryContent && (
+          <div class="memory-rationale">
+            <span class="memory-section-label">Proposed memory</span>
+            <p>{request.memoryContent}</p>
+          </div>
+        )}
+
+        <div class="memory-rationale">
+          <span class="memory-section-label">Review content</span>
+          <p>
+            Accepting opens an editable diff for the target file. Review or edit
+            the final file content there before AgentLink writes it.
+          </p>
         </div>
       </div>
     </ApprovalLayout>

@@ -47,9 +47,10 @@ describe("requestImageGenerationApprovalForTest", () => {
   it("shows the image prompt in approval detail and accepts standard write-card decisions", async () => {
     const onApprovalRequest = vi.fn<OnApprovalRequest>(async () => ({
       decision: "accept",
+      followUp: "Use the generated image in the README.",
     }));
 
-    const approved = await requestImageGenerationApprovalForTest({
+    const result = await requestImageGenerationApprovalForTest({
       approvalManager: {} as never,
       sessionId: "session-1",
       onApprovalRequest,
@@ -69,7 +70,11 @@ describe("requestImageGenerationApprovalForTest", () => {
       billing: "ChatGPT/Codex OAuth quota (active account)",
     });
 
-    expect(approved).toBe(true);
+    expect(result).toEqual({
+      approved: true,
+      followUp: "Use the generated image in the README.",
+      rejectionReason: undefined,
+    });
     const approvalRequest = onApprovalRequest.mock.calls[0]?.[0];
     expect(approvalRequest).toEqual(
       expect.objectContaining({
@@ -87,6 +92,29 @@ describe("requestImageGenerationApprovalForTest", () => {
       "Reference images (1):\n- image_1 (hexaza.png)",
     );
     expect(onApprovalRequest.mock.calls[0]?.[1]).toBe("session-1");
+  });
+
+  it("preserves rejection reasons from approval cards", async () => {
+    const onApprovalRequest = vi.fn<OnApprovalRequest>(async () => ({
+      decision: "reject",
+      rejectionReason: "Prompt should mention the brand palette.",
+    }));
+
+    const result = await requestImageGenerationApprovalForTest({
+      approvalManager: {} as never,
+      sessionId: "session-1",
+      onApprovalRequest,
+      prompt: "Create an icon.",
+      count: 1,
+      targets: [{ relPath: "generated-icons/icon.png" }],
+      billing: "OpenAI API key billing",
+    });
+
+    expect(result).toEqual({
+      approved: false,
+      followUp: undefined,
+      rejectionReason: "Prompt should mention the brand palette.",
+    });
   });
 });
 

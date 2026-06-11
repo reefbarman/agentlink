@@ -4,19 +4,46 @@ import * as path from "path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { tryGetFirstWorkspaceRoot, diagnostics } = vi.hoisted(() => ({
+const {
+  tryGetFirstWorkspaceRoot,
+  diagnostics,
+  diffOpen,
+  diffWaitForUserDecision,
+  diffSaveChanges,
+  diffRevertChanges,
+  diffGetEditedContent,
+} = vi.hoisted(() => ({
   tryGetFirstWorkspaceRoot: vi.fn(),
   diagnostics: vi.fn(() => []),
+  diffOpen: vi.fn(),
+  diffWaitForUserDecision: vi.fn(),
+  diffSaveChanges: vi.fn(),
+  diffRevertChanges: vi.fn(),
+  diffGetEditedContent: vi.fn(),
 }));
 
 vi.mock("vscode", () => ({
   DiagnosticSeverity: { Error: 0 },
   Uri: { file: (fsPath: string) => ({ fsPath }) },
   languages: { getDiagnostics: diagnostics },
+  workspace: { getConfiguration: () => ({ get: () => 0 }) },
 }));
 
 vi.mock("../util/paths.js", () => ({
   tryGetFirstWorkspaceRoot,
+}));
+
+vi.mock("../integrations/DiffViewProvider.js", () => ({
+  withFileLock: async (_filePath: string, fn: () => Promise<unknown>) => fn(),
+  DiffViewProvider: vi.fn().mockImplementation(function () {
+    return {
+      open: diffOpen,
+      waitForUserDecision: diffWaitForUserDecision,
+      saveChanges: diffSaveChanges,
+      revertChanges: diffRevertChanges,
+      getEditedContent: diffGetEditedContent,
+    };
+  }),
 }));
 
 let tmpDir: string;
@@ -29,7 +56,6 @@ function text(result: { content: Array<{ type: string; text?: string }> }) {
 }
 
 function approvingPanel(overrides?: {
-  editedContent?: string;
   memoryTier?: "instructions" | "skill" | "command" | "memory";
   memoryScope?: "global" | "project";
   memoryName?: string;
@@ -50,6 +76,24 @@ function approvingPanel(overrides?: {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  diffWaitForUserDecision.mockResolvedValue("accept");
+  diffSaveChanges.mockImplementation(async () => {
+    const lastOpenCall = diffOpen.mock.calls.at(-1);
+    const filePath = lastOpenCall?.[0] as string;
+    const content = lastOpenCall?.[2] as string;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content);
+    return {
+      status: "accepted",
+      path: lastOpenCall?.[1],
+      finalContent: content,
+    };
+  });
+  diffGetEditedContent.mockImplementation(
+    () => diffOpen.mock.calls.at(-1)?.[2],
+  );
+
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-memory-test-"));
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-memory-home-"));
   originalHome = process.env.HOME;
@@ -93,6 +137,12 @@ describe("handleProposeMemory", () => {
       scope: "project",
       targetPath: ".agentlink/memory.md",
     });
+    expect(requests[0]).not.toHaveProperty("proposedContent");
+    expect(diffOpen).toHaveBeenCalledWith(
+      target,
+      ".agentlink/memory.md",
+      expect.stringMatching(/Run `npm test` after production code changes\./),
+    );
     expect(text(result)).toMatchObject({
       status: "accepted",
       path: ".agentlink/memory.md",
@@ -154,15 +204,16 @@ describe("handleProposeMemory", () => {
     });
   });
 
-  it("validates edited content when approval retargets to a skill", async () => {
+  it("validates diff-edited content when approval retargets to a skill", async () => {
     const { handleProposeMemory } = await import("./proposeMemory.js");
     const { panel } = approvingPanel({
       memoryTier: "skill",
       memoryScope: "project",
       memoryName: "new-skill",
-      editedContent:
-        "---\nname: wrong-skill\ndescription: Use when testing.\n---\n# Skill\n",
     });
+    diffGetEditedContent.mockReturnValue(
+      "---\nname: wrong-skill\ndescription: Use when testing.\n---\n# Skill\n",
+    );
 
     const result = await handleProposeMemory(
       {
@@ -194,19 +245,11 @@ describe("handleProposeMemory", () => {
       path.join(tmpHome, ".agentlink", "memory.md"),
       "- Existing global\n",
     );
-    let calls = 0;
     const panel = {
-      enqueueMemoryApproval: vi.fn((_request: { proposedContent: string }) => {
-        calls += 1;
-        return {
-          id: `approval-${calls}`,
-          promise: Promise.resolve(
-            calls === 1
-              ? { decision: "accept", memoryScope: "global" }
-              : { decision: "accept" },
-          ),
-        };
-      }),
+      enqueueMemoryApproval: vi.fn((_request: unknown) => ({
+        id: "approval-1",
+        promise: Promise.resolve({ decision: "accept", memoryScope: "global" }),
+      })),
     };
 
     await handleProposeMemory(
@@ -221,10 +264,15 @@ describe("handleProposeMemory", () => {
       panel as never,
     );
 
-    expect(panel.enqueueMemoryApproval).toHaveBeenCalledTimes(2);
-    expect(
-      panel.enqueueMemoryApproval.mock.calls[1][0].proposedContent,
-    ).toContain("- Existing global\n\n- New global preference");
+    expect(panel.enqueueMemoryApproval).toHaveBeenCalledTimes(1);
+    expect(panel.enqueueMemoryApproval.mock.calls[0][0]).not.toHaveProperty(
+      "proposedContent",
+    );
+    expect(diffOpen).toHaveBeenCalledWith(
+      path.join(tmpHome, ".agentlink", "memory.md"),
+      "~/.agentlink/memory.md",
+      expect.stringContaining("- Existing global\n\n- New global preference"),
+    );
     expect(
       fs.readFileSync(path.join(tmpHome, ".agentlink", "memory.md"), "utf-8"),
     ).toContain("- Existing global\n\n- New global preference");
@@ -256,6 +304,7 @@ describe("handleProposeMemory", () => {
     );
 
     expect(fs.existsSync(commandPath)).toBe(false);
+    expect(diffOpen).not.toHaveBeenCalled();
   });
 
   it("supports approval retargeting to global command", async () => {
@@ -264,7 +313,21 @@ describe("handleProposeMemory", () => {
       memoryTier: "command",
       memoryScope: "global",
       memoryName: "verify-all",
-      editedContent: "Run full verification.\n",
+    });
+    diffSaveChanges.mockImplementation(async () => {
+      const filePath = path.join(
+        tmpHome,
+        ".agentlink",
+        "commands",
+        "verify-all.md",
+      );
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, "Run full verification.\n");
+      return {
+        status: "accepted",
+        path: filePath,
+        finalContent: "Run full verification.\n",
+      };
     });
 
     await handleProposeMemory(

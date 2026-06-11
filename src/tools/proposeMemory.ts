@@ -7,14 +7,18 @@ import type {
   ApprovalPanelProvider,
   MemoryApprovalResponse,
 } from "../approvals/ApprovalPanelProvider.js";
+import {
+  DiffViewProvider,
+  withFileLock,
+} from "../integrations/DiffViewProvider.js";
 import type {
   MemoryOperation,
   MemoryScope,
   MemoryTier,
 } from "../approvals/webview/types.js";
+import type { OnApprovalRequest, ToolResult } from "../shared/types.js";
 import { errorResult, successResult } from "../shared/types.js";
 
-import type { ToolResult } from "../shared/types.js";
 import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
 
 const MEMORY_NAME_RE = /^[a-z0-9](?:[a-z0-9]|-(?!-)){0,62}[a-z0-9]$/;
@@ -152,7 +156,9 @@ async function resolveTarget(params: ProposeMemoryParams): Promise<Target> {
   }
 }
 
-function validateName(params: ProposeMemoryParams): string {
+function validateName(
+  params: Pick<ProposeMemoryParams, "tier" | "name">,
+): string {
   const name = params.name?.trim();
   if (!name) throw new Error(`${params.tier} proposals require a name`);
   if (!MEMORY_NAME_RE.test(name)) {
@@ -179,7 +185,9 @@ function parseFrontmatter(content: string): Record<string, string> {
   return frontmatter;
 }
 
-function validateSkill(params: ProposeMemoryParams): void {
+function validateSkill(
+  params: Pick<ProposeMemoryParams, "tier" | "operation" | "name" | "content">,
+): void {
   if (params.tier !== "skill" || params.operation === "remove") return;
   const name = validateName(params);
   const fm = parseFrontmatter(params.content);
@@ -244,11 +252,6 @@ function applyProposal(existing: string, params: ProposeMemoryParams): string {
   );
 }
 
-async function writeContent(filePath: string, content: string): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, content, "utf-8");
-}
-
 async function deleteTarget(filePath: string, tier: MemoryTier): Promise<void> {
   await fs.rm(filePath, { force: true });
   if (tier === "skill") {
@@ -270,13 +273,61 @@ function retargetedFromDecision(
   };
 }
 
-function targetChanged(a: Target, b: Target): boolean {
-  return path.resolve(a.filePath) !== path.resolve(b.filePath);
+async function reviewProposedContentInDiff(
+  target: Target,
+  proposedContent: string,
+  approvalPanel: ApprovalPanelProvider,
+  requestId: string,
+  options?: {
+    onApprovalRequest?: OnApprovalRequest;
+    sessionId?: string;
+    validateContent?: (content: string) => void;
+  },
+): Promise<{
+  decision: "accept" | "reject";
+  finalContent?: string;
+  rejectionReason?: string;
+  followUp?: string;
+}> {
+  const diagnosticDelay = vscode.workspace
+    .getConfiguration("agentlink")
+    .get<number>("diagnosticDelay", 1500);
+
+  return await withFileLock(target.filePath, async () => {
+    const diffView = new DiffViewProvider(diagnosticDelay, requestId);
+    await diffView.open(target.filePath, target.displayPath, proposedContent);
+    const decision = await diffView.waitForUserDecision(
+      approvalPanel,
+      options?.onApprovalRequest,
+      options?.sessionId,
+    );
+
+    if (decision === "reject") {
+      await diffView.revertChanges(
+        diffView.writeApprovalResponse?.rejectionReason,
+      );
+      return {
+        decision: "reject",
+        rejectionReason: diffView.writeApprovalResponse?.rejectionReason,
+        followUp: diffView.writeApprovalResponse?.followUp,
+      };
+    }
+
+    options?.validateContent?.(diffView.getEditedContent() ?? proposedContent);
+    const saved = await diffView.saveChanges();
+    return {
+      decision: "accept",
+      finalContent: saved.finalContent ?? proposedContent,
+      followUp: saved.follow_up,
+    };
+  });
 }
 
 export async function handleProposeMemory(
   params: ProposeMemoryParams,
   approvalPanel: ApprovalPanelProvider,
+  onApprovalRequest?: OnApprovalRequest,
+  sessionId?: string,
 ): Promise<ToolResult> {
   try {
     validateSkill(params);
@@ -284,9 +335,9 @@ export async function handleProposeMemory(
 
     const target = await resolveTarget(params);
     const existing = await readFileIfExists(target.filePath);
-    const proposedContent = applyProposal(existing, params);
+    applyProposal(existing, params);
 
-    const { promise } = approvalPanel.enqueueMemoryApproval({
+    const { promise, id: approvalId } = approvalPanel.enqueueMemoryApproval({
       tier: params.tier,
       scope: params.scope,
       operation: params.operation,
@@ -295,7 +346,6 @@ export async function handleProposeMemory(
       rationale: params.rationale,
       targetPath: target.displayPath,
       content: params.content,
-      proposedContent,
     });
 
     const decision = (await promise) as MemoryApprovalResponse;
@@ -307,54 +357,14 @@ export async function handleProposeMemory(
       });
     }
 
-    const editedContent = decision.editedContent;
-    const retargeted = retargetedFromDecision(
-      params,
-      decision,
-      editedContent ?? params.content,
-    );
+    const retargeted = retargetedFromDecision(params, decision, params.content);
     if (retargeted.tier === "skill") validateSkill(retargeted);
     if (retargeted.tier === "skill" || retargeted.tier === "command") {
       validateName(retargeted);
     }
 
     const finalTarget = await resolveTarget(retargeted);
-    let finalContent = editedContent;
-
-    if (targetChanged(target, finalTarget) && finalContent === undefined) {
-      const retargetExisting = await readFileIfExists(finalTarget.filePath);
-      const retargetProposedContent = applyProposal(
-        retargetExisting,
-        retargeted,
-      );
-      const { promise: retargetPromise } = approvalPanel.enqueueMemoryApproval({
-        tier: retargeted.tier,
-        scope: retargeted.scope,
-        operation: retargeted.operation,
-        name: retargeted.name,
-        title: `${params.title} (retargeted)`,
-        rationale:
-          "The approval was retargeted, so AgentLink recomputed the preview against the new target file.",
-        targetPath: finalTarget.displayPath,
-        content: retargeted.content,
-        proposedContent: retargetProposedContent,
-      });
-      const retargetDecision =
-        (await retargetPromise) as MemoryApprovalResponse;
-      if (retargetDecision.decision === "reject") {
-        return successResult({
-          status: "rejected",
-          path: finalTarget.displayPath,
-          rejectionReason: retargetDecision.rejectionReason,
-        });
-      }
-      finalContent = retargetDecision.editedContent ?? retargetProposedContent;
-    }
-
-    if (finalContent === undefined) {
-      const latestExisting = await readFileIfExists(finalTarget.filePath);
-      finalContent = applyProposal(latestExisting, retargeted);
-    }
+    let followUp = decision.followUp;
 
     if (
       retargeted.operation === "remove" &&
@@ -362,7 +372,33 @@ export async function handleProposeMemory(
     ) {
       await deleteTarget(finalTarget.filePath, retargeted.tier);
     } else {
-      await writeContent(finalTarget.filePath, finalContent);
+      const latestExisting = await readFileIfExists(finalTarget.filePath);
+      const proposedFinalContent = applyProposal(latestExisting, retargeted);
+
+      const diffDecision = await reviewProposedContentInDiff(
+        finalTarget,
+        proposedFinalContent,
+        approvalPanel,
+        approvalId,
+        {
+          onApprovalRequest,
+          sessionId,
+          validateContent: (content) => {
+            if (retargeted.tier === "skill")
+              validateSkill({ ...retargeted, content });
+          },
+        },
+      );
+
+      if (diffDecision.decision === "reject") {
+        return successResult({
+          status: "rejected",
+          path: finalTarget.displayPath,
+          rejectionReason: diffDecision.rejectionReason,
+          ...(diffDecision.followUp && { follow_up: diffDecision.followUp }),
+        });
+      }
+      followUp = diffDecision.followUp ?? followUp;
     }
 
     const diagnostics = vscode.languages.getDiagnostics(
@@ -375,6 +411,7 @@ export async function handleProposeMemory(
       tier: retargeted.tier,
       scope: retargeted.scope,
       operation: retargeted.operation,
+      ...(followUp && { follow_up: followUp }),
       new_diagnostics: diagnostics
         .filter((d) => d.severity === vscode.DiagnosticSeverity.Error)
         .map((d) => ({ message: d.message, source: d.source })),

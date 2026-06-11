@@ -117,7 +117,6 @@ interface InternalRequest {
   memoryRationale?: string;
   memoryTargetPath?: string;
   memoryContent?: string;
-  memoryProposedContent?: string;
 }
 
 interface QueueEntry {
@@ -277,7 +276,6 @@ export class ApprovalPanelProvider
     rationale: string;
     targetPath: string;
     content: string;
-    proposedContent: string;
     id?: string;
   }): { promise: Promise<MemoryApprovalResponse>; id: string } {
     const id = options.id ?? randomUUID();
@@ -292,7 +290,6 @@ export class ApprovalPanelProvider
       memoryRationale: options.rationale,
       memoryTargetPath: options.targetPath,
       memoryContent: options.content,
-      memoryProposedContent: options.proposedContent,
     }) as Promise<MemoryApprovalResponse>;
     return { promise, id };
   }
@@ -411,7 +408,6 @@ export class ApprovalPanelProvider
         memoryRationale: request.memoryRationale,
         memoryTargetPath: request.memoryTargetPath,
         memoryContent: request.memoryContent,
-        memoryProposedContent: request.memoryProposedContent,
         queuePosition,
         queueTotal,
       };
@@ -482,7 +478,6 @@ export class ApprovalPanelProvider
       memoryRationale: request.memoryRationale,
       memoryTargetPath: request.memoryTargetPath,
       memoryContent: request.memoryContent,
-      memoryProposedContent: request.memoryProposedContent,
       queuePosition,
       queueTotal,
     };

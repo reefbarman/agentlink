@@ -84,8 +84,6 @@ export interface ApprovalRequest {
   memoryTargetPath?: string;
   /** For memory proposals: markdown entry/body being proposed. */
   memoryContent?: string;
-  /** For memory proposals: complete target file content after applying the proposal. */
-  memoryProposedContent?: string;
 }
 
 export interface RuleEntry {

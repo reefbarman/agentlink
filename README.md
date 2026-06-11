@@ -608,7 +608,7 @@ Generate PNG images through OpenAI/Codex auth and save them into the workspace. 
 
 ### propose_memory
 
-Propose a cross-session memory/config update. This is the sanctioned path for durable learnings: the tool resolves the correct target, validates skill/command names and skill frontmatter, previews the proposed final file content, and always requires explicit user approval before writing. Approval can edit the final content or retarget tier/scope before accepting.
+Propose a cross-session memory/config update. This is the sanctioned path for durable learnings: the tool resolves the correct target, validates skill/command names and skill frontmatter, and always requires explicit user approval before writing. Approval can retarget tier/scope/name in the approval card; add/update proposals then open an editable diff view for reviewing or editing the final target file content before it is saved. Skill/command removals delete the target only after approval.
 
 | Parameter   | Type                                                 | Description                                                                   |
 | ----------- | ---------------------------------------------------- | ----------------------------------------------------------------------------- |

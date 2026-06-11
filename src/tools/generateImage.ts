@@ -395,6 +395,12 @@ function getModel(auth: OpenAiCodexResolvedAuth): string {
     : CODEX_DEFAULT_MODEL;
 }
 
+type ImageGenerationApprovalResult = {
+  approved: boolean;
+  followUp?: string;
+  rejectionReason?: string;
+};
+
 export async function requestImageGenerationApprovalForTest(params: {
   approvalManager: ApprovalManager;
   sessionId: string;
@@ -405,7 +411,7 @@ export async function requestImageGenerationApprovalForTest(params: {
   targets: Array<{ relPath: string }>;
   referenceImages?: GenerateImageReferenceImage[];
   billing: string;
-}): Promise<boolean> {
+}): Promise<ImageGenerationApprovalResult> {
   const referenceImages = params.referenceImages ?? [];
   const detail = [
     `Generation prompt:\n${params.prompt}`,
@@ -438,10 +444,15 @@ export async function requestImageGenerationApprovalForTest(params: {
       params.sessionId,
     );
     const decision = typeof raw === "string" ? raw : raw.decision;
-    return decision === "accept" || decision.startsWith("accept-");
+    return {
+      approved: decision === "accept" || decision.startsWith("accept-"),
+      followUp: typeof raw === "string" ? undefined : raw.followUp,
+      rejectionReason:
+        typeof raw === "string" ? undefined : raw.rejectionReason,
+    };
   }
 
-  return false;
+  return { approved: false };
 }
 
 export async function parseCodexImageSseForTest(params: {
@@ -661,7 +672,7 @@ export async function handleGenerateImage(
         ? `ChatGPT/Codex OAuth quota (${auth.oauthAccountLabel ?? auth.oauthAccountEmail ?? "active account"})`
         : "OpenAI API key billing";
 
-    const approved = await requestImageGenerationApprovalForTest({
+    const approval = await requestImageGenerationApprovalForTest({
       approvalManager,
       sessionId,
       onApprovalRequest,
@@ -672,10 +683,22 @@ export async function handleGenerateImage(
       referenceImages,
       billing,
     });
-    if (!approved) {
-      return errorResult("User denied image generation", {
-        output_paths: targets.map((target) => target.relPath),
-      });
+    if (!approval.approved) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "rejected_by_user",
+              output_paths: targets.map((target) => target.relPath),
+              ...(approval.rejectionReason
+                ? { reason: approval.rejectionReason }
+                : {}),
+              ...(approval.followUp ? { follow_up: approval.followUp } : {}),
+            }),
+          },
+        ],
+      };
     }
 
     try {
@@ -708,6 +731,7 @@ export async function handleGenerateImage(
                 })),
                 images: result.images,
                 event_types: Array.from(new Set(result.eventTypes)),
+                ...(approval.followUp ? { follow_up: approval.followUp } : {}),
               },
               null,
               2,
@@ -759,6 +783,9 @@ export async function handleGenerateImage(
                   })),
                   images: result.images,
                   event_types: Array.from(new Set(result.eventTypes)),
+                  ...(approval.followUp
+                    ? { follow_up: approval.followUp }
+                    : {}),
                 },
                 null,
                 2,
@@ -768,9 +795,15 @@ export async function handleGenerateImage(
         };
       }
       if (writtenImages.length > 0 && error instanceof Error) {
-        return errorResult(error.message, { partial_images: writtenImages });
+        return errorResult(error.message, {
+          partial_images: writtenImages,
+          ...(approval.followUp ? { follow_up: approval.followUp } : {}),
+        });
       }
-      throw error;
+      return errorResult(
+        error instanceof Error ? error.message : String(error),
+        approval.followUp ? { follow_up: approval.followUp } : undefined,
+      );
     }
   } catch (error) {
     return errorResult(error instanceof Error ? error.message : String(error));
