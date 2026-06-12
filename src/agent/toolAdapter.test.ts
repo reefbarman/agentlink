@@ -7,6 +7,7 @@ import {
 } from "./toolAdapter.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import type { ToolDefinition } from "./providers/types.js";
+import type { ToolResult } from "../shared/types.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 
 // Mock all tool handlers so dispatchToolCall tests don't hit VS Code APIs
@@ -692,6 +693,50 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("can mark current todos complete with final completed status", async () => {
+    const onCompleteTodos = vi.fn(() => [
+      {
+        id: "1",
+        content: "Finish work",
+        activeForm: "Finishing work",
+        status: "completed" as const,
+      },
+    ]);
+
+    const result = await dispatchToolCall(
+      "set_task_status",
+      { status: "completed", summary: "Done", completeTodos: true },
+      { ...mockCtx, onFinalStatus: vi.fn(), onCompleteTodos },
+    );
+
+    expect(onCompleteTodos).toHaveBeenCalledTimes(1);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: JSON.stringify({ ok: true, completedTodos: 1 }),
+    });
+  });
+
+  it("does not complete todos for non-completed final statuses", async () => {
+    const onCompleteTodos = vi.fn(() => []);
+
+    const result = await dispatchToolCall(
+      "set_task_status",
+      {
+        status: "waiting_for_user",
+        summary: "Need input",
+        completeTodos: true,
+      },
+      { ...mockCtx, onFinalStatus: vi.fn(), onCompleteTodos },
+    );
+
+    expect(onCompleteTodos).not.toHaveBeenCalled();
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(JSON.parse(text)).toMatchObject({
+      ok: true,
+      completeTodosIgnored: expect.stringContaining("status is 'completed'"),
+    });
+  });
+
   it("loads advertised rules through the session rule allowlist", async () => {
     const onFileRead = vi.fn();
     const getAdvertisedRules = vi.fn(() => [
@@ -809,7 +854,7 @@ describe("dispatchToolCall", () => {
     });
   });
 
-  it("records suppressed final task status continuation", async () => {
+  it("ignores legacy suppressContinue input", async () => {
     const onFinalStatus = vi.fn();
     const result = await dispatchToolCall(
       "set_task_status",
@@ -825,7 +870,6 @@ describe("dispatchToolCall", () => {
       status: "completed",
       source: "tool",
       summary: "All done",
-      continueActionSuppressed: true,
     });
     expect(result.content[0]).toMatchObject({
       type: "text",
@@ -833,7 +877,7 @@ describe("dispatchToolCall", () => {
     });
   });
 
-  it("suppressed final task status ignores custom continuation", async () => {
+  it("honors custom continuation when legacy suppressContinue input is present", async () => {
     const onFinalStatus = vi.fn();
     await dispatchToolCall(
       "set_task_status",
@@ -851,7 +895,10 @@ describe("dispatchToolCall", () => {
       status: "completed",
       source: "tool",
       summary: "All done",
-      continueActionSuppressed: true,
+      continueAction: {
+        label: "Continue anyway",
+        prompt: "Please continue anyway.",
+      },
     });
   });
 
@@ -870,16 +917,20 @@ describe("dispatchToolCall", () => {
 
   it("dispatches read_file to handleReadFile", async () => {
     const { handleReadFile } = await import("../tools/readFile.js");
+    const advertisedSkills = [
+      { name: "helper", skillPath: "/outside/skills/helper/SKILL.md" },
+    ];
     const result = await dispatchToolCall(
       "read_file",
       { path: "src/foo.ts" },
-      mockCtx,
+      { ...mockCtx, getAdvertisedSkills: () => advertisedSkills },
     );
     expect(handleReadFile).toHaveBeenCalledWith(
       { path: "src/foo.ts" },
       mockCtx.approvalManager,
       mockCtx.approvalPanel,
       mockCtx.sessionId,
+      advertisedSkills,
     );
     expect(result.content[0]).toMatchObject({
       type: "text",
@@ -1547,9 +1598,13 @@ describe("dispatchToolCall", () => {
       },
     );
 
-    expect(mcpHub.callTool).toHaveBeenCalledWith("server__name__tool", {
-      ok: true,
-    });
+    expect(mcpHub.callTool).toHaveBeenCalledWith(
+      "server__name__tool",
+      {
+        ok: true,
+      },
+      { signal: undefined },
+    );
   });
 
   it("rejects call_mcp_tool targets outside the active skill allowlist", async () => {
@@ -1645,9 +1700,13 @@ describe("dispatchToolCall", () => {
     );
 
     expect(onApprovalRequest).toHaveBeenCalled();
-    expect(mcpHub.callTool).toHaveBeenCalledWith("linear__list_issues", {
-      query: "bug",
-    });
+    expect(mcpHub.callTool).toHaveBeenCalledWith(
+      "linear__list_issues",
+      {
+        query: "bug",
+      },
+      { signal: undefined },
+    );
   });
 
   it("calls MCP tools through call_mcp_tool using the standard approval path", async () => {
@@ -1691,14 +1750,182 @@ describe("dispatchToolCall", () => {
       }),
       "test-session",
     );
-    expect(mcpHub.callTool).toHaveBeenCalledWith("linear__list_issues", {
-      query: "bug",
-    });
+    expect(mcpHub.callTool).toHaveBeenCalledWith(
+      "linear__list_issues",
+      {
+        query: "bug",
+      },
+      { signal: undefined },
+    );
     expect(result.uiMeta?.mcpApprovalPromotion).toEqual({
       serverName: "linear",
       bareToolName: "list_issues",
       scopes: ["session", "project", "global"],
     });
+  });
+
+  it("tracks nested call_mcp_tool targets and aborts the MCP request when cancelled", async () => {
+    let nestedForceResolve: ((result: ToolResult) => void) | undefined;
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue({ toolPolicy: "allow" }),
+      callTool: vi.fn(
+        async (
+          _toolName: string,
+          _input: Record<string, unknown>,
+          options?: { signal?: AbortSignal },
+        ) =>
+          new Promise<ToolResult>((resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+          }),
+      ),
+    };
+    const toolCallTracker = {
+      registerAgentCall: vi.fn(
+        (
+          _id: string,
+          _toolName: string,
+          _displayArgs: string,
+          _sessionId: string,
+          forceResolve: (result: ToolResult) => void,
+        ) => {
+          nestedForceResolve = forceResolve;
+          return {
+            toolCallId: "nested-call",
+            setApprovalId: vi.fn(),
+            setTerminalId: vi.fn(),
+          };
+        },
+      ),
+      completeAgentCall: vi.fn(),
+    };
+
+    const dispatchPromise = dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "list_issues", input: { query: "bug" } },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        mcpHub: mcpHub as any,
+        toolCallTracker: toolCallTracker as any,
+        trackerCtx: {
+          toolCallId: "outer-call",
+          setApprovalId: vi.fn(),
+          setTerminalId: vi.fn(),
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(mcpHub.callTool).toHaveBeenCalled());
+    const signal = mcpHub.callTool.mock.calls[0][2]?.signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+
+    nestedForceResolve?.({
+      content: [
+        { type: "text", text: JSON.stringify({ status: "cancelled" }) },
+      ],
+    });
+
+    const result = await dispatchPromise;
+    expect(signal?.aborted).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain("cancelled");
+    expect(toolCallTracker.registerAgentCall).toHaveBeenCalledWith(
+      "outer-call:linear__list_issues",
+      "linear__list_issues",
+      "linear.list_issues",
+      "test-session",
+      expect.any(Function),
+      JSON.stringify({ query: "bug" }, null, 2),
+    );
+    expect(toolCallTracker.completeAgentCall).toHaveBeenCalledWith(
+      "outer-call:linear__list_issues",
+    );
+  });
+
+  it("propagates outer call_mcp_tool cancellation to the nested MCP request", async () => {
+    const outerController = new AbortController();
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue({ toolPolicy: "allow" }),
+      callTool: vi.fn(
+        async (
+          _toolName: string,
+          _input: Record<string, unknown>,
+          options?: { signal?: AbortSignal },
+        ) =>
+          new Promise<ToolResult>((resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+          }),
+      ),
+    };
+    const toolCallTracker = {
+      registerAgentCall: vi.fn(
+        (
+          _id: string,
+          _toolName: string,
+          _displayArgs: string,
+          _sessionId: string,
+          _forceResolve: (result: ToolResult) => void,
+        ) => ({
+          toolCallId: "nested-call",
+          setApprovalId: vi.fn(),
+          setTerminalId: vi.fn(),
+        }),
+      ),
+      completeAgentCall: vi.fn(),
+    };
+
+    const dispatchPromise = dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "list_issues", input: { query: "bug" } },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        mcpHub: mcpHub as any,
+        toolAbortSignal: outerController.signal,
+        toolCallTracker: toolCallTracker as any,
+        trackerCtx: {
+          toolCallId: "outer-call",
+          setApprovalId: vi.fn(),
+          setTerminalId: vi.fn(),
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(mcpHub.callTool).toHaveBeenCalled());
+    const signal = mcpHub.callTool.mock.calls[0][2]?.signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+
+    outerController.abort();
+
+    const result = await dispatchPromise;
+    expect(signal?.aborted).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain("Aborted");
+    expect(toolCallTracker.completeAgentCall).toHaveBeenCalledWith(
+      "outer-call:linear__list_issues",
+    );
   });
 
   it("rejects unknown call_mcp_tool targets before requesting approval", async () => {

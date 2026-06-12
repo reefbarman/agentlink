@@ -126,6 +126,45 @@ describe("handleWriteFile", () => {
     expect(doc.save).toHaveBeenCalledOnce();
   });
 
+  it("creates missing parent directories for auto-approved new files", async () => {
+    const nestedPath = path.join(workspaceDir, "plans", "new", "nested.md");
+
+    const doc = {
+      getText: vi.fn(() => ""),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: nestedPath },
+      isDirty: true,
+      save: vi.fn(async () => {
+        fs.writeFileSync(nestedPath, "nested plan", "utf-8");
+        return true;
+      }),
+    };
+    mockWorkspace.openTextDocument.mockResolvedValue(doc);
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    const result = await handleWriteFile(
+      { path: "plans/new/nested.md", content: "nested plan" },
+      {
+        isAgentWriteApproved: vi.fn(() => false),
+        isFileWriteApproved: vi.fn(() => false),
+      } as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "architect",
+    );
+
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(JSON.parse(text)).toMatchObject({
+      status: "accepted",
+      path: "plans/new/nested.md",
+      operation: "auto-approved",
+    });
+    expect(fs.existsSync(path.dirname(nestedPath))).toBe(true);
+    expect(fs.readFileSync(nestedPath, "utf-8")).toBe("nested plan");
+  });
+
   it("reports formatter edits from auto-approved saves", async () => {
     const planPath = path.join(workspaceDir, "plans", "formatted.md");
     fs.mkdirSync(path.dirname(planPath), { recursive: true });

@@ -38,6 +38,8 @@ export interface WebviewModelInfo {
 /** A slash command available for autocomplete */
 export interface SlashCommandInfo {
   name: string;
+  /** Optional presentation/search alias. `name` remains the canonical command id. */
+  displayName?: string;
   description: string;
   source: "builtin" | "project" | "global" | "agentlink" | "skill";
   /** True if this is a built-in command that executes immediately */
@@ -298,6 +300,7 @@ export type ExtensionMessage =
         toolCount: number;
         resourceCount: number;
         promptCount: number;
+        tools: Array<{ name: string; description?: string }>;
       }>;
     }
   | {
@@ -401,6 +404,7 @@ export type ExtensionMessage =
   | {
       type: "agentCommittedUserMessage";
       sessionId: string;
+      id?: string;
       text: string;
       displayText?: string;
       isSlashCommand?: boolean;

@@ -962,6 +962,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const body = (await this.readJsonBody(req)) as {
       text?: string;
+      id?: string;
       mode?: string;
       sessionId?: string;
       thinkingEnabled?: boolean;
@@ -1011,6 +1012,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const result = await this.chatViewProvider.submitBrowserSend({
       text,
+      id: typeof body.id === "string" ? body.id : undefined,
       mode: body.mode,
       sessionId: body.sessionId,
       thinkingEnabled: body.thinkingEnabled,

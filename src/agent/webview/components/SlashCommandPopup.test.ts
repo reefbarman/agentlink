@@ -16,6 +16,7 @@ describe("SlashCommandPopup", () => {
     const commands: SlashCommandInfo[] = [
       {
         name: "skill:smoke",
+        displayName: "smoke",
         description: "Smoke skill",
         source: "skill",
         builtin: false,
@@ -34,12 +35,14 @@ describe("SlashCommandPopup", () => {
       },
     ];
 
+    const onSelect = vi.fn();
+
     const { container } = render(
       h(SlashCommandPopup, {
         commands,
         selectedIndex: 0,
         anchor: { bottom: 0, left: 0 },
-        onSelect: vi.fn(),
+        onSelect,
         onClose: vi.fn(),
       }),
     );
@@ -52,6 +55,16 @@ describe("SlashCommandPopup", () => {
     const names = Array.from(container.querySelectorAll(".slash-cmd-name")).map(
       (name) => name.textContent,
     );
-    expect(names).toEqual(["/review", "/help", "/skill:smoke"]);
+    expect(names).toEqual(["/review", "/help", "/smoke"]);
+
+    const rightLabels = Array.from(
+      container.querySelectorAll(".slash-cmd-right"),
+    ).map((label) => label.textContent);
+    expect(rightLabels).toEqual(["Skill"]);
+
+    container
+      .querySelectorAll<HTMLButtonElement>(".slash-cmd-option")[2]
+      ?.click();
+    expect(onSelect).toHaveBeenCalledWith(commands[0]);
   });
 });

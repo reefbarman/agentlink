@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { handleTodoWrite } from "./todoTool.js";
+import { completeTodos, handleTodoWrite } from "./todoTool.js";
+import { describe, expect, it } from "vitest";
+
 import type { TodoItem } from "./todoTool.js";
 
 function makeItem(
@@ -84,5 +85,30 @@ describe("handleTodoWrite", () => {
     ];
     const { content } = handleTodoWrite({ todos });
     expect(content).toBe("Updated: 2/2 complete, 0 in progress, 0 pending");
+  });
+});
+
+describe("completeTodos", () => {
+  it("marks nested todos completed without mutating the original list", () => {
+    const todos: TodoItem[] = [
+      makeItem({
+        id: "1",
+        content: "Parent",
+        status: "in_progress",
+        children: [makeItem({ id: "1a", content: "Child", status: "pending" })],
+      }),
+    ];
+
+    const completed = completeTodos(todos);
+
+    expect(completed).toEqual([
+      expect.objectContaining({
+        id: "1",
+        status: "completed",
+        children: [expect.objectContaining({ id: "1a", status: "completed" })],
+      }),
+    ]);
+    expect(todos[0].status).toBe("in_progress");
+    expect(todos[0].children?.[0]?.status).toBe("pending");
   });
 });

@@ -147,6 +147,15 @@ describe("getToolGroupLabel", () => {
     ).toBe("Edited 2 files · Ran 1 command");
   });
 
+  it("normalizes provider-prefixed built-in tool names", () => {
+    expect(
+      getToolGroupLabel([
+        tool("tool-1", "functions.apply_diff"),
+        tool("tool-2", "functions.execute_command"),
+      ]),
+    ).toBe("Edited 1 file · Ran 1 command");
+  });
+
   it("treats namespaced MCP-style names as other calls", () => {
     expect(
       getToolGroupLabel([

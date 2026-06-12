@@ -565,6 +565,36 @@ export function isEnoentWithSingleSuggestion(
   );
 }
 
+export interface AdvertisedSkillFileAccess {
+  name: string;
+  skillPath: string;
+}
+
+function normalizePathForContainment(filePath: string): string {
+  return path.resolve(filePath);
+}
+
+function isPathInDirectory(filePath: string, directory: string): boolean {
+  const normalizedFilePath = normalizePathForContainment(filePath);
+  const normalizedDirectory = normalizePathForContainment(directory);
+  const relative = path.relative(normalizedDirectory, normalizedFilePath);
+  return (
+    relative === "" ||
+    (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function isAdvertisedSkillAssociatedFile(
+  filePath: string,
+  advertisedSkills: AdvertisedSkillFileAccess[] = [],
+): boolean {
+  return advertisedSkills.some((skill) => {
+    if (!skill.skillPath) return false;
+    const skillDirectory = path.dirname(skill.skillPath);
+    return isPathInDirectory(filePath, skillDirectory);
+  });
+}
+
 export async function handleReadFile(
   params: {
     path: string;
@@ -580,6 +610,7 @@ export async function handleReadFile(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  advertisedSkills: AdvertisedSkillFileAccess[] = [],
 ): Promise<ToolResult> {
   const release = await readSemaphore.acquire();
   let released = false;
@@ -589,10 +620,13 @@ export async function handleReadFile(
     );
 
     // Outside-workspace gate — agentlink tmp artifacts (truncated tool results)
-    // are always readable without approval since we wrote them ourselves.
+    // are always readable without approval since we wrote them ourselves. Files
+    // bundled next to advertised skills are also readable because the model was
+    // explicitly instructed to load those skill resources for this session.
     if (
       !inWorkspace &&
       !isAgentlinkTmpArtifact(filePath) &&
+      !isAdvertisedSkillAssociatedFile(filePath, advertisedSkills) &&
       !approvalManager.isPathTrusted(sessionId, filePath)
     ) {
       const { approved, reason } = await approveOutsideWorkspaceAccess(

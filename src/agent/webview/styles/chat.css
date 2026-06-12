@@ -411,7 +411,7 @@ body {
 
 .user-image-previews {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 180px));
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   gap: 8px;
   margin-bottom: 8px;
   max-width: min(100%, 620px);
@@ -437,9 +437,9 @@ body {
 
 .user-image-preview {
   display: block;
-  max-width: 100%;
+  box-sizing: border-box;
+  width: 100%;
   max-height: 260px;
-  width: auto;
   height: auto;
   object-fit: contain;
   border: 1px solid
@@ -1684,18 +1684,15 @@ body {
   box-sizing: border-box;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .question-body {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 10px;
-  max-height: calc(var(--question-card-max-height) - 72px);
-  min-height: 0;
   min-width: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
   padding-right: 2px;
 }
 
@@ -1799,6 +1796,7 @@ body {
 
 .question-options {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 5px;
 }
@@ -1896,6 +1894,7 @@ body {
 
 .question-scale {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
@@ -1941,6 +1940,7 @@ body {
 }
 
 .question-text-input {
+  flex: 0 0 auto;
   width: 100%;
   max-width: 100%;
   background: var(--vscode-input-background);
@@ -1962,6 +1962,7 @@ body {
 
 /* Per-question "Other / add context" textarea */
 .question-other-input {
+  flex: 0 0 auto;
   width: 100%;
   max-width: 100%;
   background: transparent;
@@ -2892,6 +2893,13 @@ body {
   min-width: 0;
 }
 
+.assistant-blocks > .tool-group-block + .assistant-content,
+.assistant-blocks > .tool-call-block + .assistant-content,
+.assistant-blocks > .thinking-block + .assistant-content,
+.assistant-blocks > .bg-agent-result-block + .assistant-content {
+  margin-top: 6px;
+}
+
 .copy-button {
   position: absolute;
   bottom: 4px;
@@ -3596,6 +3604,11 @@ body {
 }
 
 .mcp-status-item {
+  padding: 0;
+  min-width: 0;
+}
+
+.mcp-status-row {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3606,6 +3619,15 @@ body {
 .mcp-status-item .codicon {
   font-size: 13px;
   flex-shrink: 0;
+}
+
+.mcp-status-expand {
+  width: 16px;
+  height: 16px;
+}
+
+.mcp-status-expand:disabled {
+  opacity: 0.35;
 }
 
 .mcp-status-connected .codicon {
@@ -3652,6 +3674,35 @@ body {
 
 .mcp-action-disable:hover {
   color: var(--vscode-errorForeground) !important;
+}
+
+.mcp-tool-list {
+  list-style: none;
+  margin: 0;
+  padding: 1px 12px 5px 48px;
+}
+
+.mcp-tool-item,
+.mcp-tool-empty {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.mcp-tool-name {
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-editor-font-family);
+  flex-shrink: 0;
+}
+
+.mcp-tool-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 /* ── Elicitation Modal ── */

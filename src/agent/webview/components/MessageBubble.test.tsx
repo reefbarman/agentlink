@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { agentMessagesToChatMessages, initialState, reducer } from "../App";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
-import { initialState, reducer } from "../App";
 
 import type { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
@@ -125,9 +125,7 @@ describe("MessageBubble slash-command rendering", () => {
     expect(fullPreview.src).toBe("data:image/png;base64,abc123");
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(
-      screen.queryByRole("dialog", { name: "screenshot.png" }),
-    ).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "screenshot.png" })).toBeNull();
   });
 
   it("renders inline @path mentions as clickable file links in user text", () => {
@@ -466,9 +464,9 @@ describe("MessageBubble slash-command rendering", () => {
     );
   });
 
-  it("does not render a default Continue CTA when completed final marker suppresses continuation", () => {
+  it("renders a default Continue CTA when legacy tool suppression is present", () => {
     const message: ChatMessage = {
-      id: "assistant-final-suppressed-continue",
+      id: "assistant-final-legacy-suppressed-continue",
       role: "assistant",
       content: "",
       timestamp: Date.now(),
@@ -478,6 +476,32 @@ describe("MessageBubble slash-command rendering", () => {
         source: "tool",
         summary: "All requested work is complete.",
         continueActionSuppressed: true,
+      },
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onFinalMarkerContinue={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+  });
+
+  it("does not render a default Continue CTA when the action was consumed by the UI", () => {
+    const message: ChatMessage = {
+      id: "assistant-final-consumed-continue",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "All requested work is complete.",
+        continueActionConsumed: true,
       },
     };
 
@@ -656,6 +680,59 @@ describe("MessageBubble slash-command rendering", () => {
     expect(finalRegion?.textContent).toContain('"status"');
     expect(finalRegion?.textContent).toContain('"completed"');
     expect(finalRegion?.textContent).toContain('"summary"');
+  });
+
+  it("restores provider-prefixed built-in tool names with normal group labels", () => {
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "check spacing" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-1",
+            name: "functions.apply_diff",
+            input: { path: "src/agent/webview/styles/chat.css" },
+          },
+          {
+            type: "text",
+            text: "The selector is now limited to real runtime block classes.",
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tool-1",
+            content: JSON.stringify({ status: "accepted" }),
+          },
+        ],
+      },
+    ]);
+    const assistant = restored.find(
+      (message): message is ChatMessage => message.role === "assistant",
+    );
+
+    expect(assistant?.blocks[0]).toMatchObject({
+      type: "tool_call",
+      name: "apply_diff",
+    });
+    const { container } = render(
+      <MessageBubble message={assistant!} streaming={false} />,
+    );
+    const blocks = container.querySelector(".assistant-blocks");
+    const toolGroup = blocks?.children[0];
+    const textBlock = blocks?.children[1];
+
+    expect(
+      screen.getByRole("button", { name: /tools edited 1 file/i }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /1 other call/i })).toBeNull();
+    expect(toolGroup?.classList.contains("tool-group-block")).toBe(true);
+    expect(textBlock?.classList.contains("assistant-content")).toBe(true);
+    expect(toolGroup?.nextElementSibling).toBe(textBlock);
   });
 
   it("renders completed tool groups while keeping the running tool standalone", () => {

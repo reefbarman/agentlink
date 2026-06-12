@@ -255,6 +255,93 @@ describe("handleReadFile outside-workspace approval ordering", () => {
     });
   });
 
+  it("skips outside-workspace approval for files associated with advertised skills", async () => {
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath:
+        "/Users/tristan/.agentlink/skills/rfc-writing/rfc-writing-guide.md",
+      inWorkspace: false,
+    });
+
+    readFileMock.mockResolvedValue("# RFC guide\nUse this guidance.");
+
+    const approvalManager = {
+      isPathTrusted: vi.fn(() => false),
+    } as unknown as ApprovalManager;
+
+    const approvalPanel = {} as ApprovalPanelProvider;
+
+    const result = await handleReadFile(
+      {
+        path: "/Users/tristan/.agentlink/skills/rfc-writing/rfc-writing-guide.md",
+        include_symbols: false,
+      },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+      [
+        {
+          name: "rfc-writing",
+          skillPath: "/Users/tristan/.agentlink/skills/rfc-writing/SKILL.md",
+        },
+      ],
+    );
+
+    expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
+
+    const text = result.content.find((c) => c.type === "text")?.text;
+    expect(text).toBeTruthy();
+    const parsed = JSON.parse(text!);
+    expect(parsed).toMatchObject({
+      total_lines: 2,
+      content: "1 | # RFC guide\n2 | Use this guidance.",
+    });
+  });
+
+  it("still requires outside-workspace approval for files outside advertised skill directories", async () => {
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: "/Users/tristan/.agentlink/skills/other/secret.md",
+      inWorkspace: false,
+    });
+
+    approveOutsideWorkspaceAccessMock.mockResolvedValue({ approved: false });
+
+    const approvalManager = {
+      isPathTrusted: vi.fn(() => false),
+    } as unknown as ApprovalManager;
+
+    const approvalPanel = {} as ApprovalPanelProvider;
+
+    const result = await handleReadFile(
+      {
+        path: "/Users/tristan/.agentlink/skills/other/secret.md",
+        include_symbols: false,
+      },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+      [
+        {
+          name: "rfc-writing",
+          skillPath: "/Users/tristan/.agentlink/skills/rfc-writing/SKILL.md",
+        },
+      ],
+    );
+
+    expect(approveOutsideWorkspaceAccessMock).toHaveBeenCalledWith(
+      "/Users/tristan/.agentlink/skills/other/secret.md",
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    const text = result.content.find((c) => c.type === "text")?.text;
+    expect(text).toBeTruthy();
+    expect(JSON.parse(text!)).toMatchObject({
+      status: "rejected",
+      path: "/Users/tristan/.agentlink/skills/other/secret.md",
+    });
+  });
+
   it("skips outside-workspace approval for trusted paths and returns file-not-found", async () => {
     resolveAndValidatePathMock.mockReturnValue({
       absolutePath: "/outside/missing.txt",

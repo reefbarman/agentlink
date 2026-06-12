@@ -115,6 +115,16 @@ export function hasPendingTodos(todos: TodoItem[]): boolean {
   );
 }
 
+export function completeTodos(todos: TodoItem[]): TodoItem[] {
+  return todos.map((todo) => ({
+    ...todo,
+    status: "completed" as const,
+    ...(todo.children?.length
+      ? { children: completeTodos(todo.children) }
+      : {}),
+  }));
+}
+
 function countTodos(items: TodoItem[]): {
   total: number;
   completed: number;

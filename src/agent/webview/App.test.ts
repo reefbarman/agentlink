@@ -1207,7 +1207,7 @@ describe("webview App reducer background agent launch blocks", () => {
       status: "completed",
       source: "tool",
       summary: "Ready to continue.",
-      continueActionSuppressed: true,
+      continueActionConsumed: true,
     });
   });
 
@@ -1275,7 +1275,7 @@ describe("webview App reducer background agent launch blocks", () => {
       status: "completed",
       source: "tool",
       summary: "Ready to continue.",
-      continueActionSuppressed: true,
+      continueActionConsumed: true,
     });
     expect(state.messages.at(-2)).toMatchObject({
       role: "user",

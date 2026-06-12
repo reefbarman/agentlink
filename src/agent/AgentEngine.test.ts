@@ -822,6 +822,174 @@ describe("AgentEngine", () => {
       dispatchSpy.mockRestore();
     });
 
+    it("emits completed todos when set_task_status requests todo completion", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_todos",
+              name: "todo_write",
+              input: {
+                todos: [
+                  {
+                    id: "1",
+                    content: "Implement change",
+                    activeForm: "Implementing change",
+                    status: "in_progress",
+                    children: [
+                      {
+                        id: "1a",
+                        content: "Update docs",
+                        activeForm: "Updating docs",
+                        status: "pending",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+            {
+              type: "tool_use",
+              id: "call_final",
+              name: "set_task_status",
+              input: {
+                status: "completed",
+                summary: "Done",
+                completeTodos: true,
+              },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("finish");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolContext({
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      });
+
+      const events = await collectEvents(engine.run(session));
+      const todoUpdates = events.filter(
+        (event): event is Extract<AgentEvent, { type: "todo_update" }> =>
+          event.type === "todo_update",
+      );
+
+      expect(todoUpdates).toHaveLength(2);
+      expect(todoUpdates[0].todos[0]).toMatchObject({
+        id: "1",
+        status: "in_progress",
+        children: [expect.objectContaining({ id: "1a", status: "pending" })],
+      });
+      expect(todoUpdates[1].todos[0]).toMatchObject({
+        id: "1",
+        status: "completed",
+        children: [expect.objectContaining({ id: "1a", status: "completed" })],
+      });
+      expect(
+        events.find((event) => event.type === "final_marker"),
+      ).toMatchObject({
+        type: "final_marker",
+        marker: { status: "completed", source: "tool", summary: "Done" },
+      });
+    });
+
+    it("can complete todos created in an earlier provider roundtrip", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_final",
+              name: "set_task_status",
+              input: {
+                status: "completed",
+                summary: "Done",
+                completeTodos: true,
+              },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("work");
+      session.appendAssistantTurn([
+        {
+          type: "tool_use",
+          id: "call_todos",
+          name: "todo_write",
+          input: {
+            todos: [
+              {
+                id: "1",
+                content: "Implement change",
+                activeForm: "Implementing change",
+                status: "in_progress",
+              },
+            ],
+          },
+        },
+      ]);
+      session.appendToolResults([
+        {
+          type: "tool_result",
+          tool_use_id: "call_todos",
+          content: "Updated: 0/1 complete, 1 in progress, 0 pending",
+        },
+      ]);
+      session.appendAssistantTurn([
+        {
+          type: "tool_use",
+          id: "call_prior_final",
+          name: "set_task_status",
+          input: {
+            status: "completed",
+            summary: "Done previously",
+            completeTodos: true,
+          },
+        },
+      ]);
+      session.appendToolResults([
+        {
+          type: "tool_result",
+          tool_use_id: "call_prior_final",
+          content: JSON.stringify({ ok: true, completedTodos: 1 }),
+        },
+      ]);
+      session.addUserMessage("finish");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolContext({
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      });
+
+      const events = await collectEvents(engine.run(session));
+      const todoUpdate = events.find(
+        (event): event is Extract<AgentEvent, { type: "todo_update" }> =>
+          event.type === "todo_update",
+      );
+
+      expect(todoUpdate?.todos[0]).toMatchObject({
+        id: "1",
+        status: "completed",
+      });
+    });
+
     it("does not stop turn when switch_mode is rejected", async () => {
       let callCount = 0;
       const provider = makeMockProvider();

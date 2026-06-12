@@ -89,26 +89,34 @@ export const SlashCommandPopup = forwardRef<
   // Index tracker for keyboard navigation across all items
   let flatIdx = 0;
 
-  const renderItem = (cmd: SlashCommandInfo, navIdx: number) => (
-    <button
-      key={cmd.name}
-      class={`slash-cmd-option ${navIdx === selectedIndex ? "selected" : ""}`}
-      onClick={() => onSelect(cmd)}
-      type="button"
-    >
-      {cmd.icon ? (
-        <i class={`codicon codicon-${cmd.icon} slash-cmd-icon`} />
-      ) : (
-        <i
-          class={`codicon codicon-${cmd.builtin ? "symbol-event" : cmd.source === "skill" ? "sparkle" : "file"} slash-cmd-icon`}
-        />
-      )}
-      <span class="slash-cmd-name">/{cmd.name}</span>
-      {cmd.description && <span class="slash-cmd-desc">{cmd.description}</span>}
-      {cmd.rightLabel && <span class="slash-cmd-right">{cmd.rightLabel}</span>}
-      {cmd.isCurrent && <i class="codicon codicon-check slash-cmd-check" />}
-    </button>
-  );
+  const renderItem = (cmd: SlashCommandInfo, navIdx: number) => {
+    const isSkillCommand = cmd.source === "skill";
+    const displayName = cmd.displayName ?? cmd.name;
+    const rightLabel = isSkillCommand ? "Skill" : cmd.rightLabel;
+
+    return (
+      <button
+        key={cmd.name}
+        class={`slash-cmd-option ${navIdx === selectedIndex ? "selected" : ""}`}
+        onClick={() => onSelect(cmd)}
+        type="button"
+      >
+        {cmd.icon ? (
+          <i class={`codicon codicon-${cmd.icon} slash-cmd-icon`} />
+        ) : (
+          <i
+            class={`codicon codicon-${cmd.builtin ? "symbol-event" : isSkillCommand ? "sparkle" : "file"} slash-cmd-icon`}
+          />
+        )}
+        <span class="slash-cmd-name">/{displayName}</span>
+        {cmd.description && (
+          <span class="slash-cmd-desc">{cmd.description}</span>
+        )}
+        {rightLabel && <span class="slash-cmd-right">{rightLabel}</span>}
+        {cmd.isCurrent && <i class="codicon codicon-check slash-cmd-check" />}
+      </button>
+    );
+  };
 
   return (
     <div

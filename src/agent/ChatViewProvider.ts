@@ -563,6 +563,7 @@ export type ExtensionToWebview =
   | {
       type: "agentCommittedUserMessage";
       sessionId: string;
+      id?: string;
       text: string;
       displayText?: string;
       isSlashCommand?: boolean;
@@ -1781,6 +1782,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async submitBrowserSend(input: {
     text: string;
+    id?: string;
     mode?: string;
     sessionId?: string;
     thinkingEnabled?: boolean;
@@ -1852,6 +1854,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const queued = effectiveSession.setPendingInterjection(
         resolvedText,
         queueId,
+        input.id,
         displayQueueText,
         isSlashCommand,
         slashCommandLabel,
@@ -1883,6 +1886,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({
       type: "agentCommittedUserMessage",
       sessionId: effectiveSessionId,
+      id: input.id,
       text: resolvedText,
       displayText: displayText ?? text,
       isSlashCommand,
@@ -3598,6 +3602,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           session?.setPendingInterjection(
             text,
             queueId,
+            undefined,
             displayText,
             isSlashCommand,
             slashCommandLabel,
@@ -4292,6 +4297,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentCommittedUserMessage":
         this.applyProjectedAction({
           type: "ADD_COMMITTED_USER_MESSAGE",
+          id: extMsg.id,
           text: extMsg.displayText ?? extMsg.text,
           isSlashCommand: extMsg.isSlashCommand ?? false,
           slashCommandLabel:
@@ -5689,6 +5695,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({
       type: "agentCommittedUserMessage",
       sessionId,
+      id: pending.messageId,
       text: pending.text,
       displayText,
       isSlashCommand: pending.isSlashCommand,

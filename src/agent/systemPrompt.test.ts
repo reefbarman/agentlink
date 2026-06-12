@@ -126,6 +126,33 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Do not assume the user is correct");
   });
 
+  it("scopes pre-task alignment checklist to mutating modes", async () => {
+    for (const mode of ["code", "architect", "debug"]) {
+      const result = await buildSystemPrompt(mode, tmpDir);
+      expect(result).toContain("### Task Alignment");
+      expect(result).toContain(
+        "Run this checklist before edits, state-changing commands, long-running work, or committing to an approach:",
+      );
+      expect(result).toContain(
+        "Can you state the user's goal in one sentence without guessing?",
+      );
+      expect(result).toContain(
+        "If any answer is no, ask first with `ask_user`",
+      );
+    }
+
+    for (const mode of ["ask", "review"]) {
+      const result = await buildSystemPrompt(mode, tmpDir);
+      expect(result).not.toContain("### Task Alignment");
+      expect(result).not.toContain(
+        "Run this checklist before edits, state-changing commands, long-running work, or committing to an approach:",
+      );
+      expect(result).not.toContain(
+        "Can you state the user's goal in one sentence without guessing?",
+      );
+    }
+  });
+
   it("includes architect mode section for 'architect' mode", async () => {
     const result = await buildSystemPrompt("architect", tmpDir);
     expect(result).toContain("Architect mode");
@@ -167,6 +194,9 @@ describe("buildSystemPrompt", () => {
     );
     expect(result).toContain(
       "Use inline plain-text questions only for genuinely open-ended free-form responses where structured UI would not help.",
+    );
+    expect(result).toContain(
+      "Before starting a new task, make sure you and the user agree on the goal, scope, and expected outcome — ask rather than guess.",
     );
   });
 
@@ -717,6 +747,12 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Bias for action");
     expect(result).toContain("codebase_search");
     expect(result).toContain("Narrate your work");
+    expect(result).toContain(
+      "Default to acting quickly after task alignment is clear and any mode-specific alignment check has passed",
+    );
+    expect(result).toContain(
+      "If task alignment is clear and you believe you know where the change should go",
+    );
   });
 
   it("includes provider section for anthropic provider", async () => {
@@ -868,6 +904,7 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("background review agent");
     expect(result).toContain("3-5 tool calls");
     expect(result).toContain("Review stance:");
+    expect(result).toContain("Skip pre-task user alignment");
     expect(result).toContain(
       "Do not assume the foreground agent, the user, or the provided change is correct.",
     );
@@ -910,6 +947,7 @@ describe("buildSystemPrompt", () => {
     });
     expect(result).toContain("Scope rules");
     expect(result).toContain("3-5 tool calls");
+    expect(result).toContain("Skip pre-task user alignment");
     expect(result).toContain("Do not ask clarifying questions");
   });
 
@@ -918,6 +956,7 @@ describe("buildSystemPrompt", () => {
       isBackground: true,
     });
     expect(result).toContain("Background Agent");
+    expect(result).toContain("Skip pre-task user alignment");
     expect(result).not.toContain("Scope rules");
     expect(result).not.toContain("3-5 tool calls");
   });

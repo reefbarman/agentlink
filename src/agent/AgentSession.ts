@@ -139,6 +139,7 @@ export class AgentSession {
   private _pendingInterjection: {
     text: string;
     queueId: string;
+    messageId?: string;
     displayText?: string;
     isSlashCommand?: boolean;
     slashCommandLabel?: string;
@@ -622,6 +623,7 @@ export class AgentSession {
   setPendingInterjection(
     text: string,
     queueId: string,
+    messageId?: string,
     displayText?: string,
     isSlashCommand?: boolean,
     slashCommandLabel?: string,
@@ -634,6 +636,7 @@ export class AgentSession {
       this._pendingInterjection = {
         text,
         queueId,
+        messageId,
         displayText,
         isSlashCommand,
         slashCommandLabel,
@@ -650,6 +653,7 @@ export class AgentSession {
     queueId: string,
     updates: {
       text: string;
+      messageId?: string;
       displayText?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
@@ -666,6 +670,7 @@ export class AgentSession {
   consumePendingInterjection(): {
     text: string;
     queueId: string;
+    messageId?: string;
     displayText?: string;
     isSlashCommand?: boolean;
     slashCommandLabel?: string;
@@ -693,6 +698,7 @@ export class AgentSession {
   clearPendingInterjectionIf(queueId: string): {
     text: string;
     queueId: string;
+    messageId?: string;
     displayText?: string;
     isSlashCommand?: boolean;
     slashCommandLabel?: string;

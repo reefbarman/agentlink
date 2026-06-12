@@ -21,6 +21,8 @@ import {
   TODO_TOOL_NAME,
   todoTool,
   handleTodoWrite,
+  completeTodos,
+  type TodoItem,
   type TodoToolInput,
 } from "./todoTool.js";
 import {
@@ -389,6 +391,34 @@ function buildFinalStatusSkippedResult(call: ToolUseBlock): ToolCallResult {
   };
 }
 
+function getLatestTodoState(messages: MessageParam[]): TodoItem[] {
+  let todos: TodoItem[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (block.type !== "tool_use") {
+        continue;
+      }
+      const input =
+        typeof block.input === "object" && block.input !== null
+          ? (block.input as Record<string, unknown>)
+          : null;
+      if (block.name === TODO_TOOL_NAME && Array.isArray(input?.todos)) {
+        todos = input.todos as TodoItem[];
+      } else if (
+        block.name === "set_task_status" &&
+        input?.status === "completed" &&
+        input.completeTodos === true
+      ) {
+        todos = completeTodos(todos);
+      }
+    }
+  }
+  return todos;
+}
+
 // Per-tool character limits for tool results kept in conversation history.
 // Tools that self-paginate (read_file) get more headroom; repetitive/noisy
 // tools get tighter caps. At ~4 chars/token:
@@ -555,6 +585,8 @@ export class AgentEngine {
     let wrapUpAttempts = 0; // Track wrap-up injections to prevent infinite loops
     const MAX_WRAP_UP_ATTEMPTS = 2;
     let pendingFinalMarker: FinalMessageMarker | null = null;
+    let pendingCompletedTodoUpdate: TodoItem[] | null = null;
+    let currentTodos: TodoItem[] = getLatestTodoState(session.getAllMessages());
 
     try {
       let retryCount = 0;
@@ -1308,6 +1340,11 @@ export class AgentEngine {
           onFinalStatus: (marker) => {
             pendingFinalMarker = marker;
           },
+          onCompleteTodos: () => {
+            currentTodos = completeTodos(currentTodos);
+            pendingCompletedTodoUpdate = currentTodos;
+            return currentTodos;
+          },
           getSessionImages: () => {
             const images: import("./toolAdapter.js").SessionImageReference[] =
               [];
@@ -1360,6 +1397,7 @@ export class AgentEngine {
               },
               durationMs: Date.now() - start,
             });
+            currentTodos = todos;
             yield { type: "todo_update" as const, todos };
           } else {
             dispatchBlocks.push(block);
@@ -1399,6 +1437,16 @@ export class AgentEngine {
                 input: toolUseBlock?.input,
                 mcpApprovalPromotion: tr.mcpApprovalPromotion,
               });
+              if (
+                tr.toolName === "set_task_status" &&
+                pendingCompletedTodoUpdate
+              ) {
+                pushDispatchEvent({
+                  type: "todo_update" as const,
+                  todos: pendingCompletedTodoUpdate,
+                });
+                pendingCompletedTodoUpdate = null;
+              }
             },
           );
 
@@ -1665,6 +1713,7 @@ export class AgentEngine {
       {
         trackerCtx: TrackerContext;
         forcePromise: Promise<ToolResult>;
+        controller: AbortController;
       }
     >();
 
@@ -1674,6 +1723,7 @@ export class AgentEngine {
         const forcePromise = new Promise<ToolResult>((resolve) => {
           forceResolve = resolve;
         });
+        const controller = new AbortController();
         const trackerCtx = tracker.registerAgentCall(
           call.id,
           call.name,
@@ -1682,10 +1732,13 @@ export class AgentEngine {
             call.input as Record<string, unknown>,
           ),
           session.id,
-          forceResolve,
+          (result) => {
+            controller.abort();
+            forceResolve(result);
+          },
           JSON.stringify(call.input, null, 2),
         );
-        trackedCalls.set(call.id, { trackerCtx, forcePromise });
+        trackedCalls.set(call.id, { trackerCtx, forcePromise, controller });
       }
     }
 
@@ -1696,6 +1749,7 @@ export class AgentEngine {
       const trackedCall = trackedCalls.get(call.id);
       const trackerCtx = trackedCall?.trackerCtx;
       const forcePromise = trackedCall?.forcePromise;
+      const controller = trackedCall?.controller;
 
       try {
         const result = await (forcePromise
@@ -1707,6 +1761,7 @@ export class AgentEngine {
                   ...ctx,
                   sessionId: session.id,
                   trackerCtx,
+                  toolAbortSignal: controller?.signal,
                   getAdvertisedSkills: () => session.getAdvertisedSkills(),
                   getAdvertisedRules: () => session.getAdvertisedRules(),
                   onSkillLoad: (skillName: string) =>
@@ -1720,6 +1775,7 @@ export class AgentEngine {
               ...ctx,
               sessionId: session.id,
               trackerCtx,
+              toolAbortSignal: controller?.signal,
               getAdvertisedSkills: () => session.getAdvertisedSkills(),
               getAdvertisedRules: () => session.getAdvertisedRules(),
               onSkillLoad: (skillName: string) =>
@@ -1741,6 +1797,7 @@ export class AgentEngine {
           durationMs: Date.now() - start,
         };
       } finally {
+        controller?.abort();
         tracker?.completeAgentCall(call.id);
       }
     };

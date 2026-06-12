@@ -6,7 +6,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("getLatestAutoContinueAction", () => {
-  it("continues completed markers even when the visible Continue action is suppressed", () => {
+  it("continues completed markers even when the legacy tool-set suppression field is present", () => {
     expect(
       getLatestAutoContinueAction([
         {
@@ -23,6 +23,22 @@ describe("getLatestAutoContinueAction", () => {
       messageId: "assistant-1",
       ...DEFAULT_COMPLETED_CONTINUE_ACTION,
     });
+  });
+
+  it("does not expose consumed completed markers for Auto Continue", () => {
+    expect(
+      getLatestAutoContinueAction([
+        {
+          id: "assistant-1",
+          role: "assistant",
+          finalMarker: {
+            status: "completed",
+            source: "tool",
+            continueActionConsumed: true,
+          },
+        },
+      ]),
+    ).toBeUndefined();
   });
 
   it("stops scanning at user messages so older markers are stale", () => {

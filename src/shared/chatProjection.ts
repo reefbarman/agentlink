@@ -81,6 +81,51 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
+const BUILTIN_TOOL_NAMES = new Set([
+  "read_file",
+  "get_context",
+  "open_file",
+  "search_files",
+  "codebase_search",
+  "list_files",
+  "get_symbols",
+  "get_hover",
+  "get_references",
+  "get_completions",
+  "get_code_actions",
+  "go_to_definition",
+  "go_to_implementation",
+  "go_to_type_definition",
+  "get_call_hierarchy",
+  "get_type_hierarchy",
+  "get_inlay_hints",
+  "get_module_neighbors",
+  "get_repo_map",
+  "get_diagnostics",
+  "execute_command",
+  "get_terminal_output",
+  "write_file",
+  "apply_diff",
+  "find_and_replace",
+  "rename_symbol",
+  "todo_write",
+  "ask_user",
+  "load_skill",
+  "spawn_background_agent",
+  "get_background_status",
+  "get_background_result",
+  "kill_background_agent",
+  "set_task_status",
+]);
+
+export function normalizeProjectedToolName(toolName: string): string {
+  if (BUILTIN_TOOL_NAMES.has(toolName)) return toolName;
+  const dotIndex = toolName.lastIndexOf(".");
+  if (dotIndex < 0) return toolName;
+  const suffix = toolName.slice(dotIndex + 1);
+  return BUILTIN_TOOL_NAMES.has(suffix) ? suffix : toolName;
+}
+
 function getAskUserContextFromInput(input: unknown): string {
   if (!input || typeof input !== "object" || Array.isArray(input)) return "";
   const context = (input as Record<string, unknown>).context;
@@ -236,6 +281,7 @@ export type AppAction =
   | {
       type: "ADD_USER_MESSAGE";
       text: string;
+      id?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       displayMedia?: DisplayMedia;
@@ -243,6 +289,7 @@ export type AppAction =
   | {
       type: "ADD_COMMITTED_USER_MESSAGE";
       text: string;
+      id?: string;
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       origin?: "vscode" | "browser";
@@ -593,7 +640,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           });
         } else if (block.type === "tool_use") {
           const toolId = block.id ?? crypto.randomUUID();
-          const toolName = block.name ?? "";
+          const toolName = normalizeProjectedToolName(block.name ?? "");
           const toolResult = toolResults.get(toolId) ?? "";
           const inputJson = JSON.stringify(block.input ?? {});
           if (toolName === "set_task_status" && toolId === finalMarkerToolId) {
@@ -930,7 +977,7 @@ function clearFinalMarkerContinueActions(
       message.finalMarker;
     return {
       ...message,
-      finalMarker: { ...finalMarker, continueActionSuppressed: true },
+      finalMarker: { ...finalMarker, continueActionConsumed: true },
     };
   });
   return changed ? next : messages;
@@ -1073,7 +1120,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       const withNewRows = [
         ...messagesWithoutContinueActions,
         {
-          id: crypto.randomUUID(),
+          id: action.id ?? crypto.randomUUID(),
           role: "user" as const,
           content: action.text,
           timestamp: Date.now(),
@@ -1776,7 +1823,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       const withCommittedRows = [
         ...messagesWithoutContinueActions,
         {
-          id: crypto.randomUUID(),
+          id: action.id ?? crypto.randomUUID(),
           role: "user" as const,
           content: action.text,
           timestamp: Date.now(),

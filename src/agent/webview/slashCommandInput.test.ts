@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-
-import type { SlashCommandInfo } from "./types";
 import {
   getSlashCommandSelectionState,
   parseMatchedSlashCommand,
   shouldOpenSlashPopup,
   wrapTextInBackticks,
 } from "./slashCommandInput";
+
+import type { SlashCommandInfo } from "./types";
 
 const commands: SlashCommandInfo[] = [
   {
@@ -21,6 +21,14 @@ const commands: SlashCommandInfo[] = [
     source: "project",
     builtin: false,
     body: "Review the current changes",
+  },
+  {
+    name: "skill:smoke",
+    displayName: "smoke",
+    description: "Run smoke skill",
+    source: "skill",
+    builtin: false,
+    body: "Use smoke skill",
   },
 ];
 
@@ -40,6 +48,14 @@ describe("slashCommandInput", () => {
       command: commands[1],
       args: "",
       displayText: "/review",
+    });
+  });
+
+  it("matches a slash command by display name", () => {
+    expect(parseMatchedSlashCommand("/smoke arg", commands)).toMatchObject({
+      command: commands[2],
+      args: "arg",
+      displayText: "/smoke arg",
     });
   });
 

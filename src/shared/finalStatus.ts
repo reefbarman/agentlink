@@ -17,6 +17,9 @@ export interface FinalMessageMarker {
   summary?: string;
   source: "tool" | "engine";
   continueAction?: FinalMessageContinueAction;
+  /** UI-owned marker that hides a consumed/stale Continue action. */
+  continueActionConsumed?: boolean;
+  /** @deprecated Legacy tool-set field; ignored so completed markers stay resumable. */
   continueActionSuppressed?: boolean;
   autoContinueStopReason?: string;
   /** Raw set_task_status invocation shown in the final marker inspector. */
@@ -37,7 +40,7 @@ export const DEFAULT_COMPLETED_CONTINUE_ACTION: FinalMessageContinueAction = {
 export function getFinalMessageContinueAction(
   marker: FinalMessageMarker,
 ): FinalMessageContinueAction | undefined {
-  if (marker.continueActionSuppressed) return undefined;
+  if (marker.continueActionConsumed) return undefined;
   return (
     marker.continueAction ??
     (marker.status === "completed"
@@ -87,11 +90,7 @@ export function getLatestAutoContinueAction(
   const latest = getLatestFinalMessageMarker(messages);
   if (!latest) return undefined;
   const { marker } = latest;
-  const action =
-    marker.continueAction ??
-    (marker.status === "completed"
-      ? DEFAULT_COMPLETED_CONTINUE_ACTION
-      : undefined);
+  const action = getFinalMessageContinueAction(marker);
   if (!action) return undefined;
   return { messageId: latest.messageId, ...action };
 }

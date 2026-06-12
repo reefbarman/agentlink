@@ -51,6 +51,10 @@ import {
   getLatestAutoContinueAction,
   getLatestFinalMessageMarker,
 } from "../../shared/finalStatus";
+import {
+  AUTO_CONTINUE_NO_PROGRESS_REASON,
+  turnMadeProgress,
+} from "../../shared/autoContinueProgress";
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 
@@ -109,7 +113,7 @@ function projectFinalMarkerAutoContinueState(
       getFinalMessageContinueAction(finalMarker)
     ) {
       const { continueAction: _continueAction, ...rest } = finalMarker;
-      finalMarker = { ...rest, continueActionSuppressed: true };
+      finalMarker = { ...rest, continueActionConsumed: true };
     }
 
     const stopReason = stopReasons.get(message.id);
@@ -167,6 +171,7 @@ type GatewaySnapshot = {
       toolCount: number;
       resourceCount: number;
       promptCount: number;
+      tools: Array<{ name: string; description?: string }>;
     }>;
   };
   session: {
@@ -436,6 +441,9 @@ export function BrowserGatewayApp({
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [showMcpStatus, setShowMcpStatus] = useState(false);
+  const [expandedMcpServers, setExpandedMcpServers] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [transcriptView, setTranscriptView] = useState<{
     sessionId: string;
     task: string;
@@ -457,6 +465,7 @@ export function BrowserGatewayApp({
   const [autoContinueStatus, setAutoContinueStatus] = useState("");
   const autoContinuedMessageIdsRef = useRef<Set<string>>(new Set());
   const autoContinueCountRef = useRef(0);
+  const pendingAutoContinueUserMessageIdRef = useRef<string | null>(null);
   const autoContinueSessionIdRef = useRef<string | null>(null);
   const [approvalPanelHeight, setApprovalPanelHeight] = useState(360);
   const [approvalResizing, setApprovalResizing] = useState(false);
@@ -1129,6 +1138,7 @@ export function BrowserGatewayApp({
     );
     autoContinuedMessageIdsRef.current.clear();
     autoContinueCountRef.current = 0;
+    pendingAutoContinueUserMessageIdRef.current = null;
   }, []);
 
   async function handleSend(
@@ -1142,8 +1152,16 @@ export function BrowserGatewayApp({
       base64: string;
       kind: "image" | "document";
     }>,
+    origin: "user" | "autoContinue" = "user",
   ): Promise<void> {
     if (!foreground) return;
+
+    const userMessageId = crypto.randomUUID();
+    if (origin === "autoContinue") {
+      pendingAutoContinueUserMessageIdRef.current = userMessageId;
+    } else {
+      pendingAutoContinueUserMessageIdRef.current = null;
+    }
 
     let fullText = text;
     if (attachments.length > 0) {
@@ -1204,6 +1222,7 @@ export function BrowserGatewayApp({
         },
         body: JSON.stringify({
           text: trimmed,
+          id: userMessageId,
           sessionId: foreground.sessionId,
           mode: foreground.mode,
           reasoningEffort: effectiveReasoningEffort,
@@ -1896,6 +1915,7 @@ export function BrowserGatewayApp({
     autoContinueSessionIdRef.current = sessionId;
     autoContinuedMessageIdsRef.current.clear();
     autoContinueCountRef.current = 0;
+    pendingAutoContinueUserMessageIdRef.current = null;
     if (autoContinueEnabled) {
       setAutoContinueEnabled(false);
       setAutoContinueStatus("Auto Continue paused after session change.");
@@ -1942,6 +1962,24 @@ export function BrowserGatewayApp({
 
     const timer = window.setTimeout(() => {
       if (autoContinuedMessageIdsRef.current.has(action.messageId)) return;
+
+      const pendingAutoContinueUserMessageId =
+        pendingAutoContinueUserMessageIdRef.current;
+      if (
+        pendingAutoContinueUserMessageId &&
+        !turnMadeProgress(messages, pendingAutoContinueUserMessageId)
+      ) {
+        setAutoContinueEnabled(false);
+        setAutoContinueStatus(AUTO_CONTINUE_NO_PROGRESS_REASON);
+        pendingAutoContinueUserMessageIdRef.current = null;
+        setAutoContinueStopReasons((prev) => {
+          const next = new Map(prev);
+          next.set(action.messageId, AUTO_CONTINUE_NO_PROGRESS_REASON);
+          return next;
+        });
+        return;
+      }
+
       if (autoContinueCountRef.current >= AUTO_CONTINUE_MAX_TURNS) {
         const reason = `Auto Continue stopped after ${AUTO_CONTINUE_MAX_TURNS} turns to avoid an infinite loop.`;
         setAutoContinueEnabled(false);
@@ -1964,7 +2002,14 @@ export function BrowserGatewayApp({
         next.add(action.messageId);
         return next;
       });
-      void handleSend(action.prompt, []);
+      void handleSend(
+        action.prompt,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        "autoContinue",
+      );
     }, AUTO_CONTINUE_BROWSER_SETTLE_MS);
 
     return () => window.clearTimeout(timer);
@@ -2566,60 +2611,120 @@ export function BrowserGatewayApp({
                             key={info.name}
                             class={`mcp-status-item mcp-status-${info.status}`}
                           >
-                            <i
-                              class={`codicon ${
-                                info.status === "connected"
-                                  ? "codicon-check"
-                                  : info.status === "connecting"
-                                    ? "codicon-loading codicon-modifier-spin"
-                                    : "codicon-error"
-                              }`}
-                            />
-                            <span class="mcp-status-name">{info.name}</span>
-                            <span class="mcp-status-detail">
-                              {info.status === "connected"
-                                ? [
-                                    `${info.toolCount} tool${info.toolCount !== 1 ? "s" : ""}`,
-                                    info.resourceCount > 0 &&
-                                      `${info.resourceCount} resource${info.resourceCount !== 1 ? "s" : ""}`,
-                                    info.promptCount > 0 &&
-                                      `${info.promptCount} prompt${info.promptCount !== 1 ? "s" : ""}`,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ")
-                                : (info.error ?? info.status)}
-                            </span>
-                            <span class="mcp-status-actions">
-                              {info.status !== "connecting" && (
+                            <div class="mcp-status-row">
+                              <button
+                                class="mcp-status-expand icon-button"
+                                disabled={
+                                  info.tools.length === 0 &&
+                                  !expandedMcpServers.has(info.name)
+                                }
+                                aria-expanded={expandedMcpServers.has(
+                                  info.name,
+                                )}
+                                title={
+                                  info.tools.length === 0 &&
+                                  !expandedMcpServers.has(info.name)
+                                    ? "No tools available"
+                                    : expandedMcpServers.has(info.name)
+                                      ? "Hide tools"
+                                      : "Show tools"
+                                }
+                                onClick={() => {
+                                  setExpandedMcpServers((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(info.name)) {
+                                      next.delete(info.name);
+                                    } else {
+                                      next.add(info.name);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              >
+                                <i
+                                  class={`codicon codicon-chevron-${expandedMcpServers.has(info.name) ? "down" : "right"}`}
+                                />
+                              </button>
+                              <i
+                                class={`codicon ${
+                                  info.status === "connected"
+                                    ? "codicon-check"
+                                    : info.status === "connecting"
+                                      ? "codicon-loading codicon-modifier-spin"
+                                      : "codicon-error"
+                                }`}
+                              />
+                              <span class="mcp-status-name">{info.name}</span>
+                              <span class="mcp-status-detail">
+                                {info.status === "connected"
+                                  ? [
+                                      `${info.toolCount} tool${info.toolCount !== 1 ? "s" : ""}`,
+                                      info.resourceCount > 0 &&
+                                        `${info.resourceCount} resource${info.resourceCount !== 1 ? "s" : ""}`,
+                                      info.promptCount > 0 &&
+                                        `${info.promptCount} prompt${info.promptCount !== 1 ? "s" : ""}`,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")
+                                  : (info.error ?? info.status)}
+                              </span>
+                              <span class="mcp-status-actions">
+                                {info.status !== "connecting" && (
+                                  <button
+                                    class="icon-button"
+                                    title="Reconnect"
+                                    onClick={() =>
+                                      handleMcpAction(info.name, "reconnect")
+                                    }
+                                  >
+                                    <i class="codicon codicon-refresh" />
+                                  </button>
+                                )}
                                 <button
                                   class="icon-button"
-                                  title="Reconnect"
+                                  title="Reauthenticate"
                                   onClick={() =>
-                                    handleMcpAction(info.name, "reconnect")
+                                    handleMcpAction(info.name, "reauthenticate")
                                   }
                                 >
-                                  <i class="codicon codicon-refresh" />
+                                  <i class="codicon codicon-key" />
                                 </button>
-                              )}
-                              <button
-                                class="icon-button"
-                                title="Reauthenticate"
-                                onClick={() =>
-                                  handleMcpAction(info.name, "reauthenticate")
-                                }
-                              >
-                                <i class="codicon codicon-key" />
-                              </button>
-                              <button
-                                class="icon-button mcp-action-disable"
-                                title="Disable"
-                                onClick={() =>
-                                  handleMcpAction(info.name, "disable")
-                                }
-                              >
-                                <i class="codicon codicon-circle-slash" />
-                              </button>
-                            </span>
+                                <button
+                                  class="icon-button mcp-action-disable"
+                                  title="Disable"
+                                  onClick={() =>
+                                    handleMcpAction(info.name, "disable")
+                                  }
+                                >
+                                  <i class="codicon codicon-circle-slash" />
+                                </button>
+                              </span>
+                            </div>
+                            {expandedMcpServers.has(info.name) && (
+                              <ul class="mcp-tool-list">
+                                {info.tools.length === 0 ? (
+                                  <li class="mcp-tool-empty">
+                                    No tools available.
+                                  </li>
+                                ) : (
+                                  info.tools.map((tool) => (
+                                    <li key={tool.name} class="mcp-tool-item">
+                                      <span class="mcp-tool-name">
+                                        {tool.name}
+                                      </span>
+                                      {tool.description && (
+                                        <span
+                                          class="mcp-tool-description"
+                                          title={tool.description}
+                                        >
+                                          {tool.description}
+                                        </span>
+                                      )}
+                                    </li>
+                                  ))
+                                )}
+                              </ul>
+                            )}
                           </li>
                         ))}
                       </ul>

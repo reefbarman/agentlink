@@ -83,6 +83,15 @@ const ACCEPTED_DOC_TYPES = new Set([
   "text/xml",
   "text/yaml",
 ]);
+function withSlashCommandDisplayName(
+  command: SlashCommandInfo,
+): SlashCommandInfo {
+  if (command.source !== "skill" || command.displayName) {
+    return command;
+  }
+  return { ...command, displayName: command.name.replace(/^skill:/, "") };
+}
+
 const DOCUMENT_EXTENSION_MIME_TYPES: Record<string, string> = {
   c: "text/x-c",
   cc: "text/x-c++src",
@@ -254,9 +263,14 @@ export function InputArea({
     autosizeTextarea(el);
   }, [text]);
 
+  const displaySlashCommands = useMemo(
+    () => slashCommands.map(withSlashCommandDisplayName),
+    [slashCommands],
+  );
+
   const matchedSlashCommand = useMemo(
-    () => parseMatchedSlashCommand(text, slashCommands),
-    [text, slashCommands],
+    () => parseMatchedSlashCommand(text, displaySlashCommands),
+    [text, displaySlashCommands],
   );
   const pendingMedia = useMemo(() => {
     if (mediaAttachments.length === 0) return undefined;
@@ -417,8 +431,14 @@ export function InputArea({
       modes.find((m) => m.slug === currentMode)?.name ?? currentMode;
     const currentModelLabel =
       modelList.find((m) => m.id === currentModel)?.label ?? currentModel;
-    return slashCommands
-      .filter((c) => c.name.toLowerCase().startsWith(slashQuery.toLowerCase()))
+    return displaySlashCommands
+      .filter((c) => {
+        const query = slashQuery.toLowerCase();
+        return (
+          c.name.toLowerCase().startsWith(query) ||
+          c.displayName?.toLowerCase().startsWith(query)
+        );
+      })
       .map((c) => {
         if (c.name === "mode")
           return { ...c, icon: "symbol-misc", rightLabel: currentModeName };
@@ -446,11 +466,21 @@ export function InputArea({
       return false;
     }
     const exactName = matchedExecutableSlashCommand.command.name.toLowerCase();
-    return slashCommands.some((cmd) => {
+    const exactDisplayName = (
+      matchedExecutableSlashCommand.command.displayName ??
+      matchedExecutableSlashCommand.command.name
+    ).toLowerCase();
+    return displaySlashCommands.some((cmd) => {
       const name = cmd.name.toLowerCase();
-      return name !== exactName && name.startsWith(exactName);
+      const displayName = (cmd.displayName ?? cmd.name).toLowerCase();
+      return (
+        name !== exactName &&
+        displayName !== exactDisplayName &&
+        (name.startsWith(exactDisplayName) ||
+          displayName.startsWith(exactDisplayName))
+      );
     });
-  }, [matchedExecutableSlashCommand, slashView, slashCommands]);
+  }, [matchedExecutableSlashCommand, slashView, displaySlashCommands]);
 
   const shouldShowSlashPopup =
     slashOpen &&
@@ -548,7 +578,7 @@ export function InputArea({
       const selectionState = getSlashCommandSelectionState(
         text,
         slashStart,
-        cmd.name,
+        cmd.displayName ?? cmd.name,
       );
 
       // Virtual sub-picker selections (prefixed with __)
@@ -620,7 +650,7 @@ export function InputArea({
           });
         } else {
           setText(before);
-          onSend(cmd.body, [], `/${cmd.name}`);
+          onSend(cmd.body, [], `/${cmd.displayName ?? cmd.name}`);
         }
       }
     },
@@ -704,7 +734,7 @@ export function InputArea({
             const selectionState = getSlashCommandSelectionState(
               text,
               slashStart,
-              cmd.name,
+              cmd.displayName ?? cmd.name,
             );
             setText(selectionState.replacementText);
             closeSlash();
@@ -1467,10 +1497,12 @@ export function InputArea({
                 title={matchedExecutableSlashCommand.command.description}
               >
                 <i
-                  class={`codicon codicon-${matchedExecutableSlashCommand.command.icon ?? (matchedExecutableSlashCommand.command.builtin ? "symbol-event" : "file")}`}
+                  class={`codicon codicon-${matchedExecutableSlashCommand.command.icon ?? (matchedExecutableSlashCommand.command.builtin ? "symbol-event" : matchedExecutableSlashCommand.command.source === "skill" ? "sparkle" : "file")}`}
                 />
                 <span class="slash-match-pill-name">
-                  /{matchedExecutableSlashCommand.command.name}
+                  /
+                  {matchedExecutableSlashCommand.command.displayName ??
+                    matchedExecutableSlashCommand.command.name}
                 </span>
                 <span class="slash-match-pill-desc">
                   {matchedExecutableSlashCommand.command.description}

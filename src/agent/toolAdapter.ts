@@ -30,7 +30,8 @@ import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { McpClientHub } from "./McpClientHub.js";
 import type { Question } from "./webview/types.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
-import type { ToolResult } from "../shared/types.js";
+import type { TodoItem } from "./todoTool.js";
+import { handleToolError, type ToolResult } from "../shared/types.js";
 import { getToolsForMode } from "./toolPermissions.js";
 import { handleApplyDiff } from "../tools/applyDiff.js";
 import { handleCloseTerminals } from "../tools/closeTerminals.js";
@@ -68,6 +69,7 @@ import { handleShowNotification } from "../tools/showNotification.js";
 import { handleStartWorktreeAgent } from "../tools/startWorktreeAgent.js";
 import { handleWriteFile } from "../tools/writeFile.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 
 // --- Read-only tools (safe to execute in parallel) ---
@@ -456,15 +458,15 @@ const SET_TASK_STATUS_TOOL: ToolDefinition = {
         type: "string",
         description: "Optional button label for a clear next-step continuation",
       },
+      completeTodos: {
+        type: "boolean",
+        description:
+          "When true with status='completed', mark all currently visible todos completed as part of this final status call. Use instead of a separate todo_write call only when the existing todo list accurately represents finished work.",
+      },
       continuePrompt: {
         type: "string",
         description:
           "Optional visible user message sent when the continuation button is clicked",
-      },
-      suppressContinue: {
-        type: "boolean",
-        description:
-          "Set true when the task is definitely complete and no continuation button or auto-continue action should be offered",
       },
     },
     required: ["status"],
@@ -1038,8 +1040,12 @@ export interface ToolDispatchContext {
   ) => { killed: boolean; partialOutput?: string };
   /** Active skill tool allowlist, enforced for direct and deferred MCP dispatch. */
   skillAllowedTools?: string[];
+  /** Abort signal for the current tool call, used to cancel in-flight MCP SDK requests. */
+  toolAbortSignal?: AbortSignal;
   /** Records the intended final marker for the current foreground turn. */
   onFinalStatus?: (marker: FinalMessageMarker) => void;
+  /** Marks the current foreground todo list complete and returns the updated tree. */
+  onCompleteTodos?: () => TodoItem[];
 }
 
 /**
@@ -1059,6 +1065,7 @@ export async function dispatchToolCall(
     mcpHub,
     onApprovalRequest,
     trackerCtx,
+    toolAbortSignal,
   } = ctx;
 
   const skillAllowlist = ctx.skillAllowedTools
@@ -1225,7 +1232,11 @@ export async function dispatchToolCall(
       }
     }
 
-    const result = await mcpHub.callTool(toolName, input);
+    const result = await mcpHub
+      .callTool(toolName, input, {
+        signal: toolAbortSignal,
+      })
+      .catch(handleToolError);
     if (promotionMeta) {
       result.uiMeta = {
         ...result.uiMeta,
@@ -1270,19 +1281,40 @@ export async function dispatchToolCall(
         typeof params.continuePrompt === "string"
           ? params.continuePrompt.trim()
           : "";
-      const suppressContinue = params.suppressContinue === true;
       const marker: FinalMessageMarker = {
         status,
         source: "tool",
         ...(summary ? { summary } : {}),
-        ...(suppressContinue ? { continueActionSuppressed: true } : {}),
-        ...(!suppressContinue && continueLabel && continuePrompt
+        ...(continueLabel && continuePrompt
           ? { continueAction: { label: continueLabel, prompt: continuePrompt } }
           : {}),
       };
       ctx.onFinalStatus?.(marker);
+      const completeTodosRequested = params.completeTodos === true;
+      const completedTodos =
+        status === "completed" && completeTodosRequested
+          ? ctx.onCompleteTodos?.()
+          : undefined;
+      const completeTodosIgnored =
+        completeTodosRequested && status !== "completed";
       return {
-        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              ok: true,
+              ...(completedTodos
+                ? { completedTodos: completedTodos.length }
+                : {}),
+              ...(completeTodosIgnored
+                ? {
+                    completeTodosIgnored:
+                      "completeTodos only applies when status is 'completed'",
+                  }
+                : {}),
+            }),
+          },
+        ],
       };
     }
 
@@ -1291,7 +1323,13 @@ export async function dispatchToolCall(
       if (ctx.onFileRead && typeof params.path === "string") {
         ctx.onFileRead(params.path);
       }
-      return handleReadFile(params, approvalManager, approvalPanel, sessionId);
+      return handleReadFile(
+        params,
+        approvalManager,
+        approvalPanel,
+        sessionId,
+        ctx.getAdvertisedSkills?.() ?? [],
+      );
     case "get_context":
       if (ctx.onFileRead && typeof params.path === "string") {
         ctx.onFileRead(params.path);
@@ -1573,7 +1611,50 @@ export async function dispatchToolCall(
         !Array.isArray(params.input)
           ? (params.input as Record<string, unknown>)
           : {};
-      return dispatchToolCall(toolName, toolInput, ctx);
+      if (!ctx.toolCallTracker) {
+        return dispatchToolCall(toolName, toolInput, ctx);
+      }
+
+      const nestedToolCallId = `${ctx.trackerCtx?.toolCallId ?? `mcp-${randomUUID()}`}:${toolName}`;
+      const controller = new AbortController();
+      const abortNestedCall = () => controller.abort();
+      if (ctx.toolAbortSignal?.aborted) {
+        controller.abort();
+      } else {
+        ctx.toolAbortSignal?.addEventListener("abort", abortNestedCall, {
+          once: true,
+        });
+      }
+      let forceResolve!: (result: ToolResult) => void;
+      const forcePromise = new Promise<ToolResult>((resolve) => {
+        forceResolve = resolve;
+      });
+      const nestedTrackerCtx = ctx.toolCallTracker.registerAgentCall(
+        nestedToolCallId,
+        toolName,
+        `${server}.${tool}`,
+        ctx.sessionId,
+        (result) => {
+          controller.abort();
+          forceResolve(result);
+        },
+        JSON.stringify(toolInput, null, 2),
+      );
+
+      try {
+        return await Promise.race([
+          dispatchToolCall(toolName, toolInput, {
+            ...ctx,
+            trackerCtx: nestedTrackerCtx,
+            toolAbortSignal: controller.signal,
+          }),
+          forcePromise,
+        ]);
+      } finally {
+        ctx.toolAbortSignal?.removeEventListener("abort", abortNestedCall);
+        controller.abort();
+        ctx.toolCallTracker.completeAgentCall(nestedToolCallId);
+      }
     }
 
     case "list_mcp_resources": {

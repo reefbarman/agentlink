@@ -75,7 +75,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   write_file: {
     label: "Create/overwrite with diff review",
     description:
-      "Create a new file or overwrite an existing file. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. Benefits from VS Code's format-on-save. Returns any user edits, format-on-save edits, and new diagnostics.",
+      "Create a new file or overwrite an existing file, creating missing parent directories if the write is approved. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. Benefits from VS Code's format-on-save. Returns any user edits, format-on-save edits, and new diagnostics.",
   },
   generate_image: {
     label: "Generate image",

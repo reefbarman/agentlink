@@ -188,8 +188,21 @@ const SHELL_INTEGRATION_TIMEOUT = 15000; // 15 seconds (WSL2 / heavy shell confi
 // oxlint-disable-next-line no-control-regex -- intentionally matching ANSI escape sequences
 const MARKER_RE = /\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/;
 
+/** Prompt-start markers emitted when the shell has returned to an interactive prompt. */
+// oxlint-disable-next-line no-control-regex -- intentionally matching ANSI escape sequences
+const PROMPT_MARKER_RE = /\x1b\](?:633|133);A(?:;[^\x07\x1b]*)?(?:\x07|\x1b\\)/;
+
+// oxlint-disable-next-line no-control-regex -- intentionally matching terminal control chars
+const INTERRUPTED_TAIL_RE = /(?:\x03|\^C)\s*$/;
+
+type ShellCompletionMarker = {
+  exitCode: number | null;
+  stripped: string;
+  source: "exit" | "prompt";
+};
+
 /**
- * Check the output buffer for an OSC 633;D completion marker.
+ * Check the output buffer for a shell-integration completion marker.
  * If found, strips the marker from the buffer, returns the parsed exit code.
  * @param buffer The output buffer to scan
  * @param fromPos Start scanning from this position (with 20-char overlap for split markers)
@@ -198,17 +211,36 @@ const MARKER_RE = /\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/;
 function findAndStripMarker(
   buffer: string,
   fromPos: number,
-): { exitCode: number | null; stripped: string } | undefined {
+): ShellCompletionMarker | undefined {
   const searchFrom = Math.max(0, fromPos - 20);
   const region = buffer.slice(searchFrom);
-  const match = region.match(MARKER_RE);
-  if (!match) return undefined;
+  const exitMatch = region.match(MARKER_RE);
+  const promptMatch = region.match(PROMPT_MARKER_RE);
+  if (!exitMatch && !promptMatch) return undefined;
+
+  const exitIdx =
+    exitMatch?.index !== undefined ? searchFrom + exitMatch.index : undefined;
+  const promptIdx =
+    promptMatch?.index !== undefined
+      ? searchFrom + promptMatch.index
+      : undefined;
+  const useExit =
+    exitIdx !== undefined &&
+    (promptIdx === undefined || exitIdx <= promptIdx);
+  const match = useExit ? exitMatch! : promptMatch!;
+
   // Use the match index within the region to find the exact marker position,
   // rather than lastIndexOf on the full buffer which could find a stale marker.
-  const markerIdx = match.index !== undefined ? searchFrom + match.index : -1;
+  const markerIdx = useExit ? exitIdx! : promptIdx!;
   const stripped = markerIdx >= 0 ? buffer.slice(0, markerIdx) : buffer;
-  const exitCode = match[1] !== undefined ? parseInt(match[1], 10) : null;
-  return { exitCode, stripped };
+  const exitCode = useExit
+    ? match[1] !== undefined
+      ? parseInt(match[1], 10)
+      : null
+    : INTERRUPTED_TAIL_RE.test(stripped)
+      ? 130
+      : null;
+  return { exitCode, stripped, source: useExit ? "exit" : "prompt" };
 }
 
 let nextTerminalId = 1;
@@ -910,7 +942,7 @@ export class TerminalManager {
         }
         managed.outputBuffer = result.stripped;
         logDiag(
-          `MARKER_FOUND source=${source} exitCode=${result.exitCode ?? "none"}`,
+          `MARKER_FOUND source=${source} marker=${result.source} exitCode=${result.exitCode ?? "none"}`,
         );
         resolveStreamMarker!(result.exitCode ?? undefined);
         return true;
@@ -1187,7 +1219,9 @@ export class TerminalManager {
         lastMarkerCheckPos,
       );
       if (result) {
-        logBg(`MARKER_FOUND exitCode=${result.exitCode ?? "none"}`);
+        logBg(
+          `MARKER_FOUND marker=${result.source} exitCode=${result.exitCode ?? "none"}`,
+        );
         managed.outputBuffer = result.stripped;
         managed.backgroundExitCode = result.exitCode;
         finalize("marker");
@@ -1292,7 +1326,9 @@ export class TerminalManager {
         lastMarkerCheckPos,
       );
       if (result) {
-        logBg(`MARKER_FOUND exitCode=${result.exitCode ?? "none"}`);
+        logBg(
+          `MARKER_FOUND marker=${result.source} exitCode=${result.exitCode ?? "none"}`,
+        );
         managed.outputBuffer = result.stripped;
         managed.backgroundExitCode = result.exitCode;
         finalize("marker");

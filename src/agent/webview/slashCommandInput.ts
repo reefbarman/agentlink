@@ -90,14 +90,17 @@ export function parseMatchedSlashCommand(
     return null;
   }
 
-  const command = slashCommands.find((candidate) => candidate.name === name);
+  const command = slashCommands.find(
+    (candidate) => candidate.name === name || candidate.displayName === name,
+  );
   if (!command) {
     return null;
   }
 
   const args =
     firstWhitespace >= 0 ? slashText.slice(firstWhitespace).trim() : "";
-  const displayText = args ? `/${name} ${args}` : `/${name}`;
+  const displayName = command.displayName ?? command.name;
+  const displayText = args ? `/${displayName} ${args}` : `/${displayName}`;
   const prefixText = userText.slice(0, slashStart).trim();
 
   return {

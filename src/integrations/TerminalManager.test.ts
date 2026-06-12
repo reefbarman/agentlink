@@ -45,6 +45,18 @@ type MockManagedTerminal = {
   };
 };
 
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 500,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
 describe("shouldEscapeHistoryExpansion", () => {
   it("always escapes on non-windows platforms", () => {
     expect(shouldEscapeHistoryExpansion("linux", "/usr/bin/bash")).toBe(true);
@@ -442,6 +454,117 @@ describe("TerminalManager terminal selection", () => {
     expect(result.execution_mode).toBe("send_text");
     expect(result.command_sent).toBe(true);
     expect(result.verification_hint).toContain("Do not re-run");
+  });
+
+  it("treats a returned shell prompt as completion when Ctrl+C omits the exit marker", async () => {
+    const manager = new TerminalManager();
+    const executeCommand = vi.fn(() => ({
+      read: async function* () {
+        yield "starting\r\n^C\r\n\x1B]633;A\x07";
+        await new Promise(() => {});
+      },
+    }));
+
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => ({
+      id: "term_prompt",
+      name,
+      cwd,
+      busy: false,
+      backgroundRunning: false,
+      lastCommandEndedAt: 0,
+      outputBuffer: "",
+      backgroundExitCode: null,
+      backgroundOutputCaptured: false,
+      backgroundDisposables: [],
+      terminal: {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+        shellIntegration: {
+          cwd: { fsPath: cwd },
+          executeCommand,
+        },
+      },
+    }));
+
+    const result = await manager.executeCommand({
+      command: "sleep 60",
+      cwd: "/workspace",
+    });
+
+    expect(result).toMatchObject({
+      exit_code: 130,
+      output: "starting\n^C",
+      output_captured: true,
+      terminal_id: "term_prompt",
+    });
+  });
+
+  it("marks captured background commands finished when Ctrl+C returns the prompt without an exit marker", async () => {
+    const manager = new TerminalManager();
+    const executeCommand = vi.fn(() => ({
+      read: async function* () {
+        yield "watching\r\n^C\r\n\x1B]133;A\x07";
+        await new Promise(() => {});
+      },
+    }));
+
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => {
+      const managed = {
+        id: "term_bg_prompt",
+        name,
+        cwd,
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal: {
+          show: vi.fn(),
+          sendText: vi.fn(),
+          dispose: vi.fn(),
+          shellIntegration: {
+            cwd: { fsPath: cwd },
+            executeCommand,
+          },
+        },
+      } satisfies MockManagedTerminal;
+      (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+        managed,
+      ];
+      return managed;
+    });
+
+    const result = await manager.executeCommand({
+      command: "npm run dev",
+      cwd: "/workspace",
+      background: true,
+    });
+
+    expect(result.terminal_id).toBe("term_bg_prompt");
+    await waitForCondition(
+      () =>
+        manager.getBackgroundState("term_bg_prompt")?.is_running === false,
+    );
+
+    expect(manager.getBackgroundState("term_bg_prompt")).toMatchObject({
+      is_running: false,
+      exit_code: 130,
+      output: "watching\n^C",
+      output_captured: true,
+    });
   });
 
   it("creates a separate default terminal when env map differs", async () => {

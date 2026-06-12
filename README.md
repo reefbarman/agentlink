@@ -216,7 +216,7 @@ Later files override earlier ones for the same mode slug. Custom modes can also 
 
 This lets you define reusable prompts/workflows for the built-in agent while keeping project-specific commands in the repo.
 
-Detected skills are also exposed as slash commands in the built-in chat. Skills loaded from `~/.agents/skills/`, `~/.claude/skills/`, `~/.agentlink/skills/`, `.agents/skills/`, `.claude/skills/`, `.agentlink/skills/`, and their `skills-<mode>/` variants appear as `/skill:<name>`. Selecting one sends a prompt that asks the agent to load that skill with `load_skill` and follow its instructions. Use `/skills` to open the AgentLink output channel with the skills detected for the current mode, including their resolved `SKILL.md` paths.
+Detected skills are also exposed as slash commands in the built-in chat. Skills loaded from `~/.agents/skills/`, `~/.claude/skills/`, `~/.agentlink/skills/`, `.agents/skills/`, `.claude/skills/`, `.agentlink/skills/`, and their `skills-<mode>/` variants appear as `/<name>` with a `Skill` badge. Selecting one sends a prompt that asks the agent to load that skill with `load_skill` and follow its instructions. Use `/skills` to open the AgentLink output channel with the skills detected for the current mode, including their resolved `SKILL.md` paths.
 
 ### Use AgentLink with external MCP agents
 
@@ -580,7 +580,7 @@ Get VS Code diagnostics (errors, warnings, etc.) for a file or the entire worksp
 
 ### write_file
 
-Create or overwrite a file. Opens a **diff view** in VS Code for the user to review, optionally edit, and accept or reject. Benefits from format-on-save. Returns any user edits, format-on-save edits, and new diagnostics.
+Create or overwrite a file, creating missing parent directories if the write is approved. Opens a **diff view** in VS Code for the user to review, optionally edit, and accept or reject. Benefits from format-on-save. Returns any user edits, format-on-save edits, and new diagnostics.
 
 | Parameter | Type   | Description           |
 | --------- | ------ | --------------------- |
@@ -983,15 +983,15 @@ Stop a running background agent and return any partial output collected so far.
 
 Mark the current built-in agent turn's final status. This drives the highlighted final marker shown in the chat transcript.
 
-| Parameter          | Type    | Description                                                                                                            |
-| ------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `status`           | string  | Required final status: `completed`, `waiting_for_user`, `blocked`, or `cancelled`                                      |
-| `summary`          | string? | User-facing final result. Make it self-contained: what changed, why it matters, validation run/skipped, and follow-up. |
-| `continueLabel`    | string? | Optional button label for a clear continuation action                                                                  |
-| `continuePrompt`   | string? | Optional prompt sent as the user's visible message if the continuation action is clicked                               |
-| `suppressContinue` | boolean | Set true when the task is complete and no continuation button or automatic continue action should be offered           |
+| Parameter        | Type     | Description                                                                                                            |
+| ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `status`         | string   | Required final status: `completed`, `waiting_for_user`, `blocked`, or `cancelled`                                      |
+| `summary`        | string?  | User-facing final result. Make it self-contained: what changed, why it matters, validation run/skipped, and follow-up. |
+| `continueLabel`  | string?  | Optional button label for a clear continuation action                                                                  |
+| `continuePrompt` | string?  | Optional prompt sent as the user's visible message if the continuation action is clicked                               |
+| `completeTodos`  | boolean? | With `status: "completed"`, mark all current todos completed without a separate final `todo_write` call                |
 
-For non-trivial completed work, prefer 3-6 concise bullets or 1-2 short paragraphs over a terse “Done.” Include what changed, why it matters, validation results, skipped checks with reasons, and concrete caveats or handoff notes. Completed markers get a default Continue action unless `suppressContinue` is true; blocked, waiting, and cancelled markers do not. Keep the result final; avoid open-ended questions or generic offers for more help.
+For non-trivial completed work, prefer 3-6 concise bullets or 1-2 short paragraphs over a terse “Done.” Include what changed, why it matters, validation results, skipped checks with reasons, and concrete caveats or handoff notes. Completed markers get a default Continue action; blocked, waiting, and cancelled markers do not. Keep the result final; avoid open-ended questions or generic offers for more help. Use `completeTodos: true` only when the existing todo list accurately represents finished work.
 
 ### ask_user
 

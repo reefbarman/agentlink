@@ -14,6 +14,7 @@ import { isMcpToolName, parseMcpToolName } from "./mcpToolNames.js";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpServerConfig } from "./mcpConfig.js";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -26,6 +27,11 @@ export type McpServerStatus =
   | "error"
   | "disconnected";
 
+export interface McpToolInfo {
+  name: string;
+  description?: string;
+}
+
 export interface McpServerInfo {
   name: string;
   status: McpServerStatus;
@@ -33,6 +39,7 @@ export interface McpServerInfo {
   toolCount: number;
   resourceCount: number;
   promptCount: number;
+  tools: McpToolInfo[];
 }
 
 export interface McpResource {
@@ -1037,6 +1044,10 @@ export class McpClientHub {
       toolCount: s.tools.length,
       resourceCount: s.resources.length,
       promptCount: s.prompts.length,
+      tools: s.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+      })),
     }));
   }
 
@@ -1047,6 +1058,7 @@ export class McpClientHub {
   async callTool(
     prefixedName: string,
     input: Record<string, unknown>,
+    options?: Pick<RequestOptions, "signal">,
   ): Promise<ToolResult> {
     const parsed = parseMcpToolName(prefixedName);
     if (!parsed) {
@@ -1080,10 +1092,14 @@ export class McpClientHub {
 
     try {
       const result = await this.withInteractiveAuthForUse(serverName, () =>
-        server.client.callTool({
-          name: toolName,
-          arguments: input,
-        }),
+        server.client.callTool(
+          {
+            name: toolName,
+            arguments: input,
+          },
+          undefined,
+          options,
+        ),
       );
       const contentItems = result.content as Array<{
         type: string;

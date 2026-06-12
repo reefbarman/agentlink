@@ -321,7 +321,7 @@ export class ActivityTraceRecorder {
             ? {
                 status: event.marker.status,
                 hasSummary: Boolean(event.marker.summary?.trim()),
-                continueActionSuppressed: event.marker.continueActionSuppressed,
+                continueActionConsumed: event.marker.continueActionConsumed,
               }
             : { status: null },
         };

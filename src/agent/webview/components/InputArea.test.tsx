@@ -93,6 +93,62 @@ describe("InputArea slash popup", () => {
     expect(container.querySelectorAll(".slash-cmd-option").length).toBe(3);
   });
 
+  it("shows skill commands without the skill prefix and sends their body", () => {
+    const onSend = vi.fn();
+    const slashCommands: SlashCommandInfo[] = [
+      {
+        name: "skill:smoke",
+        description: "Smoke skill",
+        source: "skill",
+        builtin: false,
+        body: "Use smoke skill",
+      },
+    ];
+
+    const { container } = renderInputArea(slashCommands, { onSend });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "/";
+    input.selectionStart = 1;
+    input.selectionEnd = 1;
+    fireEvent.input(input);
+
+    input.value = "/s";
+    input.selectionStart = 2;
+    input.selectionEnd = 2;
+    fireEvent.input(input);
+
+    expect(container.querySelector(".slash-cmd-name")?.textContent).toBe(
+      "/smoke",
+    );
+    expect(container.querySelector(".slash-cmd-right")?.textContent).toBe(
+      "Skill",
+    );
+
+    input.value = "/smoke";
+    input.selectionStart = 6;
+    input.selectionEnd = 6;
+    fireEvent.input(input);
+
+    expect(container.querySelector(".slash-match-pill-name")?.textContent).toBe(
+      "/smoke",
+    );
+    expect(
+      container
+        .querySelector(".slash-match-pill .codicon")
+        ?.classList.contains("codicon-sparkle"),
+    ).toBe(true);
+
+    input.value = "/s";
+    input.selectionStart = 2;
+    input.selectionEnd = 2;
+    fireEvent.input(input);
+
+    container.querySelector<HTMLButtonElement>(".slash-cmd-option")?.click();
+
+    expect(onSend).toHaveBeenCalledWith("Use smoke skill", [], "/smoke");
+  });
+
   it("renders and toggles Auto Continue from the toolbar", () => {
     const onToggleAutoContinue = vi.fn();
     const { getByRole } = renderInputArea([], {

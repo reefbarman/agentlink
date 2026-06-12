@@ -1,6 +1,7 @@
 import { useMemo, useState } from "preact/hooks";
 
 import type { ContentBlock } from "../types";
+import { normalizeProjectedToolName } from "../../../shared/chatProjection";
 import {
   ToolCallBlock,
   fmtDuration,
@@ -243,7 +244,7 @@ function countCategories(blocks: ToolBlock[]): Record<ToolCategory, number> {
 }
 
 function getToolCategory(name: string): ToolCategory {
-  return CATEGORY_BY_TOOL.get(name) ?? "other";
+  return CATEGORY_BY_TOOL.get(normalizeProjectedToolName(name)) ?? "other";
 }
 
 function formatCategoryCount(
