@@ -1,11 +1,13 @@
-import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ChatMessage, ContentBlock } from "../types";
+
+import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import { CheckpointRow } from "./CheckpointRow";
 import { CondenseRow } from "./CondenseRow";
 import type { DetectedQuestion } from "../questionDetection";
 import { Fragment } from "preact";
 import { MessageBubble } from "./MessageBubble";
 import { WarningRow } from "./WarningRow";
+import { useMemo } from "preact/hooks";
 
 interface TranscriptMessageListProps {
   messages: ChatMessage[];
@@ -131,7 +133,8 @@ function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
     }
 
     pendingBlocks = pendingBlocks.filter(
-      (pendingBlock) => !isBackgroundResultToolCall(pendingBlock, block.sessionId),
+      (pendingBlock) =>
+        !isBackgroundResultToolCall(pendingBlock, block.sessionId),
     );
     pushPending(index);
     const id = `${message.id}:bg-agent-result:${block.sessionId}:${index}`;
@@ -190,7 +193,10 @@ export function TranscriptMessageList({
   onRevertCheckpoint,
   onViewCheckpointDiff,
 }: TranscriptMessageListProps) {
-  const rows = messages.flatMap(splitTopLevelChatBlocks);
+  const rows = useMemo(
+    () => messages.flatMap(splitTopLevelChatBlocks),
+    [messages],
+  );
   const lastMessage = messages[messages.length - 1];
   let streamingRowKey: string | null = null;
   if (streaming && lastMessage?.role === "assistant") {
@@ -215,9 +221,7 @@ export function TranscriptMessageList({
             key={key}
             message={msg}
             onRetry={
-              sourceMessage === lastMessage && msg.error
-                ? onRetry
-                : undefined
+              sourceMessage === lastMessage && msg.error ? onRetry : undefined
             }
           />
         ) : (
@@ -250,9 +254,7 @@ export function TranscriptMessageList({
               onPromoteMcpToolApproval={onPromoteMcpToolApproval}
               onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
               onRetry={
-                sourceMessage === lastMessage && msg.error
-                  ? onRetry
-                  : undefined
+                sourceMessage === lastMessage && msg.error ? onRetry : undefined
               }
               onSignIn={
                 sourceMessage === lastMessage && msg.error

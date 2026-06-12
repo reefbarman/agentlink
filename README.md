@@ -580,12 +580,14 @@ Get VS Code diagnostics (errors, warnings, etc.) for a file or the entire worksp
 
 ### write_file
 
-Create or overwrite a file. Opens a **diff view** in VS Code for the user to review, optionally edit, and accept or reject. Benefits from format-on-save. Returns any user edits as a patch and new diagnostics.
+Create or overwrite a file. Opens a **diff view** in VS Code for the user to review, optionally edit, and accept or reject. Benefits from format-on-save. Returns any user edits, format-on-save edits, and new diagnostics.
 
 | Parameter | Type   | Description           |
 | --------- | ------ | --------------------- |
 | `path`    | string | File path             |
 | `content` | string | Complete file content |
+
+Response fields may include `user_edits` (proposed content → reviewer-edited content) and `format_on_save_edits` (reviewer-edited/proposed content → final saved content). If `format_on_save_edits_omitted: "size_cap"` is returned, the file was substantially reformatted and the agent should re-read before composing more diffs.
 
 ### generate_image
 
@@ -633,7 +635,7 @@ Responses include `status`, `path`, `tier`, `scope`, `operation`, and any new di
 
 ### apply_diff
 
-Edit an existing file using search/replace blocks. Opens a diff view for review. Supports **multiple hunks** in a single call. Responses include per-block diagnostics for partial matches/failures, and pending-edit lock conflicts return a structured recovery hint instead of a bare timeout string.
+Edit an existing file using search/replace blocks. Opens a diff view for review. Supports **multiple hunks** in a single call. Responses include per-block diagnostics for partial matches/failures, format-on-save edits, and pending-edit lock conflicts return a structured recovery hint instead of a bare timeout string.
 
 | Parameter | Type   | Description                              |
 | --------- | ------ | ---------------------------------------- |
@@ -648,7 +650,7 @@ replacement content
 >>>>>>> REPLACE
 ```
 
-Include multiple SEARCH/REPLACE blocks for multiple edits in one call.
+Include multiple SEARCH/REPLACE blocks for multiple edits in one call. If a response includes both `user_edits` and `format_on_save_edits`, compose them in order: proposed content → `user_edits` → `format_on_save_edits`. If the format patch is omitted due to size, re-read the file before the next edit.
 
 ### go_to_definition
 
@@ -1197,7 +1199,7 @@ AgentLink includes a granular approval system to keep you in control.
 
 When an agent proposes file changes, a diff view opens showing the proposed changes and the approval panel presents a write approval card. The editor title bar has quick-access buttons: **Accept** (checkmark), **Options** (...), and **Reject** (X).
 
-User edits made in the diff view before accepting are captured and returned to the agent as a patch.
+User edits made in the diff view before accepting are captured and returned to the agent as `user_edits`. If VS Code format-on-save or save participants further change the file, the tool result includes `format_on_save: true` plus `format_on_save_edits` when the patch is small enough; otherwise it includes `format_on_save_edits_omitted: "size_cap"` and the agent should re-read the file.
 
 #### File-Level Write Rules
 

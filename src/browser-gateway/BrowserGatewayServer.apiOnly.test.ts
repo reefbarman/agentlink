@@ -67,7 +67,7 @@ describe("BrowserGatewayServer API-only routes", () => {
         submitBrowserApprovalDecision: vi.fn(() => true),
         submitBrowserQuestionResponse: vi.fn(() => true),
         submitBrowserQuestionProgress: vi.fn(() => true),
-        submitBrowserSend: vi.fn(async () => true),
+        submitBrowserSend: vi.fn(async () => ({ ok: true })),
       } as never,
       "test-token",
       "instance-headless",

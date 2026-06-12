@@ -24,13 +24,13 @@ When the `agentlink` MCP server is available inside VS Code, prefer its tools ov
 
 If your agent has built-in filesystem tools, prefer the agentlink equivalents:
 
-| Built-in            | AgentLink equivalent        | Why                                                                                                                                          |
-| ------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| File read           | `read_file`                 | Returns line numbers, file metadata, git status, and diagnostics summary                                                                     |
-| File edit/write     | `apply_diff` / `write_file` | Opens a diff view for user review. Format-on-save applies automatically. Returns user edits and diagnostics.                                 |
-| Shell/terminal      | `execute_command`           | Runs in VS Code's integrated terminal (visible to user). Captures output via shell integration. Supports named terminals for parallel tasks. |
-| File search/glob    | `list_files`                | Lists files with optional recursive + depth control                                                                                          |
-| Content search/grep | `search_files`              | Ripgrep-powered search with context lines.                                                                                                   |
+| Built-in            | AgentLink equivalent        | Why                                                                                                                                                             |
+| ------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File read           | `read_file`                 | Returns line numbers, file metadata, git status, and diagnostics summary                                                                                        |
+| File edit/write     | `apply_diff` / `write_file` | Opens a diff view for user review. Format-on-save applies automatically. If `format_on_save_edits` is returned, update your model or re-read before more diffs. |
+| Shell/terminal      | `execute_command`           | Runs in VS Code's integrated terminal (visible to user). Captures output via shell integration. Supports named terminals for parallel tasks.                    |
+| File search/glob    | `list_files`                | Lists files with optional recursive + depth control                                                                                                             |
+| Content search/grep | `search_files`              | Ripgrep-powered search with context lines.                                                                                                                      |
 
 ### Terminal behavior
 

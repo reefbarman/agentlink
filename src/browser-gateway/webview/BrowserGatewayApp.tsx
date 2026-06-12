@@ -74,6 +74,23 @@ const MIN_SIDE_PANE_WIDTH = 280;
 const MIN_CHAT_PANE_WIDTH = 420;
 const SIDE_PANE_KEYBOARD_STEP = 32;
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
+const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
+const DISCONNECTED_INSTANCE_RETENTION_MS = 3 * 60 * 1_000;
+
+function dedupeBackgroundSessions(sessions: BgSessionInfo[]): BgSessionInfo[] {
+  if (sessions.length <= 1) return sessions;
+
+  const byId = new Map<string, BgSessionInfo>();
+  let changed = false;
+  for (const session of sessions) {
+    if (byId.has(session.id)) {
+      changed = true;
+    }
+    byId.set(session.id, session);
+  }
+
+  return changed ? Array.from(byId.values()) : sessions;
+}
 
 function projectFinalMarkerAutoContinueState(
   messages: ChatMessage[],
@@ -115,6 +132,16 @@ const DEFAULT_BROWSER_MODES: ModeInfo[] = [
   { slug: "debug", name: "Debug", icon: "symbol-misc" },
   { slug: "review", name: "Review", icon: "symbol-misc" },
 ];
+
+type BrowserGatewayInstanceOption = {
+  instanceId: string;
+  workspaceName: string;
+  workspacePath: string;
+  url: string;
+  status?: BrowserGatewayInstanceStatusSummary;
+  lastSeenAt: number;
+  disconnectedAt?: number;
+};
 
 type GatewaySnapshot = {
   ui: {
@@ -365,14 +392,9 @@ export function BrowserGatewayApp({
 }: BrowserGatewayAppProps) {
   const [snapshot, setSnapshot] = useState<GatewaySnapshot | null>(null);
   const [instanceOptions, setInstanceOptions] = useState<
-    Array<{
-      instanceId: string;
-      workspaceName: string;
-      workspacePath: string;
-      url: string;
-      status?: BrowserGatewayInstanceStatusSummary;
-    }>
+    BrowserGatewayInstanceOption[]
   >([]);
+  const instanceOptionsRef = useRef<BrowserGatewayInstanceOption[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] =
     useState(currentInstanceId);
   const selectedInstanceIdRef = useRef(currentInstanceId);
@@ -409,6 +431,7 @@ export function BrowserGatewayApp({
   const [modes, setModes] = useState<ModeInfo[]>([]);
   const [models, setModels] = useState<WebviewModelInfo[]>([]);
   const [mobileLayout, setMobileLayout] = useState(false);
+  const [touchInput, setTouchInput] = useState(false);
   const [mobilePane, setMobilePane] = useState<"review" | null>(null);
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -461,18 +484,26 @@ export function BrowserGatewayApp({
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
 
-    const mediaQuery = window.matchMedia(MOBILE_LAYOUT_MEDIA_QUERY);
+    const mobileLayoutQuery = window.matchMedia(MOBILE_LAYOUT_MEDIA_QUERY);
+    const touchInputQuery = window.matchMedia(TOUCH_POINTER_MEDIA_QUERY);
     const syncMobilePaneAvailability = () => {
-      const isMobileLayout = mediaQuery.matches;
+      const isMobileLayout = mobileLayoutQuery.matches;
       setMobileLayout(isMobileLayout);
+      setTouchInput(touchInputQuery.matches);
       if (!isMobileLayout) {
         setMobilePane(null);
       }
     };
     syncMobilePaneAvailability();
-    mediaQuery.addEventListener("change", syncMobilePaneAvailability);
-    return () =>
-      mediaQuery.removeEventListener("change", syncMobilePaneAvailability);
+    mobileLayoutQuery.addEventListener("change", syncMobilePaneAvailability);
+    touchInputQuery.addEventListener("change", syncMobilePaneAvailability);
+    return () => {
+      mobileLayoutQuery.removeEventListener(
+        "change",
+        syncMobilePaneAvailability,
+      );
+      touchInputQuery.removeEventListener("change", syncMobilePaneAvailability);
+    };
   }, []);
 
   useEffect(() => {
@@ -620,15 +651,20 @@ export function BrowserGatewayApp({
     setSelectedDiffId(currentDiffs[0]?.requestId ?? null);
   }, [selectedDiffId, snapshot?.diffs]);
 
+  const foreground = snapshot?.session.foreground ?? null;
+  const foregroundProjectedMessages = foreground?.projectedMessages;
   const messages = useMemo<ChatMessage[]>(() => {
     return projectFinalMarkerAutoContinueState(
-      snapshot?.session.foreground?.projectedMessages ?? [],
+      foregroundProjectedMessages ?? [],
       hiddenFinalContinueMessageIds,
       autoContinueStopReasons,
     );
-  }, [autoContinueStopReasons, hiddenFinalContinueMessageIds, snapshot]);
+  }, [
+    autoContinueStopReasons,
+    foregroundProjectedMessages,
+    hiddenFinalContinueMessageIds,
+  ]);
 
-  const foreground = snapshot?.session.foreground ?? null;
   const reasoningEffort: ReasoningEffort = foreground
     ? (foreground.reasoningEffort ??
       (foreground.thinkingEnabled === false ? "none" : "high"))
@@ -639,7 +675,11 @@ export function BrowserGatewayApp({
       : reasoningEffort;
 
   const diffs = snapshot?.diffs ?? [];
-  const background = snapshot?.background ?? [];
+  const snapshotBackground = snapshot?.background;
+  const background = useMemo(
+    () => dedupeBackgroundSessions(snapshotBackground ?? []),
+    [snapshotBackground],
+  );
   const pendingApproval = snapshot?.ui.approval ?? null;
   const pendingQuestion =
     foreground?.questionRequest ?? snapshot?.ui.question ?? null;
@@ -841,6 +881,14 @@ export function BrowserGatewayApp({
   function getInstanceStatus(
     instance: (typeof instanceOptions)[number],
   ): BrowserGatewayInstanceStatusSummary {
+    if (instance.disconnectedAt !== undefined) {
+      return {
+        kind: "disconnected",
+        label: "Disconnected",
+        detail: "Waiting for this VS Code window to reconnect",
+        sessionTitle: instance.status?.sessionTitle,
+      };
+    }
     if (instance.instanceId === selectedInstanceId) {
       return deriveSelectedInstanceStatus();
     }
@@ -857,6 +905,8 @@ export function BrowserGatewayApp({
         return "bell-dot";
       case "error":
         return "error";
+      case "disconnected":
+        return "debug-disconnect";
       case "idle":
         return "circle-filled";
     }
@@ -868,7 +918,7 @@ export function BrowserGatewayApp({
    * to chase whichever instance is busy; the tab status styling signals that.
    */
   function selectPreferredInstanceId(
-    instances: Array<{ instanceId: string }>,
+    instances: BrowserGatewayInstanceOption[],
     currentServerInstanceId: string,
   ): string {
     const currentSelectedInstanceId = selectedInstanceIdRef.current;
@@ -880,7 +930,16 @@ export function BrowserGatewayApp({
     ) {
       return currentSelectedInstanceId;
     }
-    return currentServerInstanceId || instances[0]?.instanceId || "";
+
+    const liveInstances = instances.filter(
+      (instance) => instance.disconnectedAt === undefined,
+    );
+    return (
+      currentServerInstanceId ||
+      liveInstances[0]?.instanceId ||
+      instances[0]?.instanceId ||
+      ""
+    );
   }
 
   async function fetchInstances(): Promise<string | null> {
@@ -900,12 +959,39 @@ export function BrowserGatewayApp({
           status?: BrowserGatewayInstanceStatusSummary;
         }>;
       };
+      const now = Date.now();
+      const liveInstanceIds = new Set(
+        data.instances.map((instance) => instance.instanceId),
+      );
+      const liveInstances: BrowserGatewayInstanceOption[] = data.instances.map(
+        (instance) => ({
+          ...instance,
+          lastSeenAt: now,
+          disconnectedAt: undefined,
+        }),
+      );
+      const retainedDisconnectedInstances = instanceOptionsRef.current
+        .filter((instance) => !liveInstanceIds.has(instance.instanceId))
+        .map((instance) => ({
+          ...instance,
+          status: instance.status ?? { kind: "idle", label: "Idle" },
+          disconnectedAt: instance.disconnectedAt ?? now,
+        }))
+        .filter(
+          (instance) =>
+            now - (instance.disconnectedAt ?? now) <
+            DISCONNECTED_INSTANCE_RETENTION_MS,
+        );
       // Keep tab order stable regardless of registry write order.
-      const instances = [...data.instances].sort(
+      const instances = [
+        ...liveInstances,
+        ...retainedDisconnectedInstances,
+      ].sort(
         (a, b) =>
           a.workspaceName.localeCompare(b.workspaceName) ||
           a.instanceId.localeCompare(b.instanceId),
       );
+      instanceOptionsRef.current = instances;
       setInstanceOptions(instances);
       const nextSelectedInstanceId = routeByInstance
         ? selectPreferredInstanceId(instances, data.currentInstanceId)
@@ -1130,9 +1216,19 @@ export function BrowserGatewayApp({
           isSlashCommand: Boolean(slashCommandLabel),
         }),
       });
-      const body = (await response.json()) as { ok?: boolean; error?: string };
+      const body = (await response.json()) as {
+        ok?: boolean;
+        queued?: boolean;
+        error?: string;
+      };
       setSendStatus(
-        body.ok ? "Sent" : `Send failed: ${body.error ?? response.status}`,
+        body.ok
+          ? body.queued
+            ? "Queued."
+            : "Sent"
+          : body.error === "queue_full"
+            ? "A message is already queued. Wait for it to send or remove it first."
+            : `Send failed: ${body.error ?? response.status}`,
       );
     } catch (err) {
       setSendStatus(`Send error: ${String(err)}`);
@@ -2172,6 +2268,7 @@ export function BrowserGatewayApp({
                 workspaceName,
                 workspacePath: "",
                 url: "",
+                lastSeenAt: Date.now(),
               },
             ]
         ).map((instance) => {
@@ -2678,6 +2775,7 @@ export function BrowserGatewayApp({
                     onSend={handleSend}
                     onStop={handleStop}
                     streaming={Boolean(streaming)}
+                    submitOnEnter={!mobileLayout && !touchInput}
                     reasoningEffort={effectiveReasoningEffort}
                     onSetReasoningEffort={handleSetReasoningEffort}
                     onExportTranscript={handleExportTranscript}

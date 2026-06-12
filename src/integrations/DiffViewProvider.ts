@@ -111,6 +111,7 @@ export async function showDiffMoreOptions(): Promise<void> {
 // Per-path mutex to prevent concurrent edits to the same file
 const pathLocks = new Map<string, Promise<void>>();
 const LOCK_TIMEOUT = 60_000; // 60 seconds
+const FORMAT_ON_SAVE_PATCH_LIMIT = 4_000;
 
 export class FileLockTimeoutError extends Error {
   readonly code = "pending_edit_lock";
@@ -169,16 +170,79 @@ export async function withFileLock<T>(
   }
 }
 
+export interface FormatOnSaveReport {
+  format_on_save: true;
+  format_on_save_edits?: string;
+  format_on_save_edits_omitted?: "size_cap";
+  eol_changed?: boolean;
+  hint?: string;
+}
+
 export interface DiffResult {
   status: "accepted" | "rejected" | "rejected_by_user";
   path: string;
   operation?: "created" | "modified";
   user_edits?: string;
   format_on_save?: boolean;
+  format_on_save_edits?: string;
+  format_on_save_edits_omitted?: "size_cap";
+  eol_changed?: boolean;
+  hint?: string;
   new_diagnostics?: string;
   finalContent?: string;
   reason?: string;
   follow_up?: string;
+}
+
+function detectEol(content: string): "\r\n" | "\n" | undefined {
+  if (content.includes("\r\n")) return "\r\n";
+  if (content.includes("\n")) return "\n";
+  return undefined;
+}
+
+export function createFormatOnSaveReport(
+  relPath: string,
+  expectedContent: string,
+  finalContent: string,
+): FormatOnSaveReport | undefined {
+  const expectedEol = detectEol(expectedContent);
+  const finalEol = detectEol(finalContent);
+  const eol = expectedEol ?? finalEol ?? "\n";
+  const normalizedExpected = expectedContent.replace(/\r\n|\n/g, eol);
+  const normalizedFinal = finalContent.replace(/\r\n|\n/g, eol);
+  const eolChanged = Boolean(
+    expectedEol && finalEol && expectedEol !== finalEol,
+  );
+
+  if (normalizedExpected === normalizedFinal && !eolChanged) {
+    return undefined;
+  }
+
+  const report: FormatOnSaveReport = { format_on_save: true };
+  if (eolChanged) {
+    report.eol_changed = true;
+  }
+
+  if (normalizedExpected !== normalizedFinal) {
+    const patch = diffLib.createPatch(
+      relPath,
+      normalizedExpected,
+      normalizedFinal,
+      "proposed",
+      "saved",
+      { context: 1 },
+    );
+
+    if (patch.length <= FORMAT_ON_SAVE_PATCH_LIMIT) {
+      report.format_on_save_edits = patch;
+    } else {
+      report.format_on_save_edits_omitted = "size_cap";
+      report.hint =
+        "Format-on-save changed the file substantially; re-read the file before composing further diffs.";
+    }
+  }
+
+  return report;
 }
 
 export class DiffViewProvider {
@@ -510,7 +574,15 @@ export class DiffViewProvider {
 
     // Save document (triggers format-on-save, etc.)
     if (document.isDirty) {
-      await document.save();
+      const saved = await document.save();
+      if (!saved) {
+        diffSnapshotHub.remove(this.requestId);
+        return {
+          status: "rejected",
+          path: this.relPath,
+          reason: "save_failed",
+        };
+      }
     }
 
     diffSnapshotHub.remove(this.requestId);
@@ -535,7 +607,6 @@ export class DiffViewProvider {
     // - finalContent  = what ended up on disk after save (+ format-on-save)
     const eol = this.newContent.includes("\r\n") ? "\r\n" : "\n";
     const normalizedEdited = editedContent.replace(/\r\n|\n/g, eol);
-    const normalizedFinal = finalContent.replace(/\r\n|\n/g, eol);
     const normalizedNew = this.newContent.replace(/\r\n|\n/g, eol);
 
     // user_edits = only intentional changes the user made in the diff editor
@@ -551,8 +622,13 @@ export class DiffViewProvider {
       );
     }
 
-    // Detect if format-on-save changed the file beyond user edits
-    const formatOnSave = normalizedFinal !== normalizedEdited;
+    // Detect if format-on-save changed the file beyond user edits.
+    // The resulting patch composes after `user_edits`: proposed -> user-edited -> saved.
+    const formatOnSaveReport = createFormatOnSaveReport(
+      this.relPath,
+      editedContent,
+      finalContent,
+    );
 
     const result: DiffResult = {
       status: "accepted",
@@ -564,8 +640,8 @@ export class DiffViewProvider {
     if (userEdits) {
       result.user_edits = userEdits;
     }
-    if (formatOnSave) {
-      result.format_on_save = true;
+    if (formatOnSaveReport) {
+      Object.assign(result, formatOnSaveReport);
     }
     if (newProblems) {
       result.new_diagnostics = newProblems;

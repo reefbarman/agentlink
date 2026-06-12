@@ -245,6 +245,15 @@ textarea {
   color: var(--vscode-errorForeground, #f85149);
 }
 
+.instance-tab-disconnected .instance-tab-status,
+.instance-tab-disconnected .instance-tab-status .codicon {
+  color: var(--ag-muted);
+}
+
+.instance-tab-disconnected .instance-tab-main {
+  opacity: 0.72;
+}
+
 .field-stack {
   display: flex;
   flex-direction: column;
@@ -433,6 +442,14 @@ textarea {
   padding: 4px 0;
   overflow: auto;
 }
+
+.toolbar-selector-dropdown-portal {
+  position: fixed;
+  bottom: auto;
+  z-index: 1000;
+  max-width: min(320px, calc(100vw - 16px));
+}
+
 
 .toolbar-selector-option {
   display: flex;
@@ -1189,10 +1206,6 @@ pre {
     max-width: min(100%, calc(100vw - 24px));
   }
 
-  .browser-chat-composer .toolbar-selector-dropdown {
-    left: auto;
-    right: 0;
-  }
 
   .approval-mobile-review-actions {
     display: flex;

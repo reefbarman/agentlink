@@ -75,7 +75,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   write_file: {
     label: "Create/overwrite with diff review",
     description:
-      "Create a new file or overwrite an existing file. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. Benefits from VS Code's format-on-save. Returns any user edits and new diagnostics.",
+      "Create a new file or overwrite an existing file. Opens a diff view in VS Code for the user to review, optionally edit, and accept or reject the changes. Benefits from VS Code's format-on-save. Returns any user edits, format-on-save edits, and new diagnostics.",
   },
   generate_image: {
     label: "Generate image",
@@ -90,7 +90,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   apply_diff: {
     label: "Search/replace with diff review",
     description:
-      "Edit an existing file with exact SEARCH/REPLACE blocks. Opens a diff view for review. Each SEARCH block must match exactly one location. Format:\n<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE",
+      "Edit an existing file with exact SEARCH/REPLACE blocks. Opens a diff view for review. Each SEARCH block must match exactly one location. If format_on_save_edits is returned, update your model or re-read before composing more diffs. Format:\n<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE",
   },
   find_and_replace: {
     label: "Bulk find-and-replace across files",

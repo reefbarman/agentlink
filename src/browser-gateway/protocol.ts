@@ -37,7 +37,8 @@ export type BrowserGatewayInstanceStatusKind =
   | "idle"
   | "working"
   | "awaiting_approval"
-  | "error";
+  | "error"
+  | "disconnected";
 
 export interface BrowserGatewayInstanceStatusSummary {
   kind: BrowserGatewayInstanceStatusKind;

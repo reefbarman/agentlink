@@ -16,18 +16,38 @@ import { h } from "preact";
 vi.mock("../../agent/webview/components/InputArea", () => ({
   InputArea: ({
     onExecuteBuiltinCommand,
+    onSend,
+    submitOnEnter,
   }: {
     onExecuteBuiltinCommand?: (name: string, args: string) => void;
+    onSend?: (text: string, attachments: string[]) => void;
+    submitOnEnter?: boolean;
   }) =>
-    h(
-      "button",
-      {
-        type: "button",
-        "data-testid": "trigger-mcp",
-        onClick: () => onExecuteBuiltinCommand?.("mcp", ""),
-      },
-      "Trigger /mcp",
-    ),
+    h("div", { "data-testid": "mock-input-area" }, [
+      h(
+        "button",
+        {
+          type: "button",
+          "data-testid": "trigger-mcp",
+          onClick: () => onExecuteBuiltinCommand?.("mcp", ""),
+        },
+        "Trigger /mcp",
+      ),
+      h(
+        "button",
+        {
+          type: "button",
+          "data-testid": "trigger-send",
+          onClick: () => onSend?.("Ship it", []),
+        },
+        "Trigger send",
+      ),
+      h(
+        "span",
+        { "data-testid": "submit-on-enter" },
+        submitOnEnter ? "true" : "false",
+      ),
+    ]),
 }));
 
 vi.mock("./components/BrowserDiffViewer", () => ({
@@ -163,12 +183,14 @@ function createSnapshot(): TestSnapshot {
   };
 }
 
-function installMatchMediaMock(matches = false): void {
+function installMatchMediaMock(
+  matches: boolean | ((query: string) => boolean) = false,
+): void {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     writable: true,
     value: vi.fn((query: string) => ({
-      matches,
+      matches: typeof matches === "function" ? matches(query) : matches,
       media: query,
       onchange: null,
       addEventListener: vi.fn(),
@@ -383,6 +405,76 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("shows queued status for queued browser sends", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/send"))
+        return jsonResponse({ ok: true, queued: true });
+      if (url.includes("/api/ui-state")) return jsonResponse(createSnapshot());
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/ui-state"),
+        ),
+      ).toBe(true);
+    });
+    fireEvent.click(await screen.findByTestId("trigger-send"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Queued.")).toBeTruthy();
+    });
+  });
+
+  it("disables submit-on-enter for coarse pointer browser input", async () => {
+    installMatchMediaMock((query) => query.includes("pointer: coarse"));
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("submit-on-enter").textContent).toBe("false");
+    });
+  });
+
   it("keeps the current instance selected instead of jumping to an active one", async () => {
     render(
       h(BrowserGatewayApp, {
@@ -430,6 +522,82 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     const tabs = screen.getAllByRole("tab");
     expect(tabs[0]?.textContent).toContain("Worker");
     expect(tabs[1]?.textContent).toContain("Workspace");
+  });
+
+  it("keeps missing instance tabs as disconnected before pruning them", async () => {
+    vi.useFakeTimers();
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    let includeWorker = true;
+    const snapshot = createSnapshot();
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+            ...(includeWorker
+              ? [
+                  {
+                    instanceId: "instance-2",
+                    workspaceName: "Worker",
+                    workspacePath: "/worker",
+                    url: "http://127.0.0.1:3334",
+                    status: { kind: "working", label: "Working" },
+                  },
+                ]
+              : []),
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("tab", { name: /Worker/ })).toBeTruthy();
+      });
+
+      includeWorker = false;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("tab", { name: /Worker/ }).textContent,
+        ).toContain("Disconnected");
+      });
+
+      await vi.advanceTimersByTimeAsync(3 * 60 * 1_000);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("tab", { name: /Worker/ })).toBeNull();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders pending diffs in the Review pane", async () => {

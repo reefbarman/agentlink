@@ -109,6 +109,28 @@ describe("InputArea slash popup", () => {
     expect(onToggleAutoContinue).toHaveBeenCalledWith(false);
   });
 
+  it("does not submit Enter when submit-on-enter is disabled", () => {
+    const onSend = vi.fn();
+    const { container } = renderInputArea([], {
+      onSend,
+      submitOnEnter: false,
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "hello";
+    input.selectionStart = 5;
+    input.selectionEnd = 5;
+    fireEvent.input(input);
+    const keydown = fireEvent.keyDown(input, {
+      key: "Enter",
+      code: "Enter",
+      charCode: 13,
+    });
+
+    expect(keydown).toBe(true);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("attaches pasted images when the clipboard item type is empty but the file has a type", async () => {
     const { container } = renderInputArea([]);
     const input = container.querySelector(".chat-input") as HTMLTextAreaElement;

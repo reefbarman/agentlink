@@ -1009,7 +1009,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const ok = await this.chatViewProvider.submitBrowserSend({
+    const result = await this.chatViewProvider.submitBrowserSend({
       text,
       mode: body.mode,
       sessionId: body.sessionId,
@@ -1026,7 +1026,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
           : undefined,
       isSlashCommand: body.isSlashCommand === true,
     });
-    this.writeJson(res, ok ? 200 : 400, { ok });
+    this.writeJson(res, result.ok ? 200 : 400, result);
   }
 
   private async handleModeAction(

@@ -154,18 +154,12 @@ export function MemoryCard({ request, submit, followUpRef }: MemoryCardProps) {
           </div>
         )}
 
-        {request.memoryContent && (
-          <div class="memory-rationale">
-            <span class="memory-section-label">Proposed memory</span>
-            <p>{request.memoryContent}</p>
-          </div>
-        )}
-
         <div class="memory-rationale">
           <span class="memory-section-label">Review content</span>
           <p>
-            Accepting opens an editable diff for the target file. Review or edit
-            the final file content there before AgentLink writes it.
+            Review or edit the open diff for the target file, then accept here
+            to save it. Changing the target will reopen review for the selected
+            destination.
           </p>
         </div>
       </div>

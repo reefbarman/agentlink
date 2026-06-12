@@ -5,6 +5,7 @@ import * as path from "path";
 import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
 import {
   DiffViewProvider,
+  createFormatOnSaveReport,
   withFileLock,
   snapshotDiagnostics,
 } from "../integrations/DiffViewProvider.js";
@@ -119,11 +120,26 @@ export async function handleWriteFile(
             ),
             params.content,
           );
-          await vscode.workspace.applyEdit(edit);
+          const applied = await vscode.workspace.applyEdit(edit);
+          if (!applied) {
+            return {
+              error: "File edit failed",
+              path: params.path,
+              reason: "apply_edit_failed",
+            };
+          }
         }
         if (doc.isDirty) {
-          await doc.save();
+          const saved = await doc.save();
+          if (!saved) {
+            return {
+              error: "File save failed",
+              path: params.path,
+              reason: "save_failed",
+            };
+          }
         }
+        const finalContent = await fs.readFile(filePath, "utf-8");
 
         // Collect new diagnostics
         const newDiagnostics = await snap.collectNewErrors(diagnosticDelay);
@@ -136,6 +152,14 @@ export async function handleWriteFile(
         const warnings = getWriteRiskWarnings(relPath, params.content);
         if (warnings) {
           response.warnings = warnings;
+        }
+        const formatOnSaveReport = createFormatOnSaveReport(
+          relPath,
+          params.content,
+          finalContent,
+        );
+        if (formatOnSaveReport) {
+          Object.assign(response, formatOnSaveReport);
         }
         if (newDiagnostics) {
           response.new_diagnostics = newDiagnostics;

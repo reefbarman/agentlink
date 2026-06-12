@@ -12,6 +12,8 @@ const {
   diffSaveChanges,
   diffRevertChanges,
   diffGetEditedContent,
+  onDidChangeTabs,
+  tabs,
 } = vi.hoisted(() => ({
   tryGetFirstWorkspaceRoot: vi.fn(),
   diagnostics: vi.fn(() => []),
@@ -20,13 +22,27 @@ const {
   diffSaveChanges: vi.fn(),
   diffRevertChanges: vi.fn(),
   diffGetEditedContent: vi.fn(),
+  onDidChangeTabs: vi.fn(),
+  tabs: [] as unknown[],
 }));
 
 vi.mock("vscode", () => ({
   DiagnosticSeverity: { Error: 0 },
   Uri: { file: (fsPath: string) => ({ fsPath }) },
+  TabInputTextDiff: class TabInputTextDiff {
+    modified: { fsPath: string };
+    constructor(filePath: string) {
+      this.modified = { fsPath: filePath };
+    }
+  },
   languages: { getDiagnostics: diagnostics },
   workspace: { getConfiguration: () => ({ get: () => 0 }) },
+  window: {
+    tabGroups: {
+      all: [{ tabs }],
+      onDidChangeTabs,
+    },
+  },
 }));
 
 vi.mock("../util/paths.js", () => ({
@@ -35,8 +51,12 @@ vi.mock("../util/paths.js", () => ({
 
 vi.mock("../integrations/DiffViewProvider.js", () => ({
   withFileLock: async (_filePath: string, fn: () => Promise<unknown>) => fn(),
-  DiffViewProvider: vi.fn().mockImplementation(function () {
+  DiffViewProvider: vi.fn().mockImplementation(function (
+    _delay?: number,
+    requestId?: string,
+  ) {
     return {
+      requestId: requestId ?? "diff-request-1",
       open: diffOpen,
       waitForUserDecision: diffWaitForUserDecision,
       saveChanges: diffSaveChanges,
@@ -77,6 +97,8 @@ function approvingPanel(overrides?: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  tabs.length = 0;
+  onDidChangeTabs.mockImplementation(() => ({ dispose: vi.fn() }));
   diffWaitForUserDecision.mockResolvedValue("accept");
   diffSaveChanges.mockImplementation(async () => {
     const lastOpenCall = diffOpen.mock.calls.at(-1);
@@ -136,8 +158,10 @@ describe("handleProposeMemory", () => {
       tier: "memory",
       scope: "project",
       targetPath: ".agentlink/memory.md",
+      id: "diff-request-1",
     });
-    expect(requests[0]).not.toHaveProperty("proposedContent");
+    expect(requests[0]).not.toHaveProperty("content");
+    expect(diffWaitForUserDecision).not.toHaveBeenCalled();
     expect(diffOpen).toHaveBeenCalledWith(
       target,
       ".agentlink/memory.md",
@@ -231,11 +255,61 @@ describe("handleProposeMemory", () => {
       error:
         'Skill frontmatter name must match the skill directory name ("new-skill")',
     });
+    expect(diffRevertChanges).toHaveBeenCalled();
     expect(
       fs.existsSync(
         path.join(tmpDir, ".agentlink", "skills", "new-skill", "SKILL.md"),
       ),
     ).toBe(false);
+  });
+
+  it("rejects and reverts when the memory diff tab is closed", async () => {
+    const { TabInputTextDiff } = await import("vscode");
+    const { handleProposeMemory } = await import("./proposeMemory.js");
+    let closeListener: ((event: { closed: unknown[] }) => void) | undefined;
+    onDidChangeTabs.mockImplementation((listener) => {
+      closeListener = listener;
+      return { dispose: vi.fn() };
+    });
+
+    const panel = {
+      cancelApproval: vi.fn(),
+      enqueueMemoryApproval: vi.fn((request: { id: string }) => {
+        const target = path.join(tmpDir, ".agentlink", "memory.md");
+        const DiffInput = TabInputTextDiff as unknown as {
+          new (filePath: string): unknown;
+        };
+        tabs.push({ input: new DiffInput(target) });
+        setTimeout(() => {
+          tabs.length = 0;
+          closeListener?.({ closed: [{}] });
+        }, 0);
+        return {
+          id: request.id,
+          promise: new Promise(() => undefined),
+        };
+      }),
+    };
+
+    const result = await handleProposeMemory(
+      {
+        tier: "memory",
+        scope: "project",
+        operation: "add",
+        title: "Remember preference",
+        rationale: "User preference.",
+        content: "- Prefer single approvals.",
+      },
+      panel as never,
+    );
+
+    expect(text(result)).toMatchObject({
+      status: "rejected",
+      path: ".agentlink/memory.md",
+    });
+    expect(panel.cancelApproval).toHaveBeenCalledWith("diff-request-1");
+    expect(diffRevertChanges).toHaveBeenCalled();
+    expect(diffSaveChanges).not.toHaveBeenCalled();
   });
 
   it("re-approves retargeted memory against the new target content", async () => {
@@ -266,7 +340,7 @@ describe("handleProposeMemory", () => {
 
     expect(panel.enqueueMemoryApproval).toHaveBeenCalledTimes(1);
     expect(panel.enqueueMemoryApproval.mock.calls[0][0]).not.toHaveProperty(
-      "proposedContent",
+      "content",
     );
     expect(diffOpen).toHaveBeenCalledWith(
       path.join(tmpHome, ".agentlink", "memory.md"),

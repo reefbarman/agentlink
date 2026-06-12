@@ -275,7 +275,7 @@ export class ApprovalPanelProvider
     title: string;
     rationale: string;
     targetPath: string;
-    content: string;
+    content?: string;
     id?: string;
   }): { promise: Promise<MemoryApprovalResponse>; id: string } {
     const id = options.id ?? randomUUID();

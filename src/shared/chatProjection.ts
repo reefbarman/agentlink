@@ -202,6 +202,7 @@ export interface AppState {
     images?: RawImageMedia[];
     documents?: RawDocumentMedia[];
     displayMedia?: DisplayMedia;
+    source?: "vscode" | "browser";
   }>;
   questionRequest: {
     id: string;
@@ -315,6 +316,7 @@ export type AppAction =
       images?: RawImageMedia[];
       documents?: RawDocumentMedia[];
       displayMedia?: DisplayMedia;
+      source?: "vscode" | "browser";
     }
   | { type: "EDIT_QUEUE_MESSAGE"; id: string; text: string }
   | { type: "REMOVE_FROM_QUEUE"; id: string }
@@ -1671,6 +1673,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
             ...(action.displayMedia
               ? { displayMedia: action.displayMedia }
               : {}),
+            ...(action.source ? { source: action.source } : {}),
           },
         ],
       };
@@ -1849,7 +1852,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case "CONDENSE_START": {
       // Add a pending condense row — replaced with final stats when complete.
       // Set streaming: true so the input area queues messages during condense
-      // (prevents racing with message history changes).
+      // (prevents racing with message history changes). Treat duplicate start
+      // events as idempotent; browser snapshot replay or paired surfaces should
+      // not stack multiple pending condense rows for one condense operation.
+      if (
+        state.messages.some(
+          (m) => m.role === "condense" && m.condenseInfo?.condensing,
+        )
+      ) {
+        return { ...state, streaming: true };
+      }
       const tail = state.messages[state.messages.length - 1];
       const base =
         tail?.role === "assistant" && tail.blocks.length === 0 && !tail.error

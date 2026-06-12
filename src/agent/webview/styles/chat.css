@@ -2398,6 +2398,15 @@ body {
   overflow: hidden;
 }
 
+.toolbar-selector-dropdown-portal {
+  position: fixed;
+  bottom: auto;
+  z-index: 1000;
+  max-width: min(320px, calc(100vw - 16px));
+  overflow: auto;
+}
+
+
 .toolbar-selector-option {
   display: flex;
   align-items: center;
@@ -2699,17 +2708,23 @@ body {
   opacity: 0.5;
 }
 
-.send-button {
+.composer-action-buttons {
   position: sticky;
   bottom: 4px;
   float: right;
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.send-button {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
   border: none;
   border-radius: 6px;
   width: 28px;
   height: 28px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;

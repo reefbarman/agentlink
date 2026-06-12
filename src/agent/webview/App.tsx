@@ -507,7 +507,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           streamingRef.current = false;
           dispatch({ type: "DONE" });
           dispatch({ type: "CLEAR_QUESTION" });
-          const queue = messageQueueRef.current;
+          const queue = messageQueueRef.current.filter(
+            (q) => q.source !== "browser",
+          );
           if (queue.length > 0) {
             // Display text for the chat UI (shows slash command names and media indicators)
             const displayCombined = queue.map((q) => q.text).join("\n\n");
@@ -524,8 +526,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               imagesCombined,
               documentsCombined,
             );
-            messageQueueRef.current = [];
-            dispatch({ type: "CLEAR_QUEUE" });
+            messageQueueRef.current = messageQueueRef.current.filter(
+              (q) => q.source === "browser",
+            );
+            for (const item of queue) {
+              dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
+            }
             const isSlashCombined =
               queue.length === 1 ? queue[0]?.isSlashCommand === true : false;
             const slashCommandLabelCombined =
@@ -786,6 +792,51 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 : undefined),
             displayMedia: msg.displayMedia,
           });
+          dispatch({ type: "REMOVE_FROM_QUEUE", id: msg.queueId });
+          messageQueueRef.current = messageQueueRef.current.filter(
+            (q) => q.id !== msg.queueId,
+          );
+          break;
+
+        case "agentQueuedMessage":
+          dispatch({
+            type: "ENQUEUE_MESSAGE",
+            id: msg.queueId,
+            text: msg.displayText ?? msg.text,
+            fullText:
+              msg.displayText && msg.displayText !== msg.text
+                ? msg.text
+                : undefined,
+            isSlashCommand: msg.isSlashCommand,
+            slashCommandLabel: msg.slashCommandLabel,
+            attachments: msg.attachments,
+            images: msg.images,
+            documents: msg.documents,
+            displayMedia: msg.displayMedia,
+            source: "browser",
+          });
+          messageQueueRef.current = [
+            ...messageQueueRef.current,
+            {
+              id: msg.queueId,
+              text: msg.displayText ?? msg.text,
+              ...(msg.displayText && msg.displayText !== msg.text
+                ? { fullText: msg.text }
+                : {}),
+              ...(msg.isSlashCommand ? { isSlashCommand: true } : {}),
+              ...(msg.slashCommandLabel
+                ? { slashCommandLabel: msg.slashCommandLabel }
+                : {}),
+              ...(msg.attachments ? { attachments: msg.attachments } : {}),
+              ...(msg.images ? { images: msg.images } : {}),
+              ...(msg.documents ? { documents: msg.documents } : {}),
+              ...(msg.displayMedia ? { displayMedia: msg.displayMedia } : {}),
+              source: "browser",
+            },
+          ];
+          break;
+
+        case "agentRemoveQueuedMessage":
           dispatch({ type: "REMOVE_FROM_QUEUE", id: msg.queueId });
           messageQueueRef.current = messageQueueRef.current.filter(
             (q) => q.id !== msg.queueId,
@@ -1241,6 +1292,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           images: images.length > 0 ? images : undefined,
           documents: documents.length > 0 ? documents : undefined,
           displayMedia,
+          source: "vscode",
         });
         // Notify extension about this queued item so it can inject it ASAP
         // between tool batches. Only the first pending item will be used.

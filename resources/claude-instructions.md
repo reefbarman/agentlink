@@ -55,13 +55,13 @@ These are the most frequent violations. Check yourself before every tool call:
 
 ### Tool details
 
-| Instead of (built-in) | Use (agentlink MCP)         | Why                                                                                                                                          |
-| --------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Read`                | `read_file`                 | Returns line numbers, file metadata, git status, diagnostics summary, and local image content. Supports `query` param for semantic offset.   |
-| `Edit` / `Write`      | `apply_diff` / `write_file` | Opens a diff view for user review. Format-on-save applies automatically. Returns user edits and diagnostics.                                 |
-| `Bash`                | `execute_command`           | Runs in VS Code's integrated terminal (visible to user). Captures output via shell integration. Supports named terminals for parallel tasks. |
-| `Glob`                | `list_files`                | Lists files with optional recursive + depth control. Supports `query` param for semantic file discovery.                                     |
-| `Grep`                | `search_files`              | Ripgrep-powered search with context lines.                                                                                                   |
+| Instead of (built-in) | Use (agentlink MCP)         | Why                                                                                                                                                             |
+| --------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Read`                | `read_file`                 | Returns line numbers, file metadata, git status, diagnostics summary, and local image content. Supports `query` param for semantic offset.                      |
+| `Edit` / `Write`      | `apply_diff` / `write_file` | Opens a diff view for user review. Format-on-save applies automatically. If `format_on_save_edits` is returned, update your model or re-read before more diffs. |
+| `Bash`                | `execute_command`           | Runs in VS Code's integrated terminal (visible to user). Captures output via shell integration. Supports named terminals for parallel tasks.                    |
+| `Glob`                | `list_files`                | Lists files with optional recursive + depth control. Supports `query` param for semantic file discovery.                                                        |
+| `Grep`                | `search_files`              | Ripgrep-powered search with context lines.                                                                                                                      |
 
 ### Terminal behavior — IMPORTANT
 

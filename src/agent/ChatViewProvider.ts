@@ -228,6 +228,25 @@ export type ExtensionToWebview =
       totalCacheCreationTokens: number;
     }
   | {
+      type: "agentQueuedMessage";
+      sessionId: string;
+      queueId: string;
+      text: string;
+      displayText?: string;
+      isSlashCommand?: boolean;
+      slashCommandLabel?: string;
+      attachments?: string[];
+      images?: RawDisplayImage[];
+      documents?: RawDisplayDocument[];
+      displayMedia?: DisplayMedia;
+      source?: "vscode" | "browser";
+    }
+  | {
+      type: "agentRemoveQueuedMessage";
+      sessionId: string;
+      queueId: string;
+    }
+  | {
       type: "agentSessionUpdate";
       sessions: import("./types.js").SessionInfo[];
     }
@@ -521,6 +540,25 @@ export type ExtensionToWebview =
       isSlashCommand?: boolean;
       slashCommandLabel?: string;
       displayMedia?: DisplayMedia;
+    }
+  | {
+      type: "agentQueuedMessage";
+      sessionId: string;
+      text: string;
+      queueId: string;
+      displayText?: string;
+      isSlashCommand?: boolean;
+      slashCommandLabel?: string;
+      attachments?: string[];
+      images?: RawDisplayImage[];
+      documents?: RawDisplayDocument[];
+      displayMedia?: DisplayMedia;
+      source?: "vscode" | "browser";
+    }
+  | {
+      type: "agentRemoveQueuedMessage";
+      sessionId: string;
+      queueId: string;
     }
   | {
       type: "agentCommittedUserMessage";
@@ -1753,7 +1791,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     displayText?: string;
     slashCommandLabel?: string;
     isSlashCommand?: boolean;
-  }): Promise<boolean> {
+  }): Promise<{ ok: boolean; queued?: boolean; error?: string }> {
     const text = input.text;
     const mode = input.mode ?? "code";
     const sessionId = input.sessionId;
@@ -1776,12 +1814,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       images.length === 0 &&
       documents.length === 0
     ) {
-      return false;
+      return { ok: false };
     }
 
     const resolvedText = await this.resolveAttachments(text, attachments);
     const mgr = this.sessionManager;
-    if (!mgr) return false;
+    if (!mgr) return { ok: false };
     let effectiveSessionId = sessionId;
 
     if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
@@ -1790,6 +1828,56 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
       effectiveSessionId = newSession.id;
       this.approvalManager?.migrateSessionState("agent", effectiveSessionId);
+    }
+
+    const effectiveSession = mgr.getSession(effectiveSessionId);
+    const isActiveSession =
+      effectiveSession?.status === "streaming" ||
+      effectiveSession?.status === "tool_executing" ||
+      effectiveSession?.status === "awaiting_approval";
+
+    if (effectiveSession && isActiveSession) {
+      const foregroundSession = mgr.getForegroundSession();
+      if (foregroundSession?.id !== effectiveSession.id) {
+        return { ok: false, error: "session_not_foreground" };
+      }
+      this.ensureProjectedForegroundSession(foregroundSession);
+      if (this.projectedForegroundState.messageQueue.length > 0) {
+        return { ok: false, error: "queue_full" };
+      }
+
+      const queueId = randomUUID();
+      const displayQueueText = displayText ?? text;
+      const displayMedia = mediaToDisplayMedia({ images, documents });
+      const queued = effectiveSession.setPendingInterjection(
+        resolvedText,
+        queueId,
+        displayQueueText,
+        isSlashCommand,
+        slashCommandLabel,
+        undefined,
+        images.length > 0 ? images : undefined,
+        documents.length > 0 ? documents : undefined,
+      );
+      if (!queued) {
+        return { ok: false, error: "queue_full" };
+      }
+
+      this.postMessage({
+        type: "agentQueuedMessage",
+        sessionId: effectiveSessionId,
+        queueId,
+        text: resolvedText,
+        displayText: displayQueueText,
+        isSlashCommand,
+        slashCommandLabel,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        images: images.length > 0 ? images : undefined,
+        documents: documents.length > 0 ? documents : undefined,
+        displayMedia,
+        source: "browser",
+      });
+      return { ok: true, queued: true };
     }
 
     this.postMessage({
@@ -1845,7 +1933,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    return true;
+    return { ok: true };
   }
 
   public async submitBrowserModeSwitch(mode: string): Promise<{
@@ -2230,6 +2318,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       totalCacheReadTokens: session?.totalCacheReadTokens ?? 0,
       totalCacheCreationTokens: session?.totalCacheCreationTokens ?? 0,
     });
+    if (session?.background !== true) {
+      this.drainBrowserQueuedInterjection(sessionId);
+    }
     // If this was a bg session, push updated status so the strip/block
     // shows the cancelled state immediately.
     if (session?.background) {
@@ -3188,6 +3279,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               totalCacheReadTokens: fg.totalCacheReadTokens,
               totalCacheCreationTokens: fg.totalCacheCreationTokens,
             });
+            this.drainBrowserQueuedInterjection(fg.id);
           }
         } else if (name === "checkpoint") {
           const checkpoint =
@@ -4155,6 +4247,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
         break;
 
+      case "agentQueuedMessage":
+        this.applyProjectedAction({
+          type: "ENQUEUE_MESSAGE",
+          id: extMsg.queueId,
+          text: extMsg.displayText ?? extMsg.text,
+          fullText:
+            extMsg.displayText && extMsg.displayText !== extMsg.text
+              ? extMsg.text
+              : undefined,
+          isSlashCommand: extMsg.isSlashCommand,
+          slashCommandLabel: extMsg.slashCommandLabel,
+          attachments: extMsg.attachments,
+          images: extMsg.images,
+          documents: extMsg.documents,
+          displayMedia: extMsg.displayMedia,
+          source: extMsg.source,
+        });
+        break;
+
+      case "agentRemoveQueuedMessage":
+        this.applyProjectedAction({
+          type: "REMOVE_FROM_QUEUE",
+          id: extMsg.queueId,
+        });
+        break;
+
       case "agentInterjection":
         this.applyProjectedAction({
           type: "ADD_INTERJECTION",
@@ -4704,6 +4822,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               this.sessionManager?.getBackgroundResultSummary(sessionId),
           }),
         });
+        if (!isBackground) {
+          this.drainBrowserQueuedInterjection(sessionId);
+        }
         // Refresh session list after save (SessionStore.save is called in SessionManager)
         this.sendSessionList();
         // Keep bg strip in sync on done (flush any pending throttled update)
@@ -5535,6 +5656,62 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       turnIndex: c.turnIndex,
       checkpointId: c.id,
     }));
+  }
+
+  private drainBrowserQueuedInterjection(sessionId: string): void {
+    const session = this.sessionManager?.getSession(sessionId);
+    if (!session) return;
+    const queued = this.projectedForegroundState.messageQueue.find(
+      (entry) =>
+        entry.source === "browser" && session.hasPendingInterjection(entry.id),
+    );
+    if (!queued) return;
+
+    const pending = session.clearPendingInterjectionIf(queued.id);
+    if (!pending) return;
+
+    this.applyProjectedAction({ type: "REMOVE_FROM_QUEUE", id: queued.id });
+    this.sendOrQueueWebviewMessage({
+      type: "agentRemoveQueuedMessage",
+      sessionId,
+      queueId: queued.id,
+    });
+
+    const mode = session.mode;
+    const reasoningEffort = session.reasoningEffort;
+    const thinkingEnabled = reasoningEffort !== "none";
+    const displayText = pending.displayText ?? pending.text;
+    const displayMedia = mediaToDisplayMedia({
+      images: pending.images,
+      documents: pending.documents,
+    });
+
+    this.postMessage({
+      type: "agentCommittedUserMessage",
+      sessionId,
+      text: pending.text,
+      displayText,
+      isSlashCommand: pending.isSlashCommand,
+      slashCommandLabel: pending.slashCommandLabel,
+      origin: "browser",
+      displayMedia,
+    });
+
+    this.sessionManager
+      ?.sendMessage(sessionId, pending.text, mode, {
+        thinkingEnabled,
+        reasoningEffort,
+        activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+        displayText,
+        isSlashCommand: pending.isSlashCommand,
+        slashCommandLabel: pending.slashCommandLabel,
+        origin: "browser",
+        images: pending.images,
+        documents: pending.documents,
+      })
+      .catch((err) => {
+        this.log(`[error] browser queued send failed: ${err}`);
+      });
   }
 
   private postMessage(msg: ExtensionToWebview): void {

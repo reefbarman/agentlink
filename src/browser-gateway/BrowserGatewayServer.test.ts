@@ -90,7 +90,9 @@ function makeChatViewProviderStub() {
     submitBrowserApprovalDecision: vi.fn(() => true),
     submitBrowserQuestionResponse: vi.fn(() => true),
     publishBrowserQuestionProgress: vi.fn(() => true),
-    submitBrowserSend: vi.fn(async () => true),
+    submitBrowserSend: vi.fn<() => Promise<{ ok: boolean; queued?: boolean }>>(
+      async () => ({ ok: true }),
+    ),
     submitBrowserModeSwitch: vi.fn(async (mode: string) => ({
       approved: true,
       mode,
@@ -678,6 +680,7 @@ describe("BrowserGatewayServer", () => {
       sessionId: "session-1",
       mode: "code",
       thinkingEnabled: undefined,
+      reasoningEffort: undefined,
       attachments: [],
       images: [
         {
@@ -697,6 +700,25 @@ describe("BrowserGatewayServer", () => {
       slashCommandLabel: undefined,
       isSlashCommand: false,
     });
+
+    chatViewProvider.submitBrowserSend.mockResolvedValueOnce({
+      ok: true,
+      queued: true,
+    });
+    const queuedSend = await fetch(`${baseUrl}/api/send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        text: "Queue it",
+        sessionId: "session-1",
+        mode: "code",
+      }),
+    });
+    expect(queuedSend.status).toBe(200);
+    expect(await queuedSend.json()).toEqual({ ok: true, queued: true });
 
     const authorizedMode = await fetch(`${baseUrl}/api/mode`, {
       method: "POST",

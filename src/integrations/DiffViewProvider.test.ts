@@ -1,5 +1,9 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { isIgnorableTabCloseError, withFileLock } from "./DiffViewProvider.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createFormatOnSaveReport,
+  isIgnorableTabCloseError,
+  withFileLock,
+} from "./DiffViewProvider.js";
 
 // Each test uses a unique path to avoid interference from the shared
 // module-level pathLocks Map.
@@ -21,6 +25,61 @@ describe("isIgnorableTabCloseError", () => {
         new Error("Permission denied while closing tab"),
       ),
     ).toBe(false);
+  });
+});
+
+describe("createFormatOnSaveReport", () => {
+  it("returns undefined when saved content matches expected content", () => {
+    expect(
+      createFormatOnSaveReport(
+        "src/example.ts",
+        "const x = 1;\n",
+        "const x = 1;\n",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("returns a bounded patch when format-on-save changes content", () => {
+    const report = createFormatOnSaveReport(
+      "src/example.ts",
+      "const value={a:1}\n",
+      "const value = { a: 1 };\n",
+    );
+
+    expect(report).toMatchObject({ format_on_save: true });
+    expect(report?.format_on_save_edits).toContain("const value={a:1}");
+    expect(report?.format_on_save_edits).toContain("const value = { a: 1 };");
+  });
+
+  it("omits oversized format patches with a structured fallback", () => {
+    const expected = Array.from({ length: 300 }, (_, i) => `x${i}=1`).join(
+      "\n",
+    );
+    const final = Array.from({ length: 300 }, (_, i) => `x${i} = 1;`).join(
+      "\n",
+    );
+
+    const report = createFormatOnSaveReport("src/large.ts", expected, final);
+
+    expect(report).toMatchObject({
+      format_on_save: true,
+      format_on_save_edits_omitted: "size_cap",
+    });
+    expect(report?.format_on_save_edits).toBeUndefined();
+    expect(report?.hint).toContain("re-read");
+  });
+
+  it("reports EOL-only changes as metadata", () => {
+    const report = createFormatOnSaveReport(
+      "src/example.ts",
+      "a\r\nb\r\n",
+      "a\nb\n",
+    );
+
+    expect(report).toEqual({
+      format_on_save: true,
+      eol_changed: true,
+    });
   });
 });
 

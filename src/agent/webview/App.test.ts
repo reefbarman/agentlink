@@ -508,6 +508,7 @@ describe("webview App reducer background agent launch blocks", () => {
       fullText: "please review",
       images,
       documents,
+      source: "browser",
     });
 
     expect(state.messageQueue).toEqual([
@@ -517,6 +518,35 @@ describe("webview App reducer background agent launch blocks", () => {
         fullText: "please review",
         images,
         documents,
+        source: "browser",
+      },
+    ]);
+  });
+
+  it("removes only the targeted queued message", () => {
+    let state = reducer(initialState, {
+      type: "ENQUEUE_MESSAGE",
+      id: "queue-vscode",
+      text: "from VS Code",
+      source: "vscode",
+    });
+    state = reducer(state, {
+      type: "ENQUEUE_MESSAGE",
+      id: "queue-browser",
+      text: "from browser",
+      source: "browser",
+    });
+
+    state = reducer(state, {
+      type: "REMOVE_FROM_QUEUE",
+      id: "queue-browser",
+    });
+
+    expect(state.messageQueue).toEqual([
+      {
+        id: "queue-vscode",
+        text: "from VS Code",
+        source: "vscode",
       },
     ]);
   });

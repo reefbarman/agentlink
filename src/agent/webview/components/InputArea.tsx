@@ -36,7 +36,6 @@ import {
 } from "preact/hooks";
 
 import { ComposerBox } from "../../../shared/ui/ComposerBox";
-import { randomId } from "../../../shared/randomId";
 import { EmojiPopup } from "./EmojiPopup";
 import { FilePicker } from "./FilePicker";
 import type { Injection } from "../App";
@@ -46,6 +45,7 @@ import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
 import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
 import { WriteApprovalSelector } from "./WriteApprovalSelector";
+import { randomId } from "../../../shared/randomId";
 
 /** A pasted or dropped file held in webview state before sending. */
 export interface MediaAttachment {
@@ -172,6 +172,7 @@ interface InputAreaProps {
   allowFileMentions?: boolean;
   allowThinkingToggle?: boolean;
   allowExportTranscript?: boolean;
+  submitOnEnter?: boolean;
 }
 
 export function InputArea({
@@ -206,6 +207,7 @@ export function InputArea({
   allowFileMentions = true,
   allowThinkingToggle = true,
   allowExportTranscript = true,
+  submitOnEnter = true,
 }: InputAreaProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -229,6 +231,11 @@ export function InputArea({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputWrapperRef = useRef<HTMLDivElement>(null);
   const slashPopupRef = useRef<HTMLDivElement>(null);
+  const hasSubmitContent = canSubmitComposer({
+    text,
+    hasAttachments: allowAttachments && attachments.length > 0,
+    hasMedia: allowMediaPaste && mediaAttachments.length > 0,
+  });
 
   // Keep the textarea's DOM value in sync with `text` WITHOUT making it a fully
   // controlled input. A controlled `value={text}` makes Preact re-apply the prop
@@ -298,13 +305,7 @@ export function InputArea({
 
   const handleSubmit = useCallback(() => {
     const trimmed = text.trim();
-    if (
-      !canSubmitComposer({
-        text,
-        hasAttachments: allowAttachments && attachments.length > 0,
-        hasMedia: allowMediaPaste && mediaAttachments.length > 0,
-      })
-    ) {
+    if (!hasSubmitContent) {
       return;
     }
 
@@ -354,7 +355,7 @@ export function InputArea({
     mediaAttachments,
     allowAttachments,
     allowMediaPaste,
-    streaming,
+    hasSubmitContent,
     onSend,
     matchedExecutableSlashCommand,
     onExecuteBuiltinCommand,
@@ -737,7 +738,7 @@ export function InputArea({
       ) {
         return;
       }
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (submitOnEnter && e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSubmit();
       }
@@ -747,6 +748,7 @@ export function InputArea({
     },
     [
       handleSubmit,
+      submitOnEnter,
       pickerOpen,
       filteredSlashCommands,
       slashSelectedIdx,
@@ -1513,32 +1515,29 @@ export function InputArea({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         />
-        {streaming ? (
-          <button
-            class="send-button stop-button"
-            onClick={onStop}
-            title="Stop generation"
-            type="button"
-          >
-            <i class="codicon codicon-debug-stop" />
-          </button>
-        ) : (
-          <button
-            class="send-button"
-            onClick={handleSubmit}
-            disabled={
-              !canSubmitComposer({
-                text,
-                hasAttachments: allowAttachments && attachments.length > 0,
-                hasMedia: allowMediaPaste && mediaAttachments.length > 0,
-              })
-            }
-            title="Send message (Enter)"
-            type="button"
-          >
-            <i class="codicon codicon-send" />
-          </button>
-        )}
+        <div class="composer-action-buttons">
+          {streaming && (
+            <button
+              class="send-button stop-button"
+              onClick={onStop}
+              title="Stop generation"
+              type="button"
+            >
+              <i class="codicon codicon-debug-stop" />
+            </button>
+          )}
+          {(!streaming || hasSubmitContent) && (
+            <button
+              class="send-button"
+              onClick={handleSubmit}
+              disabled={!hasSubmitContent}
+              title={submitOnEnter ? "Send message (Enter)" : "Send message"}
+              type="button"
+            >
+              <i class="codicon codicon-send" />
+            </button>
+          )}
+        </div>
       </ComposerBox>
     </div>
   );

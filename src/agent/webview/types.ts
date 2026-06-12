@@ -376,6 +376,29 @@ export type ExtensionMessage =
       displayMedia?: ChatMessage["displayMedia"];
     }
   | {
+      type: "agentQueuedMessage";
+      sessionId: string;
+      text: string;
+      queueId: string;
+      /** Display text for the queue chip */
+      displayText?: string;
+      /** Whether the queued message includes a slash command invocation */
+      isSlashCommand?: boolean;
+      /** Slash command label rendered in the inline command chip */
+      slashCommandLabel?: string;
+      attachments?: string[];
+      images?: Array<{ name: string; mimeType: string; base64: string }>;
+      documents?: Array<{ name: string; mimeType: string; base64: string }>;
+      /** Display-only previews for pasted or dropped media. */
+      displayMedia?: ChatMessage["displayMedia"];
+      source?: "vscode" | "browser";
+    }
+  | {
+      type: "agentRemoveQueuedMessage";
+      sessionId: string;
+      queueId: string;
+    }
+  | {
       type: "agentCommittedUserMessage";
       sessionId: string;
       text: string;
