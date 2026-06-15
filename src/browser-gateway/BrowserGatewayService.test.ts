@@ -128,6 +128,14 @@ describe("BrowserGatewayService", () => {
         systemPrompt: null,
         loadedInstructions: null,
         restoringSession: false,
+        revertRecoveryNotice: {
+          checkpointId: "checkpoint-1",
+          sessionRevision: "revision-2",
+          workspaceRevision: "abcdef1234567890",
+          startedAt: 123,
+          title: "Checkpoint revert needs transcript recovery",
+          message: "Recovery metadata is recorded.",
+        },
         contextBudget: {
           contextWindow: 200000,
           maxInputTokens: 191808,
@@ -203,6 +211,14 @@ describe("BrowserGatewayService", () => {
         systemPrompt: null,
         loadedInstructions: null,
         restoringSession: false,
+        revertRecoveryNotice: {
+          checkpointId: "checkpoint-1",
+          sessionRevision: "revision-2",
+          workspaceRevision: "abcdef1234567890",
+          startedAt: 123,
+          title: "Checkpoint revert needs transcript recovery",
+          message: "Recovery metadata is recorded.",
+        },
         contextBudget: {
           contextWindow: 200000,
           maxInputTokens: 191808,
@@ -336,6 +352,7 @@ describe("BrowserGatewayService", () => {
         systemPrompt: null,
         loadedInstructions: null,
         restoringSession: false,
+        revertRecoveryNotice: null,
         contextBudget: {
           contextWindow: 200000,
           maxInputTokens: 191808,

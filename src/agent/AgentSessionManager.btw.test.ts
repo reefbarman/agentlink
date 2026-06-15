@@ -1,5 +1,3 @@
-import * as toolAdapter from "./toolAdapter.js";
-
 import type {
   CompleteRequest,
   CompleteResult,
@@ -155,12 +153,6 @@ describe("AgentSessionManager /btw side questions", () => {
     });
     providerRegistry.register(provider);
 
-    const dispatchSpy = vi
-      .spyOn(toolAdapter, "dispatchToolCall")
-      .mockResolvedValue({
-        content: [{ type: "text", text: "file contents" }],
-      });
-
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(makeToolCtx());
     const fg = await mgr.createSession("code");
@@ -172,11 +164,6 @@ describe("AgentSessionManager /btw side questions", () => {
     expect(result.toolCalls).toEqual([
       expect.objectContaining({ toolName: "read_file" }),
     ]);
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      "read_file",
-      { path: "src/agent/ChatViewProvider.ts" },
-      expect.objectContaining({ sessionId: expect.any(String), mode: "code" }),
-    );
     expect(provider.requests).toHaveLength(2);
     expect(provider.requests[0]?.tools?.map((t) => t.name)).toContain(
       "read_file",

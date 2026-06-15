@@ -218,6 +218,7 @@ describe("BrowserGatewayServer", () => {
         systemPrompt: null,
         loadedInstructions: null,
         restoringSession: false,
+        revertRecoveryNotice: null,
         contextBudget: {
           contextWindow: 200000,
           maxInputTokens: 191808,
@@ -432,6 +433,7 @@ describe("BrowserGatewayServer", () => {
           systemPrompt: null,
           loadedInstructions: null,
           restoringSession: false,
+          revertRecoveryNotice: null,
           contextBudget: {
             contextWindow: 200000,
             maxInputTokens: 191808,

@@ -12,14 +12,20 @@ import type {
 } from "./webview/types.js";
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import { getModeModelPreferences } from "./modeModelPreferences.js";
-import type { AgentSessionManager } from "./AgentSessionManager.js";
+import type {
+  AgentSessionManager,
+  CheckpointRevertResult,
+  PersistedSessionMutationResult,
+} from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
 import type { SessionSummary } from "./SessionStore.js";
+import type { RevertRecoveryState } from "./persistenceContracts.js";
 import type { AgentErrorActions, AgentEvent } from "./types.js";
 import type {
   BrowserGatewayThemeSnapshot,
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
+  RevertRecoveryNotice,
 } from "../shared/types.js";
 import type { InstructionBlock } from "./configLoader.js";
 import {
@@ -82,6 +88,57 @@ function hasFinalContinueAction(message: ChatMessage): boolean {
   return Boolean(
     message.finalMarker && getFinalMessageContinueAction(message.finalMarker),
   );
+}
+
+export function formatPersistedSessionMutationFailureMessage(
+  result: Exclude<PersistedSessionMutationResult, { ok: true }>,
+): string {
+  const operationLabel = result.operation === "rename" ? "rename" : "delete";
+  switch (result.reason) {
+    case "conflict":
+      return `Could not ${operationLabel} the session because it changed on disk. Refresh session history and try again.`;
+    case "not_owner":
+      return `Could not ${operationLabel} the session because another AgentLink runtime owns it. Close the other runtime or reload session history before trying again.`;
+    case "not_found":
+      return `Could not ${operationLabel} the session because it is no longer available. Refresh session history.`;
+    case "corrupt":
+      return `Could not ${operationLabel} the session because its persisted files look corrupt. Check the AgentLink Agent output channel before trying again.${result.message ? ` ${result.message}` : ""}`;
+    case "io_error":
+      return `Could not ${operationLabel} the session because AgentLink could not write the session files. Check file permissions and the AgentLink Agent output channel before trying again.${result.message ? ` ${result.message}` : ""}`;
+  }
+}
+
+export function formatRevertRecoveryNotice(
+  recovery: RevertRecoveryState,
+): RevertRecoveryNotice {
+  const workspaceSuffix = recovery.workspaceRevision
+    ? ` Workspace revision: ${recovery.workspaceRevision.slice(0, 12)}.`
+    : "";
+  return {
+    checkpointId: recovery.checkpointId,
+    sessionRevision: recovery.sessionRevision,
+    workspaceRevision: recovery.workspaceRevision,
+    startedAt: recovery.startedAt,
+    title: "Checkpoint revert needs transcript recovery",
+    message: `Workspace files were reverted to checkpoint ${recovery.checkpointId}, but AgentLink could not save the reverted transcript. Recovery metadata is recorded in the session; reload the session or check the AgentLink Agent output channel before continuing.${workspaceSuffix}`,
+  };
+}
+
+export function formatCheckpointRevertFailureMessage(
+  result: Exclude<CheckpointRevertResult, { ok: true }>,
+): string {
+  switch (result.reason) {
+    case "session_conflict":
+      return "Checkpoint revert was cancelled because the session changed after the preview. Refresh the checkpoint preview and try again.";
+    case "checkpoint_stale":
+      return "Checkpoint revert was cancelled because the checkpoint no longer matches the current transcript. Refresh the session and try again.";
+    case "workspace_revert_failed":
+      return "Failed to revert workspace files to the checkpoint. The transcript was not changed.";
+    case "persistence_failed":
+      return "Workspace files were reverted, but AgentLink could not save the reverted transcript. AgentLink recorded recovery metadata and kept the in-memory transcript unchanged; reload the session or check the AgentLink Agent output channel before continuing.";
+    case "not_found":
+      return "Checkpoint revert failed because the checkpoint or session is no longer available. Refresh the session and try again.";
+  }
 }
 
 function mediaToDisplayMedia(
@@ -624,6 +681,7 @@ export interface ChatState {
     hardBudget: number;
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
+  revertRecoveryNotice?: RevertRecoveryNotice | null;
 }
 
 type ContextBudget = NonNullable<ChatState["contextBudget"]>;
@@ -2088,20 +2146,66 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { ok: true };
   }
 
-  public submitBrowserDeleteSession(sessionId: string): { ok: boolean } {
-    if (!sessionId || !this.sessionManager) return { ok: false };
-    this.sessionManager.deletePersistedSession(sessionId);
+  public async submitBrowserDeleteSession(
+    sessionId: string,
+  ): Promise<{ ok: boolean; message?: string }> {
+    if (!sessionId) {
+      return {
+        ok: false,
+        message: "Could not delete the session: missing session id.",
+      };
+    }
+    if (!this.sessionManager) {
+      return {
+        ok: false,
+        message:
+          "Could not delete the session: session manager is not available.",
+      };
+    }
+    const result =
+      await this.sessionManager.deletePersistedSessionWithResult(sessionId);
+    if (!result.ok) {
+      const message = formatPersistedSessionMutationFailureMessage(result);
+      this.log(`[history] ${message}`);
+      return { ok: false, message };
+    }
     this.approvalManager?.clearSession(sessionId);
     this.sendSessionList();
     return { ok: true };
   }
 
-  public submitBrowserRenameSession(
+  public async submitBrowserRenameSession(
     sessionId: string,
     title: string,
-  ): { ok: boolean } {
-    if (!sessionId || !title || !this.sessionManager) return { ok: false };
-    this.sessionManager.renamePersistedSession(sessionId, title);
+  ): Promise<{ ok: boolean; message?: string }> {
+    if (!sessionId) {
+      return {
+        ok: false,
+        message: "Could not rename the session: missing session id.",
+      };
+    }
+    if (!title) {
+      return {
+        ok: false,
+        message: "Could not rename the session: title is required.",
+      };
+    }
+    if (!this.sessionManager) {
+      return {
+        ok: false,
+        message:
+          "Could not rename the session: session manager is not available.",
+      };
+    }
+    const result = await this.sessionManager.renamePersistedSessionWithResult(
+      sessionId,
+      title,
+    );
+    if (!result.ok) {
+      const message = formatPersistedSessionMutationFailureMessage(result);
+      this.log(`[history] ${message}`);
+      return { ok: false, message };
+    }
     this.sendSessionList();
     return { ok: true };
   }
@@ -3528,7 +3632,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentDeleteSession": {
         const sessionId = msg.sessionId as string;
         if (!sessionId || !this.sessionManager) break;
-        this.sessionManager.deletePersistedSession(sessionId);
+        const result =
+          await this.sessionManager.deletePersistedSessionWithResult(sessionId);
+        if (!result.ok) {
+          vscode.window.showErrorMessage(
+            formatPersistedSessionMutationFailureMessage(result),
+          );
+          break;
+        }
         this.approvalManager?.clearSession(sessionId);
         const sessions = this.sessionManager.listPersistedSessions();
         this.postMessage({ type: "agentSessionList", sessions });
@@ -3539,7 +3650,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const sessionId = msg.sessionId as string;
         const title = msg.title as string;
         if (!sessionId || !title || !this.sessionManager) break;
-        this.sessionManager.renamePersistedSession(sessionId, title);
+        const result =
+          await this.sessionManager.renamePersistedSessionWithResult(
+            sessionId,
+            title,
+          );
+        if (!result.ok) {
+          vscode.window.showErrorMessage(
+            formatPersistedSessionMutationFailureMessage(result),
+          );
+          break;
+        }
         const sessions = this.sessionManager.listPersistedSessions();
         this.postMessage({ type: "agentSessionList", sessions });
         break;
@@ -3864,9 +3985,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const shouldHydrate =
-      this.projectedForegroundSessionId !== session.id ||
-      this.projectedForegroundState.messages.length === 0;
+    const shouldHydrate = this.projectedForegroundSessionId !== session.id;
     if (!shouldHydrate) return;
 
     const allMessages =
@@ -3900,6 +4019,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: "TOKEN_ESTIMATE",
       estimatedTotalUsed: session.estimatedTotalUsed,
     });
+  }
+
+  private formatRevertRecoveryNoticeForSession(
+    sessionId: string,
+  ): RevertRecoveryNotice | null {
+    const recovery = this.sessionManager?.getRevertRecoveryState?.(sessionId);
+    return recovery ? formatRevertRecoveryNotice(recovery) : null;
   }
 
   private projectExtensionMessage(msg: ExtensionToWebview): void {
@@ -4373,6 +4499,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     restoringSession: AppState["restoringSession"];
     contextBudget?: AppState["chatState"]["contextBudget"];
     condenseThreshold?: AppState["chatState"]["condenseThreshold"];
+    revertRecoveryNotice: AppState["revertRecoveryNotice"];
   } | null {
     const fg = this.sessionManager?.getForegroundSession();
     if (!fg) return null;
@@ -4445,6 +4572,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         : undefined,
       condenseThreshold:
         this.projectedForegroundState.chatState.condenseThreshold,
+      revertRecoveryNotice: this.projectedForegroundState.revertRecoveryNotice
+        ? { ...this.projectedForegroundState.revertRecoveryNotice }
+        : null,
     };
   }
 
@@ -5215,10 +5345,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): Promise<void> {
     if (!this.sessionManager) return;
 
-    const preview = await this.sessionManager.previewRevert(
+    const previewResult = await this.sessionManager.previewRevert(
       sessionId,
       checkpointId,
     );
+    if (!previewResult) {
+      vscode.window.showErrorMessage(
+        "Failed to preview checkpoint revert. Check the AgentLink Agent output channel for details.",
+      );
+      return;
+    }
+    const preview = previewResult.preview;
 
     const affected: string[] = [
       ...(preview?.modified.map((f) => `  ~ ${f}`) ?? []),
@@ -5241,6 +5378,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const result = await this.sessionManager.revertToCheckpoint(
       sessionId,
       checkpointId,
+      previewResult.sessionRevision,
+      previewResult.persistenceRevision,
     );
 
     if (result.ok) {
@@ -5265,9 +5404,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.sendInitialState();
       vscode.window.showInformationMessage("Reverted to checkpoint.");
     } else {
-      vscode.window.showErrorMessage(
-        "Failed to revert checkpoint. Check the AgentLink Agent output channel for details.",
+      const message = formatCheckpointRevertFailureMessage(result);
+      this.log(
+        `[agent] Checkpoint revert failed for session ${sessionId} checkpoint ${checkpointId}: ${result.reason}${result.currentRevision ? ` currentRevision=${result.currentRevision}` : ""}`,
       );
+      vscode.window.showErrorMessage(message);
     }
   }
 
@@ -5556,6 +5697,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
         fg?.id ?? "agent",
       ),
+      revertRecoveryNotice: fg
+        ? this.formatRevertRecoveryNoticeForSession(fg.id)
+        : null,
     };
 
     this.postMessage({ type: "stateUpdate", state });

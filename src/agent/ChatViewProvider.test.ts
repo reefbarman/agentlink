@@ -80,6 +80,122 @@ vi.mock("vscode", () => ({
   ViewColumn: { Beside: 2 },
 }));
 
+describe("persisted session mutation failure messages", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("formats actionable conflict and recovery messages", async () => {
+    const { formatPersistedSessionMutationFailureMessage } =
+      await import("./ChatViewProvider.js");
+
+    expect(
+      formatPersistedSessionMutationFailureMessage({
+        ok: false,
+        operation: "rename",
+        reason: "conflict",
+        currentRevision: "2",
+      }),
+    ).toContain("changed on disk");
+    expect(
+      formatPersistedSessionMutationFailureMessage({
+        ok: false,
+        operation: "delete",
+        reason: "not_owner",
+      }),
+    ).toContain("another AgentLink runtime owns it");
+    expect(
+      formatPersistedSessionMutationFailureMessage({
+        ok: false,
+        operation: "rename",
+        reason: "not_found",
+      }),
+    ).toContain("no longer available");
+    expect(
+      formatPersistedSessionMutationFailureMessage({
+        ok: false,
+        operation: "delete",
+        reason: "corrupt",
+        message: "bad metadata",
+      }),
+    ).toContain("bad metadata");
+    expect(
+      formatPersistedSessionMutationFailureMessage({
+        ok: false,
+        operation: "rename",
+        reason: "io_error",
+        message: "disk full",
+      }),
+    ).toContain("disk full");
+  });
+});
+
+describe("checkpoint revert failure messages", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("formats actionable conflict and recovery messages", async () => {
+    const { formatCheckpointRevertFailureMessage } =
+      await import("./ChatViewProvider.js");
+
+    expect(
+      formatCheckpointRevertFailureMessage({
+        ok: false,
+        reason: "session_conflict",
+        currentRevision: "2",
+      }),
+    ).toContain("session changed after the preview");
+    expect(
+      formatCheckpointRevertFailureMessage({
+        ok: false,
+        reason: "checkpoint_stale",
+      }),
+    ).toContain("checkpoint no longer matches");
+    expect(
+      formatCheckpointRevertFailureMessage({
+        ok: false,
+        reason: "workspace_revert_failed",
+      }),
+    ).toContain("transcript was not changed");
+    expect(
+      formatCheckpointRevertFailureMessage({
+        ok: false,
+        reason: "persistence_failed",
+      }),
+    ).toContain("recorded recovery metadata");
+    expect(
+      formatCheckpointRevertFailureMessage({ ok: false, reason: "not_found" }),
+    ).toContain("no longer available");
+  });
+
+  it("formats a user-visible revert recovery notice", async () => {
+    const { formatRevertRecoveryNotice } =
+      await import("./ChatViewProvider.js");
+
+    const notice = formatRevertRecoveryNotice({
+      checkpointId: "checkpoint-1",
+      sessionRevision: "revision-2",
+      workspaceRevision: "abcdef1234567890",
+      startedAt: 123,
+      reason: "workspace_reverted_session_save_failed",
+    });
+
+    expect(notice).toMatchObject({
+      checkpointId: "checkpoint-1",
+      sessionRevision: "revision-2",
+      workspaceRevision: "abcdef1234567890",
+      startedAt: 123,
+      title: "Checkpoint revert needs transcript recovery",
+    });
+    expect(notice.message).toContain("could not save the reverted transcript");
+    expect(notice.message).toContain("Recovery metadata is recorded");
+    expect(notice.message).toContain("abcdef123456");
+  });
+});
+
 describe("ChatViewProvider session state sync", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -242,6 +358,168 @@ describe("ChatViewProvider session state sync", () => {
     expect(
       provider.getBrowserProjectedForegroundState()?.detectedQuestion,
     ).toBeUndefined();
+  });
+
+  it("projects revert recovery notice into browser foreground state", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const foreground = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      title: "Session 1",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [] as unknown[],
+    };
+
+    const manager = {
+      getForegroundSession: vi.fn(() => foreground),
+      getRevertRecoveryState: vi.fn(() => ({
+        checkpointId: "checkpoint-1",
+        sessionRevision: "revision-2",
+        workspaceRevision: "abcdef1234567890",
+        startedAt: 123,
+        reason: "workspace_reverted_session_save_failed",
+      })),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+
+    provider.setSessionManager(manager as never);
+
+    (
+      provider as unknown as {
+        projectExtensionMessage: (msg: Record<string, unknown>) => void;
+      }
+    ).projectExtensionMessage.call(provider, {
+      type: "stateUpdate",
+      state: {
+        sessionId: foreground.id,
+        mode: foreground.mode,
+        model: foreground.model,
+        streaming: false,
+        revertRecoveryNotice: {
+          checkpointId: "checkpoint-1",
+          sessionRevision: "revision-2",
+          workspaceRevision: "abcdef1234567890",
+          startedAt: 123,
+          title: "Checkpoint revert needs transcript recovery",
+          message: "Recovery metadata is recorded.",
+        },
+      },
+    });
+
+    const projected = provider.getBrowserProjectedForegroundState();
+    expect(projected?.revertRecoveryNotice).toMatchObject({
+      checkpointId: "checkpoint-1",
+      title: "Checkpoint revert needs transcript recovery",
+    });
+  });
+
+  it("preserves revert recovery notice across partial state updates", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const foreground = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "streaming",
+      title: "Session 1",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [] as unknown[],
+    };
+
+    const manager = {
+      getForegroundSession: vi.fn(() => foreground),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+
+    provider.setSessionManager(manager as never);
+
+    const projectExtensionMessage = (msg: Record<string, unknown>) => {
+      (
+        provider as unknown as {
+          projectExtensionMessage: (msg: Record<string, unknown>) => void;
+        }
+      ).projectExtensionMessage.call(provider, msg);
+    };
+
+    projectExtensionMessage({
+      type: "stateUpdate",
+      state: {
+        sessionId: foreground.id,
+        mode: foreground.mode,
+        model: foreground.model,
+        streaming: false,
+        revertRecoveryNotice: {
+          checkpointId: "checkpoint-1",
+          sessionRevision: "revision-2",
+          startedAt: 123,
+          title: "Checkpoint revert needs transcript recovery",
+          message: "Recovery metadata is recorded.",
+        },
+      },
+    });
+
+    projectExtensionMessage({
+      type: "stateUpdate",
+      state: {
+        sessionId: foreground.id,
+        mode: foreground.mode,
+        model: foreground.model,
+        streaming: true,
+      },
+    });
+
+    expect(
+      provider.getBrowserProjectedForegroundState()?.revertRecoveryNotice,
+    ).toMatchObject({
+      checkpointId: "checkpoint-1",
+      title: "Checkpoint revert needs transcript recovery",
+    });
+
+    projectExtensionMessage({
+      type: "stateUpdate",
+      state: {
+        sessionId: foreground.id,
+        mode: foreground.mode,
+        model: foreground.model,
+        streaming: false,
+        revertRecoveryNotice: null,
+      },
+    });
+
+    expect(
+      provider.getBrowserProjectedForegroundState()?.revertRecoveryNotice,
+    ).toBeNull();
   });
 
   it("uses heuristic fallback for projected detected question when async detection falls back", async () => {
@@ -745,6 +1023,7 @@ describe("ChatViewProvider session state sync", () => {
         reasoningEffort: "none",
         thinkingEnabled: false,
         agentWriteApproval: undefined,
+        revertRecoveryNotice: null,
       },
     });
 

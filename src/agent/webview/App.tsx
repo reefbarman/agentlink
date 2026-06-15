@@ -2169,6 +2169,15 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             onClose={() => setShowHistory(false)}
           />
         )}
+        {state.revertRecoveryNotice && (
+          <div class="revert-recovery-notice" role="alert">
+            <i class="codicon codicon-warning" />
+            <div>
+              <strong>{state.revertRecoveryNotice.title}</strong>
+              <span>{state.revertRecoveryNotice.message}</span>
+            </div>
+          </div>
+        )}
         {state.debugInfo && (
           <DebugInfo
             info={state.debugInfo}

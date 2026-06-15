@@ -4,7 +4,10 @@ import type {
   ReasoningEffort,
 } from "../types.js";
 
-import type { OpenAiCodexResolvedAuth } from "./OpenAiCodexAuthManager.js";
+import type {
+  OpenAiCodexAuthMethod,
+  OpenAiCodexResolvedAuth,
+} from "./OpenAiCodexAuthManager.js";
 
 export interface CodexModelDef {
   id: string;
@@ -127,6 +130,7 @@ export const CODEX_CONDENSE_MODEL_FALLBACKS = [
 
 const CODEX_400K_INPUT_TOKENS = 272_000;
 const CODEX_1M_CONTEXT_TOKENS = 1_050_000;
+const CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS = 400_000;
 
 export const CODEX_MODELS: CodexModelDef[] = [
   {
@@ -260,8 +264,25 @@ export function getEndpointCaps(auth: OpenAiCodexResolvedAuth): ResponsesCaps {
   };
 }
 
-export function getCodexModelCapabilities(model: string): ModelCapabilities {
+function getAuthAdjustedModelDef(
+  model: string,
+  authMethod?: OpenAiCodexAuthMethod,
+): CodexModelDef | undefined {
   const def = CODEX_MODEL_MAP.get(model);
+  if (authMethod !== "oauth" || model !== "gpt-5.5" || !def) return def;
+
+  return {
+    ...def,
+    contextWindow: CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
+  };
+}
+
+export function getCodexModelCapabilities(
+  model: string,
+  authMethod?: OpenAiCodexAuthMethod,
+): ModelCapabilities {
+  const def = getAuthAdjustedModelDef(model, authMethod);
   const maxInputTokens = def
     ? def.maxInputTokens
     : CODEX_400K_INPUT_TOKENS;
@@ -278,11 +299,14 @@ export function getCodexModelCapabilities(model: string): ModelCapabilities {
   };
 }
 
-export function listCodexModels(providerId: string): ModelInfo[] {
+export function listCodexModels(
+  providerId: string,
+  authMethod?: OpenAiCodexAuthMethod,
+): ModelInfo[] {
   return CODEX_MODELS.map((model) => ({
     id: model.id,
     displayName: model.displayName,
     provider: providerId,
-    capabilities: getCodexModelCapabilities(model.id),
+    capabilities: getCodexModelCapabilities(model.id, authMethod),
   }));
 }

@@ -14,6 +14,7 @@ import type { DetectedQuestion } from "./questionDetection.js";
 import type {
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
+  RevertRecoveryNotice,
 } from "./types.js";
 import {
   getFinalMessageContinueAction,
@@ -262,6 +263,7 @@ export interface AppState {
   /** Temporary status override shown in the streaming spinner (e.g. "Refreshing credentials…") */
   statusOverride: string | null;
   restoringSession: boolean;
+  revertRecoveryNotice: RevertRecoveryNotice | null;
   /** Number of visible user turns before the first rendered message in `messages`. */
   loadedUserTurnOffset: number;
   /** Checkpoints that arrived before their target user message row was present. */
@@ -1101,6 +1103,12 @@ export function reducer(state: AppState, action: AppAction): AppState {
         chatState: action.state,
         streaming: action.state.streaming,
         thinkingEnabled: action.state.thinkingEnabled ?? state.thinkingEnabled,
+        revertRecoveryNotice: Object.hasOwn(
+          action.state,
+          "revertRecoveryNotice",
+        )
+          ? (action.state.revertRecoveryNotice ?? null)
+          : state.revertRecoveryNotice,
       };
 
     case "SET_DEBUG_INFO":
@@ -2268,6 +2276,7 @@ export const initialState: AppState = {
   dismissedDetectedQuestionIds: [],
   statusOverride: null,
   restoringSession: false,
+  revertRecoveryNotice: null,
   loadedUserTurnOffset: 0,
   pendingCheckpoints: [],
   pendingFinalMarker: null,

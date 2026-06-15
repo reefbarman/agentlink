@@ -1281,7 +1281,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = this.chatViewProvider.submitBrowserDeleteSession(
+    const result = await this.chatViewProvider.submitBrowserDeleteSession(
       body.sessionId,
     );
     this.writeJson(res, result.ok ? 200 : 404, result);
@@ -1310,7 +1310,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = this.chatViewProvider.submitBrowserRenameSession(
+    const result = await this.chatViewProvider.submitBrowserRenameSession(
       body.sessionId,
       body.title,
     );

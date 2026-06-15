@@ -1,6 +1,7 @@
 import type {
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
+  RevertRecoveryNotice,
 } from "../../shared/types.js";
 
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
@@ -574,6 +575,7 @@ export interface ChatState {
     hardBudget: number;
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
+  revertRecoveryNotice?: RevertRecoveryNotice | null;
 }
 
 export interface SessionInfo {

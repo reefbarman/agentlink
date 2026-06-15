@@ -6,6 +6,8 @@ import type { AgentConfig, AgentMessage } from "./types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentSessionManager } from "./AgentSessionManager.js";
+import type { PersistedSessionRecord } from "./persistenceContracts.js";
+import { ProviderRegistry } from "./providers/index.js";
 
 const mocks = vi.hoisted(() => {
   const createSession = vi.fn(async (opts: any) => ({
@@ -60,6 +62,12 @@ vi.mock("./AgentSession.js", () => ({
   },
 }));
 
+async function flushPromises(): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    await Promise.resolve();
+  }
+}
+
 const makeConfig = (): AgentConfig => ({
   model: "claude-sonnet-4-6",
   maxTokens: 8192,
@@ -67,6 +75,139 @@ const makeConfig = (): AgentConfig => ({
   showThinking: false,
   autoCondense: true,
   autoCondenseThreshold: 0.9,
+});
+
+describe("AgentSessionManager host injection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getConfiguration.mockReturnValue({
+      get: () => undefined,
+      inspect: () => undefined,
+    });
+  });
+
+  it("uses injected host dependencies when creating foreground sessions", async () => {
+    const providers = new ProviderRegistry();
+    const createSession = vi.fn(
+      (opts: Parameters<typeof mocks.createSession>[0]) =>
+        mocks.createSession(opts),
+    );
+    const createActivityTraceRecorder = vi.fn(() => ({
+      appendAgentEvent: vi.fn(),
+    }));
+    const createCheckpointManager = vi.fn(() => ({
+      baseCommit: null,
+      initialize: vi.fn(async () => undefined),
+      createCheckpoint: vi.fn(async () => null),
+      previewRevert: vi.fn(async () => null),
+      revertToCheckpoint: vi.fn(async () => false),
+      getDiffBetween: vi.fn(async () => ""),
+    }));
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          workspace: {
+            getWorkspaceFolders: () => [
+              { name: "Injected", path: "/workspace/injected" },
+            ],
+          },
+          config: {
+            resolveModelForMode: () => "host-model",
+            getCondenseThresholdForModel: () => 0.42,
+            getBgSummaryMode: () => "heuristic",
+          },
+          providers,
+          createSession: createSession as any,
+          createActivityTraceRecorder,
+          createCheckpointManager,
+        },
+      },
+    );
+
+    await mgr.createSession("code");
+
+    expect(createActivityTraceRecorder).toHaveBeenCalledWith({
+      workspaceDir: "/tmp",
+    });
+    expect(createCheckpointManager).toHaveBeenCalledWith({
+      workspaceDir: "/tmp",
+      taskId: "agent",
+      log: expect.any(Function),
+    });
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          model: "host-model",
+          autoCondenseThreshold: 0.42,
+        }),
+        workspaceFolders: [{ name: "Injected", path: "/workspace/injected" }],
+      }),
+    );
+  });
+
+  it("memoizes the foreground engine and updates its runtime when tool context changes", async () => {
+    const providers = new ProviderRegistry();
+    const setToolRuntime = vi.fn();
+    const createEngine = vi.fn(() => ({
+      setToolRuntime,
+      run: vi.fn(async function* () {}),
+      condenseSession: vi.fn(async function* () {}),
+      isOverCondenseThreshold: vi.fn(() => false),
+    }));
+    const runtimeA = { executeTool: vi.fn() };
+    const runtimeB = { executeTool: vi.fn() };
+    const createToolRuntime = vi
+      .fn()
+      .mockReturnValueOnce(runtimeA)
+      .mockReturnValueOnce(runtimeB);
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          providers,
+          createEngine: createEngine as any,
+          createToolRuntime: createToolRuntime as any,
+        },
+      },
+    );
+
+    const ctxA = {
+      approvalManager: {} as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    };
+    const ctxB = { ...ctxA, sessionId: "agent-next" };
+
+    mgr.setToolContext(ctxA);
+    const first = (mgr as any).getEngine();
+    const second = (mgr as any).getEngine();
+    mgr.setToolContext(ctxB);
+
+    expect(first).toBe(second);
+    expect(createEngine).toHaveBeenCalledTimes(1);
+    expect(createEngine).toHaveBeenCalledWith(providers, undefined);
+    expect(createToolRuntime).toHaveBeenCalledTimes(2);
+    expect(createToolRuntime).toHaveBeenNthCalledWith(1, ctxA);
+    expect(createToolRuntime).toHaveBeenNthCalledWith(2, ctxB);
+    expect(setToolRuntime).toHaveBeenNthCalledWith(1, runtimeA);
+    expect(setToolRuntime).toHaveBeenNthCalledWith(2, runtimeB);
+  });
 });
 
 describe("AgentSessionManager condense thresholds", () => {
@@ -346,6 +487,39 @@ describe("AgentSessionManager in-flight persistence", () => {
     vi.useRealTimers();
   });
 
+  it("serializes immediate revision-aware saves so create is followed by update", async () => {
+    const expectedRevisions: Array<string | null> = [];
+    const store = {
+      saveSession: vi.fn(async (args: { expectedRevision: string | null }) => {
+        expectedRevisions.push(args.expectedRevision);
+        return { ok: true, revision: String(expectedRevisions.length) };
+      }),
+      list: vi.fn(() => []),
+      get: vi.fn(),
+      loadMessages: vi.fn(),
+      loadMetadata: vi.fn(),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+    (session as any).getAllMessages = vi.fn(() => [
+      { role: "user", content: "first" },
+    ]);
+
+    mgr.saveSession(session.id);
+    mgr.saveSession(session.id);
+    await flushPromises();
+    await flushPromises();
+
+    expect(expectedRevisions).toEqual([null, "1"]);
+  });
+
   it("periodically saves session progress before done while a turn is in-flight", async () => {
     const savedCounts: number[] = [];
     const store = {
@@ -524,6 +698,372 @@ describe("AgentSessionManager checkpoints", () => {
       get: () => undefined,
       inspect: () => undefined,
     });
+  });
+
+  it("renames unloaded persisted sessions with the current stored revision", async () => {
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Old title",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const renameSession = vi.fn(async () => ({ ok: true, revision: "6" }));
+    const store = {
+      renameSession,
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "5",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "persisted" }],
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: { baseCommit: null, checkpoints: [] },
+          },
+        },
+      })),
+      list: vi.fn(() => []),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => []),
+      loadMetadata: vi.fn(() => null),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await expect(
+      mgr.renamePersistedSession("session-1", "New title"),
+    ).resolves.toBe(true);
+    expect(renameSession).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      title: "New title",
+      expectedRevision: "5",
+    });
+  });
+
+  it("returns conflict details when persisted session rename sees a stale revision", async () => {
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Old title",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const renameSession = vi.fn(async () => ({
+      ok: false,
+      reason: "conflict",
+      currentRevision: "6",
+    }));
+    const log = vi.fn();
+    const store = {
+      renameSession,
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "5",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "persisted" }],
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: { baseCommit: null, checkpoints: [] },
+          },
+        },
+      })),
+      list: vi.fn(() => []),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => []),
+      loadMetadata: vi.fn(() => null),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+      log,
+    );
+
+    await expect(
+      mgr.renamePersistedSessionWithResult("session-1", "New title"),
+    ).resolves.toEqual({
+      ok: false,
+      operation: "rename",
+      reason: "conflict",
+      currentRevision: "6",
+    });
+    await expect(
+      mgr.renamePersistedSession("session-1", "New title"),
+    ).resolves.toBe(false);
+    expect(log).toHaveBeenCalledWith(
+      "[session] persistence rename conflict for session-1: current=6",
+    );
+  });
+
+  it("deletes loaded persisted sessions with the tracked revision", async () => {
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Loaded session",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const deleteSession = vi.fn(async () => ({ ok: true, revision: "4" }));
+    const store = {
+      deleteSession,
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "3",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "persisted" }],
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: { baseCommit: null, checkpoints: [] },
+          },
+        },
+      })),
+      list: vi.fn(() => []),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => []),
+      loadMetadata: vi.fn(() => null),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+    expect(session.id).toBe("session-1");
+    const loaded = await mgr.loadPersistedSession("session-1");
+    expect(loaded).toBe(session);
+
+    await expect(mgr.deletePersistedSession("session-1")).resolves.toBe(true);
+    expect(deleteSession).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      expectedRevision: "3",
+    });
+    expect(mgr.getSession("session-1")).toBeUndefined();
+  });
+
+  it("returns ownership details when persisted session rename is owned elsewhere", async () => {
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Old title",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const renameSession = vi.fn(async () => ({
+      ok: false,
+      reason: "not_owner",
+      owner: { ownerId: "other", surface: "cli", startedAt: 99 },
+    }));
+    const store = {
+      renameSession,
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "5",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "persisted" }],
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: { baseCommit: null, checkpoints: [] },
+          },
+        },
+      })),
+      list: vi.fn(() => []),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => []),
+      loadMetadata: vi.fn(() => null),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await expect(
+      mgr.renamePersistedSessionWithResult("session-1", "New title"),
+    ).resolves.toEqual({
+      ok: false,
+      operation: "rename",
+      reason: "not_owner",
+      message: undefined,
+    });
+  });
+
+  it("returns IO details when persisted session delete fails", async () => {
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Loaded session",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const deleteSession = vi.fn(async () => ({
+      ok: false,
+      reason: "io_error",
+      message: "disk full",
+    }));
+    const store = {
+      deleteSession,
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "3",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "persisted" }],
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: { baseCommit: null, checkpoints: [] },
+          },
+        },
+      })),
+      list: vi.fn(() => []),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => []),
+      loadMetadata: vi.fn(() => null),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    await expect(
+      mgr.deletePersistedSessionWithResult("session-1"),
+    ).resolves.toEqual({
+      ok: false,
+      operation: "delete",
+      reason: "io_error",
+      message: "disk full",
+    });
+    await expect(mgr.deletePersistedSession("session-1")).resolves.toBe(false);
+  });
+
+  it("does not replace a newer tracked revision when loading an already live session", async () => {
+    const saveSession = vi.fn(
+      async (args: { expectedRevision: string | null }) => {
+        if (args.expectedRevision === null) return { ok: true, revision: "2" };
+        return { ok: true, revision: "3" };
+      },
+    );
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Live session",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const store = {
+      saveSession,
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "1",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "persisted" }],
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: { baseCommit: null, checkpoints: [] },
+          },
+        },
+      })),
+      list: vi.fn(() => []),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => []),
+      loadMetadata: vi.fn(() => null),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+    (session as any).getAllMessages = vi.fn(() => [
+      { role: "user", content: "live" },
+    ]);
+
+    mgr.saveSession(session.id);
+    await flushPromises();
+
+    const loaded = await mgr.loadPersistedSession(session.id);
+    expect(loaded).toBe(session);
+
+    mgr.saveSession(session.id);
+    await flushPromises();
+
+    expect(
+      saveSession.mock.calls.map(([args]) => args.expectedRevision),
+    ).toEqual([null, "2"]);
   });
 
   it("creates an idempotent checkpoint for each completed user turn", async () => {
@@ -706,6 +1246,120 @@ describe("AgentSessionManager checkpoints", () => {
     );
   });
 
+  it("returns session and persistence revisions with checkpoint revert previews", async () => {
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "second prompt" },
+    ];
+    const session: any = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      providerId: undefined,
+      autoCondenseThreshold: 0.9,
+      title: "Checkpoint test",
+      background: false,
+      status: "idle",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      currentTool: undefined,
+      addUserMessage: vi.fn(),
+      appendRuntimeError: vi.fn(),
+      consumePendingInterjection: vi.fn(() => null),
+      queuePendingModeResume: vi.fn(),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+      getAllMessages: vi.fn(() => sessionMessages),
+      getLoadedSkills: vi.fn(() => []),
+      replaceMessages: vi.fn(),
+      restoreFromStore: vi.fn((data: { messages: AgentMessage[] }) => {
+        sessionMessages.splice(0, sessionMessages.length, ...data.messages);
+      }),
+      rebuildSystemPrompt: vi.fn(async () => {}),
+      lastActiveAt: 123,
+      createdAt: 100,
+    };
+    mocks.createSession.mockResolvedValueOnce(session);
+
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Checkpoint test",
+      messageCount: 3,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const store = {
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "persisted-1",
+        value: {
+          summary,
+          messages: sessionMessages,
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: {
+              baseCommit: null,
+              checkpoints: [
+                {
+                  id: "cp-1",
+                  commitHash: "hash-1",
+                  turnIndex: 1,
+                  createdAt: 111,
+                },
+              ],
+            },
+          },
+        },
+      })),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => sessionMessages),
+      loadMetadata: vi.fn(() => null),
+      list: vi.fn(() => []),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    await mgr.loadPersistedSession("session-1");
+
+    const checkpointManager = {
+      previewRevert: vi.fn(async () => ({
+        modified: ["src/a.ts"],
+        deleted: [],
+        restored: [],
+      })),
+    };
+    (mgr as any).checkpointManager = checkpointManager;
+
+    const preview = await mgr.previewRevert("session-1", "cp-1");
+
+    expect(preview).toEqual({
+      checkpointId: "cp-1",
+      sessionRevision: expect.any(String),
+      persistenceRevision: "persisted-1",
+      workspaceRevision: "hash-1",
+      preview: { modified: ["src/a.ts"], deleted: [], restored: [] },
+    });
+  });
+
   it("reverts to the selected checkpoint snapshot and persists checkpoint metadata", async () => {
     const sessionMessages: AgentMessage[] = [
       { role: "user", content: "first prompt" },
@@ -753,21 +1407,58 @@ describe("AgentSessionManager checkpoints", () => {
     };
     mocks.createSession.mockResolvedValueOnce(session);
 
-    const save = vi.fn();
+    const saveSession = vi.fn(
+      async (_args: { session: PersistedSessionRecord }) => ({
+        ok: true,
+        revision: "2",
+      }),
+    );
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Checkpoint test",
+      messageCount: 4,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
     const store = {
-      save,
-      get: vi.fn(() => ({
-        id: "session-1",
-        mode: "code",
-        model: "claude-sonnet-4-6",
-        title: "Checkpoint test",
-        messageCount: 4,
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        createdAt: 100,
-        lastActiveAt: 123,
-        schemaVersion: 1,
+      saveSession,
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "1",
+        value: {
+          summary,
+          messages: sessionMessages,
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: {
+              baseCommit: null,
+              checkpoints: [
+                {
+                  id: "cp-1",
+                  commitHash: "hash-1",
+                  turnIndex: 1,
+                  createdAt: 111,
+                },
+                {
+                  id: "cp-2",
+                  commitHash: "hash-2",
+                  turnIndex: 2,
+                  createdAt: 222,
+                },
+              ],
+            },
+          },
+        },
       })),
+      get: vi.fn(() => summary),
       loadMessages: vi.fn(() => sessionMessages),
       loadMetadata: vi.fn(() => ({
         schemaVersion: 1,
@@ -775,20 +1466,7 @@ describe("AgentSessionManager checkpoints", () => {
         model: "claude-sonnet-4-6",
         totalInputTokens: 0,
         totalOutputTokens: 0,
-        checkpoints: [
-          {
-            id: "cp-1",
-            commitHash: "hash-1",
-            turnIndex: 1,
-            createdAt: 111,
-          },
-          {
-            id: "cp-2",
-            commitHash: "hash-2",
-            turnIndex: 2,
-            createdAt: 222,
-          },
-        ],
+        checkpoints: [],
       })),
       list: vi.fn(() => []),
     } as any;
@@ -810,7 +1488,11 @@ describe("AgentSessionManager checkpoints", () => {
 
     const result = await mgr.revertToCheckpoint("session-1", "cp-1");
 
-    expect(result).toEqual({ ok: true, restoredPrompt: "second prompt" });
+    expect(result).toEqual({
+      ok: true,
+      restoredPrompt: "second prompt",
+      sessionRevision: "2",
+    });
     expect(checkpointManager.revertToCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({ id: "cp-1", turnIndex: 1 }),
     );
@@ -826,9 +1508,9 @@ describe("AgentSessionManager checkpoints", () => {
         createdAt: 111,
       },
     ]);
-    expect(save).toHaveBeenCalled();
-    const lastSaveArg = save.mock.calls.at(-1)?.[0];
-    expect(lastSaveArg?.checkpoints).toEqual([
+    expect(saveSession).toHaveBeenCalled();
+    const lastSaveArg = saveSession.mock.lastCall![0].session;
+    expect(lastSaveArg?.metadata.checkpointState?.checkpoints).toEqual([
       {
         id: "cp-1",
         commitHash: "hash-1",
@@ -836,10 +1518,388 @@ describe("AgentSessionManager checkpoints", () => {
         createdAt: 111,
       },
     ]);
-    expect(lastSaveArg?.getAllMessages()).toEqual([
+    expect(lastSaveArg?.messages).toEqual([
       { role: "user", content: "first prompt" },
       { role: "assistant", content: "first answer" },
     ]);
+  });
+
+  it("persists revertPending when workspace revert succeeds but session save conflicts", async () => {
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "second prompt" },
+      { role: "assistant", content: "second answer" },
+    ];
+    const replaceMessages = vi.fn((messages: AgentMessage[]) => {
+      sessionMessages.splice(0, sessionMessages.length, ...messages);
+    });
+    const session: any = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      providerId: undefined,
+      autoCondenseThreshold: 0.9,
+      title: "Checkpoint test",
+      background: false,
+      status: "idle",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      currentTool: undefined,
+      addUserMessage: vi.fn(),
+      appendRuntimeError: vi.fn(),
+      consumePendingInterjection: vi.fn(() => null),
+      queuePendingModeResume: vi.fn(),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+      getAllMessages: vi.fn(() => sessionMessages),
+      getLoadedSkills: vi.fn(() => []),
+      replaceMessages,
+      restoreFromStore: vi.fn((data: { messages: AgentMessage[] }) => {
+        sessionMessages.splice(0, sessionMessages.length, ...data.messages);
+      }),
+      rebuildSystemPrompt: vi.fn(async () => {}),
+      lastActiveAt: 123,
+      createdAt: 100,
+    };
+    mocks.createSession.mockResolvedValueOnce(session);
+
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Checkpoint test",
+      messageCount: 4,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const persistedRecord = {
+      summary,
+      messages: sessionMessages,
+      metadata: {
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        checkpointState: {
+          baseCommit: null,
+          checkpoints: [
+            {
+              id: "cp-1",
+              commitHash: "hash-1",
+              turnIndex: 1,
+              createdAt: 111,
+            },
+          ],
+        },
+      },
+    } satisfies PersistedSessionRecord;
+    const saveSession = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        reason: "conflict",
+        currentRevision: "2",
+      })
+      .mockResolvedValueOnce({ ok: true, revision: "3" });
+    const store = {
+      saveSession,
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "1",
+        value: persistedRecord,
+      })),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => sessionMessages),
+      loadMetadata: vi.fn(() => null),
+      list: vi.fn(() => []),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    await mgr.loadPersistedSession("session-1");
+
+    const checkpointManager = {
+      revertToCheckpoint: vi.fn(async () => true),
+    };
+    (mgr as any).checkpointManager = checkpointManager;
+
+    const result = await mgr.revertToCheckpoint("session-1", "cp-1");
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "persistence_failed",
+      currentRevision: "2",
+    });
+    expect(checkpointManager.revertToCheckpoint).toHaveBeenCalled();
+    expect(replaceMessages).not.toHaveBeenCalled();
+    expect(saveSession).toHaveBeenCalledTimes(2);
+    expect(saveSession.mock.calls[1][0].session.metadata.revertPending).toEqual(
+      expect.objectContaining({
+        checkpointId: "cp-1",
+        reason: "workspace_reverted_session_save_failed",
+        sessionRevision: "2",
+        workspaceRevision: "hash-1",
+      }),
+    );
+  });
+
+  it("does not return a cached current revision for non-conflict persistence failures", async () => {
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "second prompt" },
+    ];
+    const session: any = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      providerId: undefined,
+      autoCondenseThreshold: 0.9,
+      title: "Checkpoint test",
+      background: false,
+      status: "idle",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      currentTool: undefined,
+      addUserMessage: vi.fn(),
+      appendRuntimeError: vi.fn(),
+      consumePendingInterjection: vi.fn(() => null),
+      queuePendingModeResume: vi.fn(),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+      getAllMessages: vi.fn(() => sessionMessages),
+      getLoadedSkills: vi.fn(() => []),
+      replaceMessages: vi.fn(),
+      restoreFromStore: vi.fn((data: { messages: AgentMessage[] }) => {
+        sessionMessages.splice(0, sessionMessages.length, ...data.messages);
+      }),
+      rebuildSystemPrompt: vi.fn(async () => {}),
+      lastActiveAt: 123,
+      createdAt: 100,
+    };
+    mocks.createSession.mockResolvedValueOnce(session);
+
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Checkpoint test",
+      messageCount: 3,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const record: PersistedSessionRecord = {
+      summary,
+      messages: sessionMessages,
+      metadata: {
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        checkpointState: {
+          baseCommit: null,
+          checkpoints: [
+            {
+              id: "cp-1",
+              commitHash: "hash-1",
+              turnIndex: 1,
+              createdAt: 111,
+            },
+          ],
+        },
+      },
+    };
+    const store = {
+      saveSession: vi.fn(async () => ({
+        ok: false,
+        reason: "io_error",
+        message: "disk full",
+      })),
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "1",
+        value: record,
+      })),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => sessionMessages),
+      loadMetadata: vi.fn(() => null),
+      list: vi.fn(() => []),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    await mgr.loadPersistedSession("session-1");
+    (mgr as any).checkpointManager = {
+      revertToCheckpoint: vi.fn(async () => true),
+    };
+
+    const result = await mgr.revertToCheckpoint("session-1", "cp-1");
+
+    expect(result).toEqual({ ok: false, reason: "persistence_failed" });
+  });
+
+  it("rejects checkpoint revert when the session is not loaded in memory", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    (mgr as any).checkpoints.set("session-1", [
+      { id: "cp-1", commitHash: "hash-1", turnIndex: 1, createdAt: 111 },
+    ]);
+    const checkpointManager = { revertToCheckpoint: vi.fn(async () => true) };
+    (mgr as any).checkpointManager = checkpointManager;
+
+    const result = await mgr.revertToCheckpoint("session-1", "cp-1");
+
+    expect(result).toEqual({ ok: false, reason: "not_found" });
+    expect(checkpointManager.revertToCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("rejects checkpoint revert when the session changed after preview", async () => {
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "second prompt" },
+    ];
+    const session: any = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      providerId: undefined,
+      autoCondenseThreshold: 0.9,
+      title: "Checkpoint test",
+      background: false,
+      status: "idle",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      currentTool: undefined,
+      addUserMessage: vi.fn(),
+      appendRuntimeError: vi.fn(),
+      consumePendingInterjection: vi.fn(() => null),
+      queuePendingModeResume: vi.fn(),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+      getAllMessages: vi.fn(() => sessionMessages),
+      getLoadedSkills: vi.fn(() => []),
+      replaceMessages: vi.fn(),
+      restoreFromStore: vi.fn((data: { messages: AgentMessage[] }) => {
+        sessionMessages.splice(0, sessionMessages.length, ...data.messages);
+      }),
+      rebuildSystemPrompt: vi.fn(async () => {}),
+      lastActiveAt: 123,
+      createdAt: 100,
+    };
+    mocks.createSession.mockResolvedValueOnce(session);
+
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Checkpoint test",
+      messageCount: 3,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const store = {
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "1",
+        value: {
+          summary,
+          messages: sessionMessages,
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: {
+              baseCommit: null,
+              checkpoints: [
+                {
+                  id: "cp-1",
+                  commitHash: "hash-1",
+                  turnIndex: 1,
+                  createdAt: 111,
+                },
+              ],
+            },
+          },
+        },
+      })),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => sessionMessages),
+      loadMetadata: vi.fn(() => null),
+      list: vi.fn(() => []),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    await mgr.loadPersistedSession("session-1");
+
+    const checkpointManager = {
+      previewRevert: vi.fn(async () => ({
+        modified: [],
+        deleted: [],
+        restored: [],
+      })),
+      revertToCheckpoint: vi.fn(async () => true),
+    };
+    (mgr as any).checkpointManager = checkpointManager;
+    const preview = await mgr.previewRevert("session-1", "cp-1");
+    expect(preview).not.toBeNull();
+
+    sessionMessages.push({ role: "assistant", content: "new answer" });
+    const result = await mgr.revertToCheckpoint(
+      "session-1",
+      "cp-1",
+      preview!.sessionRevision,
+      preview!.persistenceRevision,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "session_conflict",
+      currentRevision: expect.any(String),
+    });
+    expect(checkpointManager.revertToCheckpoint).not.toHaveBeenCalled();
+    expect(session.replaceMessages).not.toHaveBeenCalled();
   });
 
   it("accepts reverting to a checkpoint at the current transcript tail", async () => {
@@ -889,21 +1949,52 @@ describe("AgentSessionManager checkpoints", () => {
     };
     mocks.createSession.mockResolvedValueOnce(session);
 
-    const save = vi.fn();
+    const saveSession = vi.fn(
+      async (_args: { session: PersistedSessionRecord }) => ({
+        ok: true,
+        revision: "2",
+      }),
+    );
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Checkpoint test",
+      messageCount: 4,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
     const store = {
-      save,
-      get: vi.fn(() => ({
-        id: "session-1",
-        mode: "code",
-        model: "claude-sonnet-4-6",
-        title: "Checkpoint test",
-        messageCount: 4,
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        createdAt: 100,
-        lastActiveAt: 123,
-        schemaVersion: 1,
+      saveSession,
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "1",
+        value: {
+          summary,
+          messages: sessionMessages,
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            checkpointState: {
+              baseCommit: null,
+              checkpoints: [
+                {
+                  id: "cp-tail",
+                  commitHash: "hash-tail",
+                  turnIndex: 2,
+                  createdAt: 222,
+                },
+              ],
+            },
+          },
+        },
       })),
+      get: vi.fn(() => summary),
       loadMessages: vi.fn(() => sessionMessages),
       loadMetadata: vi.fn(() => ({
         schemaVersion: 1,
@@ -911,14 +2002,7 @@ describe("AgentSessionManager checkpoints", () => {
         model: "claude-sonnet-4-6",
         totalInputTokens: 0,
         totalOutputTokens: 0,
-        checkpoints: [
-          {
-            id: "cp-tail",
-            commitHash: "hash-tail",
-            turnIndex: 2,
-            createdAt: 222,
-          },
-        ],
+        checkpoints: [],
       })),
       list: vi.fn(() => []),
     } as any;
@@ -939,14 +2023,18 @@ describe("AgentSessionManager checkpoints", () => {
 
     const result = await mgr.revertToCheckpoint("session-1", "cp-tail");
 
-    expect(result).toEqual({ ok: true, restoredPrompt: undefined });
+    expect(result).toEqual({
+      ok: true,
+      restoredPrompt: undefined,
+      sessionRevision: "2",
+    });
     expect(replaceMessages).toHaveBeenCalledWith([
       { role: "user", content: "first prompt" },
       { role: "assistant", content: "first answer" },
       { role: "user", content: "second prompt" },
       { role: "assistant", content: "second answer" },
     ]);
-    expect(save).toHaveBeenCalled();
+    expect(saveSession).toHaveBeenCalled();
   });
 });
 

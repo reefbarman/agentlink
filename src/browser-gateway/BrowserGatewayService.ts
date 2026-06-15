@@ -107,6 +107,7 @@ export interface BrowserGatewaySessionState {
         systemPrompt: AppState["systemPrompt"];
         loadedInstructions: AppState["loadedInstructions"];
         restoringSession: AppState["restoringSession"];
+        revertRecoveryNotice: AppState["revertRecoveryNotice"];
         contextBudget?: ChatState["contextBudget"];
         condenseThreshold?: number;
       }
@@ -145,6 +146,7 @@ export interface BrowserGatewayWireSessionState {
     systemPrompt: AppState["systemPrompt"];
     loadedInstructions: AppState["loadedInstructions"];
     restoringSession: AppState["restoringSession"];
+    revertRecoveryNotice: AppState["revertRecoveryNotice"];
     contextBudget?: ChatState["contextBudget"];
     condenseThreshold?: number;
     agentWriteApproval: "prompt" | "session" | "project" | "global";
@@ -383,6 +385,9 @@ export class BrowserGatewayService implements vscode.Disposable {
         restoringSession: projectedMatchesForeground
           ? projected.restoringSession
           : false,
+        revertRecoveryNotice: projectedMatchesForeground
+          ? projected.revertRecoveryNotice
+          : null,
         contextBudget: projectedMatchesForeground
           ? projected.contextBudget
           : undefined,
@@ -448,6 +453,7 @@ export class BrowserGatewayService implements vscode.Disposable {
             systemPrompt: sessionState.foreground.systemPrompt,
             loadedInstructions: sessionState.foreground.loadedInstructions,
             restoringSession: sessionState.foreground.restoringSession,
+            revertRecoveryNotice: sessionState.foreground.revertRecoveryNotice,
             contextBudget: sessionState.foreground.contextBudget,
             condenseThreshold: sessionState.foreground.condenseThreshold,
             agentWriteApproval: this.getAgentWriteApprovalState(),

@@ -1,11 +1,17 @@
-import * as vscode from "vscode";
+import * as crypto from "crypto";
+
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
+import type {
+  PersistResult,
+  PersistedSessionRecord,
+  PersistenceRevision,
+  RevertRecoveryState,
+} from "./persistenceContracts.js";
 import { hasPendingTodos, todoTool, type TodoItem } from "./todoTool.js";
 import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
-import { ActivityTraceRecorder } from "./ActivityTraceRecorder.js";
 import type { AgentMode } from "./modes.js";
 import {
   getAgentTools,
@@ -14,12 +20,7 @@ import {
 } from "./toolAdapter.js";
 import type { SessionStore, SessionSummary } from "./SessionStore.js";
 import type { BgSessionInfo } from "../shared/types.js";
-import {
-  CheckpointManager,
-  type Checkpoint,
-  type RevertPreview,
-} from "./CheckpointManager.js";
-import { providerRegistry } from "./providers/index.js";
+import type { Checkpoint, RevertPreview } from "./CheckpointManager.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import {
@@ -27,27 +28,12 @@ import {
   type McpToolDisclosurePartition,
 } from "./mcpToolDisclosure.js";
 import { CODEX_CONDENSE_MODEL_FALLBACKS } from "./providers/codex/models.js";
+import { getEffectiveAutoCondenseThreshold } from "./modelCondenseThresholds.js";
 import {
   callOpenAiCompatibleChat,
   getOpenAiCompatibleEndpoint,
 } from "./openaiCompatibleClient.js";
 
-export type BgSummaryMode = "agent" | "openai" | "heuristic";
-
-export function getBgSummaryMode(): BgSummaryMode {
-  const value = vscode.workspace
-    .getConfiguration("agentlink")
-    .get<string>("bgSummary.mode", "agent");
-  if (value === "agent" || value === "openai" || value === "heuristic") {
-    return value;
-  }
-  return "agent";
-}
-import {
-  getConfiguredBaseThresholdForModel,
-  getEffectiveAutoCondenseThreshold,
-} from "./modelCondenseThresholds.js";
-import { resolveModelForMode } from "./modeModelPreferences.js";
 import { summarizeTextForPreview } from "../shared/textSummary.js";
 import {
   applyMemoryCandidateNudge,
@@ -57,6 +43,14 @@ import type {
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
 } from "./backgroundTypes.js";
+import {
+  createDefaultAgentSessionManagerHost,
+  mergeAgentSessionManagerHost,
+  type ActivityTraceRecorderLike,
+  type AgentSessionManagerHost,
+  type AgentSessionManagerOptions,
+  type CheckpointManagerLike,
+} from "./AgentSessionManagerHost.js";
 
 export interface BtwQuestionResult {
   answer: string;
@@ -65,6 +59,39 @@ export interface BtwQuestionResult {
   inputTokens: number;
   outputTokens: number;
 }
+
+export interface CheckpointRevertPreviewResult {
+  checkpointId: string;
+  sessionRevision: PersistenceRevision;
+  persistenceRevision?: PersistenceRevision;
+  workspaceRevision?: string;
+  preview: RevertPreview;
+}
+
+export type CheckpointRevertResult =
+  | { ok: true; restoredPrompt?: string; sessionRevision?: PersistenceRevision }
+  | {
+      ok: false;
+      reason:
+        | "not_found"
+        | "session_conflict"
+        | "checkpoint_stale"
+        | "workspace_revert_failed"
+        | "persistence_failed";
+      currentRevision?: PersistenceRevision;
+    };
+
+export type PersistedSessionMutationOperation = "rename" | "delete";
+
+export type PersistedSessionMutationResult =
+  | { ok: true }
+  | {
+      ok: false;
+      operation: PersistedSessionMutationOperation;
+      reason: "conflict" | "not_owner" | "not_found" | "corrupt" | "io_error";
+      currentRevision?: PersistenceRevision;
+      message?: string;
+    };
 
 export class AgentSessionManager {
   private sessions = new Map<string, AgentSession>();
@@ -75,12 +102,16 @@ export class AgentSessionManager {
   private apiKey?: string;
   private toolCtx?: ToolDispatchContext;
   private devMode: boolean;
-  private store?: SessionStore;
+  private persistence?: SessionStore;
+  private sessionRevisions = new Map<string, PersistenceRevision>();
+  private sessionRevertPending = new Map<string, RevertRecoveryState>();
+  private sessionSaveQueues = new Map<string, Promise<void>>();
   private log?: (msg: string) => void;
-  private activityTraceRecorder: ActivityTraceRecorder;
+  private readonly host: AgentSessionManagerHost;
+  private activityTraceRecorder: ActivityTraceRecorderLike;
 
   /** CheckpointManager shared across sessions (one shadow repo per workspace) */
-  private checkpointManager: CheckpointManager | null = null;
+  private checkpointManager: CheckpointManagerLike | null = null;
   /** Checkpoints per session: sessionId → Checkpoint[] */
   private checkpoints = new Map<string, Checkpoint[]>();
   /** Pending waiters for background session completion: sessionId → resolvers */
@@ -88,7 +119,10 @@ export class AgentSessionManager {
   /** Stored final results for completed bg sessions (prevents race in waitForBackground). */
   private bgFinalResults = new Map<string, string>();
   /** Safety timers per bg session (cleared on normal completion). */
-  private bgSafetyTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
+  private bgSafetyTimers = new Map<
+    string,
+    ReturnType<AgentSessionManagerHost["timers"]["setTimeout"]>[]
+  >();
   /** Accumulated streaming text for background sessions (for UI preview). */
   private bgStreamingText = new Map<string, string>();
   /** Completion timestamps for background sessions (for auto-dismiss). */
@@ -163,24 +197,31 @@ export class AgentSessionManager {
     } = {
       maxConcurrent: 3,
     },
+    opts?: AgentSessionManagerOptions,
   ) {
     this.config = config;
     this.cwd = cwd;
     this.apiKey = apiKey;
     this.devMode = devMode ?? false;
-    this.store = store;
     this.log = log;
-    this.activityTraceRecorder = new ActivityTraceRecorder({
+    const defaultHost = createDefaultAgentSessionManagerHost({
+      cwd,
+      log,
+      store,
+    });
+    this.host = mergeAgentSessionManagerHost(defaultHost, opts?.host);
+    this.persistence = this.host.persistence;
+    this.activityTraceRecorder = this.host.createActivityTraceRecorder({
       workspaceDir: cwd,
     });
 
     // Initialize checkpoint manager asynchronously — failures are non-fatal
-    this.checkpointManager = new CheckpointManager({
+    this.checkpointManager = this.host.createCheckpointManager({
       workspaceDir: cwd,
       taskId: "agent",
-      log: (msg) => log?.(msg),
+      log: (msg: string) => log?.(msg),
     });
-    this.checkpointManager.initialize().catch((err) => {
+    this.checkpointManager.initialize().catch((err: unknown) => {
       log?.(`[checkpoint] Init error: ${err}`);
     });
   }
@@ -191,16 +232,13 @@ export class AgentSessionManager {
    * folder add/remove is reflected on the next session create or prompt rebuild.
    */
   private getWorkspaceFolders(): WorkspaceFolderInfo[] {
-    return (vscode.workspace.workspaceFolders ?? []).map((f) => ({
-      name: f.name,
-      path: f.uri.fsPath,
-    }));
+    return this.host.workspace.getWorkspaceFolders();
   }
 
   setToolContext(ctx: ToolDispatchContext): void {
     this.toolCtx = ctx;
     if (this.engine) {
-      this.engine.setToolContext(ctx);
+      this.engine.setToolRuntime(this.host.createToolRuntime(ctx));
     }
   }
 
@@ -264,9 +302,9 @@ export class AgentSessionManager {
 
   private getEngine(): AgentEngine {
     if (!this.engine) {
-      this.engine = new AgentEngine(providerRegistry, this.log);
+      this.engine = this.host.createEngine(this.host.providers, this.log);
       if (this.toolCtx) {
-        this.engine.setToolContext(this.toolCtx);
+        this.engine.setToolRuntime(this.host.createToolRuntime(this.toolCtx));
       }
     }
     return this.engine;
@@ -278,10 +316,7 @@ export class AgentSessionManager {
 
   private getCondenseThresholdForModel(model: string): number {
     try {
-      return getConfiguredBaseThresholdForModel(
-        vscode.workspace.getConfiguration("agentlink"),
-        model,
-      );
+      return this.host.config.getCondenseThresholdForModel(model);
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured condense threshold for ${model}: ${err instanceof Error ? err.message : String(err)}`,
@@ -300,8 +335,7 @@ export class AgentSessionManager {
 
   private getModelForMode(mode: string): string {
     try {
-      const configured = vscode.workspace.getConfiguration("agentlink");
-      return resolveModelForMode(configured, mode, this.config.model);
+      return this.host.config.resolveModelForMode(mode, this.config.model);
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured model for mode ${mode}: ${err instanceof Error ? err.message : String(err)}`,
@@ -347,12 +381,12 @@ export class AgentSessionManager {
   ): Promise<AgentSession> {
     const model = this.getModelForMode(mode);
     const config = this.buildConfigForModel(model);
-    const providerId = providerRegistry.tryResolveProvider(config.model)?.id;
+    const providerId = this.host.providers.tryResolveProvider(config.model)?.id;
     this.updateConfig({
       model,
       autoCondenseThreshold: config.autoCondenseThreshold,
     });
-    const session = await AgentSession.create({
+    const session = await this.host.createSession({
       mode,
       config,
       cwd: this.cwd,
@@ -398,7 +432,7 @@ export class AgentSessionManager {
 
     fg.model = model;
     this.applyThresholdToSession(fg);
-    const newProviderId = providerRegistry.tryResolveProvider(model)?.id;
+    const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
     if (newProviderId !== fg.providerId) {
       fg.providerId = newProviderId;
       await fg.rebuildSystemPrompt({
@@ -420,15 +454,111 @@ export class AgentSessionManager {
   }
 
   saveSession(id: string): void {
+    if (!this.persistence || !this.sessions.has(id)) return;
+
+    if (typeof this.persistence.saveSession !== "function") {
+      const session = this.sessions.get(id);
+      if (session) this.saveSessionLegacy(session);
+      return;
+    }
+
+    const run = () => this.saveSessionRevisionAware(id);
+    const previous = this.sessionSaveQueues.get(id);
+    const next = previous ? previous.then(run, run) : run();
+    const tracked = next.finally(() => {
+      if (this.sessionSaveQueues.get(id) === tracked) {
+        this.sessionSaveQueues.delete(id);
+      }
+    });
+    tracked.catch(() => undefined);
+    this.sessionSaveQueues.set(id, tracked);
+  }
+
+  private saveSessionLegacy(session: AgentSession): void {
+    this.persistence?.save({
+      id: session.id,
+      mode: session.mode,
+      model: session.model,
+      title: session.title,
+      createdAt: session.createdAt,
+      lastActiveAt: session.lastActiveAt,
+      totalInputTokens: session.totalInputTokens,
+      totalOutputTokens: session.totalOutputTokens,
+      totalCacheReadTokens: session.totalCacheReadTokens,
+      totalCacheCreationTokens: session.totalCacheCreationTokens,
+      lastInputTokens: session.lastInputTokens,
+      lastCacheReadTokens: session.lastCacheReadTokens,
+      reasoningEffort: session.reasoningEffort,
+      background: session.background,
+      getLoadedSkills: () => session.getLoadedSkills?.() ?? [],
+      getAllMessages: () => session.getAllMessages(),
+      checkpoints: this.checkpoints.get(session.id) ?? [],
+    });
+  }
+
+  private async saveSessionRevisionAware(id: string): Promise<void> {
     const session = this.sessions.get(id);
-    if (session) {
-      this.store?.save({
+    if (!session || !this.persistence) return;
+
+    const expectedRevision = this.sessionRevisions.get(id) ?? null;
+    let result;
+    try {
+      result = await this.persistence.saveSession({
+        session: this.buildPersistedSessionRecord(session),
+        expectedRevision,
+      });
+    } catch (error) {
+      this.log?.(
+        `[session] persistence save failed for ${id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+
+    if (result.ok) {
+      this.sessionRevisions.set(id, result.revision);
+      return;
+    }
+
+    if (result.reason === "conflict") {
+      this.sessionRevisions.set(id, result.currentRevision);
+      this.log?.(
+        `[session] persistence conflict for ${id}: expected=${expectedRevision ?? "<create>"} current=${result.currentRevision}`,
+      );
+      return;
+    }
+
+    this.log?.(
+      `[session] persistence save failed for ${id}: ${result.reason}${"message" in result ? `: ${result.message}` : ""}`,
+    );
+  }
+
+  private buildPersistedSessionRecord(
+    session: AgentSession,
+    opts?: {
+      messages?: AgentMessage[];
+      checkpoints?: Checkpoint[];
+      revertPending?: RevertRecoveryState | null;
+    },
+  ): PersistedSessionRecord {
+    const messages = opts?.messages ?? session.getAllMessages();
+    return {
+      summary: {
+        schemaVersion: 1,
         id: session.id,
         mode: session.mode,
         model: session.model,
         title: session.title,
+        messageCount: messages.length,
+        totalInputTokens: session.totalInputTokens,
+        totalOutputTokens: session.totalOutputTokens,
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,
+        background: session.background,
+      },
+      messages,
+      metadata: {
+        mode: session.mode,
+        model: session.model,
         totalInputTokens: session.totalInputTokens,
         totalOutputTokens: session.totalOutputTokens,
         totalCacheReadTokens: session.totalCacheReadTokens,
@@ -436,12 +566,19 @@ export class AgentSessionManager {
         lastInputTokens: session.lastInputTokens,
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
-        background: session.background,
-        getLoadedSkills: () => session.getLoadedSkills(),
-        getAllMessages: () => session.getAllMessages(),
-        checkpoints: this.checkpoints.get(id) ?? [],
-      });
-    }
+        loadedSkills: session.getLoadedSkills?.() ?? [],
+        checkpointState: {
+          baseCommit: this.checkpointManager?.baseCommit ?? null,
+          checkpoints:
+            opts?.checkpoints ?? this.checkpoints.get(session.id) ?? [],
+        },
+        revertPending:
+          opts?.revertPending === null
+            ? undefined
+            : (opts?.revertPending ??
+              this.sessionRevertPending.get(session.id)),
+      },
+    };
   }
 
   getForegroundSession(): AgentSession | undefined {
@@ -477,7 +614,7 @@ export class AgentSessionManager {
     const mode = fg?.mode ?? "code";
     const model = fg?.model ?? this.config.model;
     const providerId =
-      fg?.providerId ?? providerRegistry.tryResolveProvider(model)?.id;
+      fg?.providerId ?? this.host.providers.tryResolveProvider(model)?.id;
     const config: AgentConfig = fg
       ? {
           ...this.buildConfigForModel(model),
@@ -490,7 +627,7 @@ export class AgentSessionManager {
         }
       : this.buildConfigForModel(model);
 
-    const session = await AgentSession.create({
+    const session = await this.host.createSession({
       mode,
       agentMode: fg?.agentMode,
       config,
@@ -536,8 +673,8 @@ export class AgentSessionManager {
       onSkillLoad: (skillName) => session.trackLoadedSkill(skillName),
     };
 
-    const engine = new AgentEngine(providerRegistry, this.log);
-    engine.setToolContext(sideCtx);
+    const engine = this.host.createEngine(this.host.providers, this.log);
+    engine.setToolRuntime(this.host.createToolRuntime(sideCtx));
 
     let answer = "";
     const toolCalls: BtwQuestionResult["toolCalls"] = [];
@@ -689,7 +826,10 @@ export class AgentSessionManager {
 
     // Keep checkpointing in-flight turns so reloads don't drop recent transcript
     // progress. The guard above avoids writes unless message history changed.
-    const inFlightPersistTimer = setInterval(persistIfHistoryChanged, 1000);
+    const inFlightPersistTimer = this.host.timers.setInterval(
+      persistIfHistoryChanged,
+      1000,
+    );
 
     this.onSessionsChanged?.();
 
@@ -812,7 +952,7 @@ export class AgentSessionManager {
         totalCacheCreationTokens: session.totalCacheCreationTokens,
       });
     } finally {
-      clearInterval(inFlightPersistTimer);
+      this.host.timers.clearInterval(inFlightPersistTimer);
       persistIfHistoryChanged();
       this.onSessionsChanged?.();
     }
@@ -898,7 +1038,10 @@ export class AgentSessionManager {
       }
     };
 
-    const inFlightPersistTimer = setInterval(persistIfHistoryChanged, 1000);
+    const inFlightPersistTimer = this.host.timers.setInterval(
+      persistIfHistoryChanged,
+      1000,
+    );
     this.onSessionsChanged?.();
 
     try {
@@ -925,7 +1068,7 @@ export class AgentSessionManager {
         totalCacheCreationTokens: session.totalCacheCreationTokens,
       });
     } finally {
-      clearInterval(inFlightPersistTimer);
+      this.host.timers.clearInterval(inFlightPersistTimer);
       persistIfHistoryChanged();
       this.onSessionsChanged?.();
     }
@@ -950,7 +1093,7 @@ export class AgentSessionManager {
     if (!session) return null;
 
     const model = this.getModelForMode(mode);
-    const newProviderId = providerRegistry.tryResolveProvider(model)?.id;
+    const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
 
     session.model = model;
     session.providerId = newProviderId;
@@ -1118,76 +1261,251 @@ export class AgentSessionManager {
   async previewRevert(
     sessionId: string,
     checkpointId: string,
-  ): Promise<RevertPreview | null> {
+  ): Promise<CheckpointRevertPreviewResult | null> {
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
     if (!checkpoint || !this.checkpointManager) return null;
-    return this.checkpointManager.previewRevert(checkpoint);
+    const preview = await this.checkpointManager.previewRevert(checkpoint);
+    if (!preview) return null;
+    return {
+      checkpointId,
+      sessionRevision: this.currentSessionRevisionToken(sessionId),
+      persistenceRevision: this.sessionRevisions.get(sessionId),
+      workspaceRevision: checkpoint.commitHash,
+      preview,
+    };
   }
 
   /**
    * Revert workspace files to the state at `checkpointId`, then truncate the
    * session's message history to that turn.
-   *
-   * Returns true on success.
    */
   async revertToCheckpoint(
     sessionId: string,
     checkpointId: string,
-  ): Promise<{ ok: boolean; restoredPrompt?: string }> {
+    expectedSessionRevision?: PersistenceRevision,
+    expectedPersistenceRevision?: PersistenceRevision,
+  ): Promise<CheckpointRevertResult> {
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
-    if (!checkpoint || !this.checkpointManager) return { ok: false };
+    if (!checkpoint || !this.checkpointManager) {
+      return { ok: false, reason: "not_found" };
+    }
+
+    const pendingSave = this.sessionSaveQueues.get(sessionId);
+    if (pendingSave) {
+      await pendingSave.catch(() => undefined);
+    }
 
     const session = this.sessions.get(sessionId);
-
-    const ok = await this.checkpointManager.revertToCheckpoint(checkpoint);
-    if (!ok) return { ok: false };
-
-    let restoredPrompt: string | undefined;
-
-    // Truncate conversation history to the selected checkpoint snapshot.
-    // `checkpoint.turnIndex` is the count of visible user turns already committed
-    // at that snapshot, so we keep everything before the user message at that
-    // position and restore that discarded message into the composer.
-    if (session) {
-      const allMessages = session.getAllMessages();
-      let userCount = 0;
-      let keepUntil = allMessages.length;
-      for (let i = 0; i < allMessages.length; i++) {
-        const message = allMessages[i];
-        if (message.role === "user" && typeof message.content === "string") {
-          if (userCount === checkpoint.turnIndex) {
-            restoredPrompt = message.content;
-            keepUntil = i;
-            break;
-          }
-          userCount++;
-        }
-      }
-      if (
-        keepUntil === allMessages.length &&
-        userCount !== checkpoint.turnIndex
-      ) {
-        // turnIndex points past the current transcript, so this checkpoint is stale or corrupt.
-        return { ok: false };
-      }
-      const truncated = allMessages.slice(0, keepUntil);
-      session.replaceMessages(truncated);
-      session.status = "idle";
+    if (!session) {
+      return { ok: false, reason: "not_found" };
     }
 
-    // Remove checkpoints created after this one.
+    if (
+      expectedSessionRevision &&
+      this.currentSessionRevisionToken(sessionId) !== expectedSessionRevision
+    ) {
+      return {
+        ok: false,
+        reason: "session_conflict",
+        currentRevision: this.currentSessionRevisionToken(sessionId),
+      };
+    }
+
+    if (
+      expectedPersistenceRevision &&
+      this.persistence &&
+      typeof this.persistence.readSession === "function"
+    ) {
+      const readResult = await this.persistence.readSession(sessionId);
+      if (
+        readResult.ok &&
+        readResult.revision !== expectedPersistenceRevision
+      ) {
+        return {
+          ok: false,
+          reason: "session_conflict",
+          currentRevision: readResult.revision,
+        };
+      }
+      if (!readResult.ok && readResult.reason !== "not_found") {
+        return { ok: false, reason: "persistence_failed" };
+      }
+    }
+
+    const truncateResult = this.buildCheckpointTruncation(session, checkpoint);
+    if (!truncateResult) {
+      return { ok: false, reason: "checkpoint_stale" };
+    }
+
     const existingCheckpoints = this.checkpoints.get(sessionId) ?? [];
     const idx = existingCheckpoints.findIndex((c) => c.id === checkpointId);
-    if (idx !== -1) {
-      this.checkpoints.set(sessionId, existingCheckpoints.slice(0, idx + 1));
+    const nextCheckpoints =
+      idx === -1 ? existingCheckpoints : existingCheckpoints.slice(0, idx + 1);
+
+    if (
+      expectedSessionRevision &&
+      this.currentSessionRevisionToken(sessionId) !== expectedSessionRevision
+    ) {
+      return {
+        ok: false,
+        reason: "session_conflict",
+        currentRevision: this.currentSessionRevisionToken(sessionId),
+      };
     }
 
-    if (session) {
-      this.saveSession(session.id);
+    const workspaceReverted =
+      await this.checkpointManager.revertToCheckpoint(checkpoint);
+    if (!workspaceReverted) {
+      return { ok: false, reason: "workspace_revert_failed" };
     }
 
+    const saveResult = await this.saveCheckpointRevertResult(
+      session,
+      truncateResult.messages,
+      nextCheckpoints,
+    );
+    if (!saveResult.ok) {
+      await this.persistRevertPending(session, checkpoint, saveResult);
+      return saveResult.reason === "conflict"
+        ? {
+            ok: false,
+            reason: "persistence_failed",
+            currentRevision: saveResult.currentRevision,
+          }
+        : { ok: false, reason: "persistence_failed" };
+    }
+    this.sessionRevertPending.delete(sessionId);
+    session.replaceMessages(truncateResult.messages);
+    session.status = "idle";
+    this.checkpoints.set(sessionId, nextCheckpoints);
     this.onSessionsChanged?.();
-    return { ok: true, restoredPrompt };
+    return {
+      ok: true,
+      restoredPrompt: truncateResult.restoredPrompt,
+      sessionRevision: saveResult.revision,
+    };
+  }
+
+  private currentSessionRevisionToken(sessionId: string): PersistenceRevision {
+    const session = this.sessions.get(sessionId);
+    const messages = session?.getAllMessages() ?? [];
+    const checkpoints = this.checkpoints.get(sessionId) ?? [];
+    return crypto
+      .createHash("sha256")
+      .update(JSON.stringify({ checkpoints, messages }))
+      .digest("hex");
+  }
+
+  private buildCheckpointTruncation(
+    session: AgentSession,
+    checkpoint: Checkpoint,
+  ): { messages: AgentMessage[]; restoredPrompt?: string } | null {
+    const allMessages = session.getAllMessages();
+    let restoredPrompt: string | undefined;
+    let userCount = 0;
+    let keepUntil = allMessages.length;
+    for (let i = 0; i < allMessages.length; i++) {
+      const message = allMessages[i];
+      if (message.role === "user" && typeof message.content === "string") {
+        if (userCount === checkpoint.turnIndex) {
+          restoredPrompt = message.content;
+          keepUntil = i;
+          break;
+        }
+        userCount++;
+      }
+    }
+    if (
+      keepUntil === allMessages.length &&
+      userCount !== checkpoint.turnIndex
+    ) {
+      return null;
+    }
+    return { messages: allMessages.slice(0, keepUntil), restoredPrompt };
+  }
+
+  private async saveCheckpointRevertResult(
+    session: AgentSession,
+    messages: AgentMessage[],
+    checkpoints: Checkpoint[],
+  ): Promise<PersistResult> {
+    if (
+      !this.persistence ||
+      typeof this.persistence.saveSession !== "function"
+    ) {
+      return {
+        ok: true,
+        revision: this.currentSessionRevisionToken(session.id),
+      };
+    }
+
+    const pendingSave = this.sessionSaveQueues.get(session.id);
+    if (pendingSave) {
+      await pendingSave.catch(() => undefined);
+    }
+
+    const expectedRevision = this.sessionRevisions.get(session.id) ?? null;
+    const result = await this.persistence.saveSession({
+      session: this.buildPersistedSessionRecord(session, {
+        checkpoints,
+        messages,
+        revertPending: null,
+      }),
+      expectedRevision,
+    });
+    if (result.ok) {
+      this.sessionRevisions.set(session.id, result.revision);
+    } else if (result.reason === "conflict") {
+      this.sessionRevisions.set(session.id, result.currentRevision);
+    }
+    return result;
+  }
+
+  private async persistRevertPending(
+    session: AgentSession,
+    checkpoint: Checkpoint,
+    failedSaveResult: PersistResult,
+  ): Promise<void> {
+    const pending: RevertRecoveryState = {
+      checkpointId: checkpoint.id,
+      sessionRevision:
+        "currentRevision" in failedSaveResult
+          ? failedSaveResult.currentRevision
+          : (this.sessionRevisions.get(session.id) ?? "unknown"),
+      workspaceRevision: checkpoint.commitHash,
+      startedAt: Date.now(),
+      reason: "workspace_reverted_session_save_failed",
+    };
+    this.sessionRevertPending.set(session.id, pending);
+
+    if (
+      !this.persistence ||
+      typeof this.persistence.saveSession !== "function"
+    ) {
+      return;
+    }
+
+    try {
+      const readResult = await this.persistence.readSession(session.id);
+      if (!readResult.ok) return;
+      const result = await this.persistence.saveSession({
+        session: {
+          ...readResult.value,
+          metadata: {
+            ...readResult.value.metadata,
+            revertPending: pending,
+          },
+        },
+        expectedRevision: readResult.revision,
+      });
+      if (result.ok) {
+        this.sessionRevisions.set(session.id, result.revision);
+      }
+    } catch (error) {
+      this.log?.(
+        `[checkpoint] failed to persist revertPending for ${session.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**
@@ -1235,15 +1553,19 @@ export class AgentSessionManager {
 
   /** List all persisted sessions, most-recent first. */
   listPersistedSessions(): SessionSummary[] {
-    return this.store?.list() ?? [];
+    return this.persistence?.list() ?? [];
   }
 
   getPersistedSessionSummary(sessionId: string): SessionSummary | undefined {
-    return this.store?.get(sessionId);
+    return this.persistence?.get(sessionId);
   }
 
   getPersistedSessionMessages(sessionId: string): AgentMessage[] | null {
-    return this.store?.loadMessages(sessionId) ?? null;
+    return this.persistence?.loadMessages(sessionId) ?? null;
+  }
+
+  getRevertRecoveryState(sessionId: string): RevertRecoveryState | null {
+    return this.sessionRevertPending.get(sessionId) ?? null;
   }
 
   /**
@@ -1251,27 +1573,38 @@ export class AgentSessionManager {
    * foreground session. Returns the loaded session or null if not found.
    */
   async loadPersistedSession(sessionId: string): Promise<AgentSession | null> {
-    if (!this.store) return null;
+    if (!this.persistence) return null;
 
-    const summary = this.store.get(sessionId);
-    if (!summary) return null;
-
-    const messages = this.store.loadMessages(sessionId);
-    if (!messages) return null;
-    const metadata = this.store.loadMetadata(sessionId);
+    const readResult = await this.persistence.readSession(sessionId);
+    if (!readResult.ok) return null;
+    const { summary, messages, metadata } = readResult.value;
 
     // Reuse in-memory session if already loaded
     if (this.sessions.has(sessionId)) {
+      if (!this.sessionRevisions.has(sessionId)) {
+        this.sessionRevisions.set(sessionId, readResult.revision);
+      }
       this.foregroundId = sessionId;
       this.onSessionsChanged?.();
       return this.sessions.get(sessionId)!;
     }
 
-    this.checkpoints.set(sessionId, metadata?.checkpoints ?? []);
+    this.sessionRevisions.set(sessionId, readResult.revision);
+    this.checkpoints.set(
+      sessionId,
+      metadata.checkpointState?.checkpoints ?? [],
+    );
+    if (metadata.revertPending) {
+      this.sessionRevertPending.set(sessionId, metadata.revertPending);
+    } else {
+      this.sessionRevertPending.delete(sessionId);
+    }
 
     // Reconstruct session from persisted data
-    const providerId = providerRegistry.tryResolveProvider(summary.model)?.id;
-    const session = await AgentSession.create({
+    const providerId = this.host.providers.tryResolveProvider(
+      summary.model,
+    )?.id;
+    const session = await this.host.createSession({
       mode: summary.mode,
       config: this.buildConfigForModel(summary.model),
       cwd: this.cwd,
@@ -1288,13 +1621,13 @@ export class AgentSessionManager {
       lastActiveAt: summary.lastActiveAt,
       totalInputTokens: summary.totalInputTokens,
       totalOutputTokens: summary.totalOutputTokens,
-      totalCacheReadTokens: metadata?.totalCacheReadTokens ?? 0,
-      totalCacheCreationTokens: metadata?.totalCacheCreationTokens ?? 0,
-      lastInputTokens: metadata?.lastInputTokens ?? 0,
+      totalCacheReadTokens: metadata.totalCacheReadTokens ?? 0,
+      totalCacheCreationTokens: metadata.totalCacheCreationTokens ?? 0,
+      lastInputTokens: metadata.lastInputTokens ?? 0,
       // Use 0 for resumed sessions so cache-aware threshold isn't biased by stale prior runs.
       lastCacheReadTokens: 0,
-      reasoningEffort: metadata?.reasoningEffort,
-      loadedSkills: metadata?.loadedSkills ?? [],
+      reasoningEffort: metadata.reasoningEffort,
+      loadedSkills: metadata.loadedSkills ?? [],
       messages,
     });
     await session.rebuildSystemPrompt({
@@ -1314,8 +1647,8 @@ export class AgentSessionManager {
    * Returns the loaded session or null if there are no persisted sessions.
    */
   async restoreLastSession(): Promise<AgentSession | null> {
-    if (!this.store) return null;
-    const sessions = this.store.list();
+    if (!this.persistence) return null;
+    const sessions = this.persistence.list();
     if (sessions.length === 0) return null;
     // Abort restore if the user started a foreground session while startup restore
     // was still in flight. This keeps auto-restore from stealing focus back.
@@ -1329,30 +1662,165 @@ export class AgentSessionManager {
     return session;
   }
 
-  deletePersistedSession(sessionId: string): boolean {
-    const deleted = this.store?.delete(sessionId) ?? false;
-    // Also remove from in-memory map if loaded
-    if (deleted && this.sessions.has(sessionId)) {
+  async deletePersistedSession(sessionId: string): Promise<boolean> {
+    return (await this.deletePersistedSessionWithResult(sessionId)).ok;
+  }
+
+  async deletePersistedSessionWithResult(
+    sessionId: string,
+  ): Promise<PersistedSessionMutationResult> {
+    if (!this.persistence) {
+      return { ok: false, operation: "delete", reason: "not_found" };
+    }
+
+    const pendingSave = this.sessionSaveQueues.get(sessionId);
+    if (pendingSave) {
+      await pendingSave.catch(() => undefined);
+    }
+
+    let deleted: boolean;
+    if (typeof this.persistence.deleteSession === "function") {
+      const expectedRevision = await this.getExpectedSessionRevision(sessionId);
+      if (expectedRevision === null) {
+        return { ok: false, operation: "delete", reason: "not_found" };
+      }
+      const result = await this.persistence.deleteSession({
+        sessionId,
+        expectedRevision,
+      });
+      if (result.ok) {
+        deleted = true;
+      } else {
+        return this.handlePersistenceMutationFailure(
+          sessionId,
+          "delete",
+          result,
+        );
+      }
+    } else {
+      deleted = this.persistence.delete(sessionId);
+    }
+
+    if (!deleted) {
+      return { ok: false, operation: "delete", reason: "not_found" };
+    }
+
+    this.sessionRevisions.delete(sessionId);
+    this.sessionSaveQueues.delete(sessionId);
+    if (this.sessions.has(sessionId)) {
       this.sessions.delete(sessionId);
       if (this.foregroundId === sessionId) {
         this.foregroundId = null;
       }
-      this.onSessionsChanged?.();
     }
-    return deleted;
+    this.onSessionsChanged?.();
+    return { ok: true };
   }
 
-  renamePersistedSession(sessionId: string, title: string): boolean {
-    const renamed = this.store?.rename(sessionId, title) ?? false;
-    // Also update in-memory session if loaded
-    if (renamed) {
-      const session = this.sessions.get(sessionId);
-      if (session) {
-        session.title = title;
-      }
-      this.onSessionsChanged?.();
+  async renamePersistedSession(
+    sessionId: string,
+    title: string,
+  ): Promise<boolean> {
+    return (await this.renamePersistedSessionWithResult(sessionId, title)).ok;
+  }
+
+  async renamePersistedSessionWithResult(
+    sessionId: string,
+    title: string,
+  ): Promise<PersistedSessionMutationResult> {
+    if (!this.persistence) {
+      return { ok: false, operation: "rename", reason: "not_found" };
     }
-    return renamed;
+
+    let nextRevision: PersistenceRevision | null = null;
+    let renamed: boolean;
+    if (typeof this.persistence.renameSession === "function") {
+      const expectedRevision = await this.getExpectedSessionRevision(sessionId);
+      if (expectedRevision === null) {
+        return { ok: false, operation: "rename", reason: "not_found" };
+      }
+      const result = await this.persistence.renameSession({
+        sessionId,
+        title,
+        expectedRevision,
+      });
+      if (result.ok) {
+        renamed = true;
+        nextRevision = result.revision;
+      } else {
+        return this.handlePersistenceMutationFailure(
+          sessionId,
+          "rename",
+          result,
+        );
+      }
+    } else {
+      renamed = this.persistence.rename(sessionId, title);
+    }
+
+    if (!renamed) {
+      return { ok: false, operation: "rename", reason: "not_found" };
+    }
+
+    if (nextRevision) {
+      this.sessionRevisions.set(sessionId, nextRevision);
+    }
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.title = title;
+    }
+    this.onSessionsChanged?.();
+    return { ok: true };
+  }
+
+  private async getExpectedSessionRevision(
+    sessionId: string,
+  ): Promise<PersistenceRevision | null> {
+    const tracked = this.sessionRevisions.get(sessionId);
+    if (tracked) return tracked;
+    if (
+      !this.persistence ||
+      typeof this.persistence.readSession !== "function"
+    ) {
+      return null;
+    }
+    const readResult = await this.persistence.readSession(sessionId);
+    if (!readResult.ok) {
+      this.log?.(
+        `[session] persistence revision lookup failed for ${sessionId}: ${readResult.reason}${"message" in readResult ? `: ${readResult.message}` : ""}`,
+      );
+      return null;
+    }
+    this.sessionRevisions.set(sessionId, readResult.revision);
+    return readResult.revision;
+  }
+
+  private handlePersistenceMutationFailure(
+    sessionId: string,
+    operation: PersistedSessionMutationOperation,
+    result: Exclude<PersistResult, { ok: true }>,
+  ): PersistedSessionMutationResult {
+    if (result.reason === "conflict") {
+      this.sessionRevisions.set(sessionId, result.currentRevision);
+      this.log?.(
+        `[session] persistence ${operation} conflict for ${sessionId}: current=${result.currentRevision}`,
+      );
+      return {
+        ok: false,
+        operation,
+        reason: "conflict",
+        currentRevision: result.currentRevision,
+      };
+    }
+    this.log?.(
+      `[session] persistence ${operation} failed for ${sessionId}: ${result.reason}${"message" in result ? `: ${result.message}` : ""}`,
+    );
+    return {
+      ok: false,
+      operation,
+      reason: result.reason,
+      message: "message" in result ? result.message : undefined,
+    };
   }
 
   /**
@@ -1370,7 +1838,7 @@ export class AgentSessionManager {
     }
 
     // Fall back to disk
-    const messages = this.store?.loadMessages(sessionId);
+    const messages = this.persistence?.loadMessages(sessionId);
     if (!messages) return null;
     const first = messages[0];
     if (first?.role === "user" && typeof first.content === "string") {
@@ -1421,7 +1889,7 @@ export class AgentSessionManager {
     const foregroundModel = fg?.model ?? this.config.model;
     const parentSessionId = fg?.id;
 
-    const route = await resolveBackgroundRoute(providerRegistry, request, {
+    const route = await resolveBackgroundRoute(this.host.providers, request, {
       mode: foregroundMode,
       model: foregroundModel,
     });
@@ -1439,13 +1907,13 @@ export class AgentSessionManager {
     };
 
     const providerId =
-      providerRegistry.tryResolveProvider(route.resolvedModel)?.id ??
+      this.host.providers.tryResolveProvider(route.resolvedModel)?.id ??
       route.resolvedProvider;
 
     // Use lightweight prompt for review task classes to reduce system prompt bloat
     const isReviewTask = route.taskClass.startsWith("review_");
 
-    const session = await AgentSession.create({
+    const session = await this.host.createSession({
       mode: route.resolvedMode,
       config: bgConfig,
       cwd: this.cwd,
@@ -1507,8 +1975,8 @@ export class AgentSessionManager {
         : undefined,
     };
 
-    const bgEngine = new AgentEngine(providerRegistry, this.log);
-    bgEngine.setToolContext(bgCtx);
+    const bgEngine = this.host.createEngine(this.host.providers, this.log);
+    bgEngine.setToolRuntime(this.host.createToolRuntime(bgCtx));
 
     session.addUserMessage(message);
 
@@ -1524,7 +1992,10 @@ export class AgentSessionManager {
           lastPersistedActiveAt = session.lastActiveAt;
         }
       };
-      const inFlightPersistTimer = setInterval(persistIfHistoryChanged, 1000);
+      const inFlightPersistTimer = this.host.timers.setInterval(
+        persistIfHistoryChanged,
+        1000,
+      );
 
       try {
         for await (const event of bgEngine.run(session, {
@@ -1597,7 +2068,7 @@ export class AgentSessionManager {
           totalCacheCreationTokens: session.totalCacheCreationTokens,
         });
       } finally {
-        clearInterval(inFlightPersistTimer);
+        this.host.timers.clearInterval(inFlightPersistTimer);
         persistIfHistoryChanged();
       }
 
@@ -1618,7 +2089,7 @@ export class AgentSessionManager {
 
       // Clear all safety timers for this session
       for (const t of this.bgSafetyTimers.get(session.id) ?? [])
-        clearTimeout(t);
+        this.host.timers.clearTimeout(t);
       this.bgSafetyTimers.delete(session.id);
 
       for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
@@ -1629,7 +2100,7 @@ export class AgentSessionManager {
       void this.resumeParentAfterBackgroundCompletion(session.id, resultText);
 
       // Cleanup stored result after 5 minutes to prevent unbounded memory growth
-      setTimeout(
+      this.host.timers.setTimeout(
         () => {
           this.bgFinalResults.delete(session.id);
           this.bgParents.delete(session.id);
@@ -1884,7 +2355,7 @@ export class AgentSessionManager {
     resultText?: string;
     errorMessage?: string;
   }): Promise<void> {
-    const mode = getBgSummaryMode();
+    const mode = this.host.config.getBgSummaryMode();
     if (mode === "heuristic") return;
 
     const summary = this.getOrInitBgSummary(args.sessionId);
@@ -1953,7 +2424,7 @@ export class AgentSessionManager {
           lastError = err instanceof Error ? err.message : String(err);
         }
       } else {
-        const provider = providerRegistry.tryResolveProvider(session.model);
+        const provider = this.host.providers.tryResolveProvider(session.model);
         if (!provider) {
           summary.lastFailureAt = Date.now();
           summary.lastFailureReason = `No provider for model ${session.model}`;
@@ -2277,7 +2748,7 @@ export class AgentSessionManager {
       // Safety timeout: resolve after 30 minutes as a last resort to prevent
       // permanently hung waiters (e.g. if the session crashes without cleanup).
       const safetyMs = 30 * 60 * 1000;
-      const timerId = setTimeout(() => {
+      const timerId = this.host.timers.setTimeout(() => {
         this.log?.(
           `[background] Result waiter timed out for ${sessionId}; background agent is still allowed to continue running.`,
         );

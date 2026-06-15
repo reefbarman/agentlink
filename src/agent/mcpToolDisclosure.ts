@@ -1,8 +1,9 @@
+import type { McpToolDisclosureMode } from "../core/tools/types.js";
 import type { ToolDefinition } from "./providers/types.js";
 import { estimateTokensFromChars } from "./contextBreakdown.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 
-export type McpToolDisclosureMode = "inline" | "deferred" | "auto";
+export type { McpToolDisclosureMode };
 
 export interface McpToolDisclosureConfig {
   serverName: string;

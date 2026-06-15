@@ -111,6 +111,50 @@ textarea {
   text-overflow: ellipsis;
 }
 
+.session-history-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #f85149);
+  border-radius: 4px;
+  color: var(--vscode-errorForeground, #f85149);
+  background: var(--vscode-inputValidation-errorBackground, transparent);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.revert-recovery-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder, #cca700);
+  border-radius: 4px;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  background: var(--vscode-inputValidation-warningBackground, transparent);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.revert-recovery-notice > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.revert-recovery-notice strong {
+  color: var(--vscode-foreground, #e6edf3);
+}
+
+.revert-recovery-notice .codicon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 .browser-instance-tabs {
   display: flex;
   flex-wrap: wrap;

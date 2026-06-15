@@ -1121,4 +1121,28 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(apiKeyIds).toContain("gpt-5.4-pro");
     expect(apiKeyIds).toContain("gpt-5.2-codex");
   });
+
+  it("reports OAuth-specific GPT-5.5 caps unless API-key auth is preferred", async () => {
+    const oauthProvider = new CodexProvider(makeAuthManager() as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(oauthProvider.getCapabilities("gpt-5.5")).toMatchObject({
+      contextWindow: 400_000,
+      maxInputTokens: 272_000,
+      maxOutputTokens: 128_000,
+    });
+
+    const apiKeyProvider = new CodexProvider(
+      makeAuthManager({
+        getPreferredAuthMethod: vi.fn().mockResolvedValue("apiKey"),
+      }) as never,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(apiKeyProvider.getCapabilities("gpt-5.5")).toMatchObject({
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
+    expect(
+      apiKeyProvider.getCapabilities("gpt-5.5").maxInputTokens,
+    ).toBeUndefined();
+  });
 });

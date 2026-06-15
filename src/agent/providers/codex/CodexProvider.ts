@@ -527,11 +527,15 @@ export class CodexProvider implements ModelProvider {
   }
 
   getCapabilities(model: string): ModelCapabilities {
-    return getCodexModelCapabilities(model);
+    return getCodexModelCapabilities(
+      model,
+      this.lastResolvedAuthMethod ?? "oauth",
+    );
   }
 
   listModels(): ModelInfo[] {
-    const all = listCodexModels(this.id);
+    const authMethod = this.lastResolvedAuthMethod ?? "oauth";
+    const all = listCodexModels(this.id, authMethod);
     // The ChatGPT/Codex OAuth backend serves only a small current set; hide the
     // API-key-only models so users can't pick one that 400s. Default to the
     // OAuth-served subset until we've confirmed an API-key resolution (OAuth is

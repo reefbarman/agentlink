@@ -14,7 +14,11 @@ import { AgentEngine } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
 import { ToolCallTracker } from "../server/ToolCallTracker.js";
-import type { ToolDispatchContext } from "./toolAdapter.js";
+import type { AgentToolExecutionRequest } from "../core/tools/types.js";
+import {
+  createAgentToolRuntime,
+  type ToolDispatchContext,
+} from "./toolAdapter.js";
 
 const mocks = vi.hoisted(() => ({
   mockBuildSystemPrompt: vi.fn().mockResolvedValue("mock system prompt"),
@@ -152,6 +156,26 @@ async function makeSession(
     config,
     cwd: "/test",
   });
+}
+
+function setEngineToolContext(
+  engine: AgentEngine,
+  ctx: ToolDispatchContext,
+  executeTool?: (request: AgentToolExecutionRequest) => Promise<unknown>,
+): void {
+  const runtime = createAgentToolRuntime(ctx);
+  engine.setToolRuntime(
+    executeTool
+      ? {
+          ...runtime,
+          async executeTool(request) {
+            return (await executeTool(request)) as Awaited<
+              ReturnType<typeof runtime.executeTool>
+            >;
+          },
+        }
+      : runtime,
+  );
 }
 
 async function collectEvents(
@@ -348,37 +372,36 @@ describe("AgentEngine", () => {
           mode: "architect",
         }),
       };
-      engine.setToolContext(toolCtx);
-
-      const dispatchSpy = vi
-        .spyOn(await import("./toolAdapter.js"), "dispatchToolCall")
-        .mockImplementation(async (name, input, _ctx) => {
-          if (name === "switch_mode") {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({ ok: true, mode: "architect" }),
-                },
-              ],
-            };
-          }
-          if (name === "write_file") {
-            return await writeSpy(name, input);
-          }
+      const executeTool = vi.fn(async (request: AgentToolExecutionRequest) => {
+        if (request.name === "switch_mode") {
           return {
-            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ ok: true, mode: "architect" }),
+              },
+            ],
           };
-        });
+        }
+        if (request.name === "write_file") {
+          return await writeSpy(request.name, request.input);
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        };
+      });
+      setEngineToolContext(engine, toolCtx, executeTool);
 
       const events = await collectEvents(engine.run(session));
 
       expect(streamCalls).toHaveLength(1);
       expect(writeSpy).not.toHaveBeenCalled();
-      expect(dispatchSpy).toHaveBeenCalledWith(
-        "switch_mode",
-        { mode: "architect", reason: "plan first" },
-        expect.objectContaining({ mode: "code" }),
+      expect(executeTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "switch_mode",
+          input: { mode: "architect", reason: "plan first" },
+          context: expect.objectContaining({ mode: "code" }),
+        }),
       );
 
       const toolResults = events.filter(
@@ -400,8 +423,6 @@ describe("AgentEngine", () => {
       expect(skippedText).toContain('"skipped_by":"mode_switch"');
 
       expect(events.at(-1)).toMatchObject({ type: "done" });
-
-      dispatchSpy.mockRestore();
     });
 
     it("allows read-only tools in mixed batches but skips trailing non-read-only tools after switch", async () => {
@@ -488,31 +509,28 @@ describe("AgentEngine", () => {
           mode: "architect",
         }),
       };
-      engine.setToolContext(toolCtx);
-
-      const dispatchSpy = vi
-        .spyOn(await import("./toolAdapter.js"), "dispatchToolCall")
-        .mockImplementation(async (name, input, _ctx) => {
-          if (name === "read_file") {
-            return await readSpy(name, input);
-          }
-          if (name === "switch_mode") {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({ ok: true, mode: "architect" }),
-                },
-              ],
-            };
-          }
-          if (name === "write_file") {
-            return await writeSpy(name, input);
-          }
+      const executeTool = vi.fn(async (request: AgentToolExecutionRequest) => {
+        if (request.name === "read_file") {
+          return await readSpy(request.name, request.input);
+        }
+        if (request.name === "switch_mode") {
           return {
-            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ ok: true, mode: "architect" }),
+              },
+            ],
           };
-        });
+        }
+        if (request.name === "write_file") {
+          return await writeSpy(request.name, request.input);
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        };
+      });
+      setEngineToolContext(engine, toolCtx, executeTool);
 
       const events = await collectEvents(engine.run(session));
 
@@ -536,8 +554,6 @@ describe("AgentEngine", () => {
       expect(skippedText).toContain('"skipped_by":"mode_switch"');
 
       expect(events.at(-1)).toMatchObject({ type: "done" });
-
-      dispatchSpy.mockRestore();
     });
 
     it("registers queued write tools in the tracker before read-only tools finish", async () => {
@@ -581,17 +597,13 @@ describe("AgentEngine", () => {
         extensionUri: {} as ToolDispatchContext["extensionUri"],
         toolCallTracker: tracker,
       };
-      engine.setToolContext(toolCtx);
-
       let releaseRead!: () => void;
       const readCanFinish = new Promise<void>((release) => {
         releaseRead = release;
       });
-      const toolAdapter = await import("./toolAdapter.js");
-      const dispatchSpy = vi.spyOn(toolAdapter, "dispatchToolCall");
       const readStarted = new Promise<void>((resolve) => {
-        dispatchSpy.mockImplementation(async (name) => {
-          if (name === "read_file") {
+        setEngineToolContext(engine, toolCtx, async (request) => {
+          if (request.name === "read_file") {
             resolve();
             await readCanFinish;
             return {
@@ -603,7 +615,7 @@ describe("AgentEngine", () => {
               ],
             };
           }
-          if (name === "write_file") {
+          if (request.name === "write_file") {
             return {
               content: [
                 {
@@ -641,8 +653,6 @@ describe("AgentEngine", () => {
           )
           .map((e) => e.toolName),
       ).toEqual(["read_file", "write_file"]);
-
-      dispatchSpy.mockRestore();
     });
 
     it("clears pre-registered tracker calls when a run is aborted", async () => {
@@ -680,12 +690,8 @@ describe("AgentEngine", () => {
         extensionUri: {} as ToolDispatchContext["extensionUri"],
         toolCallTracker: tracker,
       };
-      engine.setToolContext(toolCtx);
-
-      const toolAdapter = await import("./toolAdapter.js");
-      const dispatchSpy = vi.spyOn(toolAdapter, "dispatchToolCall");
-      dispatchSpy.mockImplementation(async (name) => {
-        if (name === "read_file") {
+      const executeTool = vi.fn(async (request: AgentToolExecutionRequest) => {
+        if (request.name === "read_file") {
           session.abort();
           return {
             content: [
@@ -693,13 +699,14 @@ describe("AgentEngine", () => {
             ],
           };
         }
-        if (name === "write_file") {
+        if (request.name === "write_file") {
           throw new Error("write_file should not execute after abort");
         }
         return {
           content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
         };
       });
+      setEngineToolContext(engine, toolCtx, executeTool);
 
       const events = await collectEvents(engine.run(session));
       tracker.clearAgentCalls(session.id);
@@ -715,9 +722,10 @@ describe("AgentEngine", () => {
           )
           .map((e) => e.toolName),
       ).toEqual([]);
-      expect(dispatchSpy).toHaveBeenCalledTimes(1);
-
-      dispatchSpy.mockRestore();
+      expect(executeTool).toHaveBeenCalledTimes(1);
+      expect(executeTool).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "read_file" }),
+      );
     });
 
     it("stops turn and skips trailing tools after set_task_status", async () => {
@@ -761,13 +769,12 @@ describe("AgentEngine", () => {
         sessionId: "seed-session",
         extensionUri: {} as ToolDispatchContext["extensionUri"],
       };
-      engine.setToolContext(toolCtx);
-
-      const dispatchSpy = vi
-        .spyOn(await import("./toolAdapter.js"), "dispatchToolCall")
-        .mockImplementation(async (name, input, ctx) => {
-          if (name === "set_task_status") {
-            ctx.onFinalStatus?.({
+      setEngineToolContext(
+        engine,
+        toolCtx,
+        async (request: AgentToolExecutionRequest) => {
+          if (request.name === "set_task_status") {
+            request.context.onFinalStatus?.({
               status: "waiting_for_user",
               source: "tool",
               continueAction: {
@@ -779,11 +786,14 @@ describe("AgentEngine", () => {
               content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
             };
           }
-          if (name === "write_file") return await writeSpy(name, input);
+          if (request.name === "write_file") {
+            return await writeSpy(request.name, request.input);
+          }
           return {
             content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
           };
-        });
+        },
+      );
 
       const events = await collectEvents(engine.run(session));
 
@@ -818,8 +828,6 @@ describe("AgentEngine", () => {
         status: "waiting_for_user",
         source: "tool",
       });
-
-      dispatchSpy.mockRestore();
     });
 
     it("emits completed todos when set_task_status requests todo completion", async () => {
@@ -870,7 +878,7 @@ describe("AgentEngine", () => {
       const session = await makeSession();
       session.addUserMessage("finish");
       const engine = new AgentEngine(makeRegistry(provider));
-      engine.setToolContext({
+      setEngineToolContext(engine, {
         approvalManager: {} as ToolDispatchContext["approvalManager"],
         approvalPanel: {} as ToolDispatchContext["approvalPanel"],
         sessionId: "seed-session",
@@ -971,7 +979,7 @@ describe("AgentEngine", () => {
       ]);
       session.addUserMessage("finish");
       const engine = new AgentEngine(makeRegistry(provider));
-      engine.setToolContext({
+      setEngineToolContext(engine, {
         approvalManager: {} as ToolDispatchContext["approvalManager"],
         approvalPanel: {} as ToolDispatchContext["approvalPanel"],
         sessionId: "seed-session",
@@ -1029,7 +1037,7 @@ describe("AgentEngine", () => {
           mode: "architect",
         }),
       };
-      engine.setToolContext(toolCtx);
+      setEngineToolContext(engine, toolCtx);
 
       const events = await collectEvents(engine.run(session));
 
@@ -1085,7 +1093,7 @@ describe("AgentEngine", () => {
       ];
 
       const engine = new AgentEngine(makeRegistry(provider));
-      engine.setToolContext({
+      setEngineToolContext(engine, {
         ...({} as ToolDispatchContext),
         approvalManager: {} as any,
         approvalPanel: {} as any,
@@ -1139,7 +1147,7 @@ describe("AgentEngine", () => {
       expect(session.mcpToolDisclosure).toBeUndefined();
 
       const engine = new AgentEngine(makeRegistry(provider));
-      engine.setToolContext({
+      setEngineToolContext(engine, {
         ...({} as ToolDispatchContext),
         approvalManager: {} as any,
         approvalPanel: {} as any,
@@ -1559,19 +1567,11 @@ describe("AgentEngine", () => {
         sessionId: "seed-session",
         extensionUri: {} as ToolDispatchContext["extensionUri"],
       };
-      engine.setToolContext(toolCtx);
+      setEngineToolContext(engine, toolCtx, async () => ({
+        content: [{ type: "text", text: "file contents" }],
+      }));
 
-      const dispatchSpy = vi
-        .spyOn(await import("./toolAdapter.js"), "dispatchToolCall")
-        .mockResolvedValue({
-          content: [{ type: "text", text: "file contents" }],
-        });
-
-      try {
-        await collectEvents(engine.run(session));
-      } finally {
-        dispatchSpy.mockRestore();
-      }
+      await collectEvents(engine.run(session));
 
       const expectedImageMessage = {
         role: "user",
@@ -1628,7 +1628,7 @@ describe("AgentEngine", () => {
       session.addUserMessage("inspect this image");
       const engine = new AgentEngine(makeRegistry(provider));
       const condenseSpy = vi.spyOn(engine, "condenseSession");
-      engine.setToolContext({
+      setEngineToolContext(engine, {
         approvalManager: {} as ToolDispatchContext["approvalManager"],
         approvalPanel: {} as ToolDispatchContext["approvalPanel"],
         sessionId: "seed-session",

@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentSessionManager } from "./AgentSessionManager.js";
+import { ProviderRegistry } from "./providers/index.js";
 import type { ToolDispatchContext } from "./toolAdapter.js";
 
 const mocks = vi.hoisted(() => {
   let seq = 0;
   return {
-    setToolContext: vi.fn(),
+    setToolRuntime: vi.fn(),
     runBehavior: vi.fn<() => AsyncGenerator<unknown>>(),
     runArgs: vi.fn(),
     resolveBackgroundRoute: vi.fn(
@@ -79,7 +80,7 @@ vi.mock("./backgroundModelRouter.js", () => ({
 
 vi.mock("./AgentEngine.js", () => ({
   AgentEngine: class MockAgentEngine {
-    setToolContext = mocks.setToolContext;
+    setToolRuntime = mocks.setToolRuntime;
     run(...args: unknown[]) {
       mocks.runArgs(...args);
       return mocks.runBehavior();
@@ -151,6 +152,56 @@ describe("AgentSessionManager background agents", () => {
     ).rejects.toThrow(/concurrency limit reached/);
   });
 
+  it("creates background engines through the host without reusing the memoized foreground engine", async () => {
+    const providers = new ProviderRegistry();
+    const foregroundEngine = {
+      setToolRuntime: vi.fn(),
+      run: vi.fn(async function* () {}),
+      condenseSession: vi.fn(async function* () {}),
+      isOverCondenseThreshold: vi.fn(() => false),
+    };
+    const backgroundEngine = {
+      setToolRuntime: vi.fn(),
+      run: vi.fn(() => mocks.runBehavior()),
+      condenseSession: vi.fn(async function* () {}),
+      isOverCondenseThreshold: vi.fn(() => false),
+    };
+    const createEngine = vi
+      .fn()
+      .mockReturnValueOnce(foregroundEngine)
+      .mockReturnValueOnce(backgroundEngine);
+    const createToolRuntime = vi.fn(() => ({ executeTool: vi.fn() }));
+
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          providers,
+          createEngine: createEngine as any,
+          createToolRuntime: createToolRuntime as any,
+        },
+      },
+    );
+    mgr.setToolContext(toolCtx);
+
+    const memoizedForeground = (mgr as any).getEngine();
+    await mgr.spawnBackground({ task: "host engine", message: "run" });
+
+    expect(memoizedForeground).toBe(foregroundEngine);
+    expect(createEngine).toHaveBeenCalledTimes(2);
+    expect(createEngine).toHaveBeenNthCalledWith(1, providers, undefined);
+    expect(createEngine).toHaveBeenNthCalledWith(2, providers, undefined);
+    expect(backgroundEngine.setToolRuntime).toHaveBeenCalledTimes(1);
+    expect(backgroundEngine.run).toHaveBeenCalledTimes(1);
+    expect(foregroundEngine.run).not.toHaveBeenCalled();
+  });
+
   it("tracks tool calls and token usage without enforcing limits", async () => {
     mocks.runBehavior.mockReturnValue(
       (async function* () {
@@ -215,11 +266,13 @@ describe("AgentSessionManager background agents", () => {
       message: "run",
     });
 
-    const bgCtx = mocks.setToolContext.mock.calls.at(
-      -1,
-    )?.[0] as ToolDispatchContext;
-    expect(bgCtx.onQuestion).toBeDefined();
-    await bgCtx.onQuestion?.("Need input.", [], spawned.sessionId);
+    const bgRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
+    expect(bgRuntime).toBeDefined();
+    await bgRuntime.executeTool({
+      name: "ask_user",
+      input: { context: "Need input.", questions: [] },
+      context: { sessionId: spawned.sessionId },
+    });
 
     expect(onQuestion).toHaveBeenCalledWith(
       "Need input.",

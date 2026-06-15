@@ -104,6 +104,15 @@ export interface RequestContextBreakdown {
   tools?: ToolContextBreakdown;
 }
 
+export interface RevertRecoveryNotice {
+  checkpointId: string;
+  sessionRevision: string;
+  workspaceRevision?: string;
+  startedAt: number;
+  title: string;
+  message: string;
+}
+
 /** Create a successful ToolResult from a JSON-serializable payload. */
 export function successResult(payload: Record<string, unknown>): ToolResult {
   return {

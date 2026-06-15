@@ -4,19 +4,17 @@ import { readFileSync } from "fs";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
 import type { AgentEvent } from "./types.js";
-import {
-  getAgentTools,
-  dispatchToolCall,
-  READ_ONLY_TOOLS,
-  type ToolDispatchContext,
-} from "./toolAdapter.js";
+import type {
+  AgentToolRuntime,
+  AgentToolExecutionContext,
+  SessionImageReference,
+} from "../core/tools/types.js";
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { handleToolError } from "../shared/types.js";
 import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
-import type { TrackerContext } from "../server/ToolCallTracker.js";
 import {
   TODO_TOOL_NAME,
   todoTool,
@@ -545,15 +543,15 @@ function toolResultToContent(
 export class AgentEngine {
   private registry: ProviderRegistry;
   private log?: (msg: string) => void;
-  private toolCtx: ToolDispatchContext | null = null;
+  private toolRuntime: AgentToolRuntime | null = null;
 
   constructor(registry: ProviderRegistry, log?: (msg: string) => void) {
     this.registry = registry;
     this.log = log;
   }
 
-  setToolContext(ctx: ToolDispatchContext): void {
-    this.toolCtx = ctx;
+  setToolRuntime(runtime: AgentToolRuntime): void {
+    this.toolRuntime = runtime;
   }
 
   async *run(
@@ -608,8 +606,9 @@ export class AgentEngine {
         // Include tools when dispatch context is available, filtered by mode.
         // Compute this before any condense path so both automatic and retry-triggered
         // condenses see the same preserved runtime context that future requests will use.
-        const connectedMcpToolDefs = this.toolCtx?.mcpHub?.getToolDefs() ?? [];
-        if (this.toolCtx?.mcpHub && connectedMcpToolDefs.length > 0) {
+        const connectedMcpToolDefs =
+          this.toolRuntime?.getConnectedMcpToolDefs?.() ?? [];
+        if (this.toolRuntime && connectedMcpToolDefs.length > 0) {
           const serverNames = new Set(
             connectedMcpToolDefs
               .map((tool) => parseMcpToolName(tool.name)?.serverName)
@@ -620,8 +619,7 @@ export class AgentEngine {
             {
               serverConfigs: [...serverNames].map((serverName) => ({
                 serverName,
-                mode: this.toolCtx?.mcpHub?.getServerConfig(serverName)
-                  ?.toolDisclosure,
+                mode: this.toolRuntime?.getMcpToolDisclosureMode?.(serverName),
               })),
             },
           );
@@ -630,16 +628,16 @@ export class AgentEngine {
         }
         const providerMcpToolDefs =
           session.mcpToolDisclosure?.inlineTools ?? connectedMcpToolDefs;
-        const rawTools = this.toolCtx
+        const rawTools = this.toolRuntime
           ? [
-              ...getAgentTools(
-                session.agentMode,
-                providerMcpToolDefs,
-                opts?.isBackground,
-                opts?.toolProfile,
-                session.getActiveSkillAllowedTools(),
-                connectedMcpToolDefs,
-              ),
+              ...this.toolRuntime.listTools({
+                mode: session.agentMode,
+                mcpToolDefs: providerMcpToolDefs,
+                isBackground: opts?.isBackground,
+                toolProfile: opts?.toolProfile,
+                skillAllowedTools: session.getActiveSkillAllowedTools(),
+                allMcpToolDefsForSkillAllowlist: connectedMcpToolDefs,
+              }),
               todoTool,
             ]
           : undefined;
@@ -1290,8 +1288,8 @@ export class AgentEngine {
           break;
         }
 
-        if (!this.toolCtx) {
-          // No dispatch context — append and finish without executing tools.
+        if (!this.toolRuntime) {
+          // No dispatch runtime — append and finish without executing tools.
           session.appendAssistantTurn(contentBlocks);
           break;
         }
@@ -1333,8 +1331,7 @@ export class AgentEngine {
         // Session-scoped tool context: use session.id so that per-session approvals
         // (MCP, command, write) are isolated between foreground chat sessions rather
         // than shared via the static "agent" synthetic ID.
-        const sessionCtx: ToolDispatchContext = {
-          ...this.toolCtx,
+        const sessionToolContext: AgentToolExecutionContext = {
           sessionId: session.id,
           mode: session.agentMode.slug,
           onFinalStatus: (marker) => {
@@ -1346,8 +1343,7 @@ export class AgentEngine {
             return currentTodos;
           },
           getSessionImages: () => {
-            const images: import("./toolAdapter.js").SessionImageReference[] =
-              [];
+            const images: SessionImageReference[] = [];
             for (const [messageIndex, message] of session
               .getAllMessages()
               .entries()) {
@@ -1422,7 +1418,7 @@ export class AgentEngine {
           const dispatchPromise = this.executeToolCalls(
             dispatchBlocks,
             signal,
-            sessionCtx,
+            sessionToolContext,
             session,
             (tr) => {
               const toolUseBlock = toolUseBlocks.find(
@@ -1699,7 +1695,7 @@ export class AgentEngine {
   private async executeToolCalls(
     calls: ToolUseBlock[],
     signal: AbortSignal,
-    ctx: ToolDispatchContext,
+    ctx: AgentToolExecutionContext,
     session: AgentSession,
     onToolComplete?: (result: ToolCallResult) => void,
   ): Promise<Array<ToolCallResult>> {
@@ -1707,11 +1703,11 @@ export class AgentEngine {
       length: calls.length,
     }).fill(null);
 
-    const tracker = ctx.toolCallTracker;
+    const tracker = this.toolRuntime?.getToolCallTracker?.();
     const trackedCalls = new Map<
       string,
       {
-        trackerCtx: TrackerContext;
+        trackerCtx: unknown;
         forcePromise: Promise<ToolResult>;
         controller: AbortController;
       }
@@ -1754,10 +1750,10 @@ export class AgentEngine {
       try {
         const result = await (forcePromise
           ? Promise.race([
-              dispatchToolCall(
-                call.name,
-                call.input as Record<string, unknown>,
-                {
+              this.toolRuntime!.executeTool({
+                name: call.name,
+                input: call.input as Record<string, unknown>,
+                context: {
                   ...ctx,
                   sessionId: session.id,
                   trackerCtx,
@@ -1768,19 +1764,23 @@ export class AgentEngine {
                     session.trackLoadedSkill(skillName),
                   skillAllowedTools: session.getActiveSkillAllowedTools(),
                 },
-              ),
+              }),
               forcePromise,
             ])
-          : dispatchToolCall(call.name, call.input as Record<string, unknown>, {
-              ...ctx,
-              sessionId: session.id,
-              trackerCtx,
-              toolAbortSignal: controller?.signal,
-              getAdvertisedSkills: () => session.getAdvertisedSkills(),
-              getAdvertisedRules: () => session.getAdvertisedRules(),
-              onSkillLoad: (skillName: string) =>
-                session.trackLoadedSkill(skillName),
-              skillAllowedTools: session.getActiveSkillAllowedTools(),
+          : this.toolRuntime!.executeTool({
+              name: call.name,
+              input: call.input as Record<string, unknown>,
+              context: {
+                ...ctx,
+                sessionId: session.id,
+                trackerCtx,
+                toolAbortSignal: controller?.signal,
+                getAdvertisedSkills: () => session.getAdvertisedSkills(),
+                getAdvertisedRules: () => session.getAdvertisedRules(),
+                onSkillLoad: (skillName: string) =>
+                  session.trackLoadedSkill(skillName),
+                skillAllowedTools: session.getActiveSkillAllowedTools(),
+              },
             }));
         return {
           tool_use_id: call.id,
@@ -1807,7 +1807,7 @@ export class AgentEngine {
     const writeIndices: number[] = [];
     for (let i = 0; i < calls.length; i++) {
       const name = calls[i].name;
-      const isReadOnly = READ_ONLY_TOOLS.has(name);
+      const isReadOnly = this.toolRuntime?.isParallelSafe(name) ?? false;
       if (isReadOnly) {
         readOnlyIndices.push(i);
       } else {

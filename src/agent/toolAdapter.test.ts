@@ -5,6 +5,7 @@ import {
   READ_ONLY_TOOLS,
   type ToolDispatchContext,
 } from "./toolAdapter.js";
+import { PARALLEL_SAFE_TOOLS } from "../core/tools/toolCapabilities.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "../shared/types.js";
@@ -186,7 +187,51 @@ const ddgMcpTools: ToolDefinition[] = [
   },
 ];
 
+const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
+  "read_file",
+  "get_context",
+  "get_repo_map",
+  "get_module_neighbors",
+  "load_rule",
+  "load_skill",
+  "list_files",
+  "search_files",
+  "codebase_search",
+  "get_diagnostics",
+  "get_hover",
+  "get_symbols",
+  "get_references",
+  "go_to_definition",
+  "go_to_implementation",
+  "go_to_type_definition",
+  "get_call_hierarchy",
+  "get_type_hierarchy",
+  "get_inlay_hints",
+  "get_completions",
+  "get_code_actions",
+  "open_file",
+  "show_notification",
+  "get_terminal_output",
+  "ask_user",
+  "find_mcp_tools",
+  "spawn_background_agent",
+  "get_background_status",
+  "get_background_result",
+] as const;
+
 describe("READ_ONLY_TOOLS", () => {
+  it("matches the pre-core compatibility snapshot", () => {
+    expect([...READ_ONLY_TOOLS].sort()).toEqual(
+      [...READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT].sort(),
+    );
+  });
+
+  it("matches the core parallel-safe metadata", () => {
+    expect([...PARALLEL_SAFE_TOOLS].sort()).toEqual(
+      [...READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT].sort(),
+    );
+  });
+
   it("includes expected read-only tools", () => {
     expect(READ_ONLY_TOOLS.has("read_file")).toBe(true);
     expect(READ_ONLY_TOOLS.has("get_context")).toBe(true);

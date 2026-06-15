@@ -61,6 +61,7 @@ import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 import type {
   BgSessionInfo,
   BrowserGatewayThemeSnapshot,
+  RevertRecoveryNotice,
 } from "../../shared/types";
 import type { BrowserGatewayInstanceStatusSummary } from "../protocol";
 
@@ -228,6 +229,7 @@ type GatewaySnapshot = {
       systemPrompt: string | null;
       loadedInstructions: LoadedInstructionDebugInfo[] | null;
       restoringSession: boolean;
+      revertRecoveryNotice: RevertRecoveryNotice | null;
       contextBudget?: {
         contextWindow: number;
         maxInputTokens: number;
@@ -440,6 +442,9 @@ export function BrowserGatewayApp({
   const [mobilePane, setMobilePane] = useState<"review" | null>(null);
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [sessionHistoryError, setSessionHistoryError] = useState<string | null>(
+    null,
+  );
   const [showMcpStatus, setShowMcpStatus] = useState(false);
   const [expandedMcpServers, setExpandedMcpServers] = useState<Set<string>>(
     () => new Set(),
@@ -1402,6 +1407,7 @@ export function BrowserGatewayApp({
 
   const handleShowHistory = (): void => {
     setShowHistory((prev) => !prev);
+    setSessionHistoryError(null);
     void fetchSessions();
   };
 
@@ -1422,7 +1428,7 @@ export function BrowserGatewayApp({
 
   const handleDeleteSession = (sessionId: string): void => {
     void (async () => {
-      await fetch(buildApiPath("/api/session/delete"), {
+      const response = await fetch(buildApiPath("/api/session/delete"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1430,13 +1436,24 @@ export function BrowserGatewayApp({
         },
         body: JSON.stringify({ sessionId }),
       });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+      };
+      if (!response.ok || body.ok === false) {
+        setSessionHistoryError(
+          body.message ?? `Failed to delete session (${response.status}).`,
+        );
+        return;
+      }
+      setSessionHistoryError(null);
       void fetchSessions();
     })();
   };
 
   const handleRenameSession = (sessionId: string, title: string): void => {
     void (async () => {
-      await fetch(buildApiPath("/api/session/rename"), {
+      const response = await fetch(buildApiPath("/api/session/rename"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1444,6 +1461,17 @@ export function BrowserGatewayApp({
         },
         body: JSON.stringify({ sessionId, title }),
       });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+      };
+      if (!response.ok || body.ok === false) {
+        setSessionHistoryError(
+          body.message ?? `Failed to rename session (${response.status}).`,
+        );
+        return;
+      }
+      setSessionHistoryError(null);
       void fetchSessions();
     })();
   };
@@ -2442,15 +2470,32 @@ export function BrowserGatewayApp({
                 </button>
               </div>
               {showHistory && (
-                <SessionHistory
-                  sessions={sessionHistory}
-                  currentSessionId={foreground?.sessionId ?? null}
-                  onLoad={handleLoadSession}
-                  onDelete={handleDeleteSession}
-                  onRename={handleRenameSession}
-                  onCopyFirstPrompt={handleCopyFirstPrompt}
-                  onClose={() => setShowHistory(false)}
-                />
+                <>
+                  {sessionHistoryError && (
+                    <div class="session-history-error" role="alert">
+                      <i class="codicon codicon-warning" />
+                      <span>{sessionHistoryError}</span>
+                    </div>
+                  )}
+                  <SessionHistory
+                    sessions={sessionHistory}
+                    currentSessionId={foreground?.sessionId ?? null}
+                    onLoad={handleLoadSession}
+                    onDelete={handleDeleteSession}
+                    onRename={handleRenameSession}
+                    onCopyFirstPrompt={handleCopyFirstPrompt}
+                    onClose={() => setShowHistory(false)}
+                  />
+                </>
+              )}
+              {foreground?.revertRecoveryNotice && (
+                <div class="revert-recovery-notice" role="alert">
+                  <i class="codicon codicon-warning" />
+                  <div>
+                    <strong>{foreground.revertRecoveryNotice.title}</strong>
+                    <span>{foreground.revertRecoveryNotice.message}</span>
+                  </div>
+                </div>
               )}
               {foreground?.debugInfo && (
                 <DebugInfo
