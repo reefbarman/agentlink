@@ -28,6 +28,7 @@ function isLargeContextFrontierModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   return (
     isAnthropicFrontierModel(lower) ||
+    lower === "gpt-5.5" ||
     lower === "gpt-5.4" ||
     lower === "gpt-5.4-pro"
   );

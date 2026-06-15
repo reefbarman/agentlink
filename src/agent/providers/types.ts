@@ -251,7 +251,7 @@ export interface ModelCapabilities {
   supportsToolUse: boolean;
   /** Advertised total context envelope. Some providers split this into separate input/output caps. */
   contextWindow: number;
-  /** Provider-enforced request input cap. Defaults to contextWindow when omitted. */
+  /** Provider-enforced request input cap. When omitted, callers derive it from the total context envelope. */
   maxInputTokens?: number;
   maxOutputTokens: number;
   reasoningEfforts?: ReasoningEffort[];

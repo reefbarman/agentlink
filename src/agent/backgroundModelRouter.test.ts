@@ -118,10 +118,9 @@ describe("resolveBackgroundRoute", () => {
 
   it("defaults the codex side to gpt-5.5 for non-cheap opposite routing", async () => {
     const anthModel = makeModel("claude-opus-4-8", "anthropic");
-    // Larger-context codex models would otherwise out-score gpt-5.5; the router
-    // should still default to gpt-5.5 (the OAuth-served default) rather than a
-    // model the ChatGPT backend rejects.
-    const codex55 = makeModel("gpt-5.5", "codex", { contextWindow: 400_000 });
+    // The router should default to gpt-5.5 (the OAuth-served default) rather
+    // than a model the ChatGPT backend rejects.
+    const codex55 = makeModel("gpt-5.5", "codex", { contextWindow: 1_050_000 });
     const codex54 = makeModel("gpt-5.4", "codex", { contextWindow: 1_050_000 });
     const registry = makeRegistry([
       makeProvider("anthropic", [anthModel]),

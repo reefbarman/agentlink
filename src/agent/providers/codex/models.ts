@@ -126,13 +126,13 @@ export const CODEX_CONDENSE_MODEL_FALLBACKS = [
 ] as const;
 
 const CODEX_400K_INPUT_TOKENS = 272_000;
+const CODEX_1M_CONTEXT_TOKENS = 1_050_000;
 
 export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.5",
     displayName: "GPT-5.5",
-    contextWindow: 400_000,
-    maxInputTokens: CODEX_400K_INPUT_TOKENS,
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
@@ -142,7 +142,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.4",
     displayName: "GPT-5.4",
-    contextWindow: 1_050_000,
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
@@ -152,7 +152,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.4-pro",
     displayName: "GPT-5.4 Pro",
-    contextWindow: 1_050_000,
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
     supportsThinking: true,
@@ -262,13 +262,16 @@ export function getEndpointCaps(auth: OpenAiCodexResolvedAuth): ResponsesCaps {
 
 export function getCodexModelCapabilities(model: string): ModelCapabilities {
   const def = CODEX_MODEL_MAP.get(model);
+  const maxInputTokens = def
+    ? def.maxInputTokens
+    : CODEX_400K_INPUT_TOKENS;
   return {
     supportsThinking: def?.supportsThinking ?? true,
     supportsCaching: true,
     supportsImages: def?.supportsImages ?? true,
     supportsToolUse: true,
     contextWindow: def?.contextWindow ?? 400_000,
-    maxInputTokens: def?.maxInputTokens ?? CODEX_400K_INPUT_TOKENS,
+    ...(typeof maxInputTokens === "number" ? { maxInputTokens } : {}),
     maxOutputTokens: def?.maxOutputTokens ?? 128_000,
     reasoningEfforts: def?.reasoningEfforts ?? [...GPT_5_REASONING_EFFORTS],
     defaultReasoningEffort: def?.defaultReasoningEffort ?? "medium",

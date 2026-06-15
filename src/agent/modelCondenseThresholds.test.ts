@@ -10,6 +10,7 @@ describe("modelCondenseThresholds", () => {
   it("defaults large-context frontier models to 0.6", () => {
     expect(getDefaultAutoCondenseThreshold("claude-sonnet-4-6")).toBe(0.6);
     expect(getDefaultAutoCondenseThreshold("claude-opus-4-8")).toBe(0.6);
+    expect(getDefaultAutoCondenseThreshold("gpt-5.5")).toBe(0.6);
     expect(getDefaultAutoCondenseThreshold("gpt-5.4")).toBe(0.6);
     expect(getDefaultAutoCondenseThreshold("gpt-5.4-pro")).toBe(0.6);
   });
@@ -18,7 +19,6 @@ describe("modelCondenseThresholds", () => {
     expect(getDefaultAutoCondenseThreshold("claude-haiku-4-5-20251001")).toBe(
       0.9,
     );
-    expect(getDefaultAutoCondenseThreshold("gpt-5.5")).toBe(0.9);
     expect(getDefaultAutoCondenseThreshold("gpt-5.4-mini")).toBe(0.9);
     expect(getDefaultAutoCondenseThreshold("gpt-5.3-codex")).toBe(0.9);
   });
