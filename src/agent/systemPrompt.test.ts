@@ -767,7 +767,7 @@ describe("buildSystemPrompt", () => {
   it("gives anthropic models high-level code tool guidance", async () => {
     const result = await buildSystemPrompt("code", tmpDir, {
       providerId: "anthropic",
-      model: "claude-fable-5",
+      model: "claude-opus-4-8",
     });
     expect(result).toContain("Tool selection");
     expect(result).toContain("highest-level code intelligence tool");

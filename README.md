@@ -1110,7 +1110,7 @@ AgentLink includes static routing policy for background agents (`src/agent/backg
 - **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and `get_background_result` only when ready to integrate.
 - **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Use explicit owned/forbidden paths in the spawn message.
 - **Read-only lanes**: `readonly-research` routes to ask mode with the `readonly-research` tool profile for pure lookup/exploration.
-- **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available; when the opposite provider is Anthropic, Claude Fable 5 is preferred for Anthropic review candidates.
+- **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available; when the opposite provider is Anthropic, Claude Opus 4.8 is preferred for Anthropic review candidates.
 - **Review complexity**: review spawns can explicitly set `modelTier`; otherwise review routing defaults to `balanced` for routine reviews and upgrades to `deep_reasoning` for complex reviews based on task/message heuristics.
 - **Fallback behavior**: deterministic fallback order is used when preferred candidates are unavailable or unauthenticated.
 - **Transparency**: routing decisions are returned by `spawn_background_agent`, logged as `[bg-route]`, and shown in background UI/debug info.

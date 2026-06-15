@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.16.26",
+  "version": "1.16.27",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -502,7 +502,7 @@
           "default": 10000,
           "minimum": 1024,
           "maximum": 32768,
-          "description": "Token budget for extended thinking (only used with thinking-capable models like claude-fable-5 and claude-opus-4-8)."
+          "description": "Token budget for extended thinking (only used with thinking-capable models like claude-opus-4-8 and claude-sonnet-4-6)."
         },
         "agentlink.showThinking": {
           "type": "boolean",

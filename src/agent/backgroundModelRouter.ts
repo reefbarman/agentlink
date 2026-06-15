@@ -5,9 +5,9 @@ import type {
   SpawnBackgroundRequest,
 } from "./backgroundTypes.js";
 
+import { CODEX_DEFAULT_MODEL } from "./providers/codex/models.js";
 import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
-import { CODEX_DEFAULT_MODEL } from "./providers/codex/models.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
 interface TaskRouteRule {
@@ -101,8 +101,7 @@ function scoreModel(model: ModelInfo, tier: ModelTier): number {
     (caps.supportsToolUse ? 20 : 0);
 
   const cheapHints = /haiku|spark|mini|lite/;
-  const deepHints = /fable|mythos|opus|max|5\.3|sonnet|pro/;
-  const isFable = /fable/.test(id);
+  const deepHints = /mythos|opus|max|5\.3|sonnet|pro/;
   const isOpus = /opus/.test(id);
   const isSonnet = /sonnet/.test(id);
 
@@ -112,8 +111,7 @@ function scoreModel(model: ModelInfo, tier: ModelTier): number {
       (caps.supportsThinking ? 120 : -120) +
       (deepHints.test(id) ? 80 : 0) +
       (cheapHints.test(id) ? -100 : 0) +
-      (isFable ? 60 : 0) +
-      (isOpus ? 30 : 0) +
+      (isOpus ? 60 : 0) +
       (isSonnet ? 10 : 0)
     );
   }
@@ -133,9 +131,8 @@ function scoreModel(model: ModelInfo, tier: ModelTier): number {
     (caps.supportsThinking ? 30 : 0) +
     (cheapHints.test(id) ? 20 : 0) +
     (deepHints.test(id) ? 20 : 0) +
-    (isFable ? 60 : 0) +
-    (isSonnet ? 25 : 0) +
-    (isOpus ? -10 : 0)
+    (isOpus ? 60 : 0) +
+    (isSonnet ? 25 : 0)
   );
 }
 

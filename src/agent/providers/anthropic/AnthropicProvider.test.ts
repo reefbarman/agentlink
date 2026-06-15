@@ -8,10 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 describe("AnthropicProvider capabilities", () => {
   const provider = new AnthropicProvider();
 
-  it("reports 1M context for Fable, Sonnet, and Opus", () => {
-    expect(provider.getCapabilities("claude-fable-5").contextWindow).toBe(
-      1_000_000,
-    );
+  it("reports 1M context for Sonnet and Opus", () => {
     expect(provider.getCapabilities("claude-sonnet-4-6").contextWindow).toBe(
       1_000_000,
     );
@@ -27,9 +24,6 @@ describe("AnthropicProvider capabilities", () => {
   });
 
   it("reports max output tokens for exposed models", () => {
-    expect(provider.getCapabilities("claude-fable-5").maxOutputTokens).toBe(
-      128_000,
-    );
     expect(provider.getCapabilities("claude-sonnet-4-6").maxOutputTokens).toBe(
       64_000,
     );
@@ -41,19 +35,24 @@ describe("AnthropicProvider capabilities", () => {
     ).toBe(64_000);
   });
 
-  it("exposes Fable without a disabled-thinking reasoning effort", () => {
+  it("exposes Opus with adaptive-thinking reasoning efforts", () => {
     expect(provider.listModels()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "claude-fable-5",
-          displayName: "Claude Fable 5",
+          id: "claude-opus-4-8",
+          displayName: "Claude Opus 4.8",
           provider: "anthropic",
         }),
       ]),
     );
-    expect(provider.getCapabilities("claude-fable-5").reasoningEfforts).toEqual(
-      ["low", "medium", "high", "max"],
+    expect(provider.listModels()).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "claude-fable-5" }),
+      ]),
     );
+    expect(
+      provider.getCapabilities("claude-opus-4-8").reasoningEfforts,
+    ).toEqual(["none", "low", "medium", "high", "max"]);
   });
 
   it("does not emit or persist empty thinking stream blocks", async () => {
@@ -86,7 +85,7 @@ describe("AnthropicProvider capabilities", () => {
 
     const events: ProviderStreamEvent[] = [];
     for await (const event of testProvider.stream({
-      model: "claude-fable-5",
+      model: "claude-opus-4-8",
       systemPrompt: "system",
       messages: [{ role: "user", content: "hello" }],
       maxTokens: 64,
@@ -117,7 +116,7 @@ describe("AnthropicProvider capabilities", () => {
     };
 
     for await (const _event of testProvider.stream({
-      model: "claude-fable-5",
+      model: "claude-opus-4-8",
       systemPrompt: "system",
       messages: [{ role: "user", content: "hello" }],
       maxTokens: 64,
@@ -128,7 +127,7 @@ describe("AnthropicProvider capabilities", () => {
 
     expect(stream).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "claude-fable-5",
+        model: "claude-opus-4-8",
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "high" },
       }),
@@ -171,7 +170,7 @@ describe("AnthropicProvider capabilities", () => {
 
     const events: ProviderStreamEvent[] = [];
     for await (const event of testProvider.stream({
-      model: "claude-fable-5",
+      model: "claude-opus-4-8",
       systemPrompt: "system",
       messages: [{ role: "user", content: "hello" }],
       maxTokens: 64,
@@ -218,7 +217,7 @@ describe("AnthropicProvider capabilities", () => {
     };
 
     await testProvider.complete({
-      model: "claude-fable-5",
+      model: "claude-opus-4-8",
       systemPrompt: "system",
       messages: [{ role: "user", content: "hello" }],
       maxTokens: 64,
@@ -231,7 +230,7 @@ describe("AnthropicProvider capabilities", () => {
     );
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "claude-fable-5",
+        model: "claude-opus-4-8",
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "high" },
       }),

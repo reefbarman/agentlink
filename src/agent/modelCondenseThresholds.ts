@@ -19,9 +19,7 @@ export function isAnthropicFrontierModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   return (
     lower.startsWith("claude-") &&
-    (lower.includes("fable") ||
-      lower.includes("sonnet") ||
-      lower.includes("opus"))
+    (lower.includes("sonnet") || lower.includes("opus"))
   );
 }
 

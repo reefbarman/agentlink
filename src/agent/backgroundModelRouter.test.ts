@@ -142,15 +142,14 @@ describe("resolveBackgroundRoute", () => {
     expect(route.resolvedModel).toBe("gpt-5.5");
   });
 
-  it("prefers fable for routine opposite-provider anthropic reviews", async () => {
-    const fable = makeModel("claude-fable-5", "anthropic");
+  it("prefers opus for routine opposite-provider anthropic reviews", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
     const registry = makeRegistry([
-      makeProvider("anthropic", [sonnet, opus, fable], true),
+      makeProvider("anthropic", [sonnet, opus], true),
       makeProvider("codex", [codexModel], false),
     ]);
 
@@ -165,20 +164,19 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-fable-5");
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=balanced");
   });
 
-  it("prefers fable for complex opposite-provider anthropic reviews", async () => {
-    const fable = makeModel("claude-fable-5", "anthropic");
+  it("prefers opus for complex opposite-provider anthropic reviews", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
     const registry = makeRegistry([
-      makeProvider("anthropic", [sonnet, opus, fable], true),
+      makeProvider("anthropic", [sonnet, opus], true),
       makeProvider("codex", [codexModel], false),
     ]);
 
@@ -194,20 +192,19 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-fable-5");
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=deep_reasoning");
   });
 
   it("honors explicit modelTier override for review tasks", async () => {
-    const fable = makeModel("claude-fable-5", "anthropic");
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
     const registry = makeRegistry([
-      makeProvider("anthropic", [sonnet, opus, fable], true),
+      makeProvider("anthropic", [sonnet, opus], true),
       makeProvider("codex", [codexModel], false),
     ]);
 
@@ -222,7 +219,7 @@ describe("resolveBackgroundRoute", () => {
       { mode: "code", model: "gpt-5" },
     );
 
-    expect(route.resolvedModel).toBe("claude-fable-5");
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
     expect(route.routingReason).toContain("tier=deep_reasoning");
   });
 
