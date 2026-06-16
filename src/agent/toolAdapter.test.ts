@@ -286,6 +286,47 @@ describe("getAgentTools", () => {
     }
   });
 
+  it("reuses static native JSON schemas without caching MCP definitions", () => {
+    const first = getAgentTools();
+    const second = getAgentTools();
+
+    expect(first.find((tool) => tool.name === "read_file")?.input_schema).toBe(
+      second.find((tool) => tool.name === "read_file")?.input_schema,
+    );
+    expect(first.find((tool) => tool.name === "load_rule")?.input_schema).toBe(
+      second.find((tool) => tool.name === "load_rule")?.input_schema,
+    );
+
+    const firstMcpSchema = {
+      type: "object" as const,
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    };
+    const secondMcpSchema = {
+      type: "object" as const,
+      properties: { query: { type: "string" }, limit: { type: "number" } },
+      required: ["query"],
+    };
+
+    const firstMcp = getAgentTools(BUILT_IN_MODES[0], [
+      {
+        name: "demo__search",
+        description: "Search demo",
+        input_schema: firstMcpSchema,
+      },
+    ]).find((tool) => tool.name === "demo__search");
+    const secondMcp = getAgentTools(BUILT_IN_MODES[0], [
+      {
+        name: "demo__search",
+        description: "Search demo",
+        input_schema: secondMcpSchema,
+      },
+    ]).find((tool) => tool.name === "demo__search");
+
+    expect(firstMcp?.input_schema).toBe(firstMcpSchema);
+    expect(secondMcp?.input_schema).toBe(secondMcpSchema);
+  });
+
   it("does not emit duplicate tool names", () => {
     for (const mode of [undefined, ...BUILT_IN_MODES]) {
       const names = getAgentTools(mode).map((tool) => tool.name);
@@ -1145,7 +1186,47 @@ describe("dispatchToolCall", () => {
       mockCtx.sessionId,
       mockCtx.onApprovalRequest,
       mockCtx.mode,
+      {
+        editReviewProvider: expect.objectContaining({
+          reviewAndApply: expect.any(Function),
+        }),
+        writeApprovalPolicyProvider: expect.objectContaining({
+          canAutoApprove: expect.any(Function),
+          recordDecision: expect.any(Function),
+        }),
+        diagnosticDelay: 1500,
+      },
     );
+  });
+
+  it("dispatches open_file with editor reveal providers", async () => {
+    const { handleOpenFile } = await import("../tools/openFile.js");
+    const editorRevealProvider = {
+      reveal: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "opened" }],
+      })),
+    };
+
+    const result = await dispatchToolCall(
+      "open_file",
+      { path: "src/foo.ts", line: 3 },
+      { ...mockCtx, editorRevealProvider },
+    );
+
+    expect(handleOpenFile).toHaveBeenCalledWith(
+      { path: "src/foo.ts", line: 3 },
+      mockCtx.sessionId,
+      {
+        workspaceFileProvider: expect.objectContaining({
+          resolvePath: expect.any(Function),
+        }),
+        pathAccessProvider: expect.objectContaining({
+          ensureAccess: expect.any(Function),
+        }),
+        editorRevealProvider,
+      },
+    );
+    expect(result.content[0]).toMatchObject({ type: "text", text: "opened" });
   });
 
   it("dispatches show_notification to handleShowNotification", async () => {
@@ -1174,6 +1255,34 @@ describe("dispatchToolCall", () => {
       mockCtx.sessionId,
       mockCtx.extensionUri,
       mockCtx.onApprovalRequest,
+      {
+        multiFileEditReviewProvider: expect.objectContaining({
+          reviewAndApply: expect.any(Function),
+        }),
+      },
+    );
+  });
+
+  it("dispatches rename_symbol with the rename provider", async () => {
+    const { handleRenameSymbol } = await import("../tools/renameSymbol.js");
+    const renameSymbolProvider = {
+      rename: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "renamed" }],
+      })),
+    };
+
+    await dispatchToolCall(
+      "rename_symbol",
+      { path: "src/file.ts", line: 2, column: 3, new_name: "nextName" },
+      { ...mockCtx, renameSymbolProvider },
+    );
+
+    expect(handleRenameSymbol).toHaveBeenCalledWith(
+      { path: "src/file.ts", line: 2, column: 3, new_name: "nextName" },
+      mockCtx.approvalPanel,
+      mockCtx.sessionId,
+      mockCtx.onApprovalRequest,
+      { renameSymbolProvider },
     );
   });
 

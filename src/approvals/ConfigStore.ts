@@ -4,6 +4,7 @@ import * as path from "path";
 import * as os from "os";
 
 import type { CommandRule, PathRule } from "./ApprovalManager.js";
+import { parseJsonWithComments } from "../util/jsonc.js";
 
 export interface AgentLinkConfig {
   version: number;
@@ -155,7 +156,7 @@ export class ConfigStore {
   private parseAndValidate(raw: string, filePath: string): AgentLinkConfig {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw);
+      parsed = parseJsonWithComments(raw);
     } catch {
       log(`Warning: Malformed JSON in ${filePath}, treating as empty config`);
       vscode.window

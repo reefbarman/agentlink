@@ -675,7 +675,7 @@ export class SessionStore implements SessionPersistenceProvider {
       fd = this.atomicFileOps.openSync(tempPath, "w");
       this.atomicFileOps.writeFileSync(
         fd,
-        `${JSON.stringify(value, null, 2)}\n`,
+        `${JSON.stringify(value)}\n`,
         "utf-8",
       );
       this.atomicFileOps.fsyncSync(fd);

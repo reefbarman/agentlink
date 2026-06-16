@@ -195,12 +195,16 @@ function translateMessages(messages: MessageParam[]): CodexInputItem[] {
   return input;
 }
 
+const codexToolCache = new WeakMap<ToolDefinition[], OpenAIResponses.Tool[]>();
+
 /**
  * Translate our ToolDefinition[] into Codex Responses API tools.
  * Uses non-strict mode to support free-form object schemas (e.g. MCP tools).
  */
 function translateTools(tools: ToolDefinition[]): OpenAIResponses.Tool[] {
-  return tools.map((t) => ({
+  const cached = codexToolCache.get(tools);
+  if (cached) return cached;
+  const translated = tools.map((t) => ({
     type: "function" as const,
     name: t.name,
     description: t.description,
@@ -209,6 +213,8 @@ function translateTools(tools: ToolDefinition[]): OpenAIResponses.Tool[] {
     ),
     strict: false,
   })) as OpenAIResponses.Tool[];
+  codexToolCache.set(tools, translated);
+  return translated;
 }
 
 function buildReasoning(effort: string): Reasoning {
@@ -861,7 +867,11 @@ export class CodexProvider implements ModelProvider {
     const codexInput = translateMessages(messages);
 
     let auth = await this.getModelAuthOrThrow();
-    const effectiveModel = this.resolveEffectiveModel(model, auth, "complete()");
+    const effectiveModel = this.resolveEffectiveModel(
+      model,
+      auth,
+      "complete()",
+    );
     const modelDef = CODEX_MODEL_MAP.get(effectiveModel);
     const reasoningEffort =
       requestedEffort === "none"

@@ -152,11 +152,12 @@ async function runAgentDetection(
 
   try {
     const result = await agent.provider.complete({
-      model: agent.model,
+      model: agent.provider.condenseModel || agent.model,
       systemPrompt: systemMsg.content,
       messages: [{ role: "user", content: userMsg.content }],
       maxTokens: 300,
       temperature: 0,
+      reasoningEffort: "none",
       signal: options.signal,
     });
     const detected = parseQuestionDetectionJson(result.text);

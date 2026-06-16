@@ -1706,6 +1706,23 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
+  it("clears stale running token estimates after successful condense", () => {
+    let state = reducer(initialState, {
+      type: "TOKEN_ESTIMATE",
+      estimatedTotalUsed: 220_200,
+    });
+
+    state = reducer(state, {
+      type: "ADD_CONDENSE",
+      prevInputTokens: 253_100,
+      newInputTokens: 10_600,
+      durationMs: 15_400,
+    });
+
+    expect(state.lastInputTokens).toBe(10_600);
+    expect(state.estimatedTotalUsed).toBe(0);
+  });
+
   it("stores and clears detected question fallback state", () => {
     const detected = {
       messageId: "assistant-1",

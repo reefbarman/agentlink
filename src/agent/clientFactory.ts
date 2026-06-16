@@ -1,7 +1,9 @@
-import Anthropic from "@anthropic-ai/sdk";
 import * as fs from "fs";
-import * as path from "path";
 import * as os from "os";
+import * as path from "path";
+
+import Anthropic from "@anthropic-ai/sdk";
+import { agentLinkFetch } from "../util/httpDispatcher.js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 
@@ -137,7 +139,7 @@ export function createAnthropicClient(
   if (explicitApiKey) {
     logLine("[auth] using explicit API key");
     return {
-      client: new Anthropic({ apiKey: explicitApiKey }),
+      client: new Anthropic({ apiKey: explicitApiKey, fetch: agentLinkFetch }),
       authSource: "explicit",
     };
   }
@@ -145,7 +147,10 @@ export function createAnthropicClient(
   if (storedAnthropicApiKey) {
     logLine("[auth] using stored API key from secret storage");
     return {
-      client: new Anthropic({ apiKey: storedAnthropicApiKey }),
+      client: new Anthropic({
+        apiKey: storedAnthropicApiKey,
+        fetch: agentLinkFetch,
+      }),
       authSource: "env-api-key",
     };
   }
@@ -153,7 +158,10 @@ export function createAnthropicClient(
   if (process.env.ANTHROPIC_API_KEY) {
     logLine("[auth] using ANTHROPIC_API_KEY env var");
     return {
-      client: new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }),
+      client: new Anthropic({
+        apiKey: process.env.ANTHROPIC_API_KEY,
+        fetch: agentLinkFetch,
+      }),
       authSource: "env-api-key",
     };
   }
@@ -163,6 +171,7 @@ export function createAnthropicClient(
     return {
       client: new Anthropic({
         authToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+        fetch: agentLinkFetch,
       }),
       authSource: "env-oauth-token",
     };

@@ -88,6 +88,20 @@ const themeSnapshotStub = {
   source: "vscode-theme-api" as const,
 };
 
+function makePollService(hub: InMemoryAgentUiEventHub): BrowserGatewayService {
+  const sessionManager = makeSessionManagerStub();
+  return new BrowserGatewayService(
+    hub,
+    sessionManager as never,
+    () => themeSnapshotStub,
+    () => "prompt",
+    () => true,
+    () => "high",
+    () => null,
+    () => [],
+  );
+}
+
 describe("BrowserGatewayService", () => {
   it("tracks approval and question state from hub events", () => {
     const hub = new InMemoryAgentUiEventHub();
@@ -396,5 +410,31 @@ describe("BrowserGatewayService", () => {
       recentEvents: [],
     });
     hub.dispose();
+  });
+
+  it("skips the poll snapshot build when no browser client is connected", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const service = makePollService(hub);
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      // No clients connected → poll ticks should not emit.
+      service.setHasActiveClientsProbe(() => false);
+      vi.advanceTimersByTime(450);
+      expect(onDidChange).not.toHaveBeenCalled();
+
+      // Client connects → next poll tick emits the (changed) snapshot.
+      service.setHasActiveClientsProbe(() => true);
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

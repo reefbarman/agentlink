@@ -1,58 +1,18 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 
+import type {
+  EditReviewProvider,
+  WriteApprovalPolicyProvider,
+} from "../core/capabilities/editReview.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockWorkspace = vi.hoisted(() => ({
-  workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
-  getConfiguration: vi.fn(() => ({
-    get: vi.fn((_key: string, fallback?: unknown) => fallback),
-  })),
-  openTextDocument: vi.fn(),
-  applyEdit: vi.fn(async () => true),
-}));
-
-const mockWindow = vi.hoisted(() => ({
-  showTextDocument: vi.fn(async () => undefined),
-}));
-
-const mockDiffViewProvider = vi.hoisted(() => vi.fn());
-const mockCreateFormatOnSaveReport = vi.hoisted(() =>
-  vi.fn((relPath: string, expectedContent: string, finalContent: string) => {
-    if (expectedContent === finalContent) return undefined;
-    return {
-      format_on_save: true,
-      format_on_save_edits: `--- ${relPath}\n-${expectedContent}\n+${finalContent}`,
-    };
-  }),
-);
-const mockSnapshotDiagnostics = vi.hoisted(() =>
-  vi.fn(() => ({
-    collectNewErrors: vi.fn(async () => undefined),
-  })),
-);
-
 vi.mock("vscode", () => ({
-  workspace: mockWorkspace,
-  window: mockWindow,
-  Range: class {
-    constructor(
-      public start: unknown,
-      public end: unknown,
-    ) {}
+  workspace: {
+    workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
   },
-  WorkspaceEdit: class {
-    replace = vi.fn();
-  },
-}));
-
-vi.mock("../integrations/DiffViewProvider.js", () => ({
-  DiffViewProvider: mockDiffViewProvider,
-  createFormatOnSaveReport: mockCreateFormatOnSaveReport,
-  FileLockTimeoutError: class FileLockTimeoutError extends Error {},
-  withFileLock: async (_filePath: string, fn: () => Promise<unknown>) => fn(),
-  snapshotDiagnostics: mockSnapshotDiagnostics,
 }));
 
 describe("handleWriteFile", () => {
@@ -65,15 +25,11 @@ describe("handleWriteFile", () => {
     );
     workspaceDir = path.join(tempDir, "workspace");
     fs.mkdirSync(workspaceDir, { recursive: true });
-    mockWorkspace.workspaceFolders = [{ uri: { fsPath: workspaceDir } }];
-    mockWorkspace.getConfiguration.mockReturnValue({
-      get: vi.fn((_key: string, fallback?: unknown) => fallback),
-    });
-    mockWorkspace.applyEdit.mockResolvedValue(true);
-    mockWindow.showTextDocument.mockResolvedValue(undefined);
-    mockDiffViewProvider.mockClear();
-    mockCreateFormatOnSaveReport.mockClear();
-    mockSnapshotDiagnostics.mockClear();
+    (
+      vscode.workspace as unknown as {
+        workspaceFolders: Array<{ uri: { fsPath: string } }>;
+      }
+    ).workspaceFolders = [{ uri: { fsPath: workspaceDir } }];
   });
 
   afterEach(() => {
@@ -81,198 +37,202 @@ describe("handleWriteFile", () => {
     vi.clearAllMocks();
   });
 
-  it("auto-approves architect-mode modifications to existing plans files", async () => {
-    const planPath = path.join(workspaceDir, "plans", "existing.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
+  function toolJson(
+    result: Awaited<
+      ReturnType<typeof import("./writeFile.js").handleWriteFile>
+    >,
+  ) {
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    return JSON.parse(text) as Record<string, unknown>;
+  }
 
-    const doc = {
-      getText: vi.fn(() => "old plan"),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: planPath },
-      isDirty: true,
-      save: vi.fn(async () => true),
+  function createApprovalPolicy(
+    canAutoApprove: boolean,
+  ): WriteApprovalPolicyProvider {
+    return {
+      canAutoApprove: vi.fn(() => canAutoApprove),
+      recordDecision: vi.fn(),
     };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
+  }
 
-    const approvalManager = {
-      isAgentWriteApproved: vi.fn(() => false),
-      isFileWriteApproved: vi.fn(() => false),
+  it("returns explicit unavailable before mutation when no edit-review provider exists", async () => {
+    const filePath = path.join(workspaceDir, "src", "unavailable.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const policy = createApprovalPolicy(true);
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    const result = await handleWriteFile(
+      { path: "src/unavailable.ts", content: "new" },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { writeApprovalPolicyProvider: policy },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error: "Edit review is unavailable in this runtime",
+      path: "src/unavailable.ts",
+      reason: "edit_review_unavailable",
+    });
+    expect(policy.canAutoApprove).not.toHaveBeenCalled();
+    expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+  });
+
+  it("delegates auto-approved writes to the edit-review provider", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "plans/existing.md",
+        operation: "auto-approved" as const,
+      })),
     };
-    const approvalPanel = {};
+    const policy = createApprovalPolicy(true);
 
     const { handleWriteFile } = await import("./writeFile.js");
     const result = await handleWriteFile(
       { path: "plans/existing.md", content: "updated plan" },
-      approvalManager as never,
-      approvalPanel as never,
+      {} as never,
+      {} as never,
       "session-1",
       undefined,
       "architect",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
     );
 
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    const parsed = JSON.parse(text);
-    expect(parsed.error).toBeUndefined();
-    expect(parsed).toMatchObject({
+    expect(toolJson(result)).toMatchObject({
       status: "accepted",
       path: "plans/existing.md",
       operation: "auto-approved",
     });
-    expect(mockDiffViewProvider).not.toHaveBeenCalled();
-    expect(approvalManager.isAgentWriteApproved).not.toHaveBeenCalled();
-    expect(mockWorkspace.applyEdit).toHaveBeenCalledOnce();
-    expect(doc.save).toHaveBeenCalledOnce();
-  });
-
-  it("creates missing parent directories for auto-approved new files", async () => {
-    const nestedPath = path.join(workspaceDir, "plans", "new", "nested.md");
-
-    const doc = {
-      getText: vi.fn(() => ""),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: nestedPath },
-      isDirty: true,
-      save: vi.fn(async () => {
-        fs.writeFileSync(nestedPath, "nested plan", "utf-8");
-        return true;
+    expect(policy.canAutoApprove).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      absolutePath: path.join(workspaceDir, "plans", "existing.md"),
+      relativePath: "plans/existing.md",
+      inWorkspace: true,
+      mode: "architect",
+    });
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "auto",
+        absolutePath: path.join(workspaceDir, "plans", "existing.md"),
+        relativePath: "plans/existing.md",
+        content: "updated plan",
+        outsideWorkspace: false,
+        sessionId: "session-1",
       }),
+    );
+  });
+
+  it("records scoped trust after interactive accept-session decisions", async () => {
+    const approvalPanel = {};
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "src/example.ts",
+        operation: "modified" as const,
+        finalContent: "new",
+        decision: "accept-session" as const,
+        writeApprovalResponse: { decision: "accept-session" },
+      })),
     };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
+    const policy = createApprovalPolicy(false);
 
     const { handleWriteFile } = await import("./writeFile.js");
     const result = await handleWriteFile(
-      { path: "plans/new/nested.md", content: "nested plan" },
-      {
-        isAgentWriteApproved: vi.fn(() => false),
-        isFileWriteApproved: vi.fn(() => false),
-      } as never,
+      { path: "src/example.ts", content: "new" },
       {} as never,
+      approvalPanel as never,
       "session-1",
       undefined,
-      "architect",
+      "code",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
     );
 
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(JSON.parse(text)).toMatchObject({
+    expect(toolJson(result)).toMatchObject({
       status: "accepted",
-      path: "plans/new/nested.md",
-      operation: "auto-approved",
+      path: "src/example.ts",
+      operation: "modified",
     });
-    expect(fs.existsSync(path.dirname(nestedPath))).toBe(true);
-    expect(fs.readFileSync(nestedPath, "utf-8")).toBe("nested plan");
-  });
-
-  it("reports formatter edits from auto-approved saves", async () => {
-    const planPath = path.join(workspaceDir, "plans", "formatted.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
-
-    const doc = {
-      getText: vi.fn(() => "old plan"),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: planPath },
-      isDirty: true,
-      save: vi.fn(async () => {
-        fs.writeFileSync(planPath, "updated plan\n", "utf-8");
-        return true;
+    expect(toolJson(result)).not.toHaveProperty("finalContent");
+    expect(toolJson(result)).not.toHaveProperty("decision");
+    expect(policy.recordDecision).toHaveBeenCalledWith({
+      decision: "accept-session",
+      sessionId: "session-1",
+      relativePath: "src/example.ts",
+      inWorkspace: true,
+      writeApprovalResponse: { decision: "accept-session" },
+    });
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "interactive",
+        approvalPanel,
       }),
-    };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
-
-    const { handleWriteFile } = await import("./writeFile.js");
-    const result = await handleWriteFile(
-      { path: "plans/formatted.md", content: "updated plan" },
-      {
-        isAgentWriteApproved: vi.fn(() => false),
-        isFileWriteApproved: vi.fn(() => false),
-      } as never,
-      {} as never,
-      "session-1",
-      undefined,
-      "architect",
     );
-
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    const parsed = JSON.parse(text);
-    expect(parsed).toMatchObject({
-      status: "accepted",
-      format_on_save: true,
-    });
-    expect(parsed.format_on_save_edits).toContain("updated plan");
   });
 
-  it("returns an error when an auto-approved edit cannot be applied", async () => {
-    const planPath = path.join(workspaceDir, "plans", "edit-fails.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
-    mockWorkspace.applyEdit.mockResolvedValue(false);
-
-    const doc = {
-      getText: vi.fn(() => "old plan"),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: planPath },
-      isDirty: false,
-      save: vi.fn(async () => true),
+  it("does not record trust for interactive rejections", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "rejected_by_user" as const,
+        path: "src/rejected.ts",
+        reason: "Needs a smaller diff",
+        decision: "reject" as const,
+      })),
     };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
+    const policy = createApprovalPolicy(false);
 
     const { handleWriteFile } = await import("./writeFile.js");
     const result = await handleWriteFile(
-      { path: "plans/edit-fails.md", content: "updated plan" },
-      {
-        isAgentWriteApproved: vi.fn(() => false),
-        isFileWriteApproved: vi.fn(() => false),
-      } as never,
+      { path: "src/rejected.ts", content: "new" },
+      {} as never,
       {} as never,
       "session-1",
       undefined,
-      "architect",
+      "code",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
     );
 
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(JSON.parse(text)).toMatchObject({
-      error: "File edit failed",
-      reason: "apply_edit_failed",
+    expect(toolJson(result)).toMatchObject({
+      status: "rejected_by_user",
+      path: "src/rejected.ts",
+      reason: "Needs a smaller diff",
     });
+    expect(toolJson(result)).not.toHaveProperty("decision");
+    expect(policy.recordDecision).not.toHaveBeenCalled();
   });
 
-  it("returns an error when an auto-approved save fails", async () => {
-    const planPath = path.join(workspaceDir, "plans", "save-fails.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
-
-    const doc = {
-      getText: vi.fn(() => "old plan"),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: planPath },
-      isDirty: true,
-      save: vi.fn(async () => false),
+  it("adds write-risk warnings to provider results", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "src/example.test.ts",
+        operation: "modified" as const,
+      })),
     };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
 
     const { handleWriteFile } = await import("./writeFile.js");
     const result = await handleWriteFile(
-      { path: "plans/save-fails.md", content: "updated plan" },
       {
-        isAgentWriteApproved: vi.fn(() => false),
-        isFileWriteApproved: vi.fn(() => false),
-      } as never,
+        path: "src/example.test.ts",
+        content: "vi.mock('x', () => ({ value }));\nconst value = 1;\n",
+      },
+      {} as never,
       {} as never,
       "session-1",
       undefined,
-      "architect",
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(false),
+      },
     );
 
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(JSON.parse(text)).toMatchObject({
-      error: "File save failed",
-      reason: "save_failed",
-    });
+    expect(toolJson(result).warnings).toEqual([
+      expect.stringContaining("Vitest mock factories are hoisted"),
+    ]);
   });
 });

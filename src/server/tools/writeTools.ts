@@ -1,18 +1,23 @@
-import { handleOpenFile } from "../../tools/openFile.js";
-import { handleShowNotification } from "../../tools/showNotification.js";
-import { handleWriteFile } from "../../tools/writeFile.js";
-import { handleApplyDiff } from "../../tools/applyDiff.js";
-import { handleRenameSymbol } from "../../tools/renameSymbol.js";
-import { handleFindAndReplace } from "../../tools/findAndReplace.js";
 import {
+  applyDiffSchema,
+  findAndReplaceSchema,
   openFileSchema,
+  renameSymbolSchema,
   showNotificationSchema,
   writeFileSchema,
-  applyDiffSchema,
-  renameSymbolSchema,
-  findAndReplaceSchema,
 } from "../../shared/toolSchemas.js";
+import {
+  createVscodePathAccessProvider,
+  createVscodeWorkspaceFileProvider,
+} from "../../adapters/vscode/readSearchCapabilities.js";
+
 import type { ToolRegistrationContext } from "./types.js";
+import { handleApplyDiff } from "../../tools/applyDiff.js";
+import { handleFindAndReplace } from "../../tools/findAndReplace.js";
+import { handleOpenFile } from "../../tools/openFile.js";
+import { handleRenameSymbol } from "../../tools/renameSymbol.js";
+import { handleShowNotification } from "../../tools/showNotification.js";
+import { handleWriteFile } from "../../tools/writeFile.js";
 
 export function registerWriteTools(ctx: ToolRegistrationContext): void {
   const {
@@ -24,6 +29,11 @@ export function registerWriteTools(ctx: ToolRegistrationContext): void {
     sid,
     touch,
     desc,
+    editorRevealProvider,
+    editReviewProvider,
+    writeApprovalPolicyProvider,
+    multiFileEditReviewProvider,
+    renameSymbolProvider,
   } = ctx;
 
   // --- Editor actions ---
@@ -39,7 +49,14 @@ export function registerWriteTools(ctx: ToolRegistrationContext): void {
       "open_file",
       (params) => {
         touch();
-        return handleOpenFile(params, approvalManager, approvalPanel, sid());
+        return handleOpenFile(params, sid(), {
+          workspaceFileProvider: createVscodeWorkspaceFileProvider(),
+          pathAccessProvider: createVscodePathAccessProvider(
+            approvalManager,
+            approvalPanel,
+          ),
+          editorRevealProvider,
+        });
       },
       (p) => String(p.path ?? ""),
       sid,
@@ -82,7 +99,18 @@ export function registerWriteTools(ctx: ToolRegistrationContext): void {
       "write_file",
       (params) => {
         touch();
-        return handleWriteFile(params, approvalManager, approvalPanel, sid());
+        return handleWriteFile(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+          undefined,
+          undefined,
+          {
+            editReviewProvider,
+            writeApprovalPolicyProvider,
+          },
+        );
       },
       (p) => String(p.path ?? ""),
       sid,
@@ -104,7 +132,18 @@ export function registerWriteTools(ctx: ToolRegistrationContext): void {
       "apply_diff",
       (params) => {
         touch();
-        return handleApplyDiff(params, approvalManager, approvalPanel, sid());
+        return handleApplyDiff(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+          undefined,
+          undefined,
+          {
+            editReviewProvider,
+            writeApprovalPolicyProvider,
+          },
+        );
       },
       (p) => String(p.path ?? ""),
       sid,
@@ -128,12 +167,9 @@ export function registerWriteTools(ctx: ToolRegistrationContext): void {
       "rename_symbol",
       (params) => {
         touch();
-        return handleRenameSymbol(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleRenameSymbol(params, approvalPanel, sid(), undefined, {
+          renameSymbolProvider,
+        });
       },
       (p) => String(p.new_name ?? ""),
       sid,
@@ -161,6 +197,8 @@ export function registerWriteTools(ctx: ToolRegistrationContext): void {
           approvalPanel,
           sid(),
           extensionUri,
+          undefined,
+          { multiFileEditReviewProvider },
         );
       },
       (p) => `${p.find?.slice(0, 30)} → ${p.replace?.slice(0, 30)}`,

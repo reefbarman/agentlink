@@ -2,6 +2,7 @@ import * as os from "os";
 
 import OpenAI from "openai";
 
+import { agentLinkFetch } from "../../../util/httpDispatcher.js";
 import type { OpenAiCodexResolvedAuth } from "./OpenAiCodexAuthManager.js";
 import { getEndpointCaps, type ResponsesCaps } from "./models.js";
 
@@ -47,6 +48,7 @@ export function createOpenAiResponsesClient(
     apiKey: auth.bearerToken,
     baseURL: endpoint.baseURL,
     defaultHeaders: endpoint.defaultHeaders,
+    fetch: agentLinkFetch,
     maxRetries: 0,
   });
 }

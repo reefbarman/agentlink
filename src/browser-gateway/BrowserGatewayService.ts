@@ -218,6 +218,11 @@ export class BrowserGatewayService implements vscode.Disposable {
     new vscode.EventEmitter<BrowserGatewaySnapshotState>();
   private pollTimer: ReturnType<typeof setInterval> | undefined;
   private lastSerializedSnapshot = "";
+  // Optional probe, set by the gateway server, reporting whether any browser
+  // client is currently connected. When no client is listening, the 150ms poll
+  // skips the snapshot build+serialize entirely — newly-connected clients are
+  // sent a fresh snapshot on connect, so nothing is missed by pausing it.
+  private hasActiveClientsProbe: (() => boolean) | undefined;
   private approval: ApprovalRequest | undefined;
   private question:
     | {
@@ -234,6 +239,15 @@ export class BrowserGatewayService implements vscode.Disposable {
     | undefined;
 
   readonly onDidChange = this.onDidChangeEmitter.event;
+
+  /**
+   * Register a probe the poll consults to decide whether any browser client is
+   * connected. The gateway server wires this to its SSE client set so the poll
+   * can stay idle when nobody is watching.
+   */
+  setHasActiveClientsProbe(probe: (() => boolean) | undefined): void {
+    this.hasActiveClientsProbe = probe;
+  }
 
   constructor(
     uiEventHub: ReadableAgentUiEventHub,
@@ -611,6 +625,12 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   private emitSnapshotIfChanged(): void {
+    // No browser client connected → skip the snapshot build and serialize. The
+    // server pushes a fresh snapshot to each client on connect, so a paused poll
+    // never leaves a connected client stale.
+    if (this.hasActiveClientsProbe && !this.hasActiveClientsProbe()) {
+      return;
+    }
     const snapshot = this.getSerializableSnapshotState();
     const serialized = JSON.stringify(snapshot);
     if (serialized === this.lastSerializedSnapshot) {

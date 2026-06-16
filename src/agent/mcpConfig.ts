@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import { parseJsonWithComments } from "../util/jsonc.js";
 
 export interface McpServerConfig {
   /** Unique server name (key from config file) */
@@ -48,7 +49,7 @@ interface McpConfigFile {
 async function safeReadJson(filePath: string): Promise<McpConfigFile | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(raw) as McpConfigFile;
+    return parseJsonWithComments<McpConfigFile>(raw);
   } catch {
     return null;
   }
@@ -215,7 +216,7 @@ async function patchMcpJson(
   let doc: { mcpServers?: Record<string, Record<string, unknown>> } = {};
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    doc = JSON.parse(raw);
+    doc = parseJsonWithComments(raw);
   } catch {
     // File doesn't exist or invalid — start fresh
   }

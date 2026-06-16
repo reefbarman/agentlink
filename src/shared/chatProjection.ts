@@ -1989,6 +1989,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         lastInputTokens: action.newInputTokens,
         lastOutputTokens: 0,
         lastCacheReadTokens: 0,
+        estimatedTotalUsed: 0,
       };
     }
 

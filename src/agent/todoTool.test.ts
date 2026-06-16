@@ -1,7 +1,14 @@
-import { completeTodos, handleTodoWrite } from "./todoTool.js";
+import { completeTodos, handleTodoWrite, todoTool } from "./todoTool.js";
 import { describe, expect, it } from "vitest";
 
 import type { TodoItem } from "./todoTool.js";
+
+describe("todoTool", () => {
+  it("points final completion to set_task_status", () => {
+    expect(todoTool.description).toContain("completeTodos=true");
+    expect(todoTool.description).toContain("instead of a final todo_write");
+  });
+});
 
 function makeItem(
   overrides: Partial<TodoItem> & { id: string; content: string },

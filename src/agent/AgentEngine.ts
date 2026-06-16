@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "crypto";
 import * as fs from "fs/promises";
-import { readFileSync } from "fs";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
 import type { AgentEvent } from "./types.js";
@@ -493,6 +492,26 @@ function truncateToolText(
   return `${head}${notice}\n\n${tail}`;
 }
 
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(
+    ([a], [b]) => a.localeCompare(b),
+  );
+  return `{${entries.map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`).join(",")}}`;
+}
+
+function buildToolFingerprint(tools: ToolDefinition[] | undefined): string {
+  if (!tools) return "none";
+  if (tools.length === 0) return "empty";
+  return tools
+    .map(
+      (tool, index) =>
+        `${index}:${tool.name}:${tool.description ?? ""}:${stableStringify(tool.input_schema)}`,
+    )
+    .join("|");
+}
+
 /** Convert our ToolResult content to provider-agnostic tool_result content. */
 function toolResultToContent(
   result: ToolResult,
@@ -574,6 +593,9 @@ export class AgentEngine {
 
     // Cache assembled tool list across turns — rebuild only when the tool set changes.
     let cachedTools: ToolDefinition[] | undefined;
+    let cachedToolContextBreakdown: ReturnType<
+      typeof buildToolContextBreakdown
+    > = buildToolContextBreakdown(undefined);
     let cachedToolFingerprint = "";
 
     const maxApiTurns = opts?.maxApiTurns ?? 0; // 0 = unlimited
@@ -600,9 +622,15 @@ export class AgentEngine {
       // successful api_request for this turn.
       let previousResponseIdFallback = false;
       const MAX_CREDENTIAL_REFRESHES = 3;
+      const logTiming = (label: string, startedAt: number, details = "") => {
+        this.log?.(
+          `[perf] ${label} ${Date.now() - startedAt}ms${details ? ` ${details}` : ""}`,
+        );
+      };
       while (true) {
         if (signal.aborted) break;
 
+        const toolSetupStartedAt = Date.now();
         // Include tools when dispatch context is available, filtered by mode.
         // Compute this before any condense path so both automatic and retry-triggered
         // condenses see the same preserved runtime context that future requests will use.
@@ -651,31 +679,39 @@ export class AgentEngine {
             ),
           ],
         };
+        logTiming(
+          "tool setup",
+          toolSetupStartedAt,
+          `tools=${rawTools?.length ?? 0} mcp=${connectedMcpToolDefs.length}`,
+        );
 
         // --- Auto-condense check ---
         // Run before each API call (except the very first) to keep context in bounds.
-        const resolveQueuedAttachments = (
+        const resolveQueuedAttachments = async (
           text: string,
           attachments?: string[],
         ) => {
           if (!attachments?.length) return text;
-          const blocks: string[] = [];
-          for (const filePath of attachments) {
-            try {
-              const absPath = path.isAbsolute(filePath)
-                ? filePath
-                : path.join(session.cwd, filePath);
-              const content = readFileSync(absPath, "utf-8");
-              const ext = path.extname(filePath).slice(1) || "";
-              blocks.push(
-                `<file path="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</file>`,
-              );
-            } catch {
-              blocks.push(
-                `<file path="${filePath}">\n[Error: could not read file]\n</file>`,
-              );
-            }
-          }
+          const attachmentStartedAt = Date.now();
+          const blocks = await Promise.all(
+            attachments.map(async (filePath) => {
+              try {
+                const absPath = path.isAbsolute(filePath)
+                  ? filePath
+                  : path.join(session.cwd, filePath);
+                const content = await fs.readFile(absPath, "utf-8");
+                const ext = path.extname(filePath).slice(1) || "";
+                return `<file path="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</file>`;
+              } catch {
+                return `<file path="${filePath}">\n[Error: could not read file]\n</file>`;
+              }
+            }),
+          );
+          logTiming(
+            "queued attachments",
+            attachmentStartedAt,
+            `count=${attachments.length}`,
+          );
           return `${blocks.join("\n\n")}\n\n${text}`;
         };
 
@@ -692,7 +728,7 @@ export class AgentEngine {
           if (signal.aborted) break;
           const interjection = session.consumePendingInterjection();
           if (interjection) {
-            const resolvedInterjectionText = resolveQueuedAttachments(
+            const resolvedInterjectionText = await resolveQueuedAttachments(
               interjection.text,
               interjection.attachments,
             );
@@ -733,25 +769,22 @@ export class AgentEngine {
           ? Math.max(session.maxTokens, session.thinkingBudget + 4096)
           : session.maxTokens;
 
-        // Rebuild with cache_control only when the tool set changes
-        const fingerprint = rawTools
-          ? rawTools
-              .map((t) => t.name)
-              .sort()
-              .join(",")
-          : "";
-        if (rawTools && fingerprint !== cachedToolFingerprint) {
-          cachedTools = rawTools.map((t, i) =>
+        // Rebuild cache_control and tool context measurements only when the
+        // effective ordered tool definitions change.
+        const fingerprint = buildToolFingerprint(rawTools);
+        if (fingerprint !== cachedToolFingerprint) {
+          cachedTools = rawTools?.map((t, i) =>
             i === rawTools.length - 1
               ? { ...t, cache_control: { type: "ephemeral" as const } }
               : t,
           );
+          cachedToolContextBreakdown = buildToolContextBreakdown(rawTools);
           cachedToolFingerprint = fingerprint;
         }
         const tools = rawTools ? cachedTools : undefined;
         const contextBreakdown = {
           ...session.contextBreakdown,
-          tools: buildToolContextBreakdown(rawTools),
+          tools: cachedToolContextBreakdown,
         };
         session.contextBreakdown = contextBreakdown;
 
@@ -775,7 +808,14 @@ export class AgentEngine {
           // the model lose access to images after the first response. History
           // transforms preserve the field via object spread, and condensed
           // messages drop out of effective history along with their media.
+          const messageAssemblyStartedAt = Date.now();
+          const getMessagesStartedAt = Date.now();
           const effectiveMessages = session.getMessages();
+          logTiming(
+            "getMessages",
+            getMessagesStartedAt,
+            `messages=${effectiveMessages.length}`,
+          );
 
           const apiMessages: MessageParam[] = effectiveMessages.map(
             (msg, effectiveIdx) => {
@@ -868,8 +908,9 @@ export class AgentEngine {
             },
           );
 
-          // Summary: count image/document blocks across all apiMessages
-          {
+          // Summary: count image/document blocks across all apiMessages only
+          // when logging is enabled; this is otherwise pure hot-path overhead.
+          if (this.log) {
             let imgCount = 0;
             let docCount = 0;
             for (const m of apiMessages) {
@@ -881,7 +922,7 @@ export class AgentEngine {
               }
             }
             if (imgCount > 0 || docCount > 0) {
-              this.log?.(
+              this.log(
                 `[media] final apiMessages: ${apiMessages.length} messages, ${imgCount} image(s), ${docCount} document(s)`,
               );
             }
@@ -908,6 +949,11 @@ export class AgentEngine {
           promptCacheKey = currentCache?.key;
           promptCacheRetention = currentCache?.retention;
           storeResponseState = currentState?.store ?? false;
+          logTiming(
+            "message assembly",
+            messageAssemblyStartedAt,
+            `apiMessages=${apiMessages.length}`,
+          );
           const streamGen = provider.stream({
             model: session.model,
             systemPrompt: session.systemPrompt,
@@ -1113,7 +1159,10 @@ export class AgentEngine {
               streamErrMsg.includes("503");
             const delayMs = isRateLimit
               ? Math.min(retryCount * 15_000, 60_000)
-              : Math.min(retryCount * 2_000, 10_000);
+              : Math.min(
+                  Math.floor(250 * 2 ** (retryCount - 1) + Math.random() * 250),
+                  4_000,
+                );
             const retryAt = Date.now() + delayMs;
             yield {
               type: "warning",
@@ -1400,8 +1449,12 @@ export class AgentEngine {
           }
         }
 
+        const toolUseBlocksById = new Map(
+          toolUseBlocks.map((block) => [block.id, block]),
+        );
         let dispatchResults: ToolCallResult[] = [];
         if (dispatchBlocks.length > 0) {
+          const toolExecutionStartedAt = Date.now();
           const dispatchEvents: AgentEvent[] = [];
           let wakeDispatchEvents: (() => void) | undefined;
           const waitForDispatchEvent = () =>
@@ -1421,9 +1474,7 @@ export class AgentEngine {
             sessionToolContext,
             session,
             (tr) => {
-              const toolUseBlock = toolUseBlocks.find(
-                (b) => b.id === tr.tool_use_id,
-              );
+              const toolUseBlock = toolUseBlocksById.get(tr.tool_use_id);
               pushDispatchEvent({
                 type: "tool_result" as const,
                 toolCallId: tr.tool_use_id,
@@ -1490,15 +1541,24 @@ export class AgentEngine {
               yield dispatchEvents.shift()!;
             }
           }
+          logTiming(
+            "tool execution",
+            toolExecutionStartedAt,
+            `dispatch=${dispatchBlocks.length} internal=${internalResults.length}`,
+          );
         }
 
         // Merge results back in original order
+        const internalResultsById = new Map(
+          internalResults.map((result) => [result.tool_use_id, result]),
+        );
+        const dispatchResultsById = new Map(
+          dispatchResults.map((result) => [result.tool_use_id, result]),
+        );
         const toolResults = toolUseBlocks.map((block) => {
-          const internal = internalResults.find(
-            (r) => r.tool_use_id === block.id,
-          );
+          const internal = internalResultsById.get(block.id);
           if (internal) return internal;
-          return dispatchResults.find((r) => r.tool_use_id === block.id)!;
+          return dispatchResultsById.get(block.id)!;
         });
 
         // Append assistant turn + tool results atomically — no async gap between
@@ -1530,9 +1590,7 @@ export class AgentEngine {
         // their completion events now. Dispatch-tool completion events are emitted
         // by executeToolCalls as each call finishes.
         for (const tr of internalResults) {
-          const toolUseBlock = toolUseBlocks.find(
-            (b) => b.id === tr.tool_use_id,
-          );
+          const toolUseBlock = toolUseBlocksById.get(tr.tool_use_id);
           yield {
             type: "tool_result" as const,
             toolCallId: tr.tool_use_id,
@@ -1577,7 +1635,7 @@ export class AgentEngine {
         if (!signal.aborted) {
           const interjection = session.consumePendingInterjection();
           if (interjection) {
-            const resolvedInterjectionText = resolveQueuedAttachments(
+            const resolvedInterjectionText = await resolveQueuedAttachments(
               interjection.text,
               interjection.attachments,
             );

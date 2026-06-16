@@ -1,13 +1,20 @@
 // @vitest-environment jsdom
 
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentMessagesToChatMessages, initialState, reducer } from "../App";
-import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 
 import type { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
 });
 
@@ -735,7 +742,9 @@ describe("MessageBubble slash-command rendering", () => {
     expect(toolGroup?.nextElementSibling).toBe(textBlock);
   });
 
-  it("renders completed tool groups while keeping the running tool standalone", () => {
+  it("defers completed tool grouping while streaming, then settles into a summary", () => {
+    vi.useFakeTimers();
+
     let state = reducer(initialState, {
       type: "ADD_USER_MESSAGE",
       text: "inspect",
@@ -778,16 +787,14 @@ describe("MessageBubble slash-command rendering", () => {
       <MessageBubble message={assistant} streaming={true} />,
     );
 
-    const groupButton = screen.getByRole("button", {
-      name: /tools explored 1 file, 1 search/i,
-    });
-    expect(groupButton.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      screen.queryByRole("button", { name: /tools explored/i }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: /read_file/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /search_files/i })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /execute_command/i }),
     ).toBeTruthy();
-
-    fireEvent.click(groupButton);
-    expect(groupButton.getAttribute("aria-expanded")).toBe("true");
 
     state = reducer(state, {
       type: "TOOL_COMPLETE",
@@ -805,10 +812,22 @@ describe("MessageBubble slash-command rendering", () => {
       />,
     );
 
-    expect(groupButton.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.queryByRole("button", { name: /tools/i })).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(350);
+    });
+
+    const groupButton = screen.getByRole("button", {
+      name: /tools explored 1 file, 1 search/i,
+    });
+    expect(groupButton.getAttribute("aria-expanded")).toBe("false");
     expect(
       screen.queryAllByRole("button", { name: /execute_command/i }),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
+
+    fireEvent.click(groupButton);
+    expect(groupButton.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("renders MCP approval promotion actions for completed tool calls", () => {

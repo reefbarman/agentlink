@@ -62,6 +62,13 @@ import { handleGoToImplementation } from "../tools/goToImplementation.js";
 import { handleGoToTypeDefinition } from "../tools/goToTypeDefinition.js";
 import { handleListFiles } from "../tools/listFiles.js";
 import {
+  createVscodeEditorRevealProvider,
+  createVscodeEditReviewProvider,
+  createVscodeMultiFileEditReviewProvider,
+  createVscodeRenameSymbolProvider,
+  createVscodeWriteApprovalPolicyProvider,
+} from "../adapters/vscode/editReviewCapabilities.js";
+import {
   createVscodeAdvertisedArtifactProvider,
   createVscodeContextDocumentProvider,
   createVscodeContextEnrichmentProvider,
@@ -83,6 +90,13 @@ import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleShowNotification } from "../tools/showNotification.js";
 import { handleStartWorktreeAgent } from "../tools/startWorktreeAgent.js";
 import { handleWriteFile } from "../tools/writeFile.js";
+import type {
+  EditReviewProvider,
+  EditorRevealProvider,
+  MultiFileEditReviewProvider,
+  RenameSymbolProvider,
+  WriteApprovalPolicyProvider,
+} from "../core/capabilities/editReview.js";
 import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { randomUUID } from "crypto";
@@ -103,6 +117,8 @@ const DEV_FEEDBACK_TOOLS = new Set([
 
 // --- Zod schema record → JSON Schema conversion ---
 
+const jsonSchemaCache = new Map<string, JsonSchema>();
+
 function zodSchemaToJsonSchema(
   schema: Record<string, z.ZodTypeAny>,
 ): JsonSchema {
@@ -111,6 +127,17 @@ function zodSchemaToJsonSchema(
   const jsonSchema = z.toJSONSchema(obj) as Record<string, unknown>;
   const { $schema: _, ...rest } = jsonSchema;
   return rest as JsonSchema;
+}
+
+function cachedJsonSchemaFor(
+  name: string,
+  schema: Record<string, z.ZodTypeAny>,
+): JsonSchema {
+  const cached = jsonSchemaCache.get(name);
+  if (cached) return cached;
+  const converted = zodSchemaToJsonSchema(schema);
+  jsonSchemaCache.set(name, converted);
+  return converted;
 }
 
 // --- Tool name → zod schema mapping ---
@@ -718,7 +745,7 @@ export function getAgentTools(
     .map(([name, zodSchema]) => ({
       name,
       description: TOOL_REGISTRY[name]?.description ?? name,
-      input_schema: zodSchemaToJsonSchema(zodSchema),
+      input_schema: cachedJsonSchemaFor(name, zodSchema),
     }));
 
   // Restrictive profiles are authoritative: native tools come from the profile
@@ -756,14 +783,20 @@ export function getAgentTools(
           description:
             TOOL_REGISTRY.load_rule?.description ??
             "Load the full contents of an advertised local rule file.",
-          input_schema: zodSchemaToJsonSchema(schemas.loadRuleSchema),
+          input_schema: cachedJsonSchemaFor(
+            "load_rule",
+            schemas.loadRuleSchema,
+          ),
         },
         {
           name: "load_skill",
           description:
             TOOL_REGISTRY.load_skill?.description ??
             "Load the full contents of an advertised skill file.",
-          input_schema: zodSchemaToJsonSchema(schemas.loadSkillSchema),
+          input_schema: cachedJsonSchemaFor(
+            "load_skill",
+            schemas.loadSkillSchema,
+          ),
         },
       ];
   return [
@@ -1045,6 +1078,16 @@ export interface ToolDispatchContext {
   onCompleteTodos?: () => TodoItem[];
   /** Semantic codebase search implementation for runtimes that can provide an index. */
   semanticSearchProvider?: SemanticSearchProvider;
+  /** Editor reveal implementation for runtimes that can open/highlight files. */
+  editorRevealProvider?: EditorRevealProvider;
+  /** Edit review/commit implementation for runtimes that can mutate files. */
+  editReviewProvider?: EditReviewProvider;
+  /** Write approval policy implementation for runtimes that can evaluate write trust. */
+  writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
+  /** Multi-file edit review/apply implementation for runtimes that can mutate files. */
+  multiFileEditReviewProvider?: MultiFileEditReviewProvider;
+  /** Rename-symbol implementation for runtimes with language refactor + workspace edit support. */
+  renameSymbolProvider?: RenameSymbolProvider;
 }
 
 export function createAgentToolRuntime(
@@ -1476,6 +1519,16 @@ export async function dispatchToolCall(
         sessionId,
         onApprovalRequest,
         ctx.mode,
+        {
+          editReviewProvider:
+            ctx.editReviewProvider ?? createVscodeEditReviewProvider(),
+          writeApprovalPolicyProvider:
+            ctx.writeApprovalPolicyProvider ??
+            createVscodeWriteApprovalPolicyProvider(approvalManager),
+          diagnosticDelay: vscode.workspace
+            .getConfiguration("agentlink")
+            .get<number>("diagnosticDelay", 1500),
+        },
       );
     case "generate_image":
       return handleGenerateImage(
@@ -1493,6 +1546,16 @@ export async function dispatchToolCall(
         sessionId,
         onApprovalRequest,
         ctx.mode,
+        {
+          editReviewProvider:
+            ctx.editReviewProvider ?? createVscodeEditReviewProvider(),
+          writeApprovalPolicyProvider:
+            ctx.writeApprovalPolicyProvider ??
+            createVscodeWriteApprovalPolicyProvider(approvalManager),
+          diagnosticDelay: vscode.workspace
+            .getConfiguration("agentlink")
+            .get<number>("diagnosticDelay", 1500),
+        },
       );
     case "find_and_replace":
       return handleFindAndReplace(
@@ -1502,14 +1565,26 @@ export async function dispatchToolCall(
         sessionId,
         extensionUri,
         onApprovalRequest,
+        {
+          multiFileEditReviewProvider:
+            ctx.multiFileEditReviewProvider ??
+            createVscodeMultiFileEditReviewProvider(
+              approvalManager,
+              extensionUri,
+            ),
+        },
       );
     case "rename_symbol":
       return handleRenameSymbol(
         params,
-        approvalManager,
         approvalPanel,
         sessionId,
         onApprovalRequest,
+        {
+          renameSymbolProvider:
+            ctx.renameSymbolProvider ??
+            createVscodeRenameSymbolProvider(approvalManager),
+        },
       );
     case "propose_memory":
       return handleProposeMemory(
@@ -1555,7 +1630,15 @@ export async function dispatchToolCall(
 
     // --- Editor ---
     case "open_file":
-      return handleOpenFile(params, approvalManager, approvalPanel, sessionId);
+      return handleOpenFile(params, sessionId, {
+        workspaceFileProvider: createVscodeWorkspaceFileProvider(),
+        pathAccessProvider: createVscodePathAccessProvider(
+          approvalManager,
+          approvalPanel,
+        ),
+        editorRevealProvider:
+          ctx.editorRevealProvider ?? createVscodeEditorRevealProvider(),
+      });
     case "show_notification":
       return handleShowNotification(params);
 

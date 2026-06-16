@@ -59,6 +59,34 @@ describe("loadMcpConfigs", () => {
     ]);
   });
 
+  it("loads mcp configs with json comments and trailing commas", async () => {
+    await mkdir(join(cwd, ".agentlink"), { recursive: true });
+    await writeFile(
+      join(cwd, ".agentlink", "mcp.json"),
+      `{
+        // Local MCP server for development.
+        "mcpServers": {
+          "linear": {
+            "command": "linear-mcp",
+            "args": [
+              "--stdio",
+            ],
+          },
+        },
+      }
+`,
+      "utf-8",
+    );
+
+    expect(await loadMcpConfigs(cwd)).toMatchObject([
+      {
+        name: "linear",
+        command: "linear-mcp",
+        args: ["--stdio"],
+      },
+    ]);
+  });
+
   it("merges toolDisclosure from higher-priority config patches", async () => {
     await writeJson(join(home, ".agentlink", "mcp.json"), {
       mcpServers: {

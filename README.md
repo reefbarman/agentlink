@@ -1028,7 +1028,7 @@ Create or replace the built-in structured task list used to track progress on mu
 | --------- | ------ | ------------------------------------------------------------- |
 | `todos`   | todo[] | Complete task list, including completed and in-progress items |
 
-Use this for larger tasks that benefit from explicit progress tracking.
+Use this for larger tasks that benefit from explicit progress tracking. During ongoing work, update completed tasks promptly. When finishing a turn and the current todo list should all be complete, prefer `set_task_status` with `status: "completed"` and `completeTodos: true` instead of a final `todo_write` call whose only purpose is marking todos complete.
 
 ## Built-in MCP client tools
 

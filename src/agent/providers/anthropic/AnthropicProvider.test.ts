@@ -131,7 +131,7 @@ describe("AnthropicProvider capabilities", () => {
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "high" },
       }),
-      expect.any(Object),
+      expect.objectContaining({ maxRetries: 0 }),
     );
   });
 

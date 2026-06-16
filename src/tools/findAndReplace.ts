@@ -7,32 +7,30 @@ import {
 } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { anyMemoryProtectedPath } from "../approvals/protectedPaths.js";
-import {
-  saveInlineWriteTrustRules,
-  saveWriteTrustRules,
-} from "./writeApprovalUI.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
-import { FindReplacePreviewPanel } from "../findReplace/FindReplacePreviewPanel.js";
-import type {
-  FindReplaceMatch,
-  FindReplaceFileGroup,
-  FindReplacePreviewData,
-} from "../findReplace/webview/types.js";
 
 import { type ToolResult, type OnApprovalRequest } from "../shared/types.js";
+import type {
+  MultiFileEditMatch,
+  MultiFileEditReviewProvider,
+} from "../core/capabilities/editReview.js";
 
 const CONTEXT_LINES = 5;
 
 interface FileReplacement {
-  uri: vscode.Uri;
+  absolutePath: string;
   relPath: string;
   replacements: Array<{
-    range: vscode.Range;
+    startOffset: number;
+    endOffset: number;
     newText: string;
     matchId: string;
   }>;
-  matches: FindReplaceMatch[];
+  matches: MultiFileEditMatch[];
+}
+
+export interface FindAndReplaceProviders {
+  multiFileEditReviewProvider?: MultiFileEditReviewProvider;
 }
 
 export async function handleFindAndReplace(
@@ -47,11 +45,10 @@ export async function handleFindAndReplace(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
-  extensionUri: vscode.Uri,
+  _extensionUri: vscode.Uri,
   onApprovalRequest?: OnApprovalRequest,
+  providers: FindAndReplaceProviders = {},
 ): Promise<ToolResult> {
-  let previewPanel: FindReplacePreviewPanel | undefined;
-
   try {
     const workspaceRoot = tryGetFirstWorkspaceRoot();
     if (!workspaceRoot) {
@@ -144,7 +141,7 @@ export async function handleFindAndReplace(
 
       const text = doc.getText();
       const replacements: FileReplacement["replacements"] = [];
-      const matches: FindReplaceMatch[] = [];
+      const matches: MultiFileEditMatch[] = [];
 
       // Reset regex lastIndex for each file
       pattern.lastIndex = 0;
@@ -154,7 +151,6 @@ export async function handleFindAndReplace(
       while ((regexMatch = pattern.exec(text)) !== null) {
         const startPos = doc.positionAt(regexMatch.index);
         const endPos = doc.positionAt(regexMatch.index + regexMatch[0].length);
-        const range = new vscode.Range(startPos, endPos);
 
         // For regex, support capture group references ($1, $2, etc.)
         // Use the match array directly to avoid re-executing the pattern
@@ -175,17 +171,22 @@ export async function handleFindAndReplace(
         const startCtx = Math.max(0, matchLine - CONTEXT_LINES);
         const endCtx = Math.min(doc.lineCount - 1, matchLine + CONTEXT_LINES);
 
-        const contextBefore: FindReplaceMatch["contextBefore"] = [];
+        const contextBefore: MultiFileEditMatch["contextBefore"] = [];
         for (let ln = startCtx; ln < matchLine; ln++) {
           contextBefore.push({ lineNumber: ln + 1, text: doc.lineAt(ln).text });
         }
 
-        const contextAfter: FindReplaceMatch["contextAfter"] = [];
+        const contextAfter: MultiFileEditMatch["contextAfter"] = [];
         for (let ln = matchLine + 1; ln <= endCtx; ln++) {
           contextAfter.push({ lineNumber: ln + 1, text: doc.lineAt(ln).text });
         }
 
-        replacements.push({ range, newText, matchId });
+        replacements.push({
+          startOffset: regexMatch.index,
+          endOffset: regexMatch.index + regexMatch[0].length,
+          newText,
+          matchId,
+        });
         matches.push({
           id: matchId,
           line: matchLine + 1,
@@ -207,7 +208,7 @@ export async function handleFindAndReplace(
       if (replacements.length > 0) {
         totalChanges += replacements.length;
         fileReplacements.push({
-          uri,
+          absolutePath: uri.fsPath,
           relPath: getRelativePath(uri.fsPath),
           replacements,
           matches,
@@ -261,230 +262,40 @@ export async function handleFindAndReplace(
       }
     }
 
-    // Build preview and approval data
-    const fileGroups: FindReplaceFileGroup[] = fileReplacements.map((fr) => ({
-      path: fr.relPath,
-      matches: fr.matches,
-    }));
-
-    const filesPreview = fileReplacements.map((fr) => ({
-      path: fr.relPath,
-      changes: fr.replacements.length,
-    }));
-
-    // Check write approval
-    const masterBypass = vscode.workspace
-      .getConfiguration("agentlink")
-      .get<boolean>("masterBypass", false);
-
-    const touchesProtectedMemoryPath = anyMemoryProtectedPath(
-      fileReplacements.map((fr) => fr.uri.fsPath),
-    );
-
-    const canAutoApprove =
-      !touchesProtectedMemoryPath &&
-      (masterBypass ||
-        fileReplacements.every((fr) =>
-          approvalManager.isAgentWriteApproved(sessionId, fr.uri.fsPath),
-        ));
-    let followUp: string | undefined;
-    let acceptedIds: Set<string> | undefined;
-
-    if (!canAutoApprove) {
-      // Open preview panel with diff blocks
-      previewPanel = new FindReplacePreviewPanel(extensionUri);
-      const previewData: FindReplacePreviewData = {
-        findText: findStr,
-        replaceText: replaceStr,
-        isRegex: !!params.regex,
-        fileGroups,
-        totalMatches: totalChanges,
-      };
-      previewPanel.show(previewData);
-
-      if (onApprovalRequest) {
-        const filesDetail = filesPreview
-          .map(
-            (f) =>
-              `${f.path} (${f.changes} change${f.changes !== 1 ? "s" : ""})`,
-          )
-          .join("\n");
-        const approvalResponse = await onApprovalRequest(
-          {
-            kind: "rename",
-            title: `Replace \`${findStr}\` → \`${replaceStr}\`?`,
-            detail: `${totalChanges} match${totalChanges !== 1 ? "es" : ""} across ${filesPreview.length} file${filesPreview.length !== 1 ? "s" : ""}:\n${filesDetail}`,
-            choices: [
-              { label: "Accept all", value: "accept", isPrimary: true },
-              { label: "Reject", value: "reject", isDanger: true },
-            ],
-          },
-          sessionId,
-        );
-        const decision =
-          typeof approvalResponse === "string"
-            ? approvalResponse
-            : approvalResponse.decision;
-        followUp =
-          typeof approvalResponse === "string"
-            ? undefined
-            : approvalResponse.followUp;
-        if (decision === "reject") {
-          previewPanel.close();
-          previewPanel = undefined;
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  status: "rejected_by_user",
-                  find: findStr,
-                  replace: replaceStr,
-                }),
-              },
-            ],
-          };
-        }
-        saveInlineWriteTrustRules({
-          response: approvalResponse,
-          approvalManager,
-          sessionId,
-          relPath:
-            filesPreview.length > 0 ? filesPreview[0].path : "find-and-replace",
-        });
-        acceptedIds = previewPanel.getAcceptedMatchIds();
-        previewPanel.close();
-        previewPanel = undefined;
-      } else {
-        // Enqueue approval (shows summary in approval panel)
-        const { promise } = approvalPanel.enqueueRenameApproval(
-          findStr,
-          replaceStr,
-          filesPreview,
-          totalChanges,
-        );
-
-        const response = await promise;
-        followUp = response.followUp;
-
-        if (response.decision === "reject") {
-          previewPanel.close();
-          previewPanel = undefined;
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  status: "rejected_by_user",
-                  find: findStr,
-                  replace: replaceStr,
-                  reason: response.rejectionReason,
-                }),
-              },
-            ],
-          };
-        }
-
-        // Read accepted matches from preview panel
-        acceptedIds = previewPanel.getAcceptedMatchIds();
-        previewPanel.close();
-        previewPanel = undefined;
-
-        saveWriteTrustRules({
-          panelResponse: response,
-          approvalManager,
-          sessionId,
-          relPath:
-            filesPreview.length > 0 ? filesPreview[0].path : "find-and-replace",
-          inWorkspace: true,
-        });
-      }
+    if (!providers.multiFileEditReviewProvider) {
+      return error("Multi-file edit review is unavailable in this runtime", {
+        reason: "edit_review_unavailable",
+      });
     }
 
-    // Build WorkspaceEdit — filtered by accepted matches if preview was shown
-    const edit = new vscode.WorkspaceEdit();
-    let appliedCount = 0;
-    const appliedFiles: Array<{ path: string; changes: number }> = [];
-
-    for (const fr of fileReplacements) {
-      let fileChanges = 0;
-      for (const r of fr.replacements) {
-        if (!acceptedIds || acceptedIds.has(r.matchId)) {
-          edit.replace(fr.uri, r.range, r.newText);
-          fileChanges++;
-        }
-      }
-      if (fileChanges > 0) {
-        appliedCount += fileChanges;
-        appliedFiles.push({ path: fr.relPath, changes: fileChanges });
-      }
-    }
-
-    if (appliedCount === 0) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              status: "no_changes",
-              find: findStr,
-              replace: replaceStr,
-              message: "All matches were excluded by user",
-            }),
-          },
-        ],
-      };
-    }
-
-    // Apply the edit
-    const applied = await vscode.workspace.applyEdit(edit);
-
-    if (!applied) {
-      return error("Failed to apply replacements");
-    }
-
-    // Save all affected documents
-    for (const fr of fileReplacements) {
-      const doc = vscode.workspace.textDocuments.find(
-        (d) => d.uri.fsPath === fr.uri.fsPath,
-      );
-      if (doc?.isDirty) {
-        await doc.save();
-      }
-    }
-
-    const result: Record<string, unknown> = {
-      status: "applied",
+    return await providers.multiFileEditReviewProvider.reviewAndApply({
       find: findStr,
       replace: replaceStr,
-      files_changed: appliedFiles.length,
-      total_replacements: appliedCount,
-      files: appliedFiles,
-    };
-    if (acceptedIds && appliedCount < totalChanges) {
-      result.excluded = totalChanges - appliedCount;
-    }
-    if (followUp) {
-      result.follow_up = followUp;
-    }
-
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
+      isRegex: !!params.regex,
+      files: fileReplacements.map((fr) => ({
+        absolutePath: fr.absolutePath,
+        relativePath: fr.relPath,
+        replacements: fr.replacements,
+        matches: fr.matches,
+      })),
+      totalMatches: totalChanges,
+      sessionId,
+      approvalPanel,
+      onApprovalRequest,
+    });
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
       return err as ToolResult;
     }
     const message = err instanceof Error ? err.message : String(err);
     return error(message);
-  } finally {
-    // Ensure preview panel is always cleaned up
-    previewPanel?.close();
   }
 }
 
-function error(message: string): ToolResult {
+function error(message: string, extra?: Record<string, unknown>): ToolResult {
   return {
-    content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+    content: [
+      { type: "text", text: JSON.stringify({ error: message, ...extra }) },
+    ],
   };
 }

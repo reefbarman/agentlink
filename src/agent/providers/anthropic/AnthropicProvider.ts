@@ -156,21 +156,10 @@ export class AnthropicProvider implements ModelProvider {
     // Build Anthropic-native request params. Historical extended-thinking
     // signatures are provider-private replay artifacts; keep them in the local
     // transcript/UI, but do not send them back to Anthropic.
-    const sanitizedReplay = sanitizeMessagesForAnthropicReplay(messages);
-    const anthropicMessages = addMessageCacheBreakpoints(
-      mergeConsecutiveUserMessages(sanitizedReplay.messages),
-    ) as Anthropic.MessageParam[];
+    const transformedReplay = getTransformedAnthropicMessages(messages);
+    const { anthropicMessages } = transformedReplay;
 
-    const anthropicTools = tools
-      ? tools.map((t, i) =>
-          i === tools.length - 1
-            ? {
-                ...toAnthropicTool(t),
-                cache_control: { type: "ephemeral" as const },
-              }
-            : toAnthropicTool(t),
-        )
-      : undefined;
+    const anthropicTools = tools ? translateAnthropicTools(tools) : undefined;
 
     const requestParams: Anthropic.MessageCreateParams = {
       model,
@@ -192,7 +181,7 @@ export class AnthropicProvider implements ModelProvider {
     const requestedEffort = reasoningEffort ?? "high";
     if (
       requestedEffort !== "none" &&
-      !sanitizedReplay.strippedThinkingFromToolUse
+      !transformedReplay.strippedThinkingFromToolUse
     ) {
       const params = requestParams as unknown as Record<string, unknown>;
       if (supportsAdaptiveThinking(model)) {
@@ -225,7 +214,10 @@ export class AnthropicProvider implements ModelProvider {
     let cacheReadTokens = 0;
     let cacheCreationTokens = 0;
 
-    const stream = client.messages.stream(requestParams, { signal });
+    const stream = client.messages.stream(requestParams, {
+      signal,
+      maxRetries: 0,
+    });
 
     for await (const event of stream) {
       switch (event.type) {
@@ -467,10 +459,70 @@ function supportsAdaptiveThinking(model: string): boolean {
   return model === "claude-opus-4-8" || model === "claude-sonnet-4-6";
 }
 
+interface AnthropicMessageTransformResult extends AnthropicReplaySanitizationResult {
+  anthropicMessages: Anthropic.MessageParam[];
+}
+
 export interface AnthropicReplaySanitizationResult {
   messages: MessageParam[];
   strippedThinking: boolean;
   strippedThinkingFromToolUse: boolean;
+}
+
+let nextMessageContentFingerprintId = 1;
+const messageContentFingerprintIds = new WeakMap<object, number>();
+// Message arrays/content blocks are treated as immutable replay snapshots once
+// passed to the provider. The cache key intentionally uses exact string content
+// and object identity for block arrays to avoid re-walking large media/tool
+// transcripts on every stream attempt.
+const messageTransformCache = new Map<
+  string,
+  AnthropicMessageTransformResult
+>();
+const MAX_MESSAGE_TRANSFORM_CACHE_ENTRIES = 8;
+
+function getMessageContentFingerprintId(value: object): number {
+  let id = messageContentFingerprintIds.get(value);
+  if (id === undefined) {
+    id = nextMessageContentFingerprintId++;
+    messageContentFingerprintIds.set(value, id);
+  }
+  return id;
+}
+
+function buildMessageTransformFingerprint(messages: MessageParam[]): string {
+  return messages
+    .map((message, index) => {
+      const content = message.content;
+      const contentFingerprint =
+        typeof content === "string"
+          ? `s:${content}`
+          : Array.isArray(content)
+            ? `a:${getMessageContentFingerprintId(content)}:${content.length}`
+            : `o:${String(content)}`;
+      return `${index}:${message.role}:${contentFingerprint}`;
+    })
+    .join("|");
+}
+
+function getTransformedAnthropicMessages(
+  messages: MessageParam[],
+): AnthropicMessageTransformResult {
+  const fingerprint = buildMessageTransformFingerprint(messages);
+  const cached = messageTransformCache.get(fingerprint);
+  if (cached) return cached;
+
+  const sanitizedReplay = sanitizeMessagesForAnthropicReplay(messages);
+  const anthropicMessages = addMessageCacheBreakpoints(
+    mergeConsecutiveUserMessages(sanitizedReplay.messages),
+  ) as Anthropic.MessageParam[];
+  const result = { ...sanitizedReplay, anthropicMessages };
+  messageTransformCache.set(fingerprint, result);
+  if (messageTransformCache.size > MAX_MESSAGE_TRANSFORM_CACHE_ENTRIES) {
+    const oldestKey = messageTransformCache.keys().next().value;
+    if (oldestKey) messageTransformCache.delete(oldestKey);
+  }
+  return result;
 }
 
 export function sanitizeMessagesForAnthropicReplay(
@@ -500,12 +552,29 @@ export function sanitizeMessagesForAnthropicReplay(
   return { messages: sanitized, strippedThinking, strippedThinkingFromToolUse };
 }
 
+const anthropicToolCache = new WeakMap<ToolDefinition[], Anthropic.Tool[]>();
+
 function toAnthropicTool(tool: ToolDefinition): Anthropic.Tool {
   return {
     name: tool.name,
     description: tool.description,
     input_schema: tool.input_schema as Anthropic.Tool["input_schema"],
   };
+}
+
+function translateAnthropicTools(tools: ToolDefinition[]): Anthropic.Tool[] {
+  const cached = anthropicToolCache.get(tools);
+  if (cached) return cached;
+  const translated = tools.map((t, i) =>
+    i === tools.length - 1
+      ? {
+          ...toAnthropicTool(t),
+          cache_control: { type: "ephemeral" as const },
+        }
+      : toAnthropicTool(t),
+  );
+  anthropicToolCache.set(tools, translated);
+  return translated;
 }
 
 /**

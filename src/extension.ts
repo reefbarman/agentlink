@@ -24,6 +24,7 @@ import { ConfigStore } from "./approvals/ConfigStore.js";
 import { ToolCallTracker } from "./server/ToolCallTracker.js";
 import { KNOWN_AGENTS, getAgentById } from "./agents/registry.js";
 import { createConfigWriter } from "./agents/configWriters.js";
+import { parseJsonWithComments } from "./util/jsonc.js";
 import type { ConfigWriter } from "./agents/types.js";
 import {
   setupInstructions,
@@ -67,6 +68,7 @@ import { BrowserGatewayHelperAdminClient } from "./browser-gateway/helper/Browse
 import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
 import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js";
+import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
 
 export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
@@ -228,7 +230,9 @@ function readPortFromMcpJson(): number | undefined {
   try {
     const mcpPath = path.join(folder.uri.fsPath, ".mcp.json");
     const raw = fs.readFileSync(mcpPath, "utf-8");
-    const config = JSON.parse(raw);
+    const config = parseJsonWithComments<{
+      mcpServers?: { agentlink?: { url?: string } };
+    }>(raw);
     const url = config?.mcpServers?.agentlink?.url as string | undefined;
     if (!url) return undefined;
     const match = url.match(/:(\d+)\//);
@@ -756,6 +760,8 @@ async function manageCodexAccountsFlow(): Promise<void> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  installAgentLinkHttpDispatcher();
+
   outputChannel = vscode.window.createOutputChannel("AgentLink");
   context.subscriptions.push(outputChannel);
 

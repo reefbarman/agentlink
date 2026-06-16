@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFormatOnSaveReport,
   isIgnorableTabCloseError,
-  withFileLock,
 } from "./DiffViewProvider.js";
+
+import { withFileLock } from "../util/fileLock.js";
 
 // Each test uses a unique path to avoid interference from the shared
 // module-level pathLocks Map.

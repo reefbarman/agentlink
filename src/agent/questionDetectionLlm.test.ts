@@ -243,13 +243,17 @@ describe("detectQuestion", () => {
 
     const result = await detectQuestion("Pick next step.", {
       mode: "agent",
-      agent: { provider, model: "mock-haiku" },
+      agent: { provider, model: "mock-opus" },
     });
 
     expect(completeMock).toHaveBeenCalledOnce();
     const call = completeMock.mock.calls[0][0];
-    expect(call.model).toBe("mock-haiku");
-    expect(call.temperature).toBe(0);
+    expect(call).toMatchObject({
+      model: "mock-haiku",
+      maxTokens: 300,
+      temperature: 0,
+      reasoningEffort: "none",
+    });
     expect(result.fallback).toBe(false);
     expect(result.detected?.kind).toBe("single_choice");
     expect(result.detected?.options.map((o) => o.label)).toEqual([

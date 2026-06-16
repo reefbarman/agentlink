@@ -7,11 +7,14 @@ import type {
   ApprovalPanelProvider,
   WriteApprovalResponse,
 } from "../approvals/ApprovalPanelProvider.js";
+import { FileLockTimeoutError, withFileLock } from "../util/fileLock.js";
 
 import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 import type { OnApprovalRequest } from "../shared/types.js";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
 import { randomUUID } from "crypto";
+
+export { withFileLock, FileLockTimeoutError } from "../util/fileLock.js";
 
 export type DiffDecision =
   | "accept"
@@ -108,67 +111,7 @@ export async function showDiffMoreOptions(): Promise<void> {
   }
 }
 
-// Per-path mutex to prevent concurrent edits to the same file
-const pathLocks = new Map<string, Promise<void>>();
-const LOCK_TIMEOUT = 60_000; // 60 seconds
 const FORMAT_ON_SAVE_PATCH_LIMIT = 4_000;
-
-export class FileLockTimeoutError extends Error {
-  readonly code = "pending_edit_lock";
-
-  constructor(filePath: string) {
-    super(`Lock timeout: another edit to ${filePath} is pending`);
-    this.name = "FileLockTimeoutError";
-  }
-}
-
-export async function withFileLock<T>(
-  filePath: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  // Normalize the path to prevent different representations from getting separate locks
-  const lockKey = path.resolve(filePath);
-  const existing = pathLocks.get(lockKey);
-
-  // Create a deferred to control the lock.  We insert it into the map
-  // immediately so later callers chain on *our* promise (linked-list lock).
-  let releaseLock: () => void;
-  const lockPromise = new Promise<void>((resolve) => {
-    releaseLock = resolve;
-  });
-  pathLocks.set(lockKey, lockPromise);
-
-  // Wait for existing lock with timeout
-  if (existing) {
-    const TIMED_OUT = Symbol("timeout");
-    let timerId: ReturnType<typeof setTimeout>;
-    const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
-      timerId = setTimeout(() => resolve(TIMED_OUT), LOCK_TIMEOUT);
-    });
-    const result = await Promise.race([
-      existing.then(() => undefined as void),
-      timeout,
-    ]);
-    clearTimeout(timerId!);
-    if (result === TIMED_OUT) {
-      // Release our promise so callers chained behind us aren't stranded
-      releaseLock!();
-      if (pathLocks.get(lockKey) === lockPromise) {
-        pathLocks.delete(lockKey);
-      }
-      throw new FileLockTimeoutError(filePath);
-    }
-  }
-
-  try {
-    return await fn();
-  } finally {
-    releaseLock!();
-    if (pathLocks.get(lockKey) === lockPromise) {
-      pathLocks.delete(lockKey);
-    }
-  }
-}
 
 export interface FormatOnSaveReport {
   format_on_save: true;
@@ -355,15 +298,11 @@ export class DiffViewProvider {
         { preview: true, preserveFocus: true },
       );
 
-      // Wait for the diff editor to open
-      await new Promise<void>((resolve) => setTimeout(resolve, 300));
-
-      // Find the diff editor
-      this.activeDiffEditor = vscode.window.visibleTextEditors.find(
-        (editor) =>
-          editor.document.uri.scheme === "file" &&
-          editor.document.uri.fsPath === this.absolutePath,
-      );
+      // Wait for the diff editor to open. Poll until it appears rather than
+      // blocking on a fixed delay — the editor is usually visible within a few
+      // tens of milliseconds, so a flat sleep wastes most of that budget on
+      // every edit.
+      this.activeDiffEditor = await waitForVisibleFileEditor(this.absolutePath);
 
       if (!this.activeDiffEditor) {
         // Fallback: open the file and try again
@@ -723,6 +662,7 @@ export class DiffViewProvider {
         if (settled) return;
         settled = true;
         if (debounce) clearTimeout(debounce);
+        if (graceTimer) clearTimeout(graceTimer);
         disposable.dispose();
         clearTimeout(timer);
 
@@ -759,10 +699,23 @@ export class DiffViewProvider {
       const DEBOUNCE_MS = 300;
       const disposable = vscode.languages.onDidChangeDiagnostics((e) => {
         if (e.uris.some((u) => u.fsPath === this.absolutePath)) {
+          // First diagnostics arrived — hand off to the debounce.
+          if (graceTimer) {
+            clearTimeout(graceTimer);
+            graceTimer = undefined;
+          }
           if (debounce) clearTimeout(debounce);
           debounce = setTimeout(settle, DEBOUNCE_MS);
         }
       });
+
+      // If no diagnostics arrive within this grace window, assume the edit was
+      // clean and settle early instead of waiting out the full hard timeout.
+      const FIRST_EVENT_GRACE_MS = Math.min(this.diagnosticDelay, 500);
+      let graceTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(
+        settle,
+        FIRST_EVENT_GRACE_MS,
+      );
 
       // Hard timeout fallback
       const timer = setTimeout(settle, this.diagnosticDelay);
@@ -890,6 +843,32 @@ function getNewDiagnostics(
 }
 
 /**
+ * Poll for the visible file editor backing a diff view instead of blocking on a
+ * fixed delay. VS Code typically reports the editor within a few tens of
+ * milliseconds of `vscode.diff` resolving; returning as soon as it appears
+ * shaves most of the previous flat 300ms wait off every interactive edit.
+ * Returns undefined if the editor never becomes visible before the timeout, so
+ * callers can fall back to opening the document directly.
+ */
+async function waitForVisibleFileEditor(
+  absolutePath: string,
+  timeoutMs = 500,
+  intervalMs = 20,
+): Promise<vscode.TextEditor | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const editor = vscode.window.visibleTextEditors.find(
+      (e) =>
+        e.document.uri.scheme === "file" &&
+        e.document.uri.fsPath === absolutePath,
+    );
+    if (editor) return editor;
+    if (Date.now() >= deadline) return undefined;
+    await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+/**
  * Standalone diagnostic collection for auto-approved writes.
  * Snapshots diagnostics before a write and eagerly registers the
  * onDidChangeDiagnostics listener so no events are missed during
@@ -925,6 +904,7 @@ export function snapshotDiagnostics(filePath: string): {
           if (settled) return;
           settled = true;
           if (debounce) clearTimeout(debounce);
+          if (graceTimer) clearTimeout(graceTimer);
           lateDisposable.dispose();
           disposable.dispose();
           clearTimeout(timer);
@@ -958,13 +938,25 @@ export function snapshotDiagnostics(filePath: string): {
         // If we already received events before collectNewErrors was called,
         // start the debounce immediately so we settle soon.
         const DEBOUNCE_MS = 300;
+        let graceTimer: ReturnType<typeof setTimeout> | undefined;
         if (gotEvent) {
           debounce = setTimeout(settle, DEBOUNCE_MS);
+        } else {
+          // No diagnostics were observed during the write — assume the edit was
+          // clean and settle after a short grace window rather than waiting out
+          // the full hard timeout. If diagnostics do arrive, the listener below
+          // cancels this and hands off to the debounce.
+          const FIRST_EVENT_GRACE_MS = Math.min(delayMs, 500);
+          graceTimer = setTimeout(settle, FIRST_EVENT_GRACE_MS);
         }
 
         // Continue listening for new events with debounce
         const lateDisposable = vscode.languages.onDidChangeDiagnostics((e) => {
           if (e.uris.some((u) => u.fsPath === filePath)) {
+            if (graceTimer) {
+              clearTimeout(graceTimer);
+              graceTimer = undefined;
+            }
             if (debounce) clearTimeout(debounce);
             debounce = setTimeout(settle, DEBOUNCE_MS);
           }

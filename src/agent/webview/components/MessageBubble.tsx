@@ -90,11 +90,22 @@ export function MessageBubble({
   // Track whether the streaming text block has started its reveal animation
   const [_textRevealed, setTextRevealed] = useState(false);
   const [showAllDetectedOptions, setShowAllDetectedOptions] = useState(false);
+  const [deferToolGrouping, setDeferToolGrouping] = useState(streaming);
 
   // Reset when streaming starts a new message
   useEffect(() => {
     if (streaming) setTextRevealed(false);
   }, [streaming]);
+
+  useEffect(() => {
+    if (streaming) {
+      setDeferToolGrouping(true);
+      return;
+    }
+
+    const timer = window.setTimeout(() => setDeferToolGrouping(false), 350);
+    return () => window.clearTimeout(timer);
+  }, [message.id, streaming]);
 
   useEffect(() => {
     setShowAllDetectedOptions(false);
@@ -179,7 +190,9 @@ export function MessageBubble({
       !(b.type === "tool_call" && b.id === finalMarkerToolId),
   );
   const lastIdx = blocks.length - 1;
-  const blockSegments = segmentBlocks(blocks);
+  const blockSegments = segmentBlocks(blocks, {
+    groupCompletedTools: !deferToolGrouping,
+  });
 
   // Show dots while streaming — always visible at the bottom until response completes.
   // This ensures there's always a visible loading indicator during any streaming gap.

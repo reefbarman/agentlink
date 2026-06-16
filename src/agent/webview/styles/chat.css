@@ -1098,6 +1098,24 @@ body {
 .tool-group-block {
   margin: 0;
   font-size: 12px;
+  animation: tool-group-settle 160ms ease-out;
+}
+
+@keyframes tool-group-settle {
+  from {
+    opacity: 0.72;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-group-block {
+    animation: none;
+  }
 }
 
 .tool-group-header {

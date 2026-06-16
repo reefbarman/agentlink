@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import type { AgentDefinition, ConfigWriter } from "./types.js";
+import { parseJsonWithComments } from "../util/jsonc.js";
 
 const SERVER_NAME = "agentlink";
 
@@ -13,7 +14,9 @@ type LogFn = (msg: string) => void;
 function readJsonFile(filePath: string): Record<string, unknown> | null {
   try {
     if (!fs.existsSync(filePath)) return {};
-    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return parseJsonWithComments<Record<string, unknown>>(
+      fs.readFileSync(filePath, "utf-8"),
+    );
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return {};

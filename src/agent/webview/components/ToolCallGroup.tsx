@@ -70,7 +70,10 @@ const EXPLORATION_CATEGORIES: ToolCategory[] = [
   "symbols",
 ];
 
-export function segmentBlocks(blocks: ContentBlock[]): BlockSegment[] {
+export function segmentBlocks(
+  blocks: ContentBlock[],
+  opts?: { groupCompletedTools?: boolean },
+): BlockSegment[] {
   const segments: BlockSegment[] = [];
   let pendingTools: ToolBlock[] = [];
 
@@ -81,9 +84,11 @@ export function segmentBlocks(blocks: ContentBlock[]): BlockSegment[] {
     pendingTools = [];
   };
 
+  const groupCompletedTools = opts?.groupCompletedTools ?? true;
+
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index];
-    if (isGroupableToolCall(block)) {
+    if (groupCompletedTools && isGroupableToolCall(block)) {
       pendingTools.push(block);
       continue;
     }

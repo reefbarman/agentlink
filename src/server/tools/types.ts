@@ -1,3 +1,11 @@
+import type {
+  EditReviewProvider,
+  EditorRevealProvider,
+  MultiFileEditReviewProvider,
+  RenameSymbolProvider,
+  WriteApprovalPolicyProvider,
+} from "../../core/capabilities/editReview.js";
+
 import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -16,4 +24,9 @@ export interface ToolRegistrationContext {
   touch: () => void;
   desc: (name: string) => string;
   semanticSearchProvider: SemanticSearchProvider;
+  editorRevealProvider: EditorRevealProvider;
+  editReviewProvider: EditReviewProvider;
+  writeApprovalPolicyProvider: WriteApprovalPolicyProvider;
+  multiFileEditReviewProvider: MultiFileEditReviewProvider;
+  renameSymbolProvider: RenameSymbolProvider;
 }

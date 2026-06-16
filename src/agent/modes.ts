@@ -1,5 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+import { parseJsonWithComments } from "../util/jsonc.js";
 
 export interface AgentMode {
   slug: string;
@@ -56,7 +57,7 @@ interface CustomModeJson {
 
 function parseModesJson(raw: string): AgentMode[] {
   try {
-    const parsed = JSON.parse(raw) as CustomModeJson[];
+    const parsed = parseJsonWithComments<CustomModeJson[]>(raw);
     if (!Array.isArray(parsed)) return [];
 
     return parsed

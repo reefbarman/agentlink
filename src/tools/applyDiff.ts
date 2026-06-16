@@ -1,17 +1,8 @@
-import * as vscode from "vscode";
 import * as fs from "fs/promises";
 
 import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
-import {
-  DiffViewProvider,
-  createFormatOnSaveReport,
-  withFileLock,
-  snapshotDiagnostics,
-} from "../integrations/DiffViewProvider.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
-import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
 import {
   type ToolResult,
@@ -19,6 +10,11 @@ import {
   errorResult,
 } from "../shared/types.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
+import type {
+  EditReviewProvider,
+  EditReviewResult,
+  WriteApprovalPolicyProvider,
+} from "../core/capabilities/editReview.js";
 
 interface SearchReplaceBlock {
   search: string;
@@ -602,7 +598,7 @@ function buildFailedBlocksPayload(
   blocks: SearchReplaceBlock[],
   blockResults: BlockApplyResult[],
   error = "All search/replace blocks failed",
-): Record<string, unknown> {
+): EditReviewResult {
   const failedDetails = blockResults.map((result) =>
     describeBlockResult(result),
   );
@@ -618,13 +614,26 @@ function buildFailedBlocksPayload(
   };
 }
 
+function jsonResult(response: Record<string, unknown>): ToolResult {
+  return {
+    content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+  };
+}
+
+export interface ApplyDiffProviders {
+  editReviewProvider?: EditReviewProvider;
+  writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
+  diagnosticDelay?: number;
+}
+
 export async function handleApplyDiff(
   params: { path: string; diff: string },
-  approvalManager: ApprovalManager,
+  _approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
   onApprovalRequest?: OnApprovalRequest,
   mode?: string,
+  providers: ApplyDiffProviders = {},
 ): Promise<ToolResult> {
   try {
     const { absolutePath: filePath, inWorkspace } = resolveAndValidatePath(
@@ -763,225 +772,87 @@ export async function handleApplyDiff(
       };
     }
 
-    const diagnosticDelay = vscode.workspace
-      .getConfiguration("agentlink")
-      .get<number>("diagnosticDelay", 1500);
-
-    const masterBypass = vscode.workspace
-      .getConfiguration("agentlink")
-      .get<boolean>("masterBypass", false);
-
-    // In architect mode, plan documents are the expected output and can be
-    // written without prompting for per-file approval.
-    const isArchitectPlanFile =
-      mode === "architect" && inWorkspace && relPath.startsWith("plans/");
-
-    const isProtectedMemoryPath = isMemoryProtectedPath(filePath);
-
-    // Auto-approve check (includes recent single-use approvals within TTL)
-    const canAutoApprove =
-      !isProtectedMemoryPath &&
-      (masterBypass ||
-        isArchitectPlanFile ||
-        (inWorkspace
-          ? approvalManager.isAgentWriteApproved(sessionId, filePath)
-          : approvalManager.isFileWriteApproved(sessionId, filePath)));
-
-    if (canAutoApprove) {
-      // Use file lock to prevent concurrent auto-approved writes from
-      // interleaving WorkspaceEdit + format-on-save sequences,
-      // which can corrupt file content.
-      const autoResult = await withFileLock(filePath, async () => {
-        let lockedNewContent = newContent;
-        let lockedFailedBlocks = failedBlocks;
-        let lockedBlockResults = blockResults;
-        const lockedOriginalContent = await fs.readFile(filePath, "utf-8");
-        if (lockedOriginalContent !== originalContent) {
-          const reapplied = applyBlocks(lockedOriginalContent, blocks);
-          lockedNewContent = reapplied.result;
-          lockedFailedBlocks = reapplied.failedBlocks;
-          lockedBlockResults = reapplied.blockResults;
-          if (lockedFailedBlocks.length === blocks.length) {
-            return buildFailedBlocksPayload(
-              params.path,
-              blocks,
-              lockedBlockResults,
-              "All search/replace blocks failed after re-reading the file under lock",
-            );
-          }
-        }
-
-        // Snapshot diagnostics before the write (registers listener eagerly)
-        const snap = snapshotDiagnostics(filePath);
-
-        // Update content through the document model, then save — this avoids
-        // a race where fs.writeFile changes disk, the file watcher fires
-        // after applyEdit makes the doc dirty, and VS Code shows the
-        // "overwrite or revert" dialog.
-        const doc = await vscode.workspace.openTextDocument(filePath);
-        await vscode.window.showTextDocument(doc, {
-          preview: false,
-          preserveFocus: true,
-        });
-
-        if (doc.getText() !== lockedNewContent) {
-          const edit = new vscode.WorkspaceEdit();
-          edit.replace(
-            doc.uri,
-            new vscode.Range(
-              doc.positionAt(0),
-              doc.positionAt(doc.getText().length),
-            ),
-            lockedNewContent,
-          );
-          const applied = await vscode.workspace.applyEdit(edit);
-          if (!applied) {
-            return {
-              error: "File edit failed",
-              path: params.path,
-              reason: "apply_edit_failed",
-            };
-          }
-        }
-        if (doc.isDirty) {
-          const saved = await doc.save();
-          if (!saved) {
-            return {
-              error: "File save failed",
-              path: params.path,
-              reason: "save_failed",
-            };
-          }
-        }
-        const finalContent = await fs.readFile(filePath, "utf-8");
-
-        // Collect new diagnostics
-        const newDiagnostics = await snap.collectNewErrors(diagnosticDelay);
-
-        const response: Record<string, unknown> = {
-          status: "accepted",
-          path: relPath,
-          operation: "modified",
-        };
-        if (lockedFailedBlocks.length > 0 || malformedBlocks > 0) {
-          response.partial = true;
-          if (lockedFailedBlocks.length > 0) {
-            response.failed_blocks = lockedFailedBlocks;
-            response.failed_block_details = lockedBlockResults
-              .filter((result) => result.status === "failed")
-              .map((result) => describeBlockResult(result));
-          }
-          if (malformedBlocks > 0) response.malformed_blocks = malformedBlocks;
-        }
-        if (
-          blocks.length > 1 ||
-          lockedBlockResults.some(
-            (result) =>
-              result.status === "failed" ||
-              (result.status === "applied" && result.matchType !== "exact"),
-          )
-        ) {
-          response.block_results = lockedBlockResults.map((result) =>
-            describeBlockResult(result),
-          );
-        }
-        const formatOnSaveReport = createFormatOnSaveReport(
-          relPath,
-          lockedNewContent,
-          finalContent,
-        );
-        if (formatOnSaveReport) {
-          Object.assign(response, formatOnSaveReport);
-        }
-        if (newDiagnostics) {
-          response.new_diagnostics = newDiagnostics;
-        }
-        return response;
+    if (!providers.editReviewProvider) {
+      return jsonResult({
+        error: "Edit review is unavailable in this runtime",
+        path: relPath,
+        reason: "edit_review_unavailable",
       });
-
-      return {
-        content: [{ type: "text", text: JSON.stringify(autoResult, null, 2) }],
-      };
     }
 
-    // Use diff view with file lock
-    const lockedResult = await withFileLock(filePath, async () => {
-      let lockedNewContent = newContent;
-      let lockedFailedBlocks = failedBlocks;
-      let lockedBlockResults = blockResults;
-      const lockedOriginalContent = await fs.readFile(filePath, "utf-8");
-      if (lockedOriginalContent !== originalContent) {
+    const canAutoApprove =
+      providers.writeApprovalPolicyProvider?.canAutoApprove({
+        sessionId,
+        absolutePath: filePath,
+        relativePath: relPath,
+        inWorkspace,
+        mode,
+      }) ?? false;
+
+    let lockedFailedBlocks = failedBlocks;
+    let lockedBlockResults = blockResults;
+    const result = await providers.editReviewProvider.reviewAndApply({
+      mode: canAutoApprove ? "auto" : "interactive",
+      absolutePath: filePath,
+      relativePath: relPath,
+      content: newContent,
+      outsideWorkspace: !inWorkspace,
+      diagnosticDelay: providers.diagnosticDelay ?? 1500,
+      approvalPanel,
+      onApprovalRequest,
+      sessionId,
+      allowCreate: false,
+      operation: "modified",
+      prepareContent: async (lockedOriginalContent) => {
+        if (lockedOriginalContent === originalContent) {
+          return { status: "continue", content: newContent };
+        }
+
         const reapplied = applyBlocks(lockedOriginalContent, blocks);
-        lockedNewContent = reapplied.result;
         lockedFailedBlocks = reapplied.failedBlocks;
         lockedBlockResults = reapplied.blockResults;
         if (lockedFailedBlocks.length === blocks.length) {
           return {
+            status: "abort",
             result: buildFailedBlocksPayload(
               params.path,
               blocks,
               lockedBlockResults,
               "All search/replace blocks failed after re-reading the file under lock",
             ),
-            failedBlocks: lockedFailedBlocks,
-            blockResults: lockedBlockResults,
           };
         }
-      }
-
-      const diffView = new DiffViewProvider(diagnosticDelay);
-      await diffView.open(filePath, relPath, lockedNewContent, {
-        outsideWorkspace: !inWorkspace,
-      });
-      const decision = await diffView.waitForUserDecision(
-        approvalPanel,
-        onApprovalRequest,
-        sessionId,
-      );
-
-      if (decision === "reject") {
-        return {
-          result: await diffView.revertChanges(
-            diffView.writeApprovalResponse?.rejectionReason,
-          ),
-          failedBlocks: lockedFailedBlocks,
-          blockResults: lockedBlockResults,
-        };
-      }
-
-      // Handle session/always acceptance — save rules.
-      const scope = decisionToScope(decision);
-      if (scope) {
-        saveWriteTrustRules({
-          panelResponse: diffView.writeApprovalResponse,
-          approvalManager,
-          sessionId,
-          scope,
-          relPath,
-          inWorkspace,
-        });
-      }
-
-      return {
-        result: await diffView.saveChanges(),
-        failedBlocks: lockedFailedBlocks,
-        blockResults: lockedBlockResults,
-      };
+        return { status: "continue", content: reapplied.result };
+      },
     });
 
-    const result = lockedResult.result;
-    const { finalContent: _finalContent, ...response } = result;
+    if (!canAutoApprove && result.decision && result.decision !== "reject") {
+      providers.writeApprovalPolicyProvider?.recordDecision({
+        decision: result.decision,
+        sessionId,
+        relativePath: relPath,
+        inWorkspace,
+        writeApprovalResponse: result.writeApprovalResponse,
+      });
+    }
+
+    const {
+      finalContent: _finalContent,
+      decision: _decision,
+      writeApprovalResponse: _writeApprovalResponse,
+      ...response
+    } = result;
     const responseObj = response as Record<string, unknown>;
 
     // Add partial failure info if applicable
     if (
-      (lockedResult.failedBlocks.length > 0 || malformedBlocks > 0) &&
+      (lockedFailedBlocks.length > 0 || malformedBlocks > 0) &&
       result.status === "accepted"
     ) {
       responseObj.partial = true;
-      if (lockedResult.failedBlocks.length > 0) {
-        responseObj.failed_blocks = lockedResult.failedBlocks;
-        responseObj.failed_block_details = lockedResult.blockResults
+      if (lockedFailedBlocks.length > 0) {
+        responseObj.failed_blocks = lockedFailedBlocks;
+        responseObj.failed_block_details = lockedBlockResults
           .filter((blockResult) => blockResult.status === "failed")
           .map((blockResult) => describeBlockResult(blockResult));
       }
@@ -990,21 +861,19 @@ export async function handleApplyDiff(
 
     if (
       blocks.length > 1 ||
-      lockedResult.blockResults.some(
+      lockedBlockResults.some(
         (blockResult) =>
           blockResult.status === "failed" ||
           (blockResult.status === "applied" &&
             blockResult.matchType !== "exact"),
       )
     ) {
-      responseObj.block_results = lockedResult.blockResults.map((blockResult) =>
+      responseObj.block_results = lockedBlockResults.map((blockResult) =>
         describeBlockResult(blockResult),
       );
     }
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(responseObj, null, 2) }],
-    };
+    return jsonResult(responseObj);
   } catch (err) {
     return (
       handlePendingEditLockError(err, params.path) ??

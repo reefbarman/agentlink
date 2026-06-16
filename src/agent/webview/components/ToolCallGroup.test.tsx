@@ -57,6 +57,19 @@ describe("segmentBlocks", () => {
     ]);
   });
 
+  it("can leave completed tool calls standalone while a turn is settling", () => {
+    const first = tool("tool-1", "read_file");
+    const second = tool("tool-2", "search_files");
+
+    expect(
+      segmentBlocks([first, second, text()], { groupCompletedTools: false }),
+    ).toEqual([
+      { kind: "single", block: first, index: 0 },
+      { kind: "single", block: second, index: 1 },
+      { kind: "single", block: text(), index: 2 },
+    ]);
+  });
+
   it("keeps failed completed tool calls standalone after a completed group", () => {
     const first = tool("tool-1", "read_file");
     const second = tool("tool-2", "search_files");

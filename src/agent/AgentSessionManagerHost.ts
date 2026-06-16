@@ -22,6 +22,13 @@ import {
 } from "./toolAdapter.js";
 import type { SessionStore } from "./SessionStore.js";
 import type { AgentToolRuntime } from "../core/tools/types.js";
+import {
+  createVscodeEditorRevealProvider,
+  createVscodeEditReviewProvider,
+  createVscodeMultiFileEditReviewProvider,
+  createVscodeRenameSymbolProvider,
+  createVscodeWriteApprovalPolicyProvider,
+} from "../adapters/vscode/editReviewCapabilities.js";
 import { createVscodeSemanticSearchProvider } from "../adapters/vscode/readSearchCapabilities.js";
 import type { AgentEvent } from "./types.js";
 
@@ -142,6 +149,22 @@ export function createDefaultAgentSessionManagerHost(args: {
         ...ctx,
         semanticSearchProvider:
           ctx.semanticSearchProvider ?? createVscodeSemanticSearchProvider(),
+        editorRevealProvider:
+          ctx.editorRevealProvider ?? createVscodeEditorRevealProvider(),
+        editReviewProvider:
+          ctx.editReviewProvider ?? createVscodeEditReviewProvider(),
+        writeApprovalPolicyProvider:
+          ctx.writeApprovalPolicyProvider ??
+          createVscodeWriteApprovalPolicyProvider(ctx.approvalManager),
+        multiFileEditReviewProvider:
+          ctx.multiFileEditReviewProvider ??
+          createVscodeMultiFileEditReviewProvider(
+            ctx.approvalManager,
+            ctx.extensionUri,
+          ),
+        renameSymbolProvider:
+          ctx.renameSymbolProvider ??
+          createVscodeRenameSymbolProvider(ctx.approvalManager),
       }),
     persistence: args.store,
     timers: {

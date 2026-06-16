@@ -8,6 +8,7 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { parseJsonWithComments } from "./util/jsonc.js";
 
 const BEGIN_MARKER = "<!-- BEGIN agentlink -->";
 const END_MARKER = "<!-- END agentlink -->";
@@ -185,7 +186,9 @@ export function installHooks(
   let settings: Record<string, unknown> = {};
   if (fs.existsSync(settingsPath)) {
     try {
-      settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      settings = parseJsonWithComments(
+        fs.readFileSync(settingsPath, "utf-8"),
+      );
     } catch {
       log(`Warning: could not parse ${settingsPath}, creating fresh`);
     }

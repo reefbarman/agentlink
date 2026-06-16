@@ -77,6 +77,9 @@ export class BrowserGatewayServer implements vscode.Disposable {
       }),
     );
 
+    // Let the service pause its poll when no browser client is connected.
+    this.gatewayService.setHasActiveClientsProbe(() => this.sseClients.size > 0);
+
     await new Promise<void>((resolve, reject) => {
       const onError = (err: Error) => {
         this.server?.off("listening", onListening);
@@ -184,6 +187,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.registryHeartbeatTimer = undefined;
     }
     await removeBrowserGatewayInstance(this.instanceId);
+    this.gatewayService.setHasActiveClientsProbe(undefined);
     for (const disposable of this.disposables) {
       disposable.dispose();
     }

@@ -1,58 +1,18 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 
+import type {
+  EditReviewProvider,
+  WriteApprovalPolicyProvider,
+} from "../core/capabilities/editReview.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockWorkspace = vi.hoisted(() => ({
-  workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
-  getConfiguration: vi.fn(() => ({
-    get: vi.fn((_key: string, fallback?: unknown) => fallback),
-  })),
-  openTextDocument: vi.fn(),
-  applyEdit: vi.fn(async () => true),
-}));
-
-const mockWindow = vi.hoisted(() => ({
-  showTextDocument: vi.fn(async () => undefined),
-}));
-
-const mockDiffViewProvider = vi.hoisted(() => vi.fn());
-const mockCreateFormatOnSaveReport = vi.hoisted(() =>
-  vi.fn((relPath: string, expectedContent: string, finalContent: string) => {
-    if (expectedContent === finalContent) return undefined;
-    return {
-      format_on_save: true,
-      format_on_save_edits: `--- ${relPath}\n-${expectedContent}\n+${finalContent}`,
-    };
-  }),
-);
-const mockSnapshotDiagnostics = vi.hoisted(() =>
-  vi.fn(() => ({
-    collectNewErrors: vi.fn(async () => undefined),
-  })),
-);
-
 vi.mock("vscode", () => ({
-  workspace: mockWorkspace,
-  window: mockWindow,
-  Range: class {
-    constructor(
-      public start: unknown,
-      public end: unknown,
-    ) {}
+  workspace: {
+    workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
   },
-  WorkspaceEdit: class {
-    replace = vi.fn();
-  },
-}));
-
-vi.mock("../integrations/DiffViewProvider.js", () => ({
-  DiffViewProvider: mockDiffViewProvider,
-  createFormatOnSaveReport: mockCreateFormatOnSaveReport,
-  FileLockTimeoutError: class FileLockTimeoutError extends Error {},
-  withFileLock: async (_filePath: string, fn: () => Promise<unknown>) => fn(),
-  snapshotDiagnostics: mockSnapshotDiagnostics,
 }));
 
 describe("handleApplyDiff", () => {
@@ -65,15 +25,11 @@ describe("handleApplyDiff", () => {
     );
     workspaceDir = path.join(tempDir, "workspace");
     fs.mkdirSync(workspaceDir, { recursive: true });
-    mockWorkspace.workspaceFolders = [{ uri: { fsPath: workspaceDir } }];
-    mockWorkspace.getConfiguration.mockReturnValue({
-      get: vi.fn((_key: string, fallback?: unknown) => fallback),
-    });
-    mockWorkspace.applyEdit.mockResolvedValue(true);
-    mockWindow.showTextDocument.mockResolvedValue(undefined);
-    mockDiffViewProvider.mockClear();
-    mockCreateFormatOnSaveReport.mockClear();
-    mockSnapshotDiagnostics.mockClear();
+    (
+      vscode.workspace as unknown as {
+        workspaceFolders: Array<{ uri: { fsPath: string } }>;
+      }
+    ).workspaceFolders = [{ uri: { fsPath: workspaceDir } }];
   });
 
   afterEach(() => {
@@ -81,271 +37,327 @@ describe("handleApplyDiff", () => {
     vi.clearAllMocks();
   });
 
-  it("auto-approves architect-mode diffs to existing plans files", async () => {
-    const planPath = path.join(workspaceDir, "plans", "existing.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
+  function toolJson(
+    result: Awaited<
+      ReturnType<typeof import("./applyDiff.js").handleApplyDiff>
+    >,
+  ) {
+    const text =
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+    return JSON.parse(text) as Record<string, unknown>;
+  }
 
-    const doc = {
-      getText: vi.fn(() => "old plan"),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: planPath },
-      isDirty: true,
-      save: vi.fn(async () => true),
+  function createApprovalPolicy(
+    canAutoApprove: boolean,
+  ): WriteApprovalPolicyProvider {
+    return {
+      canAutoApprove: vi.fn(() => canAutoApprove),
+      recordDecision: vi.fn(),
     };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
+  }
 
-    const approvalManager = {
-      isAgentWriteApproved: vi.fn(() => false),
-      isFileWriteApproved: vi.fn(() => false),
-    };
-    const approvalPanel = {};
-
-    const diff = [
+  function searchReplaceDiff(search: string, replace: string): string {
+    return [
       "<<<<<<< SEARCH",
-      "old plan",
+      search,
       "======= DIVIDER =======",
-      "updated plan",
+      replace,
       ">>>>>>> REPLACE",
     ].join("\n");
+  }
+
+  it("returns explicit unavailable before approval checks or mutation when no edit-review provider exists", async () => {
+    const filePath = path.join(workspaceDir, "src", "unavailable.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const policy = createApprovalPolicy(true);
 
     const { handleApplyDiff } = await import("./applyDiff.js");
     const result = await handleApplyDiff(
-      { path: "plans/existing.md", diff },
-      approvalManager as never,
+      {
+        path: "src/unavailable.ts",
+        diff: searchReplaceDiff("old", "new"),
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { writeApprovalPolicyProvider: policy },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      error: "Edit review is unavailable in this runtime",
+      path: "src/unavailable.ts",
+      reason: "edit_review_unavailable",
+    });
+    expect(policy.canAutoApprove).not.toHaveBeenCalled();
+    expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+  });
+
+  it("delegates auto-approved diffs to the edit-review provider", async () => {
+    const filePath = path.join(workspaceDir, "plans", "existing.md");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old plan", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "plans/existing.md",
+        operation: "modified" as const,
+      })),
+    };
+    const policy = createApprovalPolicy(true);
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "plans/existing.md",
+        diff: searchReplaceDiff("old plan", "updated plan"),
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "architect",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      path: "plans/existing.md",
+      operation: "modified",
+    });
+    expect(policy.canAutoApprove).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      absolutePath: filePath,
+      relativePath: "plans/existing.md",
+      inWorkspace: true,
+      mode: "architect",
+    });
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "plans/existing.md",
+        content: "updated plan",
+        allowCreate: false,
+        operation: "modified",
+        outsideWorkspace: false,
+        sessionId: "session-1",
+        prepareContent: expect.any(Function),
+      }),
+    );
+  });
+
+  it("records scoped trust after interactive accept-session decisions", async () => {
+    const filePath = path.join(workspaceDir, "src", "example.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const approvalPanel = {};
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "src/example.ts",
+        operation: "modified" as const,
+        finalContent: "new",
+        decision: "accept-session" as const,
+        writeApprovalResponse: { decision: "accept-session" },
+      })),
+    };
+    const policy = createApprovalPolicy(false);
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/example.ts", diff: searchReplaceDiff("old", "new") },
+      {} as never,
       approvalPanel as never,
       "session-1",
       undefined,
-      "architect",
+      "code",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
     );
 
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    const parsed = JSON.parse(text);
-    expect(parsed.error).toBeUndefined();
-    expect(parsed).toMatchObject({
+    expect(toolJson(result)).toMatchObject({
       status: "accepted",
-      path: "plans/existing.md",
+      path: "src/example.ts",
+      operation: "modified",
     });
-    expect(mockDiffViewProvider).not.toHaveBeenCalled();
-    expect(approvalManager.isAgentWriteApproved).not.toHaveBeenCalled();
+    expect(toolJson(result)).not.toHaveProperty("finalContent");
+    expect(toolJson(result)).not.toHaveProperty("decision");
+    expect(policy.recordDecision).toHaveBeenCalledWith({
+      decision: "accept-session",
+      sessionId: "session-1",
+      relativePath: "src/example.ts",
+      inWorkspace: true,
+      writeApprovalResponse: { decision: "accept-session" },
+    });
+    expect(editReviewProvider.reviewAndApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "interactive",
+        approvalPanel,
+      }),
+    );
   });
 
-  it("does not auto-approve non-architect diffs to plans files", async () => {
-    const planPath = path.join(workspaceDir, "plans", "existing.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
-
-    const approvalManager = {
-      isAgentWriteApproved: vi.fn(() => false),
-      isFileWriteApproved: vi.fn(() => false),
+  it("does not record trust for interactive rejections", async () => {
+    const filePath = path.join(workspaceDir, "src", "rejected.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "rejected_by_user" as const,
+        path: "src/rejected.ts",
+        reason: "Needs a smaller diff",
+        decision: "reject" as const,
+      })),
     };
-
-    const diff = [
-      "<<<<<<< SEARCH",
-      "old plan",
-      "======= DIVIDER =======",
-      "updated plan",
-      ">>>>>>> REPLACE",
-    ].join("\n");
+    const policy = createApprovalPolicy(false);
 
     const { handleApplyDiff } = await import("./applyDiff.js");
-    await handleApplyDiff(
-      { path: "plans/existing.md", diff },
-      approvalManager as never,
+    const result = await handleApplyDiff(
+      { path: "src/rejected.ts", diff: searchReplaceDiff("old", "new") },
+      {} as never,
       {} as never,
       "session-1",
       undefined,
       "code",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
     );
 
-    // Without architect bypass, the auto-approve check must consult the
-    // approval manager rather than skipping straight to a silent write.
-    expect(approvalManager.isAgentWriteApproved).toHaveBeenCalled();
+    expect(toolJson(result)).toMatchObject({
+      status: "rejected_by_user",
+      path: "src/rejected.ts",
+      reason: "Needs a smaller diff",
+    });
+    expect(toolJson(result)).not.toHaveProperty("decision");
+    expect(policy.recordDecision).not.toHaveBeenCalled();
   });
 
-  it("reports formatter edits from auto-approved diffs", async () => {
-    const planPath = path.join(workspaceDir, "plans", "formatted.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
-
-    const doc = {
-      getText: vi.fn(() => "old plan"),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: planPath },
-      isDirty: true,
-      save: vi.fn(async () => {
-        fs.writeFileSync(planPath, "updated plan\n", "utf-8");
-        return true;
+  it("re-applies diffs to current file content inside the provider boundary", async () => {
+    const filePath = path.join(workspaceDir, "src", "changed.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old value", "utf-8");
+    let providerContent = "";
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        fs.writeFileSync(filePath, "old value and extra", "utf-8");
+        const prepared = await params.prepareContent?.(
+          fs.readFileSync(filePath, "utf-8"),
+        );
+        expect(prepared?.status).toBe("continue");
+        if (prepared?.status === "continue") {
+          providerContent = prepared.content;
+        }
+        return {
+          status: "accepted" as const,
+          path: "src/changed.ts",
+          operation: "modified" as const,
+        };
       }),
     };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
-
-    const diff = [
-      "<<<<<<< SEARCH",
-      "old plan",
-      "======= DIVIDER =======",
-      "updated plan",
-      ">>>>>>> REPLACE",
-    ].join("\n");
 
     const { handleApplyDiff } = await import("./applyDiff.js");
     const result = await handleApplyDiff(
-      { path: "plans/formatted.md", diff },
       {
-        isAgentWriteApproved: vi.fn(() => false),
-        isFileWriteApproved: vi.fn(() => false),
-      } as never,
+        path: "src/changed.ts",
+        diff: searchReplaceDiff("old value", "new value"),
+      },
       {} as never,
-      "session-1",
-      undefined,
-      "architect",
-    );
-
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    const parsed = JSON.parse(text);
-    expect(parsed).toMatchObject({
-      status: "accepted",
-      format_on_save: true,
-    });
-    expect(parsed.format_on_save_edits).toContain("updated plan");
-  });
-
-  it("returns an error when an auto-approved diff edit cannot be applied", async () => {
-    const planPath = path.join(workspaceDir, "plans", "edit-fails.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
-    mockWorkspace.applyEdit.mockResolvedValue(false);
-
-    const doc = {
-      getText: vi.fn(() => "old plan"),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: planPath },
-      isDirty: false,
-      save: vi.fn(async () => true),
-    };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
-
-    const diff = [
-      "<<<<<<< SEARCH",
-      "old plan",
-      "======= DIVIDER =======",
-      "updated plan",
-      ">>>>>>> REPLACE",
-    ].join("\n");
-
-    const { handleApplyDiff } = await import("./applyDiff.js");
-    const result = await handleApplyDiff(
-      { path: "plans/edit-fails.md", diff },
-      {
-        isAgentWriteApproved: vi.fn(() => false),
-        isFileWriteApproved: vi.fn(() => false),
-      } as never,
-      {} as never,
-      "session-1",
-      undefined,
-      "architect",
-    );
-
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(JSON.parse(text)).toMatchObject({
-      error: "File edit failed",
-      reason: "apply_edit_failed",
-    });
-  });
-
-  it("returns an error when an auto-approved diff save fails", async () => {
-    const planPath = path.join(workspaceDir, "plans", "save-fails.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
-
-    const doc = {
-      getText: vi.fn(() => "old plan"),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: planPath },
-      isDirty: true,
-      save: vi.fn(async () => false),
-    };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
-
-    const diff = [
-      "<<<<<<< SEARCH",
-      "old plan",
-      "======= DIVIDER =======",
-      "updated plan",
-      ">>>>>>> REPLACE",
-    ].join("\n");
-
-    const { handleApplyDiff } = await import("./applyDiff.js");
-    const result = await handleApplyDiff(
-      { path: "plans/save-fails.md", diff },
-      {
-        isAgentWriteApproved: vi.fn(() => false),
-        isFileWriteApproved: vi.fn(() => false),
-      } as never,
-      {} as never,
-      "session-1",
-      undefined,
-      "architect",
-    );
-
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(JSON.parse(text)).toMatchObject({
-      error: "File save failed",
-      reason: "save_failed",
-    });
-  });
-
-  it("re-applies diffs after re-reading the file under the write lock", async () => {
-    const planPath = path.join(workspaceDir, "plans", "changed-under-lock.md");
-    fs.mkdirSync(path.dirname(planPath), { recursive: true });
-    fs.writeFileSync(planPath, "old plan", "utf-8");
-
-    const doc = {
-      getText: vi.fn(() => "changed plan"),
-      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
-      uri: { fsPath: planPath },
-      isDirty: true,
-      save: vi.fn(async () => {
-        fs.writeFileSync(planPath, "updated plan", "utf-8");
-        return true;
-      }),
-    };
-    mockWorkspace.openTextDocument.mockResolvedValue(doc);
-
-    const diff = [
-      "<<<<<<< SEARCH",
-      "old plan",
-      "======= DIVIDER =======",
-      "updated plan",
-      ">>>>>>> REPLACE",
-    ].join("\n");
-
-    const { handleApplyDiff } = await import("./applyDiff.js");
-    const result = await handleApplyDiff(
-      { path: "plans/changed-under-lock.md", diff },
-      {
-        isAgentWriteApproved: vi.fn(() => {
-          fs.writeFileSync(planPath, "changed plan", "utf-8");
-          return true;
-        }),
-        isFileWriteApproved: vi.fn(() => false),
-      } as never,
       {} as never,
       "session-1",
       undefined,
       "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
     );
 
-    const text =
-      result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(JSON.parse(text)).toMatchObject({
+    expect(providerContent).toBe("new value and extra");
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      path: "src/changed.ts",
+    });
+  });
+
+  it("aborts through the provider when all blocks fail after re-reading", async () => {
+    const filePath = path.join(workspaceDir, "src", "changed.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old value", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async (params) => {
+        const prepared = await params.prepareContent?.("changed value");
+        expect(prepared?.status).toBe("abort");
+        return prepared?.status === "abort"
+          ? prepared.result
+          : { error: "Expected abort" };
+      }),
+    };
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      {
+        path: "src/changed.ts",
+        diff: searchReplaceDiff("old value", "new value"),
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
       error:
         "All search/replace blocks failed after re-reading the file under lock",
     });
-    expect(mockWorkspace.applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("adds partial block metadata to accepted provider results", async () => {
+    const filePath = path.join(workspaceDir, "src", "partial.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "accepted" as const,
+        path: "src/partial.ts",
+        operation: "modified" as const,
+      })),
+    };
+    const diff = [
+      searchReplaceDiff("old", "new"),
+      searchReplaceDiff("missing", "replacement"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/partial.ts", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(true),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      status: "accepted",
+      partial: true,
+      failed_blocks: [1],
+      failed_block_details: [
+        expect.objectContaining({ index: 1, status: "failed" }),
+      ],
+      block_results: [
+        expect.objectContaining({ index: 0, status: "applied" }),
+        expect.objectContaining({ index: 1, status: "failed" }),
+      ],
+    });
   });
 });

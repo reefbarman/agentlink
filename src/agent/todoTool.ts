@@ -31,7 +31,8 @@ Use this when:
 
 Task rules:
 - Exactly ONE task should be in_progress at a time
-- Mark tasks completed IMMEDIATELY when done (don't batch)
+- Mark tasks completed promptly during ongoing work (don't batch progress updates)
+- When finishing the turn and all visible todos are complete, use set_task_status with status="completed" and completeTodos=true instead of a final todo_write only to mark todos complete
 - Use nested children to break complex tasks into sub-steps
 - content: imperative form ("Run tests")
 - activeForm: present continuous ("Running tests")`,

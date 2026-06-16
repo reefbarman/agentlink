@@ -1,105 +1,82 @@
-import * as vscode from "vscode";
-
-import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
-import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
-
+import type { EditorRevealProvider } from "../core/capabilities/editReview.js";
+import type {
+  PathAccessProvider,
+  WorkspaceFileProvider,
+} from "../core/capabilities/readSearch.js";
 import { type ToolResult } from "../shared/types.js";
 
+export interface OpenFileParams {
+  path: string;
+  line?: number;
+  column?: number;
+  end_line?: number;
+  end_column?: number;
+}
+
+export interface OpenFileProviders {
+  workspaceFileProvider: WorkspaceFileProvider;
+  pathAccessProvider: PathAccessProvider;
+  editorRevealProvider?: EditorRevealProvider;
+}
+
+function errorTextResult(error: string, path?: string): ToolResult {
+  return { content: [{ type: "text", text: JSON.stringify({ error, path }) }] };
+}
+
+export function createUnavailableEditorRevealProvider(): EditorRevealProvider {
+  return {
+    async reveal(params) {
+      return errorTextResult(
+        "Editor reveal is unavailable in this runtime. Provide an EditorRevealProvider to enable open_file.",
+        params.absolutePath,
+      );
+    },
+  };
+}
+
 export async function handleOpenFile(
-  params: {
-    path: string;
-    line?: number;
-    column?: number;
-    end_line?: number;
-    end_column?: number;
-  },
-  approvalManager: ApprovalManager,
-  approvalPanel: ApprovalPanelProvider,
+  params: OpenFileParams,
   sessionId: string,
+  providers: OpenFileProviders,
 ): Promise<ToolResult> {
   try {
-    const { absolutePath, inWorkspace } = resolveAndValidatePath(params.path);
-    const relPath = getRelativePath(absolutePath);
+    const { absolutePath, inWorkspace } =
+      providers.workspaceFileProvider.resolvePath(params.path);
 
-    if (
-      !inWorkspace &&
-      !approvalManager.isPathTrusted(sessionId, absolutePath)
-    ) {
-      const { approved, reason } = await approveOutsideWorkspaceAccess(
-        absolutePath,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
-      if (!approved) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "rejected",
-                path: params.path,
-                reason,
-              }),
-            },
-          ],
-        };
-      }
-    }
-
-    const doc = await vscode.workspace.openTextDocument(absolutePath);
-    const editor = await vscode.window.showTextDocument(doc, {
-      preview: false,
+    const access = await providers.pathAccessProvider.ensureAccess({
+      absolutePath,
+      inputPath: params.path,
+      inWorkspace,
+      sessionId,
+      kind: "read",
     });
 
-    if (params.line) {
-      const line = Math.max(0, params.line - 1);
-      const col = Math.max(0, (params.column ?? 1) - 1);
-      const startPos = new vscode.Position(line, col);
-
-      if (params.end_line) {
-        // Range selection — highlight the specified range
-        const endLine = Math.max(0, params.end_line - 1);
-        const endCol = Math.max(0, (params.end_column ?? 1) - 1);
-        const endPos = new vscode.Position(endLine, endCol);
-        editor.selection = new vscode.Selection(startPos, endPos);
-        editor.revealRange(
-          new vscode.Range(startPos, endPos),
-          vscode.TextEditorRevealType.InCenterIfOutsideViewport,
-        );
-      } else {
-        // Single position — cursor placement
-        editor.selection = new vscode.Selection(startPos, startPos);
-        editor.revealRange(
-          new vscode.Range(startPos, startPos),
-          vscode.TextEditorRevealType.InCenterIfOutsideViewport,
-        );
-      }
+    if (!access.approved) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "rejected",
+              path: params.path,
+              reason: access.reason,
+            }),
+          },
+        ],
+      };
     }
 
-    const response: Record<string, unknown> = {
-      status: "opened",
-      path: relPath,
-    };
-    if (params.line) response.line = params.line;
-    if (params.column) response.column = params.column;
-    if (params.end_line) response.end_line = params.end_line;
-    if (params.end_column) response.end_column = params.end_column;
-
-    return {
-      content: [{ type: "text", text: JSON.stringify(response) }],
-    };
+    const revealProvider =
+      providers.editorRevealProvider ?? createUnavailableEditorRevealProvider();
+    return revealProvider.reveal({
+      absolutePath,
+      line: params.line,
+      column: params.column,
+      end_line: params.end_line,
+      end_column: params.end_column,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ error: message, path: params.path }),
-        },
-      ],
-    };
+    return errorTextResult(message, params.path);
   }
 }

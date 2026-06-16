@@ -1,3 +1,6 @@
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
 import type { AgentConfig, AgentEvent } from "./types.js";
 import type {
   CompleteRequest,
@@ -7,6 +10,7 @@ import type {
   ModelProvider,
   ProviderStreamEvent,
   StreamRequest,
+  ToolDefinition,
 } from "./providers/types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -655,6 +659,73 @@ describe("AgentEngine", () => {
       ).toEqual(["read_file", "write_file"]);
     });
 
+    it("resolves queued interjection attachments asynchronously before the next provider request", async () => {
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "agent-engine-"));
+      await fs.writeFile(path.join(cwd, "note.md"), "# Note\nhello", "utf-8");
+
+      const requests: StreamRequest[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await AgentSession.create({
+        mode: "code",
+        config: testConfig,
+        cwd,
+      });
+      session.addUserMessage("read then follow up");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      };
+      setEngineToolContext(engine, toolCtx, async () => {
+        session.setPendingInterjection(
+          "follow up",
+          "queue-1",
+          undefined,
+          undefined,
+          false,
+          undefined,
+          ["note.md"],
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        };
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1].messages.at(-1)).toEqual({
+        role: "user",
+        content:
+          '<file path="note.md">\n```md\n# Note\nhello\n```\n</file>\n\nfollow up',
+      });
+    });
+
     it("clears pre-registered tracker calls when a run is aborted", async () => {
       const provider = makeMockProvider();
       provider.stream = async function* () {
@@ -1128,6 +1199,165 @@ describe("AgentEngine", () => {
       ]);
     });
 
+    it("rebuilds cached provider tools when same-name tool definitions change", async () => {
+      const streamCalls: StreamRequest[] = [];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "tool-1",
+                name: "alpha",
+                input: {},
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "content_blocks",
+          blocks: [{ type: "text", text: "ok" }],
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const firstSchema = { type: "object" as const, properties: {} };
+      const secondSchema = {
+        type: "object" as const,
+        properties: { query: { type: "string" } },
+      };
+      const toolDefs: ToolDefinition[][] = [
+        [
+          {
+            name: "alpha",
+            description: "first definition",
+            input_schema: firstSchema,
+          },
+        ],
+        [
+          {
+            name: "alpha",
+            description: "second definition",
+            input_schema: secondSchema,
+          },
+        ],
+      ];
+      let listCalls = 0;
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools() {
+          return toolDefs[Math.min(listCalls++, toolDefs.length - 1)];
+        },
+        isParallelSafe() {
+          return true;
+        },
+        async executeTool() {
+          return { content: [{ type: "text", text: "tool ok" }] };
+        },
+      } as any);
+
+      await collectEvents(engine.run(session));
+
+      expect(streamCalls).toHaveLength(2);
+      const firstAlpha = streamCalls[0].tools?.find(
+        (tool) => tool.name === "alpha",
+      );
+      const secondAlpha = streamCalls[1].tools?.find(
+        (tool) => tool.name === "alpha",
+      );
+      expect(firstAlpha?.description).toBe("first definition");
+      expect(firstAlpha?.input_schema).toBe(firstSchema);
+      expect(secondAlpha?.description).toBe("second definition");
+      expect(secondAlpha?.input_schema).toBe(secondSchema);
+    });
+
+    it("reuses cached provider tools when definitions are structurally unchanged", async () => {
+      const streamCalls: StreamRequest[] = [];
+      let streamCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        streamCount += 1;
+        if (streamCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "tool-1",
+                name: "alpha",
+                input: {},
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+
+        yield { type: "text_delta", text: "ok" };
+        yield {
+          type: "content_blocks",
+          blocks: [{ type: "text", text: "ok" }],
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      let listCalls = 0;
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+      engine.setToolRuntime({
+        listTools() {
+          listCalls += 1;
+          return [
+            {
+              name: "alpha",
+              description: "same definition",
+              input_schema: {
+                properties: { query: { type: "string" } },
+                type: "object",
+              },
+            },
+          ];
+        },
+        isParallelSafe() {
+          return true;
+        },
+        async executeTool() {
+          return { content: [{ type: "text", text: "tool ok" }] };
+        },
+      } as any);
+
+      await collectEvents(engine.run(session));
+
+      expect(listCalls).toBe(2);
+      expect(streamCalls).toHaveLength(2);
+      const firstAlpha = streamCalls[0].tools?.find(
+        (tool) => tool.name === "alpha",
+      );
+      const secondAlpha = streamCalls[1].tools?.find(
+        (tool) => tool.name === "alpha",
+      );
+      expect(firstAlpha).toBeDefined();
+      expect(secondAlpha).toBe(firstAlpha);
+    });
+
     it("recomputes MCP disclosure at request time when tools connect after session creation", async () => {
       const streamCalls: StreamRequest[] = [];
       const provider = makeMockProvider();
@@ -1213,6 +1443,28 @@ describe("AgentEngine", () => {
         totalChars: 18,
         estimatedTokens: 5,
       });
+    });
+
+    it("emits gated hot-path timing logs when a logger is configured", async () => {
+      const provider = makeMockProvider();
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const logs: string[] = [];
+      const engine = new AgentEngine(makeRegistry(provider), (msg) => {
+        logs.push(msg);
+      });
+
+      await collectEvents(engine.run(session));
+
+      expect(logs).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^\[perf\] tool setup \d+ms tools=0 mcp=0$/),
+          expect.stringMatching(/^\[perf\] getMessages \d+ms messages=1$/),
+          expect.stringMatching(
+            /^\[perf\] message assembly \d+ms apiMessages=1$/,
+          ),
+        ]),
+      );
     });
 
     it("stores provider response id from usage events for future stateful codex turns", async () => {

@@ -1,24 +1,16 @@
-import * as vscode from "vscode";
-import * as fs from "fs/promises";
-import * as path from "path";
-
 import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
-import {
-  DiffViewProvider,
-  createFormatOnSaveReport,
-  withFileLock,
-  snapshotDiagnostics,
-} from "../integrations/DiffViewProvider.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
-import { decisionToScope, saveWriteTrustRules } from "./writeApprovalUI.js";
 
 import {
   type ToolResult,
   type OnApprovalRequest,
   errorResult,
 } from "../shared/types.js";
+import type {
+  EditReviewProvider,
+  WriteApprovalPolicyProvider,
+} from "../core/capabilities/editReview.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
 
 function getWriteRiskWarnings(
@@ -40,13 +32,26 @@ function getWriteRiskWarnings(
   return warnings.length > 0 ? warnings : undefined;
 }
 
+function jsonResult(response: Record<string, unknown>): ToolResult {
+  return {
+    content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+  };
+}
+
+export interface WriteFileProviders {
+  editReviewProvider?: EditReviewProvider;
+  writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
+  diagnosticDelay?: number;
+}
+
 export async function handleWriteFile(
   params: { path: string; content: string },
-  approvalManager: ApprovalManager,
+  _approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
   onApprovalRequest?: OnApprovalRequest,
   mode?: string,
+  providers: WriteFileProviders = {},
 ): Promise<ToolResult> {
   try {
     const { absolutePath: filePath, inWorkspace } = resolveAndValidatePath(
@@ -58,164 +63,54 @@ export async function handleWriteFile(
     // No separate path access prompt — that would be double-prompting. The PathRule is stored
     // as a side effect when the user clicks "For Session"/"Always" on the diff view.
 
-    const diagnosticDelay = vscode.workspace
-      .getConfiguration("agentlink")
-      .get<number>("diagnosticDelay", 1500);
-
-    const masterBypass = vscode.workspace
-      .getConfiguration("agentlink")
-      .get<boolean>("masterBypass", false);
-
-    // In architect mode, plan documents are the expected output and can be
-    // written without prompting for per-file approval.
-    const isArchitectPlanFile =
-      mode === "architect" && inWorkspace && relPath.startsWith("plans/");
-
-    const isProtectedMemoryPath = isMemoryProtectedPath(filePath);
-
-    // Auto-approve check (includes recent single-use approvals within TTL)
-    const canAutoApprove =
-      !isProtectedMemoryPath &&
-      (masterBypass ||
-        isArchitectPlanFile ||
-        (inWorkspace
-          ? approvalManager.isAgentWriteApproved(sessionId, filePath)
-          : approvalManager.isFileWriteApproved(sessionId, filePath)));
-
-    if (canAutoApprove) {
-      // Use file lock to prevent concurrent auto-approved writes from
-      // interleaving WorkspaceEdit + format-on-save sequences,
-      // which can corrupt file content.
-      const autoResult = await withFileLock(filePath, async () => {
-        // Snapshot diagnostics before the write (registers listener eagerly)
-        const snap = snapshotDiagnostics(filePath);
-
-        // Ensure parent directories exist (for new files)
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-
-        // Create file on disk if it doesn't exist (openTextDocument needs it)
-        try {
-          await fs.access(filePath);
-        } catch {
-          await fs.writeFile(filePath, "", "utf-8");
-        }
-
-        // Update content through the document model, then save — this avoids
-        // a race where fs.writeFile changes disk, the file watcher fires
-        // after applyEdit makes the doc dirty, and VS Code shows the
-        // "overwrite or revert" dialog.
-        const doc = await vscode.workspace.openTextDocument(filePath);
-        await vscode.window.showTextDocument(doc, {
-          preview: false,
-          preserveFocus: true,
-        });
-
-        if (doc.getText() !== params.content) {
-          const edit = new vscode.WorkspaceEdit();
-          edit.replace(
-            doc.uri,
-            new vscode.Range(
-              doc.positionAt(0),
-              doc.positionAt(doc.getText().length),
-            ),
-            params.content,
-          );
-          const applied = await vscode.workspace.applyEdit(edit);
-          if (!applied) {
-            return {
-              error: "File edit failed",
-              path: params.path,
-              reason: "apply_edit_failed",
-            };
-          }
-        }
-        if (doc.isDirty) {
-          const saved = await doc.save();
-          if (!saved) {
-            return {
-              error: "File save failed",
-              path: params.path,
-              reason: "save_failed",
-            };
-          }
-        }
-        const finalContent = await fs.readFile(filePath, "utf-8");
-
-        // Collect new diagnostics
-        const newDiagnostics = await snap.collectNewErrors(diagnosticDelay);
-
-        const response: Record<string, unknown> = {
-          status: "accepted",
-          path: relPath,
-          operation: "auto-approved",
-        };
-        const warnings = getWriteRiskWarnings(relPath, params.content);
-        if (warnings) {
-          response.warnings = warnings;
-        }
-        const formatOnSaveReport = createFormatOnSaveReport(
-          relPath,
-          params.content,
-          finalContent,
-        );
-        if (formatOnSaveReport) {
-          Object.assign(response, formatOnSaveReport);
-        }
-        if (newDiagnostics) {
-          response.new_diagnostics = newDiagnostics;
-        }
-        return response;
+    if (!providers.editReviewProvider) {
+      return jsonResult({
+        error: "Edit review is unavailable in this runtime",
+        path: relPath,
+        reason: "edit_review_unavailable",
       });
-
-      return {
-        content: [{ type: "text", text: JSON.stringify(autoResult, null, 2) }],
-      };
     }
 
-    // Use diff view with file lock
-    const result = await withFileLock(filePath, async () => {
-      const diffView = new DiffViewProvider(diagnosticDelay);
-
-      await diffView.open(filePath, relPath, params.content, {
-        outsideWorkspace: !inWorkspace,
-      });
-      const decision = await diffView.waitForUserDecision(
-        approvalPanel,
-        onApprovalRequest,
+    const canAutoApprove =
+      providers.writeApprovalPolicyProvider?.canAutoApprove({
         sessionId,
-      );
+        absolutePath: filePath,
+        relativePath: relPath,
+        inWorkspace,
+        mode,
+      }) ?? false;
 
-      if (decision === "reject") {
-        return await diffView.revertChanges(
-          diffView.writeApprovalResponse?.rejectionReason,
-        );
-      }
-
-      // Handle session/always acceptance — save rules.
-      const scope = decisionToScope(decision);
-      if (scope) {
-        saveWriteTrustRules({
-          panelResponse: diffView.writeApprovalResponse,
-          approvalManager,
-          sessionId,
-          scope,
-          relPath,
-          inWorkspace,
-        });
-      }
-
-      const saved = await diffView.saveChanges();
-      const warnings = getWriteRiskWarnings(relPath, params.content);
-      if (warnings) {
-        return { ...saved, warnings };
-      }
-      return saved;
+    const result = await providers.editReviewProvider.reviewAndApply({
+      mode: canAutoApprove ? "auto" : "interactive",
+      absolutePath: filePath,
+      relativePath: relPath,
+      content: params.content,
+      outsideWorkspace: !inWorkspace,
+      diagnosticDelay: providers.diagnosticDelay ?? 1500,
+      approvalPanel,
+      onApprovalRequest,
+      sessionId,
     });
 
-    const { finalContent: _finalContent, ...response } = result;
-    return {
-      content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
-    };
+    if (!canAutoApprove && result.decision && result.decision !== "reject") {
+      providers.writeApprovalPolicyProvider?.recordDecision({
+        decision: result.decision,
+        sessionId,
+        relativePath: relPath,
+        inWorkspace,
+        writeApprovalResponse: result.writeApprovalResponse,
+      });
+    }
+
+    const warnings = getWriteRiskWarnings(relPath, params.content);
+    const {
+      finalContent: _finalContent,
+      decision: _decision,
+      writeApprovalResponse: _writeApprovalResponse,
+      ...response
+    } = warnings ? { ...result, warnings } : result;
+
+    return jsonResult(response);
   } catch (err) {
     return (
       handlePendingEditLockError(err, params.path) ??

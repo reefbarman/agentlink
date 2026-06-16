@@ -4763,8 +4763,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (isBackground) {
           this.sendBgSessionsUpdateThrottled();
         }
-        // Emit user-visible annotation for follow-ups and user rejections
+        // Emit user-visible annotation for follow-ups and user rejections.
+        // Tool results can be large (file reads, search output); only attempt
+        // the JSON parse when a marker substring is actually present so the
+        // common large-result case skips the parse entirely.
         try {
+          if (
+            !resultText.includes("follow_up") &&
+            !resultText.includes("rejected_by_user")
+          ) {
+            break;
+          }
           const parsed = JSON.parse(resultText);
           if (parsed.follow_up) {
             this.postMessage({

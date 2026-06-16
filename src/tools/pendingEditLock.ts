@@ -1,6 +1,6 @@
+import { FileLockTimeoutError } from "../util/fileLock.js";
 import type { ToolResult } from "../shared/types.js";
 import { errorResult } from "../shared/types.js";
-import { FileLockTimeoutError } from "../integrations/DiffViewProvider.js";
 
 export function handlePendingEditLockError(
   err: unknown,

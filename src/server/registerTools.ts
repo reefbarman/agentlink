@@ -20,6 +20,13 @@ import {
 } from "./tools/index.js";
 import type { ToolRegistrationContext } from "./tools/types.js";
 
+import {
+  createVscodeEditorRevealProvider,
+  createVscodeEditReviewProvider,
+  createVscodeMultiFileEditReviewProvider,
+  createVscodeRenameSymbolProvider,
+  createVscodeWriteApprovalPolicyProvider,
+} from "../adapters/vscode/editReviewCapabilities.js";
 import { createVscodeSemanticSearchProvider } from "../adapters/vscode/readSearchCapabilities.js";
 import { type ToolResult } from "../shared/types.js";
 
@@ -105,6 +112,15 @@ export function registerTools(
     touch,
     desc,
     semanticSearchProvider: createVscodeSemanticSearchProvider(),
+    editorRevealProvider: createVscodeEditorRevealProvider(),
+    editReviewProvider: createVscodeEditReviewProvider(),
+    writeApprovalPolicyProvider:
+      createVscodeWriteApprovalPolicyProvider(approvalManager),
+    multiFileEditReviewProvider: createVscodeMultiFileEditReviewProvider(
+      approvalManager,
+      extensionUri,
+    ),
+    renameSymbolProvider: createVscodeRenameSymbolProvider(approvalManager),
   };
 
   // --- Register all tool groups ---
