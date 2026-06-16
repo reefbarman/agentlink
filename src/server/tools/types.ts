@@ -1,6 +1,7 @@
 import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { SemanticSearchProvider } from "../../core/capabilities/readSearch.js";
 import type { ToolCallTracker } from "../ToolCallTracker.js";
 
 /** Shared dependencies passed to each tool registration module. */
@@ -14,4 +15,5 @@ export interface ToolRegistrationContext {
   sid: () => string;
   touch: () => void;
   desc: (name: string) => string;
+  semanticSearchProvider: SemanticSearchProvider;
 }

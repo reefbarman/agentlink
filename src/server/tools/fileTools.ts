@@ -1,4 +1,14 @@
 import {
+  createVscodeAdvertisedArtifactProvider,
+  createVscodeContextDocumentProvider,
+  createVscodeContextEnrichmentProvider,
+  createVscodeContextWorkingSetProvider,
+  createVscodePathAccessProvider,
+  createVscodeReadFileEnrichmentProvider,
+  createVscodeStructuralGraphProvider,
+  createVscodeWorkspaceFileProvider,
+} from "../../adapters/vscode/readSearchCapabilities.js";
+import {
   getContextSchema,
   getDiagnosticsSchema,
   getModuleNeighborsSchema,
@@ -24,6 +34,13 @@ import { handleSearchFiles } from "../../tools/searchFiles.js";
 export function registerFileTools(ctx: ToolRegistrationContext): void {
   const { server, tracker, approvalManager, approvalPanel, sid, touch, desc } =
     ctx;
+  const readSearchProviders = {
+    workspaceFileProvider: createVscodeWorkspaceFileProvider(),
+    pathAccessProvider: createVscodePathAccessProvider(
+      approvalManager,
+      approvalPanel,
+    ),
+  };
 
   server.registerTool(
     "read_file",
@@ -36,7 +53,14 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       "read_file",
       (params) => {
         touch();
-        return handleReadFile(params, approvalManager, approvalPanel, sid());
+        return handleReadFile(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+          [],
+          createVscodeReadFileEnrichmentProvider(),
+        );
       },
       (p) => String(p.path ?? ""),
       sid,
@@ -54,7 +78,14 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       "get_context",
       (params) => {
         touch();
-        return handleGetContext(params, approvalManager, approvalPanel, sid());
+        return handleGetContext(params, sid(), {
+          documentProvider: createVscodeContextDocumentProvider(
+            approvalManager,
+            approvalPanel,
+          ),
+          workingSetProvider: createVscodeContextWorkingSetProvider(),
+          enrichmentProvider: createVscodeContextEnrichmentProvider(),
+        });
       },
       (p) => String(p.path ?? ""),
       sid,
@@ -72,7 +103,10 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       "get_module_neighbors",
       (params) => {
         touch();
-        return handleGetModuleNeighbors(params, ctx.globalStorageUri);
+        return handleGetModuleNeighbors(
+          params,
+          createVscodeStructuralGraphProvider(ctx.globalStorageUri),
+        );
       },
       (p) => String(p.path ?? ""),
       sid,
@@ -90,7 +124,10 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       "get_repo_map",
       (params) => {
         touch();
-        return handleGetRepoMap(params, ctx.globalStorageUri);
+        return handleGetRepoMap(
+          params,
+          createVscodeStructuralGraphProvider(ctx.globalStorageUri),
+        );
       },
       (p) => String(p.path ?? "workspace"),
       sid,
@@ -108,7 +145,14 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       "load_rule",
       (params) => {
         touch();
-        return handleLoadRule(params, approvalManager, approvalPanel, sid());
+        return handleLoadRule(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+          [],
+          createVscodeAdvertisedArtifactProvider(),
+        );
       },
       (p) => String(p.path ?? ""),
       sid,
@@ -126,7 +170,14 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       "load_skill",
       (params) => {
         touch();
-        return handleLoadSkill(params, approvalManager, approvalPanel, sid());
+        return handleLoadSkill(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+          [],
+          createVscodeAdvertisedArtifactProvider(),
+        );
       },
       (p) => String(p.path ?? ""),
       sid,
@@ -144,7 +195,13 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       "list_files",
       (params) => {
         touch();
-        return handleListFiles(params, approvalManager, approvalPanel, sid());
+        return handleListFiles(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+          readSearchProviders,
+        );
       },
       (p) => String(p.path ?? ""),
       sid,
@@ -162,7 +219,13 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       "search_files",
       (params) => {
         touch();
-        return handleSearchFiles(params, approvalManager, approvalPanel, sid());
+        return handleSearchFiles(
+          params,
+          approvalManager,
+          approvalPanel,
+          sid(),
+          readSearchProviders,
+        );
       },
       (p) => String(p.regex ?? "").slice(0, 60),
       sid,

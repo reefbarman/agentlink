@@ -1,6 +1,11 @@
 import * as fs from "fs";
 import * as path from "path";
 
+import type {
+  PathAccessProvider,
+  SearchFilesParams,
+  WorkspaceFileProvider,
+} from "../core/capabilities/readSearch.js";
 import { resolveAndValidatePath } from "../util/paths.js";
 import {
   getRipgrepBinPath,
@@ -15,6 +20,48 @@ import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 const DEFAULT_MAX_RESULTS = 300;
 
 import { type ToolResult } from "../shared/types.js";
+
+export interface SearchFilesProviders {
+  workspaceFileProvider: WorkspaceFileProvider;
+  pathAccessProvider: PathAccessProvider;
+}
+
+function createLegacySearchFilesProviders(
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+): SearchFilesProviders {
+  return {
+    workspaceFileProvider: {
+      resolvePath(inputPath) {
+        return resolveAndValidatePath(inputPath);
+      },
+    },
+    pathAccessProvider: {
+      async ensureAccess(request) {
+        if (request.inWorkspace) {
+          return { approved: true };
+        }
+        if (
+          request.allowTemporaryArtifact &&
+          isAgentlinkTmpArtifact(request.absolutePath)
+        ) {
+          return { approved: true };
+        }
+        if (
+          approvalManager.isPathTrusted(request.sessionId, request.absolutePath)
+        ) {
+          return { approved: true };
+        }
+        return approveOutsideWorkspaceAccess(
+          request.absolutePath,
+          approvalManager,
+          approvalPanel,
+          request.sessionId,
+        );
+      },
+    },
+  };
+}
 
 /**
  * Fix common regex escaping mistakes that Claude makes.
@@ -173,56 +220,37 @@ export function getEscapingHint(regex: string): string | undefined {
 }
 
 export async function handleSearchFiles(
-  params: {
-    path: string;
-    regex: string;
-    file_pattern?: string;
-    semantic?: boolean;
-    context?: number;
-    context_before?: number;
-    context_after?: number;
-    case_insensitive?: boolean;
-    multiline?: boolean;
-    max_results?: number;
-    offset?: number;
-    output_mode?: string;
-  },
+  params: SearchFilesParams,
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  providers = createLegacySearchFilesProviders(approvalManager, approvalPanel),
 ): Promise<ToolResult> {
   try {
-    const { absolutePath: resolvedPath, inWorkspace } = resolveAndValidatePath(
-      params.path,
-    );
+    const { absolutePath: resolvedPath, inWorkspace } =
+      providers.workspaceFileProvider.resolvePath(params.path);
 
-    // Outside-workspace gate — agentlink tmp artifacts (truncated tool results)
-    // are always readable/searchable without approval since we wrote them ourselves.
-    if (
-      !inWorkspace &&
-      !isAgentlinkTmpArtifact(resolvedPath) &&
-      !approvalManager.isPathTrusted(sessionId, resolvedPath)
-    ) {
-      const { approved, reason } = await approveOutsideWorkspaceAccess(
-        resolvedPath,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
-      if (!approved) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "rejected",
-                path: params.path,
-                ...(reason && { reason }),
-              }),
-            },
-          ],
-        };
-      }
+    const access = await providers.pathAccessProvider.ensureAccess({
+      absolutePath: resolvedPath,
+      inputPath: params.path,
+      inWorkspace,
+      sessionId,
+      kind: "read",
+      allowTemporaryArtifact: true,
+    });
+    if (!access.approved) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "rejected",
+              path: params.path,
+              ...(access.reason && { reason: access.reason }),
+            }),
+          },
+        ],
+      };
     }
 
     let searchDir = resolvedPath;

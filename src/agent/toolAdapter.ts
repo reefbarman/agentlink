@@ -61,6 +61,16 @@ import { handleGoToDefinition } from "../tools/goToDefinition.js";
 import { handleGoToImplementation } from "../tools/goToImplementation.js";
 import { handleGoToTypeDefinition } from "../tools/goToTypeDefinition.js";
 import { handleListFiles } from "../tools/listFiles.js";
+import {
+  createVscodeAdvertisedArtifactProvider,
+  createVscodeContextDocumentProvider,
+  createVscodeContextEnrichmentProvider,
+  createVscodeContextWorkingSetProvider,
+  createVscodePathAccessProvider,
+  createVscodeReadFileEnrichmentProvider,
+  createVscodeStructuralGraphProvider,
+  createVscodeWorkspaceFileProvider,
+} from "../adapters/vscode/readSearchCapabilities.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
 import { handleOpenFile } from "../tools/openFile.js";
@@ -73,6 +83,7 @@ import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleShowNotification } from "../tools/showNotification.js";
 import { handleStartWorktreeAgent } from "../tools/startWorktreeAgent.js";
 import { handleWriteFile } from "../tools/writeFile.js";
+import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { randomUUID } from "crypto";
 import { z } from "zod";
@@ -788,6 +799,17 @@ function errorTextResult(error: string): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify({ error }) }] };
 }
 
+const SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE =
+  "Semantic codebase search is unavailable in this runtime. Provide a SemanticSearchProvider to enable codebase_search.";
+
+export function createUnavailableSemanticSearchProvider(): SemanticSearchProvider {
+  return {
+    async search() {
+      return errorTextResult(SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE);
+    },
+  };
+}
+
 function isTeaserOnlyFinalSummary(summary: string): boolean {
   const normalized = summary
     .toLowerCase()
@@ -1021,6 +1043,8 @@ export interface ToolDispatchContext {
   onFinalStatus?: (marker: FinalMessageMarker) => void;
   /** Marks the current foreground todo list complete and returns the updated tree. */
   onCompleteTodos?: () => TodoItem[];
+  /** Semantic codebase search implementation for runtimes that can provide an index. */
+  semanticSearchProvider?: SemanticSearchProvider;
 }
 
 export function createAgentToolRuntime(
@@ -1352,27 +1376,36 @@ export async function dispatchToolCall(
         approvalPanel,
         sessionId,
         ctx.getAdvertisedSkills?.() ?? [],
+        createVscodeReadFileEnrichmentProvider(),
       );
     case "get_context":
       if (ctx.onFileRead && typeof params.path === "string") {
         ctx.onFileRead(params.path);
       }
-      return handleGetContext(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGetContext(params, sessionId, {
+        documentProvider: createVscodeContextDocumentProvider(
+          approvalManager,
+          approvalPanel,
+        ),
+        workingSetProvider: createVscodeContextWorkingSetProvider(),
+        enrichmentProvider: createVscodeContextEnrichmentProvider(),
+      });
     case "get_repo_map":
       if (ctx.onFileRead && typeof params.path === "string") {
         ctx.onFileRead(params.path);
       }
-      return handleGetRepoMap(params, ctx.globalStorageUri);
+      return handleGetRepoMap(
+        params,
+        createVscodeStructuralGraphProvider(ctx.globalStorageUri),
+      );
     case "get_module_neighbors":
       if (ctx.onFileRead && typeof params.path === "string") {
         ctx.onFileRead(params.path);
       }
-      return handleGetModuleNeighbors(params, ctx.globalStorageUri);
+      return handleGetModuleNeighbors(
+        params,
+        createVscodeStructuralGraphProvider(ctx.globalStorageUri),
+      );
     case "load_rule":
       if (ctx.onFileRead && typeof params.path === "string") {
         ctx.onFileRead(params.path);
@@ -1383,6 +1416,7 @@ export async function dispatchToolCall(
         approvalPanel,
         sessionId,
         ctx.getAdvertisedRules?.() ?? [],
+        createVscodeAdvertisedArtifactProvider(),
       );
     case "load_skill": {
       const result = await handleLoadSkill(
@@ -1391,6 +1425,7 @@ export async function dispatchToolCall(
         approvalPanel,
         sessionId,
         ctx.getAdvertisedSkills?.() ?? [],
+        createVscodeAdvertisedArtifactProvider(),
       );
       try {
         const text = result.content.find((c) => c.type === "text")?.text;
@@ -1404,13 +1439,32 @@ export async function dispatchToolCall(
       return result;
     }
     case "list_files":
-      return handleListFiles(params, approvalManager, approvalPanel, sessionId);
+      return handleListFiles(
+        params,
+        approvalManager,
+        approvalPanel,
+        sessionId,
+        {
+          workspaceFileProvider: createVscodeWorkspaceFileProvider(),
+          pathAccessProvider: createVscodePathAccessProvider(
+            approvalManager,
+            approvalPanel,
+          ),
+        },
+      );
     case "search_files":
       return handleSearchFiles(
         params,
         approvalManager,
         approvalPanel,
         sessionId,
+        {
+          workspaceFileProvider: createVscodeWorkspaceFileProvider(),
+          pathAccessProvider: createVscodePathAccessProvider(
+            approvalManager,
+            approvalPanel,
+          ),
+        },
       );
 
     // --- File writing ---
@@ -1585,19 +1639,16 @@ export async function dispatchToolCall(
 
     // --- Search ---
     case "codebase_search": {
-      const { semanticSearch } = await import("../services/semanticSearch.js");
-      const { resolveAndValidatePath, tryGetFirstWorkspaceRoot } =
-        await import("../util/paths.js");
-      const dirPath = params.path
-        ? resolveAndValidatePath(String(params.path)).absolutePath
-        : (tryGetFirstWorkspaceRoot() ?? ".");
-      return semanticSearch(
-        dirPath,
-        String(params.query),
-        params.limit,
-        params.exclude_globs,
-        { includeAllWorkspaceRoots: !params.path },
-      );
+      const provider =
+        ctx.semanticSearchProvider ?? createUnavailableSemanticSearchProvider();
+      return provider.search({
+        query: String(params.query),
+        path: params.path ? String(params.path) : undefined,
+        limit: typeof params.limit === "number" ? params.limit : undefined,
+        exclude_globs: Array.isArray(params.exclude_globs)
+          ? params.exclude_globs.map(String)
+          : undefined,
+      });
     }
 
     case "find_mcp_tools": {

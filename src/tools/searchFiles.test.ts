@@ -186,6 +186,48 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(payload.error).toContain("file_pattern must be omitted");
   });
 
+  it("returns rejected output when outside-workspace access is denied", async () => {
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: "/outside/project",
+      inWorkspace: false,
+    });
+    approveOutsideWorkspaceAccess.mockResolvedValue({
+      approved: false,
+      reason: "outside workspace",
+    });
+
+    const approvalManager = {
+      isPathTrusted: vi.fn(() => false),
+    };
+
+    const result = await handleSearchFiles(
+      {
+        path: "/outside/project",
+        regex: "needle",
+        semantic: false,
+      },
+      approvalManager as never,
+      {} as never,
+      "session-search-outside",
+    );
+
+    expect(approveOutsideWorkspaceAccess).toHaveBeenCalledWith(
+      "/outside/project",
+      approvalManager,
+      {},
+      "session-search-outside",
+    );
+    expect(execRipgrepSearch).not.toHaveBeenCalled();
+    const firstContent = result.content[0];
+    expect(firstContent?.type).toBe("text");
+    if (firstContent?.type !== "text") throw new Error("Expected text result");
+    expect(JSON.parse(firstContent.text)).toEqual({
+      status: "rejected",
+      path: "/outside/project",
+      reason: "outside workspace",
+    });
+  });
+
   it("skips outside-workspace approval for agentlink tmp artifacts", async () => {
     const tmpArtifactPath = path.join(
       os.tmpdir(),

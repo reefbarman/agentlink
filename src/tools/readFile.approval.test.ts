@@ -255,6 +255,52 @@ describe("handleReadFile outside-workspace approval ordering", () => {
     });
   });
 
+  it("reads text content when editor enrichment provider is degraded", async () => {
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: "/workspace/src/example.ts",
+      inWorkspace: true,
+    });
+    readFileMock.mockResolvedValue("const value = 1;\nexport { value };\n");
+    statMock.mockResolvedValue({
+      size: 36,
+      mtime: new Date("2024-02-03T04:05:06.000Z"),
+    });
+
+    const approvalManager = {
+      isPathTrusted: vi.fn(() => true),
+    } as unknown as ApprovalManager;
+    const approvalPanel = {} as ApprovalPanelProvider;
+
+    const result = await handleReadFile(
+      { path: "src/example.ts" },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+      [],
+      {
+        getGitStatus: () => undefined,
+        detectLanguage: () => undefined,
+        getSymbolOutline: async () => undefined,
+        getDiagnosticsSummary: () => undefined,
+      },
+    );
+
+    const text = result.content.find((c) => c.type === "text")?.text;
+    expect(text).toBeTruthy();
+    const parsed = JSON.parse(text!);
+    expect(parsed).toMatchObject({
+      total_lines: 3,
+      showing: "1-3",
+      size: 36,
+      modified: "2024-02-03T04:05:06.000Z",
+      content: "1 | const value = 1;\n2 | export { value };\n3 | ",
+    });
+    expect(parsed).not.toHaveProperty("git_status");
+    expect(parsed).not.toHaveProperty("language");
+    expect(parsed).not.toHaveProperty("symbols");
+    expect(parsed).not.toHaveProperty("diagnostics");
+  });
+
   it("skips outside-workspace approval for files associated with advertised skills", async () => {
     resolveAndValidatePathMock.mockReturnValue({
       absolutePath:

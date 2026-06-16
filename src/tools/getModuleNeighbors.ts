@@ -1,12 +1,6 @@
-import * as fs from "fs";
 import * as path from "path";
-import type * as vscode from "vscode";
 
-import {
-  getStructuralCachePath,
-  hashContent,
-  loadStructuralCache,
-} from "../indexer/workerLib.js";
+import type { StructuralGraphProvider } from "../core/capabilities/readSearch.js";
 import type {
   StructuralFileEntry,
   StructuralGraphCache,
@@ -18,11 +12,6 @@ import {
   successResult,
   type ToolResult,
 } from "../shared/types.js";
-import { getAlCollectionName } from "../services/semanticSearch.js";
-import {
-  getWorkspaceRootForPath,
-  resolveAndValidatePath,
-} from "../util/paths.js";
 
 export interface GetModuleNeighborsParams {
   path: string;
@@ -45,10 +34,10 @@ const MAX_RESULTS = 200;
 
 export async function handleGetModuleNeighbors(
   params: GetModuleNeighborsParams,
-  globalStorageUri: vscode.Uri | undefined,
+  structuralGraphProvider: StructuralGraphProvider | undefined,
 ): Promise<ToolResult> {
   try {
-    if (!globalStorageUri) {
+    if (!structuralGraphProvider) {
       return errorResult(
         "get_module_neighbors is unavailable without global storage context.",
         { path: params.path },
@@ -64,7 +53,9 @@ export async function handleGetModuleNeighbors(
     }
     const limit = Math.min(rawLimit, MAX_RESULTS);
 
-    const { absolutePath, inWorkspace } = resolveAndValidatePath(params.path);
+    const { absolutePath, inWorkspace } = structuralGraphProvider.resolvePath(
+      params.path,
+    );
     if (!inWorkspace) {
       return errorResult(
         "Path is outside the current workspace; structural graph data is workspace-scoped.",
@@ -72,28 +63,26 @@ export async function handleGetModuleNeighbors(
       );
     }
 
-    const workspaceRoot = getWorkspaceRootForPath(absolutePath);
+    const workspaceRoot =
+      structuralGraphProvider.getWorkspaceRootForPath(absolutePath);
     if (!workspaceRoot) {
       return errorResult("No workspace folder owns this path.", {
         path: params.path,
       });
     }
 
-    const collectionName = getAlCollectionName(workspaceRoot);
-    const vectorCachePath = getVectorCachePath(
-      globalStorageUri.fsPath,
-      collectionName,
-    );
-    const structuralCachePath = getStructuralCachePath(vectorCachePath);
-    const graphExists = fs.existsSync(structuralCachePath);
-    const graph = loadStructuralCache(structuralCachePath, workspaceRoot);
+    const { graph, collectionName, structuralCachePath, graphExists } =
+      structuralGraphProvider.loadGraph(workspaceRoot);
 
     const targetRelPath = normalizeRelPath(
       path.relative(workspaceRoot, absolutePath),
     );
     const target = findEntry(graph, targetRelPath);
     const dependents = findDependents(graph, targetRelPath);
-    const targetFreshness = getTargetFreshness(absolutePath, target);
+    const targetFreshness = structuralGraphProvider.getTargetFreshness(
+      absolutePath,
+      target,
+    );
 
     return successResult({
       path: targetRelPath,
@@ -125,7 +114,7 @@ export async function handleGetModuleNeighbors(
 export function buildModuleNeighborsPayload(args: {
   graph: StructuralGraphCache;
   targetRelPath: string;
-  absolutePath?: string;
+  targetFreshness?: Record<string, unknown>;
   graphExists?: boolean;
   maxResults?: number;
 }): Record<string, unknown> {
@@ -135,9 +124,9 @@ export function buildModuleNeighborsPayload(args: {
   );
   const targetRelPath = normalizeRelPath(args.targetRelPath);
   const target = findEntry(args.graph, targetRelPath);
-  const targetFreshness = args.absolutePath
-    ? getTargetFreshness(args.absolutePath, target)
-    : { status: target ? "unknown" : "missing_from_graph" };
+  const targetFreshness = args.targetFreshness ?? {
+    status: target ? "unknown" : "missing_from_graph",
+  };
 
   return {
     path: targetRelPath,
@@ -156,13 +145,6 @@ export function buildModuleNeighborsPayload(args: {
     dependents: limitList(findDependents(args.graph, targetRelPath), limit),
     note: buildNote(target, args.graphExists !== false, targetFreshness.status),
   };
-}
-
-function getVectorCachePath(
-  globalStoragePath: string,
-  collectionName: string,
-): string {
-  return path.join(globalStoragePath, "index-cache", `${collectionName}.json`);
 }
 
 function findEntry(
@@ -196,35 +178,6 @@ function findDependents(
   }
   dependents.sort((a, b) => a.path.localeCompare(b.path));
   return dependents;
-}
-
-function getTargetFreshness(
-  absolutePath: string,
-  target: StructuralFileEntry | undefined,
-): Record<string, unknown> {
-  if (!target) {
-    return { status: "missing_from_graph" };
-  }
-
-  try {
-    const stat = fs.statSync(absolutePath);
-    if (!stat.isFile()) {
-      return { status: "target_not_file", indexed_at: target.indexedAt };
-    }
-    const content = fs.readFileSync(absolutePath, "utf-8");
-    const currentHash = hashContent(content);
-    const status = currentHash === target.hash ? "fresh" : "stale";
-    return {
-      status,
-      indexed_at: target.indexedAt,
-      indexed_hash: target.hash,
-      current_hash: currentHash,
-      size: stat.size,
-      mtime_ms: stat.mtimeMs,
-    };
-  } catch {
-    return { status: "target_missing", indexed_at: target.indexedAt };
-  }
 }
 
 function limitList<T>(items: T[], limit: number): LimitedList<T> {

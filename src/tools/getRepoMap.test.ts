@@ -2,12 +2,44 @@ import { buildRepoMapPayload, handleGetRepoMap } from "./getRepoMap.js";
 import { describe, expect, it } from "vitest";
 
 import type { StructuralGraphCache } from "../indexer/structuralGraph.js";
+import type { StructuralGraphProvider } from "../core/capabilities/readSearch.js";
 
 function parseTextResult(result: Awaited<ReturnType<typeof handleGetRepoMap>>) {
   const [content] = result.content;
   expect(content.type).toBe("text");
   if (content.type !== "text") throw new Error("expected text result");
   return JSON.parse(content.text) as Record<string, unknown>;
+}
+
+function makeProvider(
+  graph: StructuralGraphCache = makeGraph(),
+): StructuralGraphProvider {
+  return {
+    resolveWorkspaceRoot(inputPath) {
+      return inputPath === "../outside" ? undefined : "/workspace";
+    },
+    resolvePath(inputPath) {
+      if (inputPath === "../outside") {
+        return { absolutePath: "/outside", inWorkspace: false };
+      }
+      return { absolutePath: `/workspace/${inputPath}`, inWorkspace: true };
+    },
+    getWorkspaceRootForPath() {
+      return "/workspace";
+    },
+    loadGraph(workspaceRoot) {
+      return {
+        graph,
+        workspaceRoot,
+        collectionName: "al-test",
+        structuralCachePath: "/cache/al-test.structural.json",
+        graphExists: true,
+      };
+    },
+    getTargetFreshness() {
+      return { status: "unknown" };
+    },
+  };
 }
 
 function makeGraph(): StructuralGraphCache {
@@ -105,7 +137,7 @@ function makeGraph(): StructuralGraphCache {
 }
 
 describe("handleGetRepoMap", () => {
-  it("returns an error result when global storage is unavailable", async () => {
+  it("returns the legacy unavailable error when structural graph provider is unavailable", async () => {
     const result = await handleGetRepoMap({}, undefined);
 
     expect(parseTextResult(result)).toEqual({
@@ -114,12 +146,27 @@ describe("handleGetRepoMap", () => {
   });
 
   it("returns an error result for too-small max_chars", async () => {
-    const result = await handleGetRepoMap({ max_chars: 100 }, {
-      fsPath: "/storage",
-    } as never);
+    const result = await handleGetRepoMap({ max_chars: 100 }, makeProvider());
 
     expect(parseTextResult(result)).toEqual({
       error: "Invalid max_chars: 100. Must be at least 2000.",
+    });
+  });
+
+  it("builds a repo map from an injected structural graph provider", async () => {
+    const result = await handleGetRepoMap(
+      { path: "src/core", max_chars: 20_000 },
+      makeProvider(),
+    );
+
+    expect(parseTextResult(result)).toMatchObject({
+      workspace_root: "/workspace",
+      cache: {
+        collection_name: "al-test",
+        structural_cache_path: "/cache/al-test.structural.json",
+      },
+      scope: { path: "src/core", matched_files: 2 },
+      totals: { files: 2, imports: 1, internal_imports: 1 },
     });
   });
 });

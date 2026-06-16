@@ -1,5 +1,11 @@
+import type {
+  ContextDocumentProvider,
+  ContextEnrichmentProvider,
+  ContextWorkingSetProvider,
+} from "../../core/capabilities/readSearch.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { WorkingSetStore } from "./WorkingSetStore.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -119,6 +125,41 @@ function getText(result: {
   return item.text;
 }
 
+function makeProviders(
+  filePath: string,
+  relPath: string,
+  content: string,
+  symbols: Record<string, string[]> | undefined = {
+    class: ["Example (line 1)"],
+    method: ["Example.run (line 2)"],
+  },
+): {
+  documentProvider: ContextDocumentProvider;
+  workingSetProvider: ContextWorkingSetProvider;
+  enrichmentProvider: ContextEnrichmentProvider;
+} {
+  return {
+    documentProvider: {
+      async resolveDocument() {
+        const currentContent = fs.readFileSync(filePath, "utf-8");
+        const document = makeDocument(filePath, currentContent || content);
+        return {
+          absolutePath: filePath,
+          relPath,
+          languageId: document.languageId,
+          hostDocument: { uri: document.uri, document },
+        };
+      },
+    },
+    workingSetProvider: new WorkingSetStore(),
+    enrichmentProvider: {
+      getGitStatus: vi.fn(() => undefined),
+      getDocumentSymbols: vi.fn(async () => symbols),
+      getDiagnosticsSummary: vi.fn(() => undefined),
+    },
+  };
+}
+
 function makeDocument(filePath: string, content: string) {
   const lines = content.split("\n");
   return {
@@ -174,9 +215,8 @@ describe("handleGetContext", () => {
     const { handleGetContext } = await import("./getContext.js");
     const result = await handleGetContext(
       { path: "example.ts", limit: 2 },
-      { isPathTrusted: vi.fn(() => true) } as never,
-      {} as never,
       "session-1",
+      makeProviders(filePath, "example.ts", content),
     );
 
     const payload = JSON.parse(getText(result));
@@ -197,6 +237,85 @@ describe("handleGetContext", () => {
       class: ["Example (line 1)"],
       method: ["Example.run (line 2)"],
     });
+  });
+
+  it("groups VS Code document symbols in the context enrichment helper", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "example.ts");
+    const content = "class Example {\n  constructor() {}\n}\n";
+    fs.writeFileSync(filePath, content);
+    const document = makeDocument(filePath, content);
+    vscodeMock.executeCommand.mockResolvedValue([
+      {
+        name: "Example",
+        kind: 4,
+        range: { start: { line: 0 }, end: { line: 2 } },
+        children: [
+          {
+            name: "constructor",
+            kind: 8,
+            range: { start: { line: 1 }, end: { line: 1 } },
+            children: [],
+          },
+        ],
+      },
+    ]);
+
+    const { getContextDocumentSymbols } = await import("./getContext.js");
+    await expect(
+      getContextDocumentSymbols({
+        absolutePath: filePath,
+        relPath: "example.ts",
+        languageId: "typescript",
+        hostDocument: { uri: document.uri, document },
+      }),
+    ).resolves.toMatchObject({
+      class: ["Example (line 1)"],
+      constructor: ["Example.constructor (line 2)"],
+    });
+  });
+
+  it("skips JSON document symbols in the context enrichment helper", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "package.json");
+    const content = '{"name":"example"}\n';
+    fs.writeFileSync(filePath, content);
+    const document = { ...makeDocument(filePath, content), languageId: "json" };
+
+    const { getContextDocumentSymbols } = await import("./getContext.js");
+    await expect(
+      getContextDocumentSymbols({
+        absolutePath: filePath,
+        relPath: "package.json",
+        languageId: "json",
+        hostDocument: { uri: document.uri, document },
+      }),
+    ).resolves.toBeUndefined();
+    expect(vscodeMock.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("summarizes diagnostics in the context enrichment helper", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "example.ts");
+    const content = "const value = 1;\n";
+    fs.writeFileSync(filePath, content);
+    const document = makeDocument(filePath, content);
+    vscodeMock.getDiagnostics.mockReturnValue([
+      { severity: 0 },
+      { severity: 1 },
+      { severity: 1 },
+      { severity: 2 },
+    ]);
+
+    const { getContextDiagnosticsSummary } = await import("./getContext.js");
+    expect(
+      getContextDiagnosticsSummary({
+        absolutePath: filePath,
+        relPath: "example.ts",
+        languageId: "typescript",
+        hostDocument: { uri: document.uri, document },
+      }),
+    ).toEqual({ errors: 1, warnings: 2 });
   });
 
   it("groups constructor symbols without colliding with Object.prototype", async () => {
@@ -229,9 +348,11 @@ describe("handleGetContext", () => {
     const { handleGetContext } = await import("./getContext.js");
     const result = await handleGetContext(
       { path: "example.ts" },
-      { isPathTrusted: vi.fn(() => true) } as never,
-      {} as never,
       "session-constructor-symbol",
+      makeProviders(filePath, "example.ts", content, {
+        class: ["Example (line 1)"],
+        constructor: ["Example.constructor (line 2)"],
+      }),
     );
 
     const payload = JSON.parse(getText(result));
@@ -255,11 +376,11 @@ describe("handleGetContext", () => {
     );
 
     const { handleGetContext } = await import("./getContext.js");
+    const providers = makeProviders(filePath, "example.ts", content);
     await handleGetContext(
       { path: "example.ts", offset: 1, limit: 1 },
-      { isPathTrusted: vi.fn(() => true) } as never,
-      {} as never,
       "session-2",
+      providers,
     );
     const result = await handleGetContext(
       {
@@ -268,9 +389,8 @@ describe("handleGetContext", () => {
         limit: 1,
         dedupe_unchanged_content: true,
       },
-      { isPathTrusted: vi.fn(() => true) } as never,
-      {} as never,
       "session-2",
+      providers,
     );
 
     const payload = JSON.parse(getText(result));
@@ -298,9 +418,8 @@ describe("handleGetContext", () => {
     const { handleGetContext } = await import("./getContext.js");
     const result = await handleGetContext(
       { path: "example.ts" },
-      { isPathTrusted: vi.fn(() => true) } as never,
-      {} as never,
       "session-dirty-buffer",
+      makeProviders(filePath, "example.ts", dirtyEditorContent),
     );
 
     const payload = JSON.parse(getText(result));
@@ -322,11 +441,11 @@ describe("handleGetContext", () => {
     );
 
     const { handleGetContext } = await import("./getContext.js");
+    const providers = makeProviders(filePath, "example.ts", firstContent);
     const first = await handleGetContext(
       { path: "example.ts" },
-      { isPathTrusted: vi.fn(() => true) } as never,
-      {} as never,
       "session-3",
+      providers,
     );
 
     fs.writeFileSync(filePath, secondContent);
@@ -335,9 +454,8 @@ describe("handleGetContext", () => {
     );
     const second = await handleGetContext(
       { path: "example.ts", dedupe_unchanged_content: true },
-      { isPathTrusted: vi.fn(() => true) } as never,
-      {} as never,
       "session-3",
+      providers,
     );
 
     const firstPayload = JSON.parse(getText(first));

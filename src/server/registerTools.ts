@@ -20,6 +20,7 @@ import {
 } from "./tools/index.js";
 import type { ToolRegistrationContext } from "./tools/types.js";
 
+import { createVscodeSemanticSearchProvider } from "../adapters/vscode/readSearchCapabilities.js";
 import { type ToolResult } from "../shared/types.js";
 
 /** Closures for per-session trust state, provided by McpServerHost. */
@@ -103,6 +104,7 @@ export function registerTools(
     sid,
     touch,
     desc,
+    semanticSearchProvider: createVscodeSemanticSearchProvider(),
   };
 
   // --- Register all tool groups ---

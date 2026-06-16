@@ -1806,6 +1806,77 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(state.dismissedDetectedQuestionIds).toContain("assistant-4");
   });
 
+  it("clears transient interaction prompts without resetting dismiss history", () => {
+    let state = reducer(initialState, {
+      type: "SET_QUESTION",
+      id: "question-1",
+      context: "Need input.",
+      questions: [
+        {
+          id: "choice",
+          type: "multiple_choice",
+          question: "Pick one.",
+          options: ["A", "B"],
+          recommended: "A",
+        },
+      ],
+    });
+
+    state = reducer(state, {
+      type: "SET_DETECTED_QUESTION",
+      detectedQuestion: {
+        messageId: "assistant-5",
+        kind: "yes_no",
+        prompt: "Proceed?",
+        options: [
+          { label: "Yes", payload: "Yes" },
+          { label: "No", payload: "No" },
+        ],
+      },
+    });
+
+    state = reducer(state, {
+      type: "DISMISS_DETECTED_QUESTION",
+      messageId: "old-assistant",
+    });
+
+    state = {
+      ...state,
+      messages: [
+        ...state.messages,
+        {
+          id: "assistant-final",
+          role: "assistant",
+          content: "Done.",
+          timestamp: Date.now(),
+          blocks: [{ type: "text", text: "Done." }],
+          finalMarker: {
+            status: "completed",
+            source: "tool",
+            continueAction: {
+              label: "Continue",
+              prompt: "Do the next thing.",
+            },
+          },
+        },
+      ],
+    };
+
+    state = reducer(state, { type: "CLEAR_INTERACTION_PROMPTS" });
+
+    expect(state.questionRequest).toBeNull();
+    expect(state.detectedQuestion).toBeNull();
+    expect(state.dismissedDetectedQuestionIds).toEqual(["old-assistant"]);
+    expect(state.messages.at(-1)?.finalMarker).toMatchObject({
+      status: "completed",
+      continueActionConsumed: true,
+    });
+    expect(
+      state.messages.at(-1)?.finalMarker &&
+        "continueAction" in state.messages.at(-1)!.finalMarker!,
+    ).toBe(false);
+  });
+
   it("resets detected question state on NEW_SESSION", () => {
     let state = reducer(initialState, {
       type: "SET_DETECTED_QUESTION",

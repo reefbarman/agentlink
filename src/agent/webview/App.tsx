@@ -515,7 +515,6 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           flushDeltasNow();
           streamingRef.current = false;
           dispatch({ type: "DONE" });
-          dispatch({ type: "CLEAR_QUESTION" });
           const queue = messageQueueRef.current.filter(
             (q) => q.source !== "browser",
           );
@@ -711,6 +710,15 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
         case "agentQuestionCleared":
           dispatch({ type: "CLEAR_QUESTION" });
+          setRemoteQuestionProgress(null);
+          break;
+
+        case "agentInteractionPromptsCleared":
+          activeDetectRequestRef.current = null;
+          dispatch({ type: "CLEAR_INTERACTION_PROMPTS" });
+          forwardedApprovalRef.current = null;
+          setForwardedApproval(null);
+          setElicitation(null);
           setRemoteQuestionProgress(null);
           break;
 
@@ -1368,6 +1376,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
   const handleStop = useCallback(() => {
     if (stateRef.current.sessionId) {
+      activeDetectRequestRef.current = null;
+      dispatch({ type: "CLEAR_INTERACTION_PROMPTS" });
+      forwardedApprovalRef.current = null;
+      setForwardedApproval(null);
+      setElicitation(null);
+      setRemoteQuestionProgress(null);
       vscodeApi.postMessage({
         command: "agentStop",
         sessionId: stateRef.current.sessionId,

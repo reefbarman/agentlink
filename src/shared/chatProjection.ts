@@ -347,6 +347,7 @@ export type AppAction =
   | { type: "SET_FINAL_MARKER"; marker: FinalMessageMarker | null }
   | { type: "CLEAR_FINAL_MARKER_CONTINUE_ACTIONS" }
   | { type: "MARK_AUTO_CONTINUE_STOPPED"; messageId: string; reason: string }
+  | { type: "CLEAR_INTERACTION_PROMPTS" }
   | { type: "DONE" }
   | { type: "NEW_SESSION" }
   | { type: "SET_REASONING_EFFORT"; effort: ReasoningEffort }
@@ -1560,6 +1561,14 @@ export function reducer(state: AppState, action: AppAction): AppState {
           action.messageId,
           action.reason,
         ),
+      };
+
+    case "CLEAR_INTERACTION_PROMPTS":
+      return {
+        ...state,
+        questionRequest: null,
+        detectedQuestion: null,
+        messages: clearFinalMarkerContinueActions(state.messages),
       };
 
     case "ERROR": {

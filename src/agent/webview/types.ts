@@ -178,6 +178,7 @@ export type ExtensionMessage =
       totalCacheReadTokens: number;
       totalCacheCreationTokens: number;
     }
+  | { type: "agentInteractionPromptsCleared"; sessionId: string }
   | { type: "agentTodoUpdate"; sessionId: string; todos: TodoItem[] }
   | {
       type: "agentFinalMarker";

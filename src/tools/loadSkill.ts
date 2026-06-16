@@ -1,3 +1,4 @@
+import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { ToolResult } from "../shared/types.js";
@@ -16,6 +17,7 @@ export async function handleLoadSkill(
   _approvalPanel: ApprovalPanelProvider,
   _sessionId: string,
   advertisedSkills: AllowedSkill[] = [],
+  artifactProvider?: AdvertisedArtifactProvider,
 ): Promise<ToolResult> {
   return loadAdvertisedFile({
     path: params.path,
@@ -27,5 +29,6 @@ export async function handleLoadSkill(
     pathProperty: "skillPath",
     nameProperty: "skill_name",
     allowlistLabel: "skill",
+    artifactProvider,
   });
 }

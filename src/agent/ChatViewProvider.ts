@@ -284,6 +284,7 @@ export type ExtensionToWebview =
       totalCacheReadTokens: number;
       totalCacheCreationTokens: number;
     }
+  | { type: "agentInteractionPromptsCleared"; sessionId: string }
   | {
       type: "agentQueuedMessage";
       sessionId: string;
@@ -2375,6 +2376,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.sessionManager.stopSession(sessionId);
     // Clear any active agent tool calls from the sidebar tracker
     this.toolCallTracker?.clearAgentCalls(sessionId);
+    this.publishVisibleApprovalOrIdle();
+    this.postMessage({
+      type: "agentInteractionPromptsCleared",
+      sessionId,
+    });
     // Resolve only the pending questions belonging to this session so their
     // promises unblock without cancelling unrelated sessions' question flows.
     const questionIds = this.questionSessionIndex.get(sessionId);
@@ -4226,7 +4232,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentDone":
         this.applyProjectedAction({ type: "DONE" });
-        this.applyProjectedAction({ type: "CLEAR_QUESTION" });
+        break;
+
+      case "agentInteractionPromptsCleared":
+        this.projectedDetectRequest = null;
+        this.projectedLastDetectKey = null;
+        this.applyProjectedAction({ type: "CLEAR_INTERACTION_PROMPTS" });
         break;
 
       case "agentDebugInfo":

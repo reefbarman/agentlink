@@ -22,6 +22,7 @@ import {
 } from "./toolAdapter.js";
 import type { SessionStore } from "./SessionStore.js";
 import type { AgentToolRuntime } from "../core/tools/types.js";
+import { createVscodeSemanticSearchProvider } from "../adapters/vscode/readSearchCapabilities.js";
 import type { AgentEvent } from "./types.js";
 
 export interface AgentWorkspaceHost {
@@ -136,7 +137,12 @@ export function createDefaultAgentSessionManagerHost(args: {
     createSession: (opts) => AgentSession.create(opts),
     createCheckpointManager: (opts) => new CheckpointManager(opts),
     createActivityTraceRecorder: (opts) => new ActivityTraceRecorder(opts),
-    createToolRuntime: (ctx) => createAgentToolRuntime(ctx),
+    createToolRuntime: (ctx) =>
+      createAgentToolRuntime({
+        ...ctx,
+        semanticSearchProvider:
+          ctx.semanticSearchProvider ?? createVscodeSemanticSearchProvider(),
+      }),
     persistence: args.store,
     timers: {
       setInterval: (handler, timeoutMs) => setInterval(handler, timeoutMs),

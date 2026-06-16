@@ -57,6 +57,9 @@ export interface IndexStatus {
 
 const WATCHER_DEBOUNCE_MS = 2000;
 const MAX_FILE_SIZE = 1_000_000; // 1MB
+const QDRANT_BACKGROUND_RETRY_DELAYS_MS = [
+  15_000, 30_000, 60_000, 120_000, 300_000,
+];
 // Phase 0 eval fixture exception: keep the resettable workdir git-ignored
 // while still indexing it so structural/semantic tool gains can be measured.
 const EXPLICITLY_INDEXED_IGNORED_PATHS = [
@@ -101,6 +104,8 @@ export class IndexerManager implements vscode.Disposable {
   private pendingAdded = new Set<string>();
   private pendingRemoved = new Set<string>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private qdrantRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private qdrantRetryAttempt = 0;
 
   // Event emitter for status changes
   private readonly _onStatusChanged = new vscode.EventEmitter<IndexStatus>();
@@ -114,7 +119,10 @@ export class IndexerManager implements vscode.Disposable {
 
   // --- Public API ---
 
-  async startIndexing(force = false): Promise<void> {
+  async startIndexing(
+    force = false,
+    options?: { fromQdrantRetry?: boolean },
+  ): Promise<void> {
     if (
       this.status.state === "indexing" ||
       this.status.state === "discovering"
@@ -124,6 +132,9 @@ export class IndexerManager implements vscode.Disposable {
     }
 
     this.cancelRequested = false;
+    if (!options?.fromQdrantRetry) {
+      this.clearQdrantRetry(true);
+    }
 
     try {
       const config = vscode.workspace.getConfiguration("agentlink");
@@ -210,6 +221,7 @@ export class IndexerManager implements vscode.Disposable {
             readinessMessage: message,
             error: message,
           });
+          this.scheduleQdrantRetry(force, qdrantUrl);
         }
         return;
       }
@@ -326,16 +338,28 @@ export class IndexerManager implements vscode.Disposable {
         !aggregateStats.cancelled
       ) {
         const message = `Indexing failed for all workspace folders: ${aggregateStats.errors.join("; ")}`;
+        const qdrantUnavailable = this.isQdrantUnavailableError(message);
         this.updateStatus({
           state: "error",
-          readinessReason: "generic_error",
-          readinessMessage: getSemanticReadinessMessage("generic_error"),
-          error: message,
+          readinessReason: qdrantUnavailable
+            ? "qdrant_unavailable"
+            : "generic_error",
+          readinessMessage: qdrantUnavailable
+            ? getSemanticReadinessMessage("qdrant_unavailable", { qdrantUrl })
+            : getSemanticReadinessMessage("generic_error"),
+          error: qdrantUnavailable
+            ? getSemanticReadinessMessage("qdrant_unavailable", { qdrantUrl })
+            : message,
         });
+        if (qdrantUnavailable) {
+          this.scheduleQdrantRetry(force, qdrantUrl);
+        }
         return;
       }
+      this.clearQdrantRetry(true);
       this.updateStatus({
         state: "idle",
+        detail: undefined,
         lastCompleted: {
           filesIndexed: aggregateStats.filesIndexed,
           totalFilesInIndex: aggregateStats.totalFilesInIndex,
@@ -359,6 +383,7 @@ export class IndexerManager implements vscode.Disposable {
 
   cancelIndexing(): void {
     this.cancelRequested = true;
+    this.clearQdrantRetry(true);
 
     if (this.status.state === "discovering") {
       // Cancel during Qdrant check / file discovery — waitForQdrant checks this flag
@@ -416,7 +441,9 @@ export class IndexerManager implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.cancelRequested = true;
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this.clearQdrantRetry(true);
     if (this.worker) {
       this.worker.kill();
       this.worker = null;
@@ -1043,6 +1070,56 @@ export class IndexerManager implements vscode.Disposable {
       "index-cache",
       `${collectionName}.json`,
     );
+  }
+
+  private isQdrantUnavailableError(message: string): boolean {
+    return (
+      /Qdrant/i.test(message) &&
+      /fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|connection closed|connection refused|network|not reachable|503|502|504|5\d\d/i.test(
+        message,
+      )
+    );
+  }
+
+  private scheduleQdrantRetry(force: boolean, qdrantUrl: string): void {
+    if (this.qdrantRetryTimer) return;
+
+    const delay =
+      QDRANT_BACKGROUND_RETRY_DELAYS_MS[
+        Math.min(
+          this.qdrantRetryAttempt,
+          QDRANT_BACKGROUND_RETRY_DELAYS_MS.length - 1,
+        )
+      ];
+    const nextAttempt = this.qdrantRetryAttempt + 1;
+    this.qdrantRetryAttempt = nextAttempt;
+    const delaySeconds = Math.round(delay / 1000);
+
+    this.log(
+      `Qdrant unavailable at ${qdrantUrl}; retrying index start in ${delaySeconds}s (background retry ${nextAttempt})`,
+    );
+    this.updateStatus({
+      detail: `Will retry Qdrant connection automatically in ${delaySeconds}s.`,
+    });
+
+    this.qdrantRetryTimer = setTimeout(() => {
+      this.qdrantRetryTimer = null;
+      if (this.cancelRequested) return;
+      this.log(
+        `Retrying index start after Qdrant backoff (attempt ${this.qdrantRetryAttempt})`,
+      );
+      void this.startIndexing(force, { fromQdrantRetry: true });
+    }, delay);
+  }
+
+  private clearQdrantRetry(resetAttempt: boolean): void {
+    if (this.qdrantRetryTimer) {
+      clearTimeout(this.qdrantRetryTimer);
+      this.qdrantRetryTimer = null;
+    }
+    if (resetAttempt) {
+      this.qdrantRetryAttempt = 0;
+    }
   }
 
   /**

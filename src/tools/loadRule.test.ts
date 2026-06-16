@@ -60,6 +60,44 @@ describe("handleLoadRule", () => {
     });
   });
 
+  it("loads advertised rule files through an artifact provider", async () => {
+    const artifactProvider = {
+      resolvePath: vi.fn(() => "/provider/rules/typescript.md"),
+      normalizeExistingPath: vi.fn((filePath: string) => filePath),
+      readTextFile: vi.fn(
+        async () =>
+          "---\ndescription: TypeScript standards\n---\n# Provider TypeScript standards",
+      ),
+    };
+
+    const result = await handleLoadRule(
+      { path: ".agentlink/rules/typescript.md" },
+      {} as never,
+      {} as never,
+      "session-1",
+      [
+        {
+          source: ".agentlink/rules/typescript.md",
+          filePath: "/provider/rules/typescript.md",
+          summary: "TypeScript standards",
+        },
+      ],
+      artifactProvider,
+    );
+
+    expect(artifactProvider.resolvePath).toHaveBeenCalledWith(
+      ".agentlink/rules/typescript.md",
+    );
+    expect(artifactProvider.readTextFile).toHaveBeenCalledWith(
+      "/provider/rules/typescript.md",
+    );
+    expect(JSON.parse(textOf(result))).toEqual({
+      rule_name: ".agentlink/rules/typescript.md — TypeScript standards",
+      rulePath: "/provider/rules/typescript.md",
+      content: "# Provider TypeScript standards",
+    });
+  });
+
   it("rejects paths outside the advertised rule allowlist", async () => {
     const rulePath = path.join(tmpDir, ".agentlink", "rules", "security.md");
     fs.mkdirSync(path.dirname(rulePath), { recursive: true });

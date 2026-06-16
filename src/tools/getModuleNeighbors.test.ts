@@ -5,6 +5,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import type { StructuralGraphCache } from "../indexer/structuralGraph.js";
+import type { StructuralGraphProvider } from "../core/capabilities/readSearch.js";
 
 function parseTextResult(
   result: Awaited<ReturnType<typeof handleGetModuleNeighbors>>,
@@ -13,6 +14,37 @@ function parseTextResult(
   expect(content.type).toBe("text");
   if (content.type !== "text") throw new Error("expected text result");
   return JSON.parse(content.text) as Record<string, unknown>;
+}
+
+function makeProvider(
+  graph: StructuralGraphCache = makeGraph(),
+): StructuralGraphProvider {
+  return {
+    resolveWorkspaceRoot() {
+      return "/workspace";
+    },
+    resolvePath(inputPath) {
+      if (inputPath === "../outside.ts") {
+        return { absolutePath: "/outside.ts", inWorkspace: false };
+      }
+      return { absolutePath: `/workspace/${inputPath}`, inWorkspace: true };
+    },
+    getWorkspaceRootForPath() {
+      return "/workspace";
+    },
+    loadGraph(workspaceRoot) {
+      return {
+        graph,
+        workspaceRoot,
+        collectionName: "al-test",
+        structuralCachePath: "/cache/al-test.structural.json",
+        graphExists: true,
+      };
+    },
+    getTargetFreshness() {
+      return { status: "fresh", indexed_at: "2026-01-01T00:00:00.000Z" };
+    },
+  };
 }
 
 function makeGraph(): StructuralGraphCache {
@@ -74,7 +106,7 @@ function makeGraph(): StructuralGraphCache {
 }
 
 describe("handleGetModuleNeighbors", () => {
-  it("returns an error result when global storage is unavailable", async () => {
+  it("returns the legacy unavailable error when structural graph provider is unavailable", async () => {
     const result = await handleGetModuleNeighbors(
       { path: "src/foo.ts" },
       undefined,
@@ -90,12 +122,33 @@ describe("handleGetModuleNeighbors", () => {
   it("returns an error result for non-positive max_results", async () => {
     const result = await handleGetModuleNeighbors(
       { path: "src/foo.ts", max_results: 0 },
-      { fsPath: "/storage" } as never,
+      makeProvider(),
     );
 
     expect(parseTextResult(result)).toEqual({
       error: "Invalid max_results: 0. Must be a positive number.",
       path: "src/foo.ts",
+    });
+  });
+
+  it("builds module neighbors from an injected structural graph provider", async () => {
+    const result = await handleGetModuleNeighbors(
+      { path: "src/bar.ts" },
+      makeProvider(),
+    );
+
+    expect(parseTextResult(result)).toMatchObject({
+      path: "src/bar.ts",
+      workspace_root: "/workspace",
+      cache: {
+        collection_name: "al-test",
+        structural_cache_path: "/cache/al-test.structural.json",
+      },
+      freshness: {
+        target: { status: "fresh" },
+        graph: { status: "available", file_count: 3 },
+      },
+      dependents: { total: 2 },
     });
   });
 });

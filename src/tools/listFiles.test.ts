@@ -69,6 +69,95 @@ describe("handleListFiles", () => {
     ]);
   });
 
+  it("returns stable shallow listing output", async () => {
+    readdirMock.mockResolvedValue([
+      { name: "README.md", isDirectory: () => false },
+      { name: "src", isDirectory: () => true },
+    ]);
+
+    const { handleListFiles } = await import("./listFiles.js");
+
+    const result = await handleListFiles(
+      { path: "docs" },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(readdirMock).toHaveBeenCalledWith("/workspace/docs", {
+      withFileTypes: true,
+    });
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      path: "docs",
+      entries: "README.md\nsrc/",
+      count: 2,
+      truncated: false,
+    });
+  });
+
+  it("returns rejected output when outside-workspace access is denied", async () => {
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: "/outside/docs",
+      inWorkspace: false,
+    });
+    const rejectingApprovalManager = {
+      isPathTrusted: vi.fn(() => false),
+    } as unknown as ApprovalManager;
+    approveOutsideWorkspaceAccessMock.mockResolvedValue({
+      approved: false,
+      reason: "outside workspace",
+    });
+
+    const { handleListFiles } = await import("./listFiles.js");
+
+    const result = await handleListFiles(
+      { path: "/outside/docs" },
+      rejectingApprovalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(approveOutsideWorkspaceAccessMock).toHaveBeenCalledWith(
+      "/outside/docs",
+      rejectingApprovalManager,
+      approvalPanel,
+      sessionId,
+    );
+    expect(statMock).not.toHaveBeenCalled();
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      status: "rejected",
+      path: "/outside/docs",
+      reason: "outside workspace",
+    });
+  });
+
+  it("does not bypass outside-workspace approval for temporary artifacts", async () => {
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: "/tmp/agentlink-output-123/output.txt",
+      inWorkspace: false,
+    });
+    const rejectingApprovalManager = {
+      isPathTrusted: vi.fn(() => false),
+    } as unknown as ApprovalManager;
+    approveOutsideWorkspaceAccessMock.mockResolvedValue({ approved: false });
+
+    const { handleListFiles } = await import("./listFiles.js");
+
+    const result = await handleListFiles(
+      { path: "/tmp/agentlink-output-123/output.txt" },
+      rejectingApprovalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(approveOutsideWorkspaceAccessMock).toHaveBeenCalledOnce();
+    expect(statMock).not.toHaveBeenCalled();
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      status: "rejected",
+      path: "/tmp/agentlink-output-123/output.txt",
+    });
+  });
+
   it("passes --no-ignore for recursive listings when include_ignored is true", async () => {
     const { handleListFiles } = await import("./listFiles.js");
 

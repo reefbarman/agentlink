@@ -1,11 +1,6 @@
-import * as fs from "fs";
 import * as path from "path";
-import type * as vscode from "vscode";
 
-import {
-  getStructuralCachePath,
-  loadStructuralCache,
-} from "../indexer/workerLib.js";
+import type { StructuralGraphProvider } from "../core/capabilities/readSearch.js";
 import type {
   StructuralFileEntry,
   StructuralGraphCache,
@@ -15,12 +10,6 @@ import {
   handleToolError,
   type ToolResult,
 } from "../shared/types.js";
-import { getAlCollectionName } from "../services/semanticSearch.js";
-import {
-  getWorkspaceRootForPath,
-  resolveAndValidatePath,
-  tryGetFirstWorkspaceRoot,
-} from "../util/paths.js";
 
 export interface GetRepoMapParams {
   path?: string;
@@ -65,10 +54,10 @@ const MAX_SYMBOLS_PER_FILE = 10;
 
 export async function handleGetRepoMap(
   params: GetRepoMapParams,
-  globalStorageUri: vscode.Uri | undefined,
+  structuralGraphProvider: StructuralGraphProvider | undefined,
 ): Promise<ToolResult> {
   try {
-    if (!globalStorageUri) {
+    if (!structuralGraphProvider) {
       return errorResult(
         "get_repo_map is unavailable without global storage context.",
         {
@@ -97,14 +86,18 @@ export async function handleGetRepoMap(
       return errorResult(maxFiles, { path: params.path });
     }
 
-    const workspaceRoot = resolveWorkspaceRoot(params.path);
+    const workspaceRoot = structuralGraphProvider.resolveWorkspaceRoot(
+      params.path,
+    );
     if (!workspaceRoot) {
       return errorResult("No workspace folder open.", { path: params.path });
     }
 
     let scopeRelPath: string | undefined;
     if (params.path) {
-      const { absolutePath, inWorkspace } = resolveAndValidatePath(params.path);
+      const { absolutePath, inWorkspace } = structuralGraphProvider.resolvePath(
+        params.path,
+      );
       if (!inWorkspace) {
         return errorResult(
           "Path is outside the current workspace; structural graph data is workspace-scoped.",
@@ -117,14 +110,8 @@ export async function handleGetRepoMap(
       if (scopeRelPath === ".") scopeRelPath = undefined;
     }
 
-    const collectionName = getAlCollectionName(workspaceRoot);
-    const vectorCachePath = getVectorCachePath(
-      globalStorageUri.fsPath,
-      collectionName,
-    );
-    const structuralCachePath = getStructuralCachePath(vectorCachePath);
-    const graphExists = fs.existsSync(structuralCachePath);
-    const graph = loadStructuralCache(structuralCachePath, workspaceRoot);
+    const { graph, collectionName, structuralCachePath, graphExists } =
+      structuralGraphProvider.loadGraph(workspaceRoot);
 
     const payload = buildRepoMapPayload({
       graph,
@@ -540,15 +527,6 @@ function buildNote(
   return undefined;
 }
 
-function resolveWorkspaceRoot(
-  inputPath: string | undefined,
-): string | undefined {
-  if (!inputPath) return tryGetFirstWorkspaceRoot();
-  const { absolutePath, inWorkspace } = resolveAndValidatePath(inputPath);
-  if (!inWorkspace) return undefined;
-  return getWorkspaceRootForPath(absolutePath);
-}
-
 function parsePositiveInt(
   value: number,
   name: string,
@@ -604,13 +582,6 @@ function withActualChars(
 
 function payloadLength(payload: Record<string, unknown>): number {
   return JSON.stringify(payload, null, 2).length;
-}
-
-function getVectorCachePath(
-  globalStoragePath: string,
-  collectionName: string,
-): string {
-  return path.join(globalStoragePath, "index-cache", `${collectionName}.json`);
 }
 
 function normalizeOptionalRelPath(

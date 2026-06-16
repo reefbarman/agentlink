@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
 
+import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
 import type { ToolResult } from "../shared/types.js";
 import { resolveAndValidatePath } from "../util/paths.js";
 
@@ -32,6 +33,18 @@ function errorResult(message: string, filePath?: string): ToolResult {
   };
 }
 
+function createLegacyAdvertisedArtifactProvider(): AdvertisedArtifactProvider {
+  return {
+    resolvePath(inputPath) {
+      return resolveAndValidatePath(inputPath).absolutePath;
+    },
+    normalizeExistingPath,
+    readTextFile(filePath) {
+      return fsp.readFile(filePath, "utf-8");
+    },
+  };
+}
+
 export async function loadAdvertisedFile(params: {
   path: string;
   advertisedFiles: AllowedAdvertisedFile[];
@@ -40,13 +53,20 @@ export async function loadAdvertisedFile(params: {
   nameProperty: "skill_name" | "rule_name";
   allowlistLabel: string;
   contentTransform?: (raw: string) => string;
+  artifactProvider?: AdvertisedArtifactProvider;
 }): Promise<ToolResult> {
   try {
-    const { absolutePath } = resolveAndValidatePath(params.path);
-    const normalizedAbsolutePath = normalizeExistingPath(absolutePath);
+    const artifactProvider =
+      params.artifactProvider ?? createLegacyAdvertisedArtifactProvider();
+    const absolutePath = artifactProvider.resolvePath(params.path);
+    const normalizedAbsolutePath =
+      artifactProvider.normalizeExistingPath(absolutePath);
     const allowed = params.advertisedFiles.find((file) => {
       try {
-        return normalizeExistingPath(file.filePath) === normalizedAbsolutePath;
+        return (
+          artifactProvider.normalizeExistingPath(file.filePath) ===
+          normalizedAbsolutePath
+        );
       } catch {
         return false;
       }
@@ -59,7 +79,7 @@ export async function loadAdvertisedFile(params: {
       );
     }
 
-    const raw = await fsp.readFile(absolutePath, "utf-8");
+    const raw = await artifactProvider.readTextFile(absolutePath);
     const content = params.contentTransform?.(raw) ?? raw;
 
     return {

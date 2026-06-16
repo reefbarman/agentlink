@@ -1,3 +1,4 @@
+import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { ToolResult } from "../shared/types.js";
@@ -26,6 +27,7 @@ export async function handleLoadRule(
   _approvalPanel: ApprovalPanelProvider,
   _sessionId: string,
   advertisedRules: AllowedRule[] = [],
+  artifactProvider?: AdvertisedArtifactProvider,
 ): Promise<ToolResult> {
   return loadAdvertisedFile({
     path: params.path,
@@ -38,5 +40,6 @@ export async function handleLoadRule(
     nameProperty: "rule_name",
     allowlistLabel: "rule",
     contentTransform: stripFrontmatter,
+    artifactProvider,
   });
 }

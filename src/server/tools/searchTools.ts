@@ -2,7 +2,7 @@ import type { ToolRegistrationContext } from "./types.js";
 import { codebaseSearchSchema } from "../../shared/toolSchemas.js";
 
 export function registerSearchTools(ctx: ToolRegistrationContext): void {
-  const { server, tracker, sid, touch, desc } = ctx;
+  const { server, tracker, sid, touch, desc, semanticSearchProvider } = ctx;
 
   server.registerTool(
     "codebase_search",
@@ -15,20 +15,14 @@ export function registerSearchTools(ctx: ToolRegistrationContext): void {
       "codebase_search",
       async (params) => {
         touch();
-        const { semanticSearch } =
-          await import("../../services/semanticSearch.js");
-        const { resolveAndValidatePath, tryGetFirstWorkspaceRoot } =
-          await import("../../util/paths.js");
-        const dirPath = params.path
-          ? resolveAndValidatePath(String(params.path)).absolutePath
-          : (tryGetFirstWorkspaceRoot() ?? ".");
-        return semanticSearch(
-          dirPath,
-          String(params.query),
-          params.limit,
-          params.exclude_globs,
-          { includeAllWorkspaceRoots: !params.path },
-        );
+        return semanticSearchProvider.search({
+          query: String(params.query),
+          path: params.path ? String(params.path) : undefined,
+          limit: typeof params.limit === "number" ? params.limit : undefined,
+          exclude_globs: Array.isArray(params.exclude_globs)
+            ? params.exclude_globs.map(String)
+            : undefined,
+        });
       },
       (p) => String(p.query ?? "").slice(0, 60),
       sid,

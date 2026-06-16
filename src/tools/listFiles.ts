@@ -1,6 +1,11 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 
+import type {
+  ListFilesParams,
+  PathAccessProvider,
+  WorkspaceFileProvider,
+} from "../core/capabilities/readSearch.js";
 import { execRipgrepFiles, getRipgrepBinPath } from "../util/ripgrep.js";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
@@ -11,46 +16,73 @@ import { semanticFileList } from "../services/semanticSearch.js";
 
 const MAX_ENTRIES = 500;
 
+export interface ListFilesProviders {
+  workspaceFileProvider: WorkspaceFileProvider;
+  pathAccessProvider: PathAccessProvider;
+}
+
+function createLegacyListFilesProviders(
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+): ListFilesProviders {
+  return {
+    workspaceFileProvider: {
+      resolvePath(inputPath) {
+        return resolveAndValidatePath(inputPath);
+      },
+    },
+    pathAccessProvider: {
+      async ensureAccess(request) {
+        if (request.inWorkspace) {
+          return { approved: true };
+        }
+        if (
+          approvalManager.isPathTrusted(request.sessionId, request.absolutePath)
+        ) {
+          return { approved: true };
+        }
+        return approveOutsideWorkspaceAccess(
+          request.absolutePath,
+          approvalManager,
+          approvalPanel,
+          request.sessionId,
+        );
+      },
+    },
+  };
+}
+
 export async function handleListFiles(
-  params: {
-    path: string;
-    recursive?: boolean;
-    depth?: number;
-    pattern?: string;
-    query?: string;
-    include_ignored?: boolean;
-  },
+  params: ListFilesParams,
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  providers = createLegacyListFilesProviders(approvalManager, approvalPanel),
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   try {
-    const { absolutePath: dirPath, inWorkspace } = resolveAndValidatePath(
-      params.path,
-    );
+    const { absolutePath: dirPath, inWorkspace } =
+      providers.workspaceFileProvider.resolvePath(params.path);
 
-    // Outside-workspace gate
-    if (!inWorkspace && !approvalManager.isPathTrusted(sessionId, dirPath)) {
-      const { approved, reason } = await approveOutsideWorkspaceAccess(
-        dirPath,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
-      if (!approved) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "rejected",
-                path: params.path,
-                ...(reason && { reason }),
-              }),
-            },
-          ],
-        };
-      }
+    const access = await providers.pathAccessProvider.ensureAccess({
+      absolutePath: dirPath,
+      inputPath: params.path,
+      inWorkspace,
+      sessionId,
+      kind: "read",
+    });
+    if (!access.approved) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "rejected",
+              path: params.path,
+              ...(access.reason && { reason: access.reason }),
+            }),
+          },
+        ],
+      };
     }
 
     // Detect when a file path is passed instead of a directory

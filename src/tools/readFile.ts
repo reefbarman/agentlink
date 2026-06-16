@@ -3,6 +3,10 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as syncFs from "fs";
 
+import type {
+  ReadFileEnrichmentProvider,
+  ReadFileParams,
+} from "../core/capabilities/readSearch.js";
 import {
   resolveAndValidatePath,
   isBinaryFile,
@@ -133,7 +137,7 @@ const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
   ".cmd": "bat",
 };
 
-function detectLanguage(filePath: string): string | undefined {
+export function detectLanguage(filePath: string): string | undefined {
   // Check already-open documents first (zero cost, exact language ID)
   const openDoc = vscode.workspace.textDocuments.find(
     (doc) => doc.uri.scheme === "file" && doc.uri.fsPath === filePath,
@@ -173,7 +177,7 @@ interface GitExtension {
   getAPI(version: 1): GitAPI;
 }
 
-function getGitStatus(filePath: string): string | undefined {
+export function getGitStatus(filePath: string): string | undefined {
   try {
     const gitExtension =
       vscode.extensions.getExtension<GitExtension>("vscode.git");
@@ -215,7 +219,7 @@ function getGitStatus(filePath: string): string | undefined {
 
 // --- Diagnostics summary ---
 
-function getDiagnosticsSummary(
+export function getDiagnosticsSummary(
   filePath: string,
 ): { errors: number; warnings: number } | undefined {
   try {
@@ -247,12 +251,21 @@ const CONTAINER_KINDS = new Set([
   vscode.SymbolKind.Module,
 ]);
 
-type SymbolOutlineResult =
+export type SymbolOutlineResult =
   | { symbols: Record<string, string[]> }
   | { timedOut: true }
   | undefined;
 
-async function getSymbolOutline(
+function createLegacyReadFileEnrichmentProvider(): ReadFileEnrichmentProvider {
+  return {
+    getGitStatus,
+    detectLanguage,
+    getSymbolOutline,
+    getDiagnosticsSummary,
+  };
+}
+
+export async function getSymbolOutline(
   filePath: string,
 ): Promise<SymbolOutlineResult> {
   try {
@@ -596,21 +609,12 @@ function isAdvertisedSkillAssociatedFile(
 }
 
 export async function handleReadFile(
-  params: {
-    path: string;
-    offset?: number;
-    limit?: number;
-    include_symbols?: boolean;
-    query?: string;
-    anchor?: string;
-    anchor_regex?: string;
-    anchor_offset?: number;
-    auto_follow_suggestion?: boolean;
-  },
+  params: ReadFileParams,
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
   advertisedSkills: AdvertisedSkillFileAccess[] = [],
+  enrichmentProvider = createLegacyReadFileEnrichmentProvider(),
 ): Promise<ToolResult> {
   const release = await readSemaphore.acquire();
   let released = false;
@@ -806,9 +810,9 @@ export async function handleReadFile(
       };
       emptyResult.size = stat.size;
       emptyResult.modified = stat.mtime.toISOString();
-      const gitStatus = getGitStatus(filePath);
+      const gitStatus = enrichmentProvider.getGitStatus(filePath);
       if (gitStatus) emptyResult.git_status = gitStatus;
-      emptyResult.language = detectLanguage(filePath);
+      emptyResult.language = enrichmentProvider.detectLanguage(filePath);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(emptyResult) }],
       };
@@ -889,11 +893,11 @@ export async function handleReadFile(
     result.modified = stat.mtime.toISOString();
 
     // Git status
-    const gitStatus = getGitStatus(filePath);
+    const gitStatus = enrichmentProvider.getGitStatus(filePath);
     if (gitStatus) result.git_status = gitStatus;
 
     // Detect language early so we can use it for symbol filtering
-    const language = detectLanguage(filePath);
+    const language = enrichmentProvider.detectLanguage(filePath);
 
     // Symbol outline runs first — it opens the document, which triggers the
     // language server. This makes accurate language detection and diagnostics
@@ -901,7 +905,7 @@ export async function handleReadFile(
     // Skip symbols for JSON/JSONC — every key becomes a "symbol" which is noisy
     const isDataFile = language === "json" || language === "jsonc";
     if (params.include_symbols !== false && !isDataFile) {
-      const symbolResult = await getSymbolOutline(filePath);
+      const symbolResult = await enrichmentProvider.getSymbolOutline(filePath);
       if (symbolResult && "symbols" in symbolResult) {
         result.symbols = symbolResult.symbols;
       } else if (symbolResult && "timedOut" in symbolResult) {
@@ -913,7 +917,7 @@ export async function handleReadFile(
     if (language) result.language = language;
 
     // Diagnostics — check after symbols so the language server has analyzed the file
-    const diagSummary = getDiagnosticsSummary(filePath);
+    const diagSummary = enrichmentProvider.getDiagnosticsSummary(filePath);
     if (diagSummary) result.diagnostics = diagSummary;
 
     // Content last so metadata is visible at the top
@@ -943,6 +947,8 @@ export async function handleReadFile(
         approvalManager,
         approvalPanel,
         sessionId,
+        advertisedSkills,
+        enrichmentProvider,
       ).then((followed) => {
         const item = followed.content[0];
         if (item?.type !== "text") {

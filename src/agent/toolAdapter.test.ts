@@ -10,17 +10,27 @@ import { BUILT_IN_MODES } from "./modes.js";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "../shared/types.js";
 import { handleLoadRule } from "../tools/loadRule.js";
+import { handleGetContext } from "../tools/context/getContext.js";
+import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
+import { handleGetRepoMap } from "../tools/getRepoMap.js";
 
 // Mock all tool handlers so dispatchToolCall tests don't hit VS Code APIs
 vi.mock("../tools/readFile.js", () => ({
   handleReadFile: vi
     .fn()
     .mockResolvedValue({ content: [{ type: "text", text: "file content" }] }),
+  getGitStatus: vi.fn(() => undefined),
+  detectLanguage: vi.fn(() => undefined),
+  getSymbolOutline: vi.fn(async () => undefined),
+  getDiagnosticsSummary: vi.fn(() => undefined),
 }));
 vi.mock("../tools/context/getContext.js", () => ({
   handleGetContext: vi
     .fn()
     .mockResolvedValue({ content: [{ type: "text", text: "context" }] }),
+  getContextGitStatus: vi.fn(() => undefined),
+  getContextDocumentSymbols: vi.fn(async () => undefined),
+  getContextDiagnosticsSummary: vi.fn(() => undefined),
 }));
 vi.mock("../tools/getModuleNeighbors.js", () => ({
   handleGetModuleNeighbors: vi.fn().mockResolvedValue({
@@ -810,6 +820,11 @@ describe("dispatchToolCall", () => {
           summary: "TypeScript standards",
         },
       ],
+      expect.objectContaining({
+        resolvePath: expect.any(Function),
+        normalizeExistingPath: expect.any(Function),
+        readTextFile: expect.any(Function),
+      }),
     );
     expect(onFileRead).toHaveBeenCalledWith(
       "/workspace/.agentlink/rules/typescript.md",
@@ -960,6 +975,33 @@ describe("dispatchToolCall", () => {
     expect(JSON.parse(text)).toMatchObject({ error: "Invalid status" });
   });
 
+  it("dispatches get_context with context providers", async () => {
+    const result = await dispatchToolCall(
+      "get_context",
+      { path: "src/foo.ts" },
+      mockCtx,
+    );
+
+    expect(handleGetContext).toHaveBeenCalledWith(
+      { path: "src/foo.ts" },
+      mockCtx.sessionId,
+      {
+        documentProvider: expect.objectContaining({
+          resolveDocument: expect.any(Function),
+        }),
+        workingSetProvider: expect.objectContaining({
+          check: expect.any(Function),
+        }),
+        enrichmentProvider: expect.objectContaining({
+          getGitStatus: expect.any(Function),
+          getDocumentSymbols: expect.any(Function),
+          getDiagnosticsSummary: expect.any(Function),
+        }),
+      },
+    );
+    expect(result.content[0]).toMatchObject({ type: "text", text: "context" });
+  });
+
   it("dispatches read_file to handleReadFile", async () => {
     const { handleReadFile } = await import("../tools/readFile.js");
     const advertisedSkills = [
@@ -976,10 +1018,99 @@ describe("dispatchToolCall", () => {
       mockCtx.approvalPanel,
       mockCtx.sessionId,
       advertisedSkills,
+      expect.objectContaining({
+        getGitStatus: expect.any(Function),
+        detectLanguage: expect.any(Function),
+        getSymbolOutline: expect.any(Function),
+        getDiagnosticsSummary: expect.any(Function),
+      }),
     );
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: "file content",
+    });
+  });
+
+  it("dispatches get_repo_map with a structural graph provider", async () => {
+    const result = await dispatchToolCall(
+      "get_repo_map",
+      { path: "src" },
+      { ...mockCtx, globalStorageUri: { fsPath: "/global-storage" } as never },
+    );
+
+    expect(handleGetRepoMap).toHaveBeenCalledWith(
+      { path: "src" },
+      expect.objectContaining({
+        resolveWorkspaceRoot: expect.any(Function),
+        resolvePath: expect.any(Function),
+        loadGraph: expect.any(Function),
+      }),
+    );
+    expect(result.content[0]).toMatchObject({ type: "text", text: "repo map" });
+  });
+
+  it("dispatches get_module_neighbors with a structural graph provider", async () => {
+    const result = await dispatchToolCall(
+      "get_module_neighbors",
+      { path: "src/foo.ts" },
+      { ...mockCtx, globalStorageUri: { fsPath: "/global-storage" } as never },
+    );
+
+    expect(handleGetModuleNeighbors).toHaveBeenCalledWith(
+      { path: "src/foo.ts" },
+      expect.objectContaining({
+        resolvePath: expect.any(Function),
+        getWorkspaceRootForPath: expect.any(Function),
+        loadGraph: expect.any(Function),
+        getTargetFreshness: expect.any(Function),
+      }),
+    );
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "module neighbors",
+    });
+  });
+
+  it("dispatches codebase_search through the semantic search provider", async () => {
+    const search = vi.fn().mockResolvedValue({
+      content: [{ type: "text" as const, text: "semantic results" }],
+    });
+
+    const result = await dispatchToolCall(
+      "codebase_search",
+      {
+        query: "auth flow",
+        path: "src/agent",
+        limit: 3,
+        exclude_globs: ["**/dist/**", 42],
+      },
+      { ...mockCtx, semanticSearchProvider: { search } },
+    );
+
+    expect(search).toHaveBeenCalledWith({
+      query: "auth flow",
+      path: "src/agent",
+      limit: 3,
+      exclude_globs: ["**/dist/**", "42"],
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "semantic results",
+    });
+  });
+
+  it("returns explicit unavailable behavior for codebase_search without a provider", async () => {
+    const result = await dispatchToolCall(
+      "codebase_search",
+      { query: "auth flow" },
+      mockCtx,
+    );
+
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(JSON.parse(text)).toMatchObject({
+      error: expect.stringContaining(
+        "Semantic codebase search is unavailable in this runtime",
+      ),
     });
   });
 

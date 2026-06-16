@@ -1,14 +1,17 @@
-import path from "node:path";
 import * as vscode from "vscode";
 
-import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
-import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
+import type {
+  ContextDocumentProvider,
+  ContextEnrichmentProvider,
+  ContextResolvedDocument,
+  ContextWorkingSetCheckResult,
+  ContextWorkingSetProvider,
+  ContextWorkingSetRange,
+} from "../../core/capabilities/readSearch.js";
+
+import { SYMBOL_KIND_NAMES } from "../languageFeatures.js";
 import type { ToolResult } from "../../shared/types.js";
-import {
-  resolveAndOpenDocument,
-  SYMBOL_KIND_NAMES,
-} from "../languageFeatures.js";
-import { WorkingSetStore, type WorkingSetRange } from "./WorkingSetStore.js";
+import path from "node:path";
 
 export interface GetContextParams {
   path: string;
@@ -29,22 +32,23 @@ const CONTAINER_KINDS = new Set([
   vscode.SymbolKind.Module,
 ]);
 
-const workingSetStore = new WorkingSetStore();
+export interface GetContextProviders {
+  documentProvider: ContextDocumentProvider;
+  workingSetProvider: ContextWorkingSetProvider;
+  enrichmentProvider: ContextEnrichmentProvider;
+}
 
 export async function handleGetContext(
   params: GetContextParams,
-  approvalManager: ApprovalManager,
-  approvalPanel: ApprovalPanelProvider,
   sessionId: string,
+  providers: GetContextProviders,
 ): Promise<ToolResult> {
   try {
-    const { uri, document, absolutePath, relPath } =
-      await resolveAndOpenDocument(
-        params.path,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+    const document = await providers.documentProvider.resolveDocument(
+      params.path,
+      sessionId,
+    );
+    const { absolutePath, relPath } = document;
 
     const rawLimit = Math.trunc(params.limit ?? DEFAULT_LIMIT);
     if (!Number.isFinite(rawLimit) || rawLimit <= 0) {
@@ -57,11 +61,11 @@ export async function handleGetContext(
     const offset = Math.max(1, Math.trunc(params.offset ?? 1));
     let diskLines: string[] = [];
     let totalLines = 0;
-    const workingSet = await workingSetStore.check({
+    const workingSet = await providers.workingSetProvider.check({
       sessionId,
       path: absolutePath,
       deriveRange: (contentBytes) => {
-        diskLines = contentBytes.toString("utf-8").split("\n");
+        diskLines = Buffer.from(contentBytes).toString("utf-8").split("\n");
         totalLines = diskLines.length;
         if (offset > totalLines) {
           return { startLine: offset, endLine: offset - 1 };
@@ -107,13 +111,15 @@ export async function handleGetContext(
       working_set: buildWorkingSetPayload(workingSet, range),
     };
 
-    const gitStatus = getGitStatus(absolutePath);
+    const gitStatus = providers.enrichmentProvider.getGitStatus(absolutePath);
     if (gitStatus) result.git_status = gitStatus;
 
-    const symbols = await getDocumentSymbols(uri, document.languageId);
+    const symbols =
+      await providers.enrichmentProvider.getDocumentSymbols(document);
     if (symbols) result.symbols = symbols;
 
-    const diagnostics = getDiagnosticsSummary(uri);
+    const diagnostics =
+      providers.enrichmentProvider.getDiagnosticsSummary(document);
     if (diagnostics) result.diagnostics = diagnostics;
 
     if (content !== undefined) {
@@ -143,8 +149,8 @@ function buildNumberedContent(
 }
 
 function buildWorkingSetPayload(
-  workingSet: Awaited<ReturnType<WorkingSetStore["check"]>>,
-  range: WorkingSetRange,
+  workingSet: ContextWorkingSetCheckResult,
+  range: ContextWorkingSetRange,
 ): Record<string, unknown> {
   return {
     status: workingSet.status,
@@ -159,10 +165,11 @@ function buildWorkingSetPayload(
   };
 }
 
-async function getDocumentSymbols(
-  uri: vscode.Uri,
-  languageId: string,
+export async function getContextDocumentSymbols(
+  document: ContextResolvedDocument,
 ): Promise<Record<string, string[]> | undefined> {
+  const { uri } = getVscodeContextDocument(document);
+  const languageId = document.languageId;
   if (languageId === "json" || languageId === "jsonc") {
     return undefined;
   }
@@ -201,9 +208,10 @@ function addSymbol(
   bucket.push(`${name} (line ${symbol.range.start.line + 1})`);
 }
 
-function getDiagnosticsSummary(
-  uri: vscode.Uri,
+export function getContextDiagnosticsSummary(
+  document: ContextResolvedDocument,
 ): { errors: number; warnings: number } | undefined {
+  const { uri } = getVscodeContextDocument(document);
   const diagnostics = vscode.languages.getDiagnostics(uri);
   if (!diagnostics.length) {
     return undefined;
@@ -242,7 +250,7 @@ interface GitExtension {
   getAPI(version: 1): GitAPI;
 }
 
-function getGitStatus(filePath: string): string | undefined {
+export function getContextGitStatus(filePath: string): string | undefined {
   try {
     const gitExtension =
       vscode.extensions.getExtension<GitExtension>("vscode.git");
@@ -282,6 +290,19 @@ function getGitStatus(filePath: string): string | undefined {
     return undefined;
   }
   return undefined;
+}
+
+function getVscodeContextDocument(document: ContextResolvedDocument): {
+  uri: vscode.Uri;
+  document: vscode.TextDocument;
+} {
+  const hostDocument = document.hostDocument as
+    | { uri?: vscode.Uri; document?: vscode.TextDocument }
+    | undefined;
+  if (!hostDocument?.uri || !hostDocument.document) {
+    throw new Error("VS Code context document is unavailable.");
+  }
+  return { uri: hostDocument.uri, document: hostDocument.document };
 }
 
 function textResult(payload: unknown, pretty = false): ToolResult {
