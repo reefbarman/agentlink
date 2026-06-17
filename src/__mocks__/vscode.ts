@@ -62,6 +62,12 @@ export const languages = {
   onDidChangeDiagnostics: () => ({ dispose: () => {} }),
 };
 
+export const ViewColumn = {
+  One: 1,
+  Active: -1,
+  Beside: -2,
+};
+
 export const commands = {
   executeCommand: async () => undefined,
   registerCommand: () => ({ dispose: () => {} }),

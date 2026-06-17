@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 import { resolveAndOpenDocument } from "./languageFeatures.js";
 
 import { type ToolResult } from "../shared/types.js";
@@ -35,10 +36,13 @@ export async function handleGetInlayHints(
     );
 
     // Inlay hints provider requires the document to be visible in the editor
-    await vscode.window.showTextDocument(document, {
-      preserveFocus: true,
-      preview: true,
-    });
+    await vscode.window.showTextDocument(
+      document,
+      withPrimaryEditorColumn({
+        preserveFocus: true,
+        preview: true,
+      }),
+    );
 
     const startLine = Math.max(0, (params.start_line ?? 1) - 1);
     const endLine = Math.min(

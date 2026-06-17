@@ -69,6 +69,7 @@ import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/Browse
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
 import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js";
 import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
+import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
 
 export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
@@ -836,9 +837,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Agent chat view
   const agentConfiguration = vscode.workspace.getConfiguration("agentlink");
-  const workspaceCwd =
-    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-  const sessionStore = new SessionStore(workspaceCwd);
+  const workspaceSessionLocation = resolveWorkspaceSessionLocation({
+    workspaceFolders: vscode.workspace.workspaceFolders,
+    workspaceFile: vscode.workspace.workspaceFile,
+    fallbackCwd: process.cwd(),
+  });
+  const workspaceCwd = workspaceSessionLocation.cwd;
+  const sessionStore = new SessionStore(workspaceCwd, undefined, undefined, {
+    historyNamespace: workspaceSessionLocation.historyNamespace,
+  });
   const explicitAgentModel = getExplicitAgentModel(agentConfiguration);
   const configuredMode =
     agentConfiguration.get<string>("defaultMode")?.trim() || "code";
@@ -855,7 +862,7 @@ export function activate(context: vscode.ExtensionContext): void {
     agentConfiguration,
     startupModel,
   );
-  const agentConfig: AgentConfig = {
+  let agentConfig: AgentConfig = {
     model: startupModel,
     maxTokens: agentConfiguration.get<number>("agentMaxTokens") ?? 8192,
     thinkingBudget: agentConfiguration.get<number>("thinkingBudget") ?? 10000,
@@ -879,13 +886,43 @@ export function activate(context: vscode.ExtensionContext): void {
   // Register providers after chatViewProvider is created so all auth logs
   // (including initial client construction) go to the agent output channel.
   const agentLog = (msg: string) => chatViewProvider.log(msg);
-  providerRegistry.register(new AnthropicProvider(undefined, agentLog));
+  const ANTHROPIC_MODEL_CATALOG_KEY = "anthropic.modelCatalog.v1";
+  const dynamicModelCapabilitiesEnabled = vscode.workspace
+    .getConfiguration("agentlink")
+    .get<boolean>("anthropic.dynamicModelCapabilities", true);
+  const anthropicProvider = new AnthropicProvider(undefined, agentLog, {
+    dynamicCapabilitiesEnabled: dynamicModelCapabilitiesEnabled,
+    modelCatalogPersistence: {
+      load: () =>
+        context.globalState.get<
+          import("./agent/providers/anthropic/anthropicModelCatalog.js").AnthropicModelCatalogSnapshot
+        >(ANTHROPIC_MODEL_CATALOG_KEY),
+      save: (snapshot) => {
+        void context.globalState.update(ANTHROPIC_MODEL_CATALOG_KEY, snapshot);
+      },
+    },
+  });
+  providerRegistry.register(anthropicProvider);
+  chatViewProvider.setAnthropicProvider(anthropicProvider);
 
   // Register the OpenAI/Codex provider with unified OAuth + API key auth.
   openAiCodexAuthManager.initialize(context);
   providerRegistry.register(
     new CodexProvider(openAiCodexAuthManager, agentLog),
   );
+
+  const getConfiguredThresholdWithCapabilities = (model: string): number =>
+    getConfiguredBaseThresholdForModel(
+      vscode.workspace.getConfiguration("agentlink"),
+      model,
+      providerRegistry.tryResolveProvider(model)?.getCapabilities(model),
+    );
+  agentConfig = {
+    ...agentConfig,
+    autoCondenseThreshold:
+      migratedThresholds[startupModel] ??
+      getConfiguredThresholdWithCapabilities(startupModel),
+  };
 
   // Re-send model list to webview when OpenAI/Codex auth state changes.
   openAiCodexAuthManager.onAuthStateChanged = () => {
@@ -910,6 +947,10 @@ export function activate(context: vscode.ExtensionContext): void {
     () => chatViewProvider.getBrowserMcpStatusInfos(),
   );
   context.subscriptions.push(browserGatewayService);
+  // Keep the browser model list in parity after a dynamic capability refresh.
+  chatViewProvider.setBrowserModelsChangedNotifier(() => {
+    browserGatewayService?.bumpModelsVersion();
+  });
   browserGatewayAuthToken = randomUUID();
   const browserGatewayWorkspaceInstanceId =
     context.workspaceState.get<string>("browserGatewayInstanceId") ??
@@ -1358,6 +1399,7 @@ export function activate(context: vscode.ExtensionContext): void {
           autoCondenseThreshold: getConfiguredBaseThresholdForModel(
             config,
             model,
+            providerRegistry.tryResolveProvider(model)?.getCapabilities(model),
           ),
           codexStatefulResponses:
             config.get<boolean>("codexStatefulResponses") ?? true,

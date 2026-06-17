@@ -5,6 +5,7 @@ import type {
 } from "../../shared/types.js";
 
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
+import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
 
 /** A mode available for selection */
 export interface ModeInfo {
@@ -292,6 +293,8 @@ export type ExtensionMessage =
       >;
       required: string[];
     }
+  | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
+  | { type: "agentUrlElicitationCleared"; id: string }
   | {
       type: "agentMcpStatus";
       open?: boolean;
@@ -328,6 +331,8 @@ export type ExtensionMessage =
       notes: Record<string, string>;
       origin: string;
     }
+  | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
+  | { type: "agentUrlElicitationCleared"; id: string }
   | { type: "agentDroppedFilesResolved"; files: string[] }
   | {
       type: "agentSessionList";

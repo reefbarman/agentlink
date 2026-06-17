@@ -118,11 +118,18 @@ export function createDefaultAgentSessionManagerHost(args: {
         })),
     },
     config: {
-      getCondenseThresholdForModel: (model) =>
-        getConfiguredBaseThresholdForModel(
-          vscode.workspace.getConfiguration("agentlink"),
-          model,
-        ) ?? getEffectiveAutoCondenseThreshold(model),
+      getCondenseThresholdForModel: (model) => {
+        const capabilities = providerRegistry
+          .tryResolveProvider(model)
+          ?.getCapabilities(model);
+        return (
+          getConfiguredBaseThresholdForModel(
+            vscode.workspace.getConfiguration("agentlink"),
+            model,
+            capabilities,
+          ) ?? getEffectiveAutoCondenseThreshold(model, undefined, capabilities)
+        );
+      },
       resolveModelForMode: (mode, fallbackModel) =>
         resolveModelForMode(
           vscode.workspace.getConfiguration("agentlink"),

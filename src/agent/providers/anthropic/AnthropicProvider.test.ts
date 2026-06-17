@@ -238,6 +238,250 @@ describe("AnthropicProvider capabilities", () => {
   });
 });
 
+describe("AnthropicProvider dynamic model capabilities", () => {
+  function support(supported: boolean) {
+    return { supported };
+  }
+
+  it("does not call the network on construct", () => {
+    const list = vi.fn();
+    const provider = new AnthropicProvider();
+    (provider as unknown as { client: unknown }).client = {
+      models: { list },
+    };
+    // Construction must not have fetched anything.
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("falls back to static capabilities when list() throws", async () => {
+    const provider = new AnthropicProvider(undefined, undefined, {
+      dynamicCapabilitiesEnabled: true,
+    });
+    (provider as unknown as { client: unknown }).client = {
+      models: {
+        list: vi.fn(async () => {
+          throw new Error("offline");
+        }),
+      },
+    };
+    await provider.listAvailableModels();
+    expect(provider.getCapabilities("claude-sonnet-4-6").contextWindow).toBe(
+      1_000_000,
+    );
+    expect(provider.listModels().map((m) => m.id)).toEqual([
+      "claude-sonnet-4-6",
+      "claude-opus-4-8",
+      "claude-haiku-4-5-20251001",
+    ]);
+  });
+
+  it("updates capabilities and surfaces new models after a successful refresh", async () => {
+    const provider = new AnthropicProvider(undefined, undefined, {
+      dynamicCapabilitiesEnabled: true,
+    });
+    (provider as unknown as { client: unknown }).client = {
+      models: {
+        list: vi.fn(async () => ({
+          data: [
+            {
+              id: "claude-sonnet-4-6",
+              display_name: "Claude Sonnet 4.6",
+              max_input_tokens: 1_000_000,
+              max_tokens: 64_000,
+              capabilities: {
+                image_input: support(true),
+                thinking: {
+                  supported: true,
+                  types: { adaptive: support(true) },
+                },
+                effort: {
+                  supported: true,
+                  high: support(true),
+                  max: support(true),
+                },
+              },
+            },
+            {
+              id: "claude-future-9",
+              display_name: "Claude Future 9",
+              max_input_tokens: 2_000_000,
+              max_tokens: 128_000,
+              capabilities: {
+                image_input: support(true),
+                thinking: {
+                  supported: true,
+                  types: { adaptive: support(true) },
+                },
+                effort: { supported: true, high: support(true) },
+              },
+            },
+          ],
+        })),
+      },
+    };
+
+    const models = await provider.listAvailableModels();
+    const ids = models.map((m) => m.id);
+    expect(ids).toContain("claude-future-9");
+    expect(provider.getCapabilities("claude-future-9").contextWindow).toBe(
+      2_000_000,
+    );
+  });
+
+  it("flag-off returns static models without any network call", async () => {
+    const list = vi.fn();
+    const provider = new AnthropicProvider(undefined, undefined, {
+      dynamicCapabilitiesEnabled: false,
+    });
+    (provider as unknown as { client: unknown }).client = {
+      models: { list },
+    };
+    const models = await provider.listAvailableModels();
+    expect(list).not.toHaveBeenCalled();
+    expect(models.map((m) => m.id)).toEqual([
+      "claude-sonnet-4-6",
+      "claude-opus-4-8",
+      "claude-haiku-4-5-20251001",
+    ]);
+  });
+
+  it("skips the network when cached data is still fresh, but forces on demand", async () => {
+    const list = vi.fn(async () => ({
+      data: [
+        {
+          id: "claude-sonnet-4-6",
+          max_input_tokens: 1_000_000,
+          max_tokens: 64_000,
+        },
+      ],
+    }));
+    const provider = new AnthropicProvider(undefined, undefined, {
+      dynamicCapabilitiesEnabled: true,
+    });
+    (provider as unknown as { client: unknown }).client = {
+      models: { list },
+    };
+
+    await provider.listAvailableModels(); // first fetch
+    expect(list).toHaveBeenCalledTimes(1);
+    await provider.listAvailableModels(); // fresh ⇒ no network
+    expect(list).toHaveBeenCalledTimes(1);
+    await provider.listAvailableModels({ force: true }); // forced ⇒ network
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("hides static models omitted from a successful list but keeps them routable", async () => {
+    const provider = new AnthropicProvider(undefined, undefined, {
+      dynamicCapabilitiesEnabled: true,
+    });
+    (provider as unknown as { client: unknown }).client = {
+      models: {
+        list: vi.fn(async () => ({
+          data: [
+            {
+              id: "claude-sonnet-4-6",
+              display_name: "Claude Sonnet 4.6",
+              max_input_tokens: 1_000_000,
+              max_tokens: 64_000,
+            },
+          ],
+        })),
+      },
+    };
+
+    await provider.listAvailableModels();
+    const visible = provider.listModels().map((m) => m.id);
+    expect(visible).toContain("claude-sonnet-4-6");
+    expect(visible).not.toContain("claude-haiku-4-5-20251001");
+    // Omitted static model still routable + has resolvable capabilities.
+    expect(provider.listRoutableModelIds()).toContain(
+      "claude-haiku-4-5-20251001",
+    );
+    expect(
+      provider.getCapabilities("claude-haiku-4-5-20251001").contextWindow,
+    ).toBe(200_000);
+  });
+
+  it("retries after a failed refresh on a forced call", async () => {
+    let attempt = 0;
+    const list = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("auth not ready");
+      return {
+        data: [
+          {
+            id: "claude-sonnet-4-6",
+            max_input_tokens: 1_000_000,
+            max_tokens: 64_000,
+          },
+        ],
+      };
+    });
+    const provider = new AnthropicProvider(undefined, undefined, {
+      dynamicCapabilitiesEnabled: true,
+    });
+    (provider as unknown as { client: unknown }).client = {
+      models: { list },
+    };
+
+    await provider.listAvailableModels(); // fails ⇒ static fallback
+    expect(provider.listModels().map((m) => m.id)).toContain(
+      "claude-haiku-4-5-20251001",
+    );
+    await provider.listAvailableModels({ force: true }); // retries, succeeds
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends adaptive thinking for a dynamically discovered adaptive model", async () => {
+    const create = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    const provider = new AnthropicProvider(undefined, undefined, {
+      dynamicCapabilitiesEnabled: true,
+    });
+    (provider as unknown as { client: unknown }).client = {
+      models: {
+        list: vi.fn(async () => ({
+          data: [
+            {
+              id: "claude-future-9",
+              display_name: "Claude Future 9",
+              max_input_tokens: 1_000_000,
+              max_tokens: 64_000,
+              capabilities: {
+                thinking: {
+                  supported: true,
+                  types: { adaptive: support(true) },
+                },
+                effort: { supported: true, high: support(true) },
+              },
+            },
+          ],
+        })),
+      },
+      messages: { create },
+    };
+
+    await provider.listAvailableModels();
+    await provider.complete({
+      model: "claude-future-9",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 64,
+      reasoningEffort: "high",
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-future-9",
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      }),
+    );
+  });
+});
+
 describe("sanitizeMessagesForAnthropicReplay", () => {
   it("strips historical thinking blocks while preserving text", () => {
     const messages: MessageParam[] = [

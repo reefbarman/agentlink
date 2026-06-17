@@ -60,10 +60,28 @@ export class ProviderRegistry {
   private rebuildIndex(): void {
     this.modelIndex.clear();
     for (const provider of this.providers.values()) {
+      // Index picker-visible models...
       for (const model of provider.listModels()) {
         this.modelIndex.set(model.id, provider.id);
       }
+      // ...plus any routing-floor IDs the provider keeps resolvable but hidden
+      // from the picker (e.g. static Anthropic models omitted by models.list()).
+      for (const id of provider.listRoutableModelIds?.() ?? []) {
+        if (!this.modelIndex.has(id)) {
+          this.modelIndex.set(id, provider.id);
+        }
+      }
     }
+  }
+
+  /**
+   * Rebuild the model→provider routing index from current `listModels()` output.
+   *
+   * Call after a provider's dynamic model set changes (e.g. Anthropic dynamic
+   * capability refresh) so newly added/removed model IDs route correctly.
+   */
+  refreshIndex(): void {
+    this.rebuildIndex();
   }
 
   /**

@@ -27,10 +27,12 @@ import type {
   ToolDefinition,
   ReasoningEffort,
 } from "../types.js";
-
-type AnthropicModelCapabilities = ModelCapabilities & {
-  supportsThinking: boolean;
-};
+import {
+  AnthropicModelCatalog,
+  type AnthropicModelCapabilities,
+  type ModelCatalogPersistence,
+  type StaticModelEntry,
+} from "./anthropicModelCatalog.js";
 
 const CLAUDE_REASONING_EFFORTS = [
   "none",
@@ -44,6 +46,7 @@ const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
   {
     "claude-opus-4-8": {
       supportsThinking: true,
+      supportsAdaptiveThinking: true,
       supportsCaching: true,
       supportsImages: true,
       supportsToolUse: true,
@@ -54,6 +57,7 @@ const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
     },
     "claude-sonnet-4-6": {
       supportsThinking: true,
+      supportsAdaptiveThinking: true,
       supportsCaching: true,
       supportsImages: true,
       supportsToolUse: true,
@@ -64,6 +68,7 @@ const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
     },
     "claude-haiku-4-5-20251001": {
       supportsThinking: false,
+      supportsAdaptiveThinking: false,
       supportsCaching: true,
       supportsImages: true,
       supportsToolUse: true,
@@ -71,6 +76,28 @@ const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
       maxOutputTokens: 64_000,
     },
   };
+
+/** Display names for the statically-known models (merge base + offline fallback). */
+const ANTHROPIC_MODEL_DISPLAY_NAMES: Record<string, string> = {
+  "claude-sonnet-4-6": "Claude Sonnet 4.6",
+  "claude-opus-4-8": "Claude Opus 4.8",
+  "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
+};
+
+/** Static-listing order preserved from the original hard-coded `listModels()`. */
+const ANTHROPIC_STATIC_MODEL_ORDER = [
+  "claude-sonnet-4-6",
+  "claude-opus-4-8",
+  "claude-haiku-4-5-20251001",
+] as const;
+
+function buildStaticModelEntries(): StaticModelEntry[] {
+  return ANTHROPIC_STATIC_MODEL_ORDER.map((id) => ({
+    id,
+    displayName: ANTHROPIC_MODEL_DISPLAY_NAMES[id] ?? id,
+    capabilities: ANTHROPIC_MODEL_CAPABILITIES[id],
+  }));
+}
 
 const DEFAULT_CAPABILITIES: AnthropicModelCapabilities = {
   supportsThinking: false,
@@ -84,6 +111,14 @@ const DEFAULT_CAPABILITIES: AnthropicModelCapabilities = {
 /** The preferred cheap/fast model for condensing. */
 export const ANTHROPIC_CONDENSE_MODEL = "claude-haiku-4-5-20251001";
 
+/** Options accepted by AnthropicProvider for dynamic model capabilities. */
+export interface AnthropicProviderOptions {
+  /** Persistence port for the dynamic model catalog snapshot (host-injected). */
+  modelCatalogPersistence?: ModelCatalogPersistence;
+  /** Feature flag (Q1 default true). When false, only static metadata is used. */
+  dynamicCapabilitiesEnabled?: boolean;
+}
+
 export class AnthropicProvider implements ModelProvider {
   readonly id = "anthropic";
   readonly displayName = "Anthropic";
@@ -93,10 +128,27 @@ export class AnthropicProvider implements ModelProvider {
   private authSource: AuthSource = "none";
   private apiKey?: string;
   private log?: (msg: string) => void;
+  private readonly catalog: AnthropicModelCatalog;
+  private readonly dynamicCapabilitiesEnabled: boolean;
 
-  constructor(apiKey?: string, log?: (msg: string) => void) {
+  constructor(
+    apiKey?: string,
+    log?: (msg: string) => void,
+    options?: AnthropicProviderOptions,
+  ) {
     this.apiKey = apiKey;
     this.log = log;
+    this.dynamicCapabilitiesEnabled =
+      options?.dynamicCapabilitiesEnabled ?? true;
+    this.catalog = new AnthropicModelCatalog({
+      providerId: this.id,
+      staticModels: buildStaticModelEntries(),
+      // Flag off ⇒ no persisted seed, no snapshot-driven getters (kill switch).
+      persistence: this.dynamicCapabilitiesEnabled
+        ? options?.modelCatalogPersistence
+        : undefined,
+      log,
+    });
     this.tryInitializeClient();
   }
 
@@ -105,15 +157,77 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   getCapabilities(model: string): ModelCapabilities {
+    if (this.dynamicCapabilitiesEnabled) {
+      const dynamic = this.catalog.getCapabilities(model);
+      if (dynamic) return dynamic;
+    }
     return ANTHROPIC_MODEL_CAPABILITIES[model] ?? DEFAULT_CAPABILITIES;
   }
 
   listModels(): ModelInfo[] {
-    return [
-      this.makeModelInfo("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-      this.makeModelInfo("claude-opus-4-8", "Claude Opus 4.8"),
-      this.makeModelInfo("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
-    ];
+    if (this.dynamicCapabilitiesEnabled && this.catalog.hasDynamicData()) {
+      return this.catalog.listModels();
+    }
+    return ANTHROPIC_STATIC_MODEL_ORDER.map((id) =>
+      this.makeModelInfo(id, ANTHROPIC_MODEL_DISPLAY_NAMES[id] ?? id),
+    );
+  }
+
+  /**
+   * Model IDs that must remain routable (picker-visible models plus the static
+   * routing floor). Used by the registry index so persisted-session model IDs
+   * resolve even when omitted from a successful `models.list()` (design §0.2).
+   */
+  listRoutableModelIds(): string[] {
+    if (this.dynamicCapabilitiesEnabled && this.catalog.hasDynamicData()) {
+      return this.catalog.listRoutableModelIds();
+    }
+    return [...ANTHROPIC_STATIC_MODEL_ORDER];
+  }
+
+  /**
+   * Lazy, coalesced refresh of dynamic model capabilities from the Anthropic
+   * Models API. Never called on construct/activation. Returns the merged list.
+   * Flag-off ⇒ returns the static list without any network call.
+   */
+  async listAvailableModels(options?: {
+    force?: boolean;
+  }): Promise<ModelInfo[]> {
+    if (!this.dynamicCapabilitiesEnabled) {
+      return this.listModels();
+    }
+    // Respect the TTL (Q2): skip the network when cached data is still fresh,
+    // unless the caller forces a refresh (e.g. explicit refresh / auth change).
+    if (!options?.force && this.catalog.hasFreshData()) {
+      return this.listModels();
+    }
+    try {
+      const client = this.getClient();
+      return await this.catalog.refresh({
+        list: () =>
+          (
+            client as unknown as {
+              models: {
+                list: () => Promise<{
+                  data: import("./anthropicModelCatalog.js").SdkModelInfo[];
+                }>;
+              };
+            }
+          ).models.list(),
+      });
+    } catch (err) {
+      this.log?.(
+        `[anthropic] listAvailableModels unavailable: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return this.listModels();
+    }
+  }
+
+  /** Whether dynamic model capabilities are enabled (kill switch state). */
+  get dynamicModelCapabilitiesEnabled(): boolean {
+    return this.dynamicCapabilitiesEnabled;
   }
 
   /**
@@ -184,7 +298,7 @@ export class AnthropicProvider implements ModelProvider {
       !transformedReplay.strippedThinkingFromToolUse
     ) {
       const params = requestParams as unknown as Record<string, unknown>;
-      if (supportsAdaptiveThinking(model)) {
+      if (this.supportsAdaptiveThinking(model)) {
         params.thinking = { type: "adaptive", display: "summarized" };
         params.output_config = { effort: requestedEffort };
       } else if (thinking) {
@@ -384,7 +498,7 @@ export class AnthropicProvider implements ModelProvider {
     const requestParams: Anthropic.MessageCreateParams = {
       model,
       max_tokens: maxTokens,
-      ...(temperature !== undefined && !supportsAdaptiveThinking(model)
+      ...(temperature !== undefined && !this.supportsAdaptiveThinking(model)
         ? { temperature }
         : {}),
       system: systemPrompt,
@@ -397,7 +511,7 @@ export class AnthropicProvider implements ModelProvider {
     };
 
     const requestedEffort = reasoningEffort ?? "high";
-    if (requestedEffort !== "none" && supportsAdaptiveThinking(model)) {
+    if (requestedEffort !== "none" && this.supportsAdaptiveThinking(model)) {
       const params = requestParams as unknown as Record<string, unknown>;
       params.thinking = { type: "adaptive", display: "summarized" };
       params.output_config = { effort: requestedEffort };
@@ -428,6 +542,18 @@ export class AnthropicProvider implements ModelProvider {
     };
   }
 
+  /**
+   * Whether the model supports the "adaptive" thinking request shape. Sourced
+   * from dynamic catalog data when present, falling back to the static set so
+   * request assembly stays correct for newly discovered models (design §3.4a).
+   */
+  private supportsAdaptiveThinking(model: string): boolean {
+    if (this.dynamicCapabilitiesEnabled) {
+      return this.catalog.supportsAdaptiveThinking(model);
+    }
+    return staticSupportsAdaptiveThinking(model);
+  }
+
   private tryInitializeClient(): void {
     try {
       const result = createAnthropicClient(this.apiKey, this.log);
@@ -455,8 +581,9 @@ export class AnthropicProvider implements ModelProvider {
 
 // ── Helpers (moved from AgentEngine.ts) ──
 
-function supportsAdaptiveThinking(model: string): boolean {
-  return model === "claude-opus-4-8" || model === "claude-sonnet-4-6";
+/** Static fallback used when dynamic model capabilities are disabled. */
+function staticSupportsAdaptiveThinking(model: string): boolean {
+  return Boolean(ANTHROPIC_MODEL_CAPABILITIES[model]?.supportsAdaptiveThinking);
 }
 
 interface AnthropicMessageTransformResult extends AnthropicReplaySanitizationResult {

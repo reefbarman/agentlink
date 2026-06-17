@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import type { ApprovalRequest } from "../approvals/webview/types.js";
+import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
 import type { Question } from "./webview/types.js";
 
 export type AgentUiEvent =
@@ -23,7 +24,9 @@ export type AgentUiEvent =
       answers: Record<string, string | string[] | number | boolean | undefined>;
       notes: Record<string, string>;
       origin: string;
-    };
+    }
+  | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
+  | { type: "agentUrlElicitationCleared"; id: string };
 
 export interface AgentUiPublisher {
   publishApproval(request: ApprovalRequest): void;
@@ -42,6 +45,8 @@ export interface AgentUiPublisher {
     notes: Record<string, string>;
     origin: string;
   }): void;
+  publishUrlElicitationRequest(request: McpUrlElicitationRequest): void;
+  publishUrlElicitationCleared(id: string): void;
 }
 
 export interface ReadableAgentUiEventHub {
@@ -117,6 +122,26 @@ export class FanoutAgentUiPublisher implements AgentUiPublisher {
       }
     }
   }
+
+  publishUrlElicitationRequest(request: McpUrlElicitationRequest): void {
+    for (const publisher of this.publishers) {
+      try {
+        publisher.publishUrlElicitationRequest(request);
+      } catch {
+        // Keep other sinks alive even if one publisher fails.
+      }
+    }
+  }
+
+  publishUrlElicitationCleared(id: string): void {
+    for (const publisher of this.publishers) {
+      try {
+        publisher.publishUrlElicitationCleared(id);
+      } catch {
+        // Keep other sinks alive even if one publisher fails.
+      }
+    }
+  }
 }
 
 export class WebviewAgentUiPublisher implements AgentUiPublisher {
@@ -159,6 +184,14 @@ export class WebviewAgentUiPublisher implements AgentUiPublisher {
     origin: string;
   }): void {
     this.publishMessage({ type: "agentQuestionProgress", ...progress });
+  }
+
+  publishUrlElicitationRequest(request: McpUrlElicitationRequest): void {
+    this.publishMessage({ type: "agentUrlElicitationRequest", request });
+  }
+
+  publishUrlElicitationCleared(id: string): void {
+    this.publishMessage({ type: "agentUrlElicitationCleared", id });
   }
 }
 
@@ -209,6 +242,14 @@ export class InMemoryAgentUiEventHub
     origin: string;
   }): void {
     this.publish({ type: "agentQuestionProgress", ...progress });
+  }
+
+  publishUrlElicitationRequest(request: McpUrlElicitationRequest): void {
+    this.publish({ type: "agentUrlElicitationRequest", request });
+  }
+
+  publishUrlElicitationCleared(id: string): void {
+    this.publish({ type: "agentUrlElicitationCleared", id });
   }
 
   dispose(): void {

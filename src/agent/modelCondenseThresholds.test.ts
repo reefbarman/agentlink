@@ -7,7 +7,18 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("modelCondenseThresholds", () => {
-  it("defaults large-context frontier models to 0.6", () => {
+  it("defaults models with 1m+ context windows to 0.7", () => {
+    expect(
+      getDefaultAutoCondenseThreshold("claude-sonnet-4-6", {
+        contextWindow: 1_000_000,
+      }),
+    ).toBe(0.7);
+    expect(
+      getDefaultAutoCondenseThreshold("gpt-5.5", { contextWindow: 1_050_000 }),
+    ).toBe(0.7);
+  });
+
+  it("keeps legacy large-model fallback at 0.6 when capabilities are unavailable", () => {
     expect(getDefaultAutoCondenseThreshold("claude-sonnet-4-6")).toBe(0.6);
     expect(getDefaultAutoCondenseThreshold("claude-opus-4-8")).toBe(0.6);
     expect(getDefaultAutoCondenseThreshold("gpt-5.5")).toBe(0.6);
@@ -25,9 +36,13 @@ describe("modelCondenseThresholds", () => {
 
   it("prefers explicit per-model overrides", () => {
     expect(
-      getEffectiveAutoCondenseThreshold("claude-sonnet-4-6", {
-        "claude-sonnet-4-6": 0.72,
-      }),
+      getEffectiveAutoCondenseThreshold(
+        "claude-sonnet-4-6",
+        {
+          "claude-sonnet-4-6": 0.72,
+        },
+        { contextWindow: 1_000_000 },
+      ),
     ).toBe(0.72);
   });
 

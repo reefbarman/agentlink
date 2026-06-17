@@ -1,6 +1,6 @@
 import type { ChatMessage, ContentBlock } from "../types";
 import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import { ApiRequestBlock } from "./ApiRequestBlock";
 import { BgAgentBlock } from "./BgAgentBlock";
@@ -18,6 +18,12 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
 import { matchFilePaths } from "./filePathLinks";
+
+const TOOL_GROUP_SETTLE_MS = 350;
+
+function getToolSettleKey(messageId: string, toolCallId: string): string {
+  return `${messageId}:${toolCallId}`;
+}
 
 /**
  * Derive a short activity label from the current message blocks.
@@ -90,7 +96,23 @@ export function MessageBubble({
   // Track whether the streaming text block has started its reveal animation
   const [_textRevealed, setTextRevealed] = useState(false);
   const [showAllDetectedOptions, setShowAllDetectedOptions] = useState(false);
-  const [deferToolGrouping, setDeferToolGrouping] = useState(streaming);
+  const [settledToolIds, setSettledToolIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const toolSettleTimers = useRef<Map<string, number>>(new Map());
+
+  // Hide spawn_background_agent tool_call — it's replaced by the bg_agent block.
+  // Keep get_background_status/result/kill visible so users can see what the foreground
+  // agent is doing (e.g. waiting for bg results vs actually stuck).
+  const finalMarkerToolId = message.finalMarker?.toolCall?.id;
+  const blocks =
+    message.role === "assistant"
+      ? (message.blocks ?? []).filter(
+          (b) =>
+            !(b.type === "tool_call" && b.name === "spawn_background_agent") &&
+            !(b.type === "tool_call" && b.id === finalMarkerToolId),
+        )
+      : [];
 
   // Reset when streaming starts a new message
   useEffect(() => {
@@ -98,14 +120,71 @@ export function MessageBubble({
   }, [streaming]);
 
   useEffect(() => {
-    if (streaming) {
-      setDeferToolGrouping(true);
+    return () => {
+      for (const timer of toolSettleTimers.current.values()) {
+        window.clearTimeout(timer);
+      }
+      toolSettleTimers.current.clear();
+    };
+  }, [message.id]);
+
+  useEffect(() => {
+    if (!streaming) {
+      for (const timer of toolSettleTimers.current.values()) {
+        window.clearTimeout(timer);
+      }
+      toolSettleTimers.current.clear();
+      setSettledToolIds((prev) => (prev.size === 0 ? prev : new Set()));
       return;
     }
 
-    const timer = window.setTimeout(() => setDeferToolGrouping(false), 350);
-    return () => window.clearTimeout(timer);
-  }, [message.id, streaming]);
+    const visibleToolIds = new Set(
+      blocks
+        .filter((block) => block.type === "tool_call")
+        .map((block) => getToolSettleKey(message.id, block.id)),
+    );
+
+    for (const [id, timer] of toolSettleTimers.current.entries()) {
+      if (!visibleToolIds.has(id)) {
+        window.clearTimeout(timer);
+        toolSettleTimers.current.delete(id);
+      }
+    }
+
+    setSettledToolIds((prev) => {
+      let next: Set<string> | null = null;
+      for (const id of prev) {
+        if (!visibleToolIds.has(id)) {
+          next ??= new Set(prev);
+          next.delete(id);
+        }
+      }
+      return next ?? prev;
+    });
+
+    for (const block of blocks) {
+      if (
+        block.type !== "tool_call" ||
+        !block.complete ||
+        settledToolIds.has(getToolSettleKey(message.id, block.id)) ||
+        toolSettleTimers.current.has(getToolSettleKey(message.id, block.id))
+      ) {
+        continue;
+      }
+
+      const settleKey = getToolSettleKey(message.id, block.id);
+      const timer = window.setTimeout(() => {
+        toolSettleTimers.current.delete(settleKey);
+        setSettledToolIds((prev) => {
+          if (prev.has(settleKey)) return prev;
+          const next = new Set(prev);
+          next.add(settleKey);
+          return next;
+        });
+      }, TOOL_GROUP_SETTLE_MS);
+      toolSettleTimers.current.set(settleKey, timer);
+    }
+  }, [blocks, message.id, settledToolIds, streaming]);
 
   useEffect(() => {
     setShowAllDetectedOptions(false);
@@ -180,18 +259,10 @@ export function MessageBubble({
     );
   }
 
-  // Hide spawn_background_agent tool_call — it's replaced by the bg_agent block.
-  // Keep get_background_status/result/kill visible so users can see what the foreground
-  // agent is doing (e.g. waiting for bg results vs actually stuck).
-  const finalMarkerToolId = message.finalMarker?.toolCall?.id;
-  const blocks = (message.blocks ?? []).filter(
-    (b) =>
-      !(b.type === "tool_call" && b.name === "spawn_background_agent") &&
-      !(b.type === "tool_call" && b.id === finalMarkerToolId),
-  );
   const lastIdx = blocks.length - 1;
   const blockSegments = segmentBlocks(blocks, {
-    groupCompletedTools: !deferToolGrouping,
+    shouldGroupToolCall: (block) =>
+      !streaming || settledToolIds.has(getToolSettleKey(message.id, block.id)),
   });
 
   // Show dots while streaming — always visible at the bottom until response completes.

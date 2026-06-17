@@ -3,8 +3,10 @@ import * as vscode from "vscode";
 const LEGACY_THRESHOLD_KEY = "autoCondenseThreshold";
 export const MODEL_THRESHOLD_KEY = "modelCondenseThresholds";
 
-const LARGE_MODEL_DEFAULT_THRESHOLD = 0.6;
+const LARGE_CONTEXT_DEFAULT_THRESHOLD = 0.7;
+const LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD = 0.6;
 const OTHER_MODELS_DEFAULT_THRESHOLD = 0.9;
+const LARGE_CONTEXT_WINDOW_TOKENS = 1_000_000;
 const MIN_THRESHOLD = 0.1;
 const MAX_THRESHOLD = 1;
 
@@ -23,8 +25,8 @@ export function isAnthropicFrontierModel(modelId: string): boolean {
   );
 }
 
-/** Frontier models with large context windows that benefit from earlier condensing. */
-function isLargeContextFrontierModel(modelId: string): boolean {
+/** Frontier models historically treated as large when capabilities are unavailable. */
+function isLegacyLargeContextFrontierModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   return (
     isAnthropicFrontierModel(lower) ||
@@ -34,9 +36,18 @@ function isLargeContextFrontierModel(modelId: string): boolean {
   );
 }
 
-export function getDefaultAutoCondenseThreshold(modelId: string): number {
-  return isLargeContextFrontierModel(modelId)
-    ? LARGE_MODEL_DEFAULT_THRESHOLD
+export function getDefaultAutoCondenseThreshold(
+  modelId: string,
+  capabilities?: { contextWindow?: number },
+): number {
+  if (
+    typeof capabilities?.contextWindow === "number" &&
+    capabilities.contextWindow >= LARGE_CONTEXT_WINDOW_TOKENS
+  ) {
+    return LARGE_CONTEXT_DEFAULT_THRESHOLD;
+  }
+  return isLegacyLargeContextFrontierModel(modelId)
+    ? LEGACY_LARGE_MODEL_DEFAULT_THRESHOLD
     : OTHER_MODELS_DEFAULT_THRESHOLD;
 }
 
@@ -55,18 +66,20 @@ export function normalizeModelThresholdMap(
 export function getEffectiveAutoCondenseThreshold(
   modelId: string,
   overrides?: ModelCondenseThresholdMap,
+  capabilities?: { contextWindow?: number },
 ): number {
   const explicit = overrides?.[modelId];
   if (typeof explicit === "number") return clampCondenseThreshold(explicit);
-  return getDefaultAutoCondenseThreshold(modelId);
+  return getDefaultAutoCondenseThreshold(modelId, capabilities);
 }
 
 export function getConfiguredBaseThresholdForModel(
   config: vscode.WorkspaceConfiguration,
   modelId: string,
+  capabilities?: { contextWindow?: number },
 ): number {
   const overrides = getMigratedModelCondenseThresholdMap(config, modelId);
-  return getEffectiveAutoCondenseThreshold(modelId, overrides);
+  return getEffectiveAutoCondenseThreshold(modelId, overrides, capabilities);
 }
 
 export function getModelCondenseThresholdMap(

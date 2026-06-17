@@ -2054,11 +2054,12 @@ describe("AgentEngine", () => {
       const provider = makeMockProvider();
       Object.defineProperty(provider, "id", { value: "anthropic" });
       provider.stream = async function* () {
+        // Keep this mock typed as an async generator while always throwing.
+        if (attempts < 0) yield* makeProviderStream();
         attempts += 1;
         throw new Error(
           '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid `signature` in `thinking` block"}}',
         );
-        yield* makeProviderStream();
       };
 
       const session = await makeSession();

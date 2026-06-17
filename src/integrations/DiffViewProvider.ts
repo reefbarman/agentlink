@@ -7,14 +7,14 @@ import type {
   ApprovalPanelProvider,
   WriteApprovalResponse,
 } from "../approvals/ApprovalPanelProvider.js";
-import { FileLockTimeoutError, withFileLock } from "../util/fileLock.js";
 
 import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 import type { OnApprovalRequest } from "../shared/types.js";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
 import { randomUUID } from "crypto";
+import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
-export { withFileLock, FileLockTimeoutError } from "../util/fileLock.js";
+export { FileLockTimeoutError, withFileLock } from "../util/fileLock.js";
 
 export type DiffDecision =
   | "accept"
@@ -141,6 +141,29 @@ function detectEol(content: string): "\r\n" | "\n" | undefined {
   if (content.includes("\r\n")) return "\r\n";
   if (content.includes("\n")) return "\n";
   return undefined;
+}
+
+export function createUserEditsPatch(
+  relPath: string,
+  proposedContent: string,
+  editedContent: string,
+): string | undefined {
+  // User-edits patches compose before the format-on-save report, which owns
+  // EOL-only change metadata.
+  const eol = proposedContent.includes("\r\n") ? "\r\n" : "\n";
+  const normalizedEdited = editedContent.replace(/\r\n|\n/g, eol);
+  const normalizedProposed = proposedContent.replace(/\r\n|\n/g, eol);
+
+  if (normalizedEdited === normalizedProposed) return undefined;
+
+  return diffLib.createPatch(
+    relPath,
+    normalizedProposed,
+    normalizedEdited,
+    "proposed",
+    "user-edited",
+    { context: 1 },
+  );
 }
 
 export function createFormatOnSaveReport(
@@ -295,7 +318,10 @@ export class DiffViewProvider {
         leftUri,
         rightUri,
         `${outsidePrefix}${this.relPath}: ${fileExists ? "Proposed Changes" : "New File"} (Editable)`,
-        { preview: true, preserveFocus: true },
+        withPrimaryEditorColumn({
+          preview: true,
+          preserveFocus: true,
+        }),
       );
 
       // Wait for the diff editor to open. Poll until it appears rather than
@@ -307,9 +333,10 @@ export class DiffViewProvider {
       if (!this.activeDiffEditor) {
         // Fallback: open the file and try again
         const doc = await vscode.workspace.openTextDocument(this.absolutePath);
-        this.activeDiffEditor = await vscode.window.showTextDocument(doc, {
-          preserveFocus: true,
-        });
+        this.activeDiffEditor = await vscode.window.showTextDocument(
+          doc,
+          withPrimaryEditorColumn({ preserveFocus: true }),
+        );
       }
 
       diffSnapshotHub.upsert({
@@ -527,10 +554,13 @@ export class DiffViewProvider {
     diffSnapshotHub.remove(this.requestId);
 
     // Show file in normal editor (not diff)
-    await vscode.window.showTextDocument(vscode.Uri.file(this.absolutePath!), {
-      preview: false,
-      preserveFocus: true,
-    });
+    await vscode.window.showTextDocument(
+      vscode.Uri.file(this.absolutePath!),
+      withPrimaryEditorColumn({
+        preview: false,
+        preserveFocus: true,
+      }),
+    );
 
     // Close diff views
     await this.closeAllDiffViews();
@@ -544,22 +574,12 @@ export class DiffViewProvider {
     // Separate user edits from format-on-save changes:
     // - editedContent = what was in the editor when user accepted (proposed + user edits)
     // - finalContent  = what ended up on disk after save (+ format-on-save)
-    const eol = this.newContent.includes("\r\n") ? "\r\n" : "\n";
-    const normalizedEdited = editedContent.replace(/\r\n|\n/g, eol);
-    const normalizedNew = this.newContent.replace(/\r\n|\n/g, eol);
-
     // user_edits = only intentional changes the user made in the diff editor
-    let userEdits: string | undefined;
-    if (normalizedEdited !== normalizedNew) {
-      userEdits = diffLib.createPatch(
-        this.relPath,
-        normalizedNew,
-        normalizedEdited,
-        "proposed",
-        "user-edited",
-        { context: 1 },
-      );
-    }
+    const userEdits = createUserEditsPatch(
+      this.relPath,
+      this.newContent,
+      editedContent,
+    );
 
     // Detect if format-on-save changed the file beyond user edits.
     // The resulting patch composes after `user_edits`: proposed -> user-edited -> saved.
@@ -625,7 +645,10 @@ export class DiffViewProvider {
         const openDoc = await vscode.workspace.openTextDocument(
           this.absolutePath,
         );
-        await vscode.window.showTextDocument(openDoc, { preserveFocus: true });
+        await vscode.window.showTextDocument(
+          openDoc,
+          withPrimaryEditorColumn({ preserveFocus: true }),
+        );
       }
     } else if (this.editType === "create") {
       // Delete the file we created

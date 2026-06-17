@@ -39,6 +39,7 @@ import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvide
 import { FindReplacePreviewPanel } from "../../findReplace/FindReplacePreviewPanel.js";
 import type { WriteApprovalResponse } from "../../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "../../tools/pathAccessUI.js";
+import { withPrimaryEditorColumn } from "../../util/editorPlacement.js";
 import { getRelativePath } from "../../util/paths.js";
 import { resolveAndValidatePath } from "../../util/paths.js";
 import { withFileLock } from "../../util/fileLock.js";
@@ -47,9 +48,10 @@ export function createVscodeEditorRevealProvider(): EditorRevealProvider {
   return {
     async reveal(params: EditorRevealParams) {
       const doc = await vscode.workspace.openTextDocument(params.absolutePath);
-      const editor = await vscode.window.showTextDocument(doc, {
-        preview: false,
-      });
+      const editor = await vscode.window.showTextDocument(
+        doc,
+        withPrimaryEditorColumn({ preview: false }),
+      );
 
       if (params.line) {
         const line = Math.max(0, params.line - 1);
@@ -132,10 +134,13 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
           const doc = await vscode.workspace.openTextDocument(
             params.absolutePath,
           );
-          await vscode.window.showTextDocument(doc, {
-            preview: false,
-            preserveFocus: true,
-          });
+          await vscode.window.showTextDocument(
+            doc,
+            withPrimaryEditorColumn({
+              preview: false,
+              preserveFocus: true,
+            }),
+          );
 
           if (doc.getText() !== content) {
             const edit = new vscode.WorkspaceEdit();

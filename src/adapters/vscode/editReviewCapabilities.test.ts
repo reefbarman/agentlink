@@ -60,6 +60,7 @@ vi.mock("vscode", () => {
     Selection,
     WorkspaceEdit,
     TextEditorRevealType: { InCenterIfOutsideViewport: "center" },
+    ViewColumn: { One: 1 },
     Uri: { file: (fsPath: string) => ({ fsPath }) },
     workspace: { openTextDocument, getConfiguration, applyEdit, textDocuments },
     window: { showTextDocument },
@@ -120,7 +121,7 @@ describe("createVscodeEditorRevealProvider", () => {
     expect(openTextDocument).toHaveBeenCalledWith("/workspace/src/file.ts");
     expect(showTextDocument).toHaveBeenCalledWith(
       { uri: { fsPath: "/workspace/src/file.ts" } },
-      { preview: false },
+      { preview: false, viewColumn: 1 },
     );
     const text = (result.content[0] as { type: "text"; text: string }).text;
     expect(JSON.parse(text)).toEqual({
@@ -215,6 +216,11 @@ describe("createVscodeEditReviewProvider", () => {
         operation: "modified",
       });
       expect(prepareContent).toHaveBeenCalledWith("old");
+      expect(showTextDocument).toHaveBeenCalledWith(doc, {
+        preview: false,
+        preserveFocus: true,
+        viewColumn: 1,
+      });
       expect(workspaceEditInstances).toHaveLength(1);
       const editInstance = workspaceEditInstances[0];
       expect(editInstance?.replace).toHaveBeenCalledWith(

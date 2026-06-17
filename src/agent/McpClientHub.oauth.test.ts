@@ -94,6 +94,10 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
       // no-op for test
     }
 
+    setNotificationHandler(): void {
+      // no-op for test
+    }
+
     async callTool(): Promise<{ content: unknown[] }> {
       return mocks.createTransportCallTool();
     }

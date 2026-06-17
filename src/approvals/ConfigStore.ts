@@ -4,6 +4,7 @@ import * as path from "path";
 import * as os from "os";
 
 import type { CommandRule, PathRule } from "./ApprovalManager.js";
+import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 import { parseJsonWithComments } from "../util/jsonc.js";
 
 export interface AgentLinkConfig {
@@ -166,7 +167,10 @@ export class ConfigStore {
         )
         .then((choice) => {
           if (choice === "Open File") {
-            vscode.window.showTextDocument(vscode.Uri.file(filePath));
+            vscode.window.showTextDocument(
+              vscode.Uri.file(filePath),
+              withPrimaryEditorColumn(),
+            );
           }
         });
       return { ...EMPTY_CONFIG };

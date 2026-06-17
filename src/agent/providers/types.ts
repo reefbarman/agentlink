@@ -151,6 +151,13 @@ export interface ModelProvider {
    */
   listAvailableModels?(): Promise<ModelInfo[]>;
 
+  /**
+   * Optional: model IDs that must remain routable even if not shown by
+   * `listModels()` (e.g. a static routing floor so persisted-session models
+   * resolve after a dynamic refresh). Defaults to `listModels()` ids.
+   */
+  listRoutableModelIds?(): string[];
+
   /** Streaming completion — the primary agentic loop interface. */
   stream(request: StreamRequest): AsyncGenerator<ProviderStreamEvent>;
 

@@ -79,6 +79,15 @@ interface SessionStoreAtomicFileOps {
   rmSync(path: fs.PathLike, options: fs.RmOptions): void;
 }
 
+export interface SessionStoreOptions {
+  /**
+   * Optional subdirectory under `.agentlink/history` used to isolate sessions
+   * for a specific VS Code workspace identity (for example, a multi-root
+   * workspace). Omit to preserve the legacy single-folder history layout.
+   */
+  historyNamespace?: string;
+}
+
 const SCHEMA_VERSION = 1;
 const SESSIONS_FILE = "sessions.json";
 const AGENTLINK_GITIGNORE_ENTRIES = [
@@ -118,10 +127,14 @@ export class SessionStore implements SessionPersistenceProvider {
       startedAt: Date.now(),
     },
     atomicFileOps: SessionStoreAtomicFileOps = fs,
+    options: SessionStoreOptions = {},
   ) {
     this.identity = identity;
     this.atomicFileOps = atomicFileOps;
-    this.historyDir = path.join(workspaceDir, ".agentlink", "history");
+    const historyRoot = path.join(workspaceDir, ".agentlink", "history");
+    this.historyDir = options.historyNamespace
+      ? path.join(historyRoot, options.historyNamespace)
+      : historyRoot;
     this.sessionsFile = path.join(this.historyDir, SESSIONS_FILE);
     this.ensureGitignore(path.join(workspaceDir, ".agentlink"));
     this.loadIndex();

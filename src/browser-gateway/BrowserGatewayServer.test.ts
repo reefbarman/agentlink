@@ -90,6 +90,7 @@ function makeChatViewProviderStub() {
     submitBrowserApprovalDecision: vi.fn(() => true),
     submitBrowserQuestionResponse: vi.fn(() => true),
     publishBrowserQuestionProgress: vi.fn(() => true),
+    submitBrowserUrlElicitation: vi.fn(() => true),
     submitBrowserSend: vi.fn<() => Promise<{ ok: boolean; queued?: boolean }>>(
       async () => ({ ok: true }),
     ),
@@ -358,6 +359,7 @@ describe("BrowserGatewayServer", () => {
           ],
         },
         questionProgress: null,
+        urlElicitation: null,
         recentEvents: [
           {
             type: "showApproval",
@@ -485,6 +487,7 @@ describe("BrowserGatewayServer", () => {
         themeLabel: "Dark",
         source: "vscode-theme-api",
       },
+      modelsVersion: 0,
     });
 
     const unauthorizedDiffDetailResponse = await fetch(
@@ -612,6 +615,37 @@ describe("BrowserGatewayServer", () => {
         notes: {},
       },
     );
+
+    const authorizedUrlElicitation = await fetch(
+      `${baseUrl}/api/url-elicitation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ id: "url-1", action: "accept" }),
+      },
+    );
+    expect(authorizedUrlElicitation.status).toBe(200);
+    expect(await authorizedUrlElicitation.json()).toEqual({ ok: true });
+    expect(chatViewProvider.submitBrowserUrlElicitation).toHaveBeenCalledWith({
+      id: "url-1",
+      action: "accept",
+    });
+
+    const invalidUrlElicitation = await fetch(
+      `${baseUrl}/api/url-elicitation`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ id: "url-1" }),
+      },
+    );
+    expect(invalidUrlElicitation.status).toBe(400);
 
     const authorizedProgress = await fetch(`${baseUrl}/api/question-progress`, {
       method: "POST",

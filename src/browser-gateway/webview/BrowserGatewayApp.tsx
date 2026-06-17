@@ -10,6 +10,7 @@ import type {
   WebviewModelInfo,
 } from "../../agent/webview/types";
 
+import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import type { DetectedQuestion } from "../../shared/questionDetection";
 import {
   useCallback,
@@ -164,6 +165,7 @@ type GatewaySnapshot = {
       notes: Record<string, string>;
       origin: string;
     } | null;
+    urlElicitation: McpUrlElicitationRequest | null;
     recentEvents: Array<{ type: string }>;
     mcpStatusInfos: Array<{
       name: string;
@@ -254,7 +256,57 @@ type GatewaySnapshot = {
     createdAt: number;
   }>;
   theme: BrowserGatewayThemeSnapshot;
+  modelsVersion?: number;
 };
+
+function UrlElicitationPanel({
+  request,
+  onAccept,
+  onDecline,
+  onCancel,
+}: {
+  request: McpUrlElicitationRequest;
+  onAccept: (id: string, url: string) => void;
+  onDecline: (id: string) => void;
+  onCancel: (id: string) => void;
+}) {
+  return (
+    <div class="approval-panel-embed url-elicitation-panel">
+      <div class="url-elicitation-header">
+        <i class="codicon codicon-link-external" />
+        <span>MCP URL requested by {request.serverName}</span>
+      </div>
+      <p>{request.message}</p>
+      <div class="url-elicitation-warning">
+        Only continue if you trust this MCP server and expected this browser
+        flow.
+      </div>
+      {request.isLocalAddress && (
+        <div class="url-elicitation-warning danger">
+          This URL points at a local/private network address. Make sure the
+          server is trusted.
+        </div>
+      )}
+      <dl class="url-elicitation-details">
+        <dt>Origin</dt>
+        <dd>{request.origin}</dd>
+        <dt>Full URL</dt>
+        <dd>{request.url}</dd>
+      </dl>
+      <div class="url-elicitation-actions">
+        <button type="button" onClick={() => onCancel(request.id)}>
+          Cancel
+        </button>
+        <button type="button" onClick={() => onDecline(request.id)}>
+          Decline
+        </button>
+        <button type="button" onClick={() => onAccept(request.id, request.url)}>
+          Open URL
+        </button>
+      </div>
+    </div>
+  );
+}
 
 interface BrowserGatewayAppProps {
   authToken: string;
@@ -645,6 +697,16 @@ export function BrowserGatewayApp({
     };
   }, [selectedInstanceId, routeByInstance]);
 
+  // Re-fetch the model list when the gateway signals a model-metadata change
+  // (e.g. Anthropic dynamic capability refresh). Keeps browser models in parity
+  // without a dedicated event (Target A / Q7).
+  const modelsVersion = snapshot?.modelsVersion;
+  useEffect(() => {
+    if (modelsVersion === undefined || modelsVersion === 0) return;
+    void fetchModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelsVersion]);
+
   useEffect(() => {
     const currentDiffs = snapshot?.diffs ?? [];
 
@@ -697,6 +759,7 @@ export function BrowserGatewayApp({
   const pendingApproval = snapshot?.ui.approval ?? null;
   const pendingQuestion =
     foreground?.questionRequest ?? snapshot?.ui.question ?? null;
+  const pendingUrlElicitation = snapshot?.ui.urlElicitation ?? null;
   const visibleApproval =
     pendingApproval && pendingApproval.id !== localDismissedApprovalId
       ? pendingApproval
@@ -723,6 +786,7 @@ export function BrowserGatewayApp({
   const awaitingUserInput = Boolean(
     visibleApproval ||
     visibleQuestion ||
+    pendingUrlElicitation ||
     foreground?.status === "awaiting_approval" ||
     instanceOptions.some(
       (instance) => instance.status?.kind === "awaiting_approval",
@@ -864,7 +928,11 @@ export function BrowserGatewayApp({
     ) {
       return {
         kind: "awaiting_approval",
-        label: pendingQuestion ? "Question" : "Approval",
+        label: pendingUrlElicitation
+          ? "MCP URL"
+          : pendingQuestion
+            ? "Question"
+            : "Approval",
         detail: foreground?.statusOverride ?? "Awaiting response",
         sessionTitle: foreground?.title,
       };
@@ -2251,6 +2319,25 @@ export function BrowserGatewayApp({
         return;
       }
 
+      if (command === "agentUrlElicitationResponse") {
+        const id = String(data.id ?? "").trim();
+        const action = String(data.action ?? "");
+        if (
+          id &&
+          (action === "accept" || action === "cancel" || action === "decline")
+        ) {
+          void fetch(buildApiPath("/api/url-elicitation"), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({ id, action }),
+          });
+        }
+        return;
+      }
+
       if (command === "agentQuestionProgress") {
         const id = String(data.id ?? "").trim();
         const step = Number(data.step ?? 0);
@@ -2778,6 +2865,33 @@ export function BrowserGatewayApp({
                 )}
               {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
                 <TodoPanel todos={foreground?.todos ?? []} />
+              )}
+              {pendingUrlElicitation && !mobileReviewOpen && (
+                <UrlElicitationPanel
+                  request={pendingUrlElicitation}
+                  onAccept={(id, url) => {
+                    window.open(url, "_blank", "noopener,noreferrer");
+                    browserVscodeApi.postMessage({
+                      command: "agentUrlElicitationResponse",
+                      id,
+                      action: "accept",
+                    });
+                  }}
+                  onDecline={(id) => {
+                    browserVscodeApi.postMessage({
+                      command: "agentUrlElicitationResponse",
+                      id,
+                      action: "decline",
+                    });
+                  }}
+                  onCancel={(id) => {
+                    browserVscodeApi.postMessage({
+                      command: "agentUrlElicitationResponse",
+                      id,
+                      action: "cancel",
+                    });
+                  }}
+                />
               )}
               {visibleQuestion && !mobileReviewOpen && (
                 <QuestionCard

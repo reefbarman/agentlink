@@ -72,7 +72,10 @@ const EXPLORATION_CATEGORIES: ToolCategory[] = [
 
 export function segmentBlocks(
   blocks: ContentBlock[],
-  opts?: { groupCompletedTools?: boolean },
+  opts?: {
+    groupCompletedTools?: boolean;
+    shouldGroupToolCall?: (block: ToolBlock) => boolean;
+  },
 ): BlockSegment[] {
   const segments: BlockSegment[] = [];
   let pendingTools: ToolBlock[] = [];
@@ -88,7 +91,11 @@ export function segmentBlocks(
 
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index];
-    if (groupCompletedTools && isGroupableToolCall(block)) {
+    if (
+      groupCompletedTools &&
+      isGroupableToolCall(block) &&
+      (opts?.shouldGroupToolCall?.(block) ?? true)
+    ) {
       pendingTools.push(block);
       continue;
     }

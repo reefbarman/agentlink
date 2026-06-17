@@ -321,7 +321,11 @@ export class AgentSessionManager {
       this.log?.(
         `[agent] Failed to resolve configured condense threshold for ${model}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return getEffectiveAutoCondenseThreshold(model);
+      return getEffectiveAutoCondenseThreshold(
+        model,
+        undefined,
+        this.host.providers.tryResolveProvider(model)?.getCapabilities(model),
+      );
     }
   }
 

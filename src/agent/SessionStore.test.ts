@@ -66,6 +66,53 @@ describe("SessionStore", () => {
     }
   });
 
+  it("stores namespaced sessions separately from the legacy single-folder history", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const legacyStore = new SessionStore(tmpDir);
+    const namespacedStore = new SessionStore(tmpDir, undefined, undefined, {
+      historyNamespace: "workspace-abc123",
+    });
+
+    await expect(
+      legacyStore.saveSession({
+        session: createRecord({
+          summary: createSummary({ id: "legacy", title: "Legacy" }),
+        }),
+        expectedRevision: null,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ ok: true }));
+    await expect(
+      namespacedStore.saveSession({
+        session: createRecord({
+          summary: createSummary({ id: "namespaced", title: "Namespaced" }),
+        }),
+        expectedRevision: null,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ ok: true }));
+
+    expect(new SessionStore(tmpDir).list().map((s) => s.id)).toEqual([
+      "legacy",
+    ]);
+    expect(
+      new SessionStore(tmpDir, undefined, undefined, {
+        historyNamespace: "workspace-abc123",
+      })
+        .list()
+        .map((s) => s.id),
+    ).toEqual(["namespaced"]);
+    expect(
+      fs.existsSync(
+        path.join(
+          tmpDir,
+          ".agentlink",
+          "history",
+          "workspace-abc123",
+          "sessions.json",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("excludes background sessions from list() but keeps them addressable by id", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
     const store = new SessionStore(tmpDir);

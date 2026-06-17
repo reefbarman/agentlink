@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.16.35",
+  "version": "1.16.41",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -509,6 +509,11 @@
           "default": true,
           "description": "Show thinking blocks in the agent chat UI."
         },
+        "agentlink.anthropic.dynamicModelCapabilities": {
+          "type": "boolean",
+          "default": true,
+          "description": "Fetch Anthropic model list and capabilities (context window, output tokens, reasoning efforts) from the Anthropic API and merge them over the built-in defaults. Refreshes lazily (never on activation) and falls back to the built-in static metadata when offline or the API is unavailable. Disable to use only the built-in static metadata."
+        },
         "agentlink.autoCondense": {
           "type": "boolean",
           "default": true,
@@ -530,7 +535,7 @@
             "minimum": 0.1,
             "maximum": 1
           },
-          "description": "Per-model auto-condense thresholds keyed by model ID. Anthropic Sonnet/Opus default to 0.6; other models default to 0.9 when no override is stored."
+          "description": "Per-model auto-condense thresholds keyed by model ID. Models with 1M+ context windows default to 0.7; other models default to 0.9 when no override is stored."
         },
         "agentlink.writeRules": {
           "type": "array",
@@ -577,31 +582,30 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.78.0",
-    "@modelcontextprotocol/sdk": "^1.27.1",
-    "@tanstack/virtual-core": "^3.13.20",
+    "@anthropic-ai/sdk": "^0.104.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@tanstack/virtual-core": "^3.17.1",
     "@types/multicast-dns": "^7.2.4",
-    "@vscode/codicons": "^0.0.44",
-    "@vscode/tree-sitter-wasm": "^0.3.0",
-    "diff": "^8.0.3",
-    "dompurify": "^3.3.2",
-    "eslint": "^10.2.1",
-    "gray-matter": "^4.0.3",
-    "marked": "^17.0.4",
-    "mermaid": "^11.14.0",
+    "@vscode/codicons": "^0.0.45",
+    "@vscode/tree-sitter-wasm": "^0.3.1",
+    "diff": "^9.0.0",
+    "dompurify": "^3.4.10",
+    "eslint": "^10.5.0",
+    "marked": "^18.0.5",
+    "mermaid": "^11.15.0",
     "multicast-dns": "^7.2.5",
-    "openai": "^6.32.0",
+    "openai": "^6.42.0",
     "picomatch": "^4.0.3",
-    "preact": "^10.28.4",
-    "simple-git": "^3.32.3",
+    "preact": "^10.29.2",
+    "simple-git": "^3.36.0",
     "undici": "^8.5.0",
     "unpdf": "^1.6.2",
     "vega": "^6.2.0",
     "vega-embed": "^7.1.0",
-    "vega-lite": "^6.4.2",
-    "web-tree-sitter": "^0.26.6",
-    "zod": "^4.3.6",
-    "zod-to-json-schema": "^3.25.1"
+    "vega-lite": "^6.4.3",
+    "web-tree-sitter": "^0.26.9",
+    "zod": "^4.4.3",
+    "zod-to-json-schema": "^3.25.2"
   },
   "overrides": {
     "uuid": "^14.0.0"
@@ -609,15 +613,15 @@
   "devDependencies": {
     "@testing-library/preact": "^3.2.4",
     "@types/dompurify": "^3.0.5",
-    "@types/node": "^25.3.2",
-    "@types/picomatch": "^4.0.2",
+    "@types/node": "^25.9.3",
+    "@types/picomatch": "^4.0.3",
     "@types/vscode": "^1.109.0",
-    "@vitest/coverage-v8": "^4.0.18",
-    "esbuild": "^0.27.3",
-    "jsdom": "^29.0.2",
+    "@vitest/coverage-v8": "^4.1.9",
+    "esbuild": "^0.28.1",
+    "jsdom": "^29.1.1",
     "monaco-editor": "^0.55.1",
-    "oxlint": "^1.53.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "oxlint": "^1.70.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
   }
 }

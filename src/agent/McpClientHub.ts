@@ -2,8 +2,10 @@ import * as vscode from "vscode";
 
 import {
   CreateMessageRequestSchema,
+  ElicitationCompleteNotificationSchema,
   ElicitRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { ElicitRequestURLParams } from "@modelcontextprotocol/sdk/types.js";
 import type { JsonSchema, ToolDefinition } from "./providers/types.js";
 import { McpOAuthError, McpOAuthProvider } from "./McpOAuthProvider.js";
 import {
@@ -20,6 +22,10 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ToolResult } from "../shared/types.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import {
+  validateMcpElicitationUrl,
+  type McpUrlElicitationRequest,
+} from "../shared/mcpUrlElicitation.js";
 
 export type McpServerStatus =
   | "connecting"
@@ -74,6 +80,8 @@ export interface ElicitRequest {
   fields: Record<string, ElicitField>;
   required: string[];
 }
+
+export type UrlElicitationAction = "accept" | "cancel" | "decline";
 
 type McpConnectAuthMode = "interactive" | "noninteractive";
 
@@ -245,6 +253,18 @@ export class McpClientHub {
     cancel: () => void,
   ) => void;
 
+  /** Called when an MCP server requests URL-mode elicitation. */
+  onUrlElicitation?: (
+    request: McpUrlElicitationRequest,
+    resolve: (action: UrlElicitationAction) => void,
+  ) => void;
+
+  /** Called when an MCP server reports a URL elicitation completed out-of-band. */
+  onUrlElicitationComplete?: (
+    serverName: string,
+    elicitationId: string,
+  ) => void;
+
   /**
    * Called when an MCP server requests sampling (AI inference).
    * Should call Claude and return the result.
@@ -366,7 +386,7 @@ export class McpClientHub {
         {
           capabilities: {
             sampling: {},
-            elicitation: {},
+            elicitation: { form: {}, url: {} },
             roots: { listChanged: false },
           },
         },
@@ -404,17 +424,68 @@ export class McpClientHub {
 
       // Register elicitation handler
       entry.client.setRequestHandler(ElicitRequestSchema, async (req) => {
-        if (!this.onElicitation) {
-          return { action: "cancel" as const };
-        }
         const params = (req as { params: unknown }).params as {
+          mode?: string;
           message?: string;
+          elicitationId?: string;
+          url?: string;
+          task?: { ttl?: number };
           requestedSchema?: {
             type: string;
             properties?: Record<string, unknown>;
             required?: string[];
           };
         };
+
+        if (params.mode === "url") {
+          if (!this.onUrlElicitation) {
+            return { action: "decline" as const };
+          }
+          if (
+            typeof params.url !== "string" ||
+            typeof params.message !== "string" ||
+            typeof params.elicitationId !== "string"
+          ) {
+            this.log(
+              `[mcp:${cfg.name}] declined malformed URL elicitation request`,
+            );
+            return { action: "decline" as const };
+          }
+          const urlParams = params as ElicitRequestURLParams;
+          const validated = validateMcpElicitationUrl(urlParams.url);
+          if (!validated.ok) {
+            this.log(
+              `[mcp:${cfg.name}] declined URL elicitation ${urlParams.elicitationId}: ${validated.error}`,
+            );
+            return { action: "decline" as const };
+          }
+
+          const ttlMs =
+            typeof urlParams.task?.ttl === "number" &&
+            Number.isFinite(urlParams.task.ttl) &&
+            urlParams.task.ttl > 0
+              ? urlParams.task.ttl * 1000
+              : undefined;
+          const request: McpUrlElicitationRequest = {
+            id: `url_elicit_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            serverName: cfg.name,
+            message: urlParams.message,
+            url: validated.value.url,
+            elicitationId: urlParams.elicitationId,
+            origin: validated.value.origin,
+            host: validated.value.host,
+            isLocalAddress: validated.value.isLocalAddress,
+            ...(ttlMs ? { expiresAt: Date.now() + ttlMs } : {}),
+          };
+
+          return new Promise((resolve) => {
+            this.onUrlElicitation!(request, (action) => resolve({ action }));
+          });
+        }
+
+        if (!this.onElicitation) {
+          return { action: "cancel" as const };
+        }
         const properties = (params.requestedSchema?.properties ?? {}) as Record<
           string,
           ElicitField
@@ -433,6 +504,16 @@ export class McpClientHub {
           );
         });
       });
+
+      entry.client.setNotificationHandler(
+        ElicitationCompleteNotificationSchema,
+        (notification) => {
+          this.onUrlElicitationComplete?.(
+            cfg.name,
+            notification.params.elicitationId,
+          );
+        },
+      );
 
       // Register sampling handler
       entry.client.setRequestHandler(

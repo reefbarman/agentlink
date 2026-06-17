@@ -78,7 +78,9 @@ export class BrowserGatewayServer implements vscode.Disposable {
     );
 
     // Let the service pause its poll when no browser client is connected.
-    this.gatewayService.setHasActiveClientsProbe(() => this.sseClients.size > 0);
+    this.gatewayService.setHasActiveClientsProbe(
+      () => this.sseClients.size > 0,
+    );
 
     await new Promise<void>((resolve, reject) => {
       const onError = (err: Error) => {
@@ -295,6 +297,25 @@ export class BrowserGatewayServer implements vscode.Disposable {
     if (method === "POST" && url === "/api/question") {
       void this.handleQuestionAction(req, res).catch((err) => {
         this.log(`[browser-gateway] question action failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
+    if (method === "POST" && url === "/api/url-elicitation") {
+      void this.handleUrlElicitationAction(req, res).catch((err) => {
+        this.log(`[browser-gateway] url elicitation action failed: ${err}`);
         if (!res.headersSent) {
           this.writeJson(
             res,
@@ -910,6 +931,35 @@ export class BrowserGatewayServer implements vscode.Disposable {
       id: body.id,
       answers: body.answers,
       notes: body.notes,
+    });
+    this.writeJson(res, ok ? 200 : 404, { ok });
+  }
+
+  private async handleUrlElicitationAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await this.readJsonBody(req)) as {
+      id?: string;
+      action?: string;
+    };
+    if (
+      typeof body?.id !== "string" ||
+      (body.action !== "accept" &&
+        body.action !== "cancel" &&
+        body.action !== "decline")
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const ok = this.chatViewProvider.submitBrowserUrlElicitation({
+      id: body.id,
+      action: body.action,
     });
     this.writeJson(res, ok ? 200 : 404, { ok });
   }

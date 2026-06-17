@@ -20,6 +20,7 @@ import type {
 
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
+import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
 import type {
   AgentUiEvent,
   ReadableAgentUiEventHub,
@@ -53,6 +54,7 @@ export interface BrowserGatewayUiState {
       }
     | undefined;
   questionProgress: QuestionProgressState | undefined;
+  urlElicitation: McpUrlElicitationRequest | undefined;
   recentEvents: AgentUiEvent[];
 }
 
@@ -65,6 +67,7 @@ export interface BrowserGatewayWireState {
     backgroundTask?: string;
   } | null;
   questionProgress: QuestionProgressState | null;
+  urlElicitation: McpUrlElicitationRequest | null;
   recentEvents: AgentUiEvent[];
   mcpStatusInfos: ReturnType<ChatViewProvider["getBrowserMcpStatusInfos"]>;
 }
@@ -159,6 +162,13 @@ export interface BrowserGatewaySnapshotState {
   background: BgSessionInfo[];
   diffs: DiffSnapshotPreview[];
   theme: BrowserGatewayThemeSnapshot;
+  /**
+   * Monotonic counter bumped when the provider model list/capabilities change
+   * (e.g. Anthropic dynamic capability refresh). Browser clients re-fetch
+   * `/api/models` when this changes — keeps model metadata in parity without a
+   * dedicated event (Target A / Q7).
+   */
+  modelsVersion: number;
 }
 
 function isSameOrNestedPath(pathValue: string, candidateRoot: string): boolean {
@@ -233,7 +243,9 @@ export class BrowserGatewayService implements vscode.Disposable {
       }
     | undefined;
   private questionProgress: QuestionProgressState | undefined;
+  private urlElicitation: McpUrlElicitationRequest | undefined;
   private recentEvents: AgentUiEvent[] = [];
+  private modelsVersion = 0;
   private repositoryInfoCache:
     | { value: BrowserGatewayRepositoryInfo | null; expiresAt: number }
     | undefined;
@@ -311,6 +323,9 @@ export class BrowserGatewayService implements vscode.Disposable {
         : undefined,
       questionProgress: this.questionProgress
         ? { ...this.questionProgress }
+        : undefined,
+      urlElicitation: this.urlElicitation
+        ? { ...this.urlElicitation }
         : undefined,
       recentEvents: [...this.recentEvents],
     };
@@ -428,6 +443,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       questionProgress: this.questionProgress
         ? { ...this.questionProgress }
         : null,
+      urlElicitation: this.urlElicitation ? { ...this.urlElicitation } : null,
       recentEvents: [...this.recentEvents],
       mcpStatusInfos: this.getMcpStatusInfos(),
     };
@@ -492,13 +508,17 @@ export class BrowserGatewayService implements vscode.Disposable {
     if (
       ui.approval ||
       ui.question ||
+      ui.urlElicitation ||
       session?.questionRequest ||
       session?.status === "awaiting_approval"
     ) {
       return {
         kind: "awaiting_approval",
-        label:
-          ui.question || session?.questionRequest ? "Question" : "Approval",
+        label: ui.urlElicitation
+          ? "MCP URL"
+          : ui.question || session?.questionRequest
+            ? "Question"
+            : "Approval",
         detail: session?.statusOverride ?? "Awaiting response",
         sessionTitle: session?.title,
       };
@@ -540,7 +560,17 @@ export class BrowserGatewayService implements vscode.Disposable {
         createdAt: diff.createdAt,
       })),
       theme: this.getThemeSnapshot(),
+      modelsVersion: this.modelsVersion,
     };
+  }
+
+  /**
+   * Signal that provider model metadata changed so browser clients re-fetch
+   * `/api/models`. Bumps the snapshot's `modelsVersion` and emits a snapshot.
+   */
+  bumpModelsVersion(): void {
+    this.modelsVersion += 1;
+    this.emitSnapshot();
   }
 
   dispose(): void {
@@ -555,6 +585,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.approval = undefined;
     this.question = undefined;
     this.questionProgress = undefined;
+    this.urlElicitation = undefined;
     this.recentEvents = [];
     this.lastSerializedSnapshot = "";
     this.onDidChangeEmitter.dispose();
@@ -609,6 +640,14 @@ export class BrowserGatewayService implements vscode.Disposable {
           notes: { ...event.notes },
           origin: event.origin,
         };
+        break;
+      case "agentUrlElicitationRequest":
+        this.urlElicitation = { ...event.request };
+        break;
+      case "agentUrlElicitationCleared":
+        if (!this.urlElicitation || this.urlElicitation.id === event.id) {
+          this.urlElicitation = undefined;
+        }
         break;
     }
 

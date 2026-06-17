@@ -77,7 +77,7 @@ vi.mock("vscode", () => ({
     joinPath: vi.fn(() => ({ fsPath: "/tmp/dist" })),
     file: vi.fn((fsPath: string) => ({ fsPath })),
   },
-  ViewColumn: { Beside: 2 },
+  ViewColumn: { One: 1, Beside: 2 },
 }));
 
 describe("persisted session mutation failure messages", () => {

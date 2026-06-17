@@ -43,6 +43,7 @@ import { DebugInfo } from "./components/DebugInfo";
 import { ElicitationModal } from "./components/ElicitationModal";
 import { InputArea } from "./components/InputArea";
 import { McpCard } from "../../approvals/webview/components/McpCard";
+import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import { MemoryCard } from "../../approvals/webview/components/MemoryCard";
 import { ModeSwitchCard } from "../../approvals/webview/components/ModeSwitchCard";
 import { PathCard } from "../../approvals/webview/components/PathCard";
@@ -51,6 +52,7 @@ import { RenameCard } from "../../approvals/webview/components/RenameCard";
 import { SessionHistory } from "./components/SessionHistory";
 import { TodoPanel } from "./components/TodoPanel";
 import { TranscriptView } from "./components/TranscriptView";
+import { UrlElicitationModal } from "./components/UrlElicitationModal";
 import { WriteCard } from "../../approvals/webview/components/WriteCard";
 import { detectQuestionFromAssistantText } from "./questionDetection";
 import { getStreamingActivity } from "./components/MessageBubble";
@@ -210,6 +212,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     >;
     required: string[];
   } | null>(null);
+  const [urlElicitation, setUrlElicitation] =
+    useState<McpUrlElicitationRequest | null>(null);
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [forwardedApproval, setForwardedApproval] =
@@ -620,6 +624,14 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             fields: msg.fields,
             required: msg.required,
           });
+          break;
+        case "agentUrlElicitationRequest":
+          setUrlElicitation(msg.request);
+          break;
+        case "agentUrlElicitationCleared":
+          setUrlElicitation((current) =>
+            current?.id === msg.id ? null : current,
+          );
           break;
         case "agentMcpStatus":
           if (msg.open) {
@@ -1763,6 +1775,37 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
+  const submitUrlElicitation = useCallback(
+    (id: string, action: "accept" | "cancel" | "decline") => {
+      if (action !== "accept") {
+        setUrlElicitation((current) => (current?.id === id ? null : current));
+      }
+      vscodeApi.postMessage({
+        command: "agentUrlElicitationResponse",
+        id,
+        action,
+      });
+    },
+    [vscodeApi],
+  );
+
+  const handleUrlElicitAccept = useCallback(
+    (id: string, _url: string) => {
+      submitUrlElicitation(id, "accept");
+    },
+    [submitUrlElicitation],
+  );
+
+  const handleUrlElicitDecline = useCallback(
+    (id: string) => submitUrlElicitation(id, "decline"),
+    [submitUrlElicitation],
+  );
+
+  const handleUrlElicitCancel = useCallback(
+    (id: string) => submitUrlElicitation(id, "cancel"),
+    [submitUrlElicitation],
+  );
+
   const handleForwardedApprovalSubmit = useCallback(
     (data: Omit<DecisionMessage, "type">) => {
       const submittedApprovalId = data.id;
@@ -2118,6 +2161,14 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           required={elicitation.required}
           onSubmit={handleElicitSubmit}
           onCancel={handleElicitCancel}
+        />
+      )}
+      {urlElicitation && (
+        <UrlElicitationModal
+          request={urlElicitation}
+          onAccept={handleUrlElicitAccept}
+          onDecline={handleUrlElicitDecline}
+          onCancel={handleUrlElicitCancel}
         />
       )}
       <div

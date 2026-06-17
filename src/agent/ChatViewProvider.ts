@@ -27,6 +27,8 @@ import type {
   RequestContextBreakdown,
   RevertRecoveryNotice,
 } from "../shared/types.js";
+import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
+import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 import type { InstructionBlock } from "./configLoader.js";
 import {
   getFinalMessageContinueAction,
@@ -379,6 +381,8 @@ export type ExtensionToWebview =
       >;
       required: string[];
     }
+  | { type: "agentUrlElicitationRequest"; request: McpUrlElicitationRequest }
+  | { type: "agentUrlElicitationCleared"; id: string }
   | {
       type: "agentMcpStatus";
       open?: boolean;
@@ -814,6 +818,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     string,
     { resolve: (values: Record<string, unknown>) => void; cancel: () => void }
   >();
+  private pendingUrlElicitations = new Map<
+    string,
+    {
+      request: McpUrlElicitationRequest;
+      resolve: (action: "accept" | "cancel" | "decline") => void;
+      timeout?: ReturnType<typeof setTimeout>;
+    }
+  >();
   /** Tracks which pending-elicitation IDs belong to each session, for scoped cancellation on stop */
   private elicitationSessionIndex = new Map<string, Set<string>>();
   private pendingApprovals = new Map<
@@ -869,6 +881,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private approvalManager: ApprovalManager | undefined;
   private approvalManagerListener: vscode.Disposable | undefined;
   private toolCallTracker: ToolCallTracker | undefined;
+  private anthropicProvider: ModelProvider | undefined;
+  private notifyBrowserModelsChanged: (() => void) | undefined;
+  private anthropicModelsRefreshInFlight: Promise<void> | undefined;
   private browserGatewayAdminClient:
     | import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient
     | undefined;
@@ -968,6 +983,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         required: request.required,
       } as unknown as ExtensionToWebview);
     };
+
+    this.mcpHub.onUrlElicitation = (request, resolve) => {
+      this.cancelPendingUrlElicitations();
+      this.pendingUrlElicitations.set(request.id, { request, resolve });
+      if (request.expiresAt) {
+        const delay = Math.max(0, request.expiresAt - Date.now());
+        const pending = this.pendingUrlElicitations.get(request.id);
+        if (pending) {
+          pending.timeout = setTimeout(() => {
+            this.resolveUrlElicitation(request.id, "cancel");
+          }, delay);
+        }
+      }
+      this.uiPublisher.publishUrlElicitationRequest(request);
+    };
+
+    this.mcpHub.onUrlElicitationComplete = (_serverName, elicitationId) => {
+      for (const pending of this.pendingUrlElicitations.values()) {
+        if (pending.request.elicitationId === elicitationId) {
+          this.clearUrlElicitation(pending.request.id);
+          return;
+        }
+      }
+    };
   }
 
   dispose(): void {
@@ -1003,6 +1042,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cancel();
     }
     this.pendingElicitations.clear();
+    for (const [id, pending] of this.pendingUrlElicitations) {
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.resolve("cancel");
+      this.uiPublisher.publishUrlElicitationCleared(id);
+    }
+    this.pendingUrlElicitations.clear();
     this.elicitationSessionIndex.clear();
 
     this.outputChannel.dispose();
@@ -1054,6 +1099,63 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     client: import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient,
   ): void {
     this.browserGatewayAdminClient = client;
+  }
+
+  /**
+   * Register the Anthropic provider so model capabilities can be refreshed
+   * lazily (Target A). The provider exposes an optional `listAvailableModels()`.
+   */
+  setAnthropicProvider(provider: ModelProvider): void {
+    this.anthropicProvider = provider;
+  }
+
+  /**
+   * Register a callback (wired to the browser gateway) invoked after a dynamic
+   * model refresh so browser clients re-fetch `/api/models`. Keeps the gateway
+   * in parity without a dedicated event type (design §5 / Q7).
+   */
+  setBrowserModelsChangedNotifier(notify: () => void): void {
+    this.notifyBrowserModelsChanged = notify;
+  }
+
+  /**
+   * Lazily refresh Anthropic dynamic model capabilities. No-op if the provider
+   * has no `listAvailableModels`, dynamic capabilities are disabled, or a
+   * refresh is already in-flight. The provider itself honors the TTL, so a
+   * fresh cache resolves without a network call. On a change: rebuild the
+   * routing index, re-send the VS Code model list, and signal the browser
+   * gateway to re-fetch. `force` bypasses the TTL (explicit refresh / auth).
+   */
+  private maybeRefreshAnthropicModels(options?: { force?: boolean }): void {
+    const provider = this.anthropicProvider;
+    if (!provider?.listAvailableModels) return;
+    // Flag-off kill switch: no dynamic refresh, no registry rebuild, no bump.
+    const enabled = (provider as { dynamicModelCapabilitiesEnabled?: boolean })
+      .dynamicModelCapabilitiesEnabled;
+    if (enabled === false) return;
+    // Coalesce: only one refresh in-flight at a time. Unlike a permanent guard,
+    // this allows later refreshes (TTL expiry, auth change, explicit refresh).
+    if (this.anthropicModelsRefreshInFlight) return;
+    const listAvailableModels = provider.listAvailableModels as (opts?: {
+      force?: boolean;
+    }) => Promise<unknown>;
+    this.anthropicModelsRefreshInFlight = listAvailableModels
+      .call(provider, options)
+      .then(() => {
+        providerRegistry.refreshIndex();
+        void this.sendModelsUpdate();
+        this.notifyBrowserModelsChanged?.();
+      })
+      .catch((err: unknown) => {
+        this.log(
+          `[anthropic] dynamic model refresh failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      })
+      .finally(() => {
+        this.anthropicModelsRefreshInFlight = undefined;
+      });
   }
 
   getBrowserGatewayAdminClient():
@@ -1314,7 +1416,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const uri = vscode.Uri.file(filePath);
     const doc = await vscode.workspace.openTextDocument(uri);
-    await vscode.window.showTextDocument(doc);
+    await vscode.window.showTextDocument(doc, withPrimaryEditorColumn());
   }
 
   /** Called by the tool dispatcher when the agent requests a mode switch. */
@@ -1839,6 +1941,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return true;
   }
 
+  public submitBrowserUrlElicitation(msg: {
+    id: string;
+    action: "accept" | "cancel" | "decline";
+  }): boolean {
+    return this.resolveUrlElicitation(msg.id, msg.action);
+  }
+
+  private resolveUrlElicitation(
+    id: string,
+    action: "accept" | "cancel" | "decline",
+  ): boolean {
+    const pending = this.pendingUrlElicitations.get(id);
+    if (!pending) return false;
+    this.pendingUrlElicitations.delete(id);
+    if (pending.timeout) clearTimeout(pending.timeout);
+    pending.resolve(action);
+    this.uiPublisher.publishUrlElicitationCleared(id);
+    return true;
+  }
+
+  private cancelPendingUrlElicitations(): void {
+    for (const [id, pending] of this.pendingUrlElicitations) {
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.resolve("cancel");
+      this.uiPublisher.publishUrlElicitationCleared(id);
+    }
+    this.pendingUrlElicitations.clear();
+  }
+
+  private clearUrlElicitation(id: string): boolean {
+    const pending = this.pendingUrlElicitations.get(id);
+    if (!pending) return false;
+    this.pendingUrlElicitations.delete(id);
+    if (pending.timeout) clearTimeout(pending.timeout);
+    this.uiPublisher.publishUrlElicitationCleared(id);
+    return true;
+  }
+
   public async submitBrowserSend(input: {
     text: string;
     id?: string;
@@ -1972,10 +2112,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const fg = mgr.getForegroundSession();
     if (fg) {
-      const condenseThreshold = getConfiguredBaseThresholdForModel(
-        vscode.workspace.getConfiguration("agentlink"),
-        fg.model,
-      );
+      const condenseThreshold = this.getConfiguredCondenseThreshold(fg.model);
       this.postMessage({
         type: "stateUpdate",
         state: {
@@ -2546,7 +2683,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async getBrowserModels(): Promise<WebviewModelInfo[]> {
     const allModels = providerRegistry.listAllModels();
     const authStatus = await providerRegistry.getAuthStatus();
-    const config = vscode.workspace.getConfiguration("agentlink");
     return allModels.map((m) => ({
       id: m.id,
       displayName: m.displayName,
@@ -2557,7 +2693,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       reasoningEfforts: m.capabilities.reasoningEfforts,
       defaultReasoningEffort: m.capabilities.defaultReasoningEffort,
       authenticated: authStatus[m.provider] ?? false,
-      condenseThreshold: getConfiguredBaseThresholdForModel(config, m.id),
+      condenseThreshold: this.getConfiguredCondenseThreshold(m.id),
     }));
   }
 
@@ -2619,9 +2755,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async sendModelsUpdate(): Promise<void> {
+    // Lazy (non-blocking) dynamic model refresh — never on activation; runs once
+    // per session, re-sends models + signals the browser when it lands (Target A).
+    this.maybeRefreshAnthropicModels();
     const allModels = providerRegistry.listAllModels();
     const authStatus = await providerRegistry.getAuthStatus();
-    const config = vscode.workspace.getConfiguration("agentlink");
     const models = allModels.map((m) => ({
       id: m.id,
       displayName: m.displayName,
@@ -2632,7 +2770,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       reasoningEfforts: m.capabilities.reasoningEfforts,
       defaultReasoningEffort: m.capabilities.defaultReasoningEffort,
       authenticated: authStatus[m.provider] ?? false,
-      condenseThreshold: getConfiguredBaseThresholdForModel(config, m.id),
+      condenseThreshold: this.getConfiguredCondenseThreshold(m.id),
     }));
     this.postMessage({
       type: "agentModelsUpdate",
@@ -2651,6 +2789,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private sendSessionList(): void {
     const sessions = this.sessionManager?.listPersistedSessions() ?? [];
     this.postMessage({ type: "agentSessionList", sessions });
+  }
+
+  private getConfiguredCondenseThreshold(modelId: string): number {
+    return getConfiguredBaseThresholdForModel(
+      vscode.workspace.getConfiguration("agentlink"),
+      modelId,
+      providerRegistry.tryResolveProvider(modelId)?.getCapabilities(modelId),
+    );
   }
 
   private buildContextBudget(
@@ -2986,8 +3132,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         const fg = mgr.getForegroundSession();
         if (fg) {
-          const condenseThreshold = getConfiguredBaseThresholdForModel(
-            vscode.workspace.getConfiguration("agentlink"),
+          const condenseThreshold = this.getConfiguredCondenseThreshold(
             fg.model,
           );
           this.postMessage({
@@ -3030,8 +3175,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           // Update state to show streaming
           const fg = this.sessionManager.getForegroundSession();
           if (fg) {
-            const condenseThreshold = getConfiguredBaseThresholdForModel(
-              vscode.workspace.getConfiguration("agentlink"),
+            const condenseThreshold = this.getConfiguredCondenseThreshold(
               fg.model,
             );
             this.postMessage({
@@ -3295,6 +3439,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentUrlElicitationResponse": {
+        const id = msg.id as string;
+        const action = msg.action as "accept" | "cancel" | "decline";
+        const pending = this.pendingUrlElicitations.get(id);
+        if (pending && action === "accept") {
+          void vscode.env.openExternal(vscode.Uri.parse(pending.request.url));
+        }
+        this.resolveUrlElicitation(id, action);
+        break;
+      }
+
       case "approvalDecision": {
         const id = msg.id as string;
 
@@ -3496,7 +3651,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ? filePath
           : path.join(workspaceRoot, filePath);
         const uri = vscode.Uri.file(absPath);
-        const options: vscode.TextDocumentShowOptions = {};
+        const options: vscode.TextDocumentShowOptions =
+          withPrimaryEditorColumn();
         if (line) {
           const pos = new vscode.Position(line - 1, 0);
           options.selection = new vscode.Range(pos, pos);
@@ -5309,7 +5465,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     fs.writeFileSync(filePath, lines.join("\n"), "utf-8");
 
     const doc = await vscode.workspace.openTextDocument(filePath);
-    await vscode.window.showTextDocument(doc, { preview: true });
+    await vscode.window.showTextDocument(
+      doc,
+      withPrimaryEditorColumn({ preview: true }),
+    );
     this.log(`Transcript exported to ${filePath}`);
   }
 
@@ -5457,10 +5616,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     const doc = await vscode.workspace.openTextDocument(uri);
-    await vscode.window.showTextDocument(doc, {
-      preview: true,
-      preserveFocus: false,
-    });
+    await vscode.window.showTextDocument(
+      doc,
+      withPrimaryEditorColumn({
+        preview: true,
+        preserveFocus: false,
+      }),
+    );
   }
 
   private async sendDebugInfo(): Promise<void> {
@@ -5691,10 +5853,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const fg = this.sessionManager.getForegroundSession();
     const config = this.sessionManager.getConfig();
     const modelId = fg?.model ?? config.model;
-    const condenseThreshold = getConfiguredBaseThresholdForModel(
-      vscode.workspace.getConfiguration("agentlink"),
-      modelId,
-    );
+    const condenseThreshold = this.getConfiguredCondenseThreshold(modelId);
     const contextBudget = this.buildContextBudget(
       fg,
       modelId,
@@ -5734,6 +5893,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * state changes (e.g. Codex sign-in/sign-out).
    */
   public refreshModels(): void {
+    // Force a dynamic refresh (bypass TTL) — e.g. provider auth state changed.
+    this.maybeRefreshAnthropicModels({ force: true });
     void this.sendModelsUpdate();
   }
 

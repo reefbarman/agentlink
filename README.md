@@ -74,7 +74,7 @@ flowchart LR
 - **Slash commands** — built-ins include `/new`, `/mode`, `/model`, `/condense`, `/checkpoint`, `/revert`, `/help`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, `/btw`, and `/pair`. Custom commands and detected skills appear in the same picker.
 - **Background agents** — spawn parallel sub-agents for review and research, then inspect their result/transcript from the foreground session.
 - **Auto-condense** — when context fills up, AgentLink can condense the conversation and continue without losing task continuity.
-- **Model picker + auth-aware UX** — model selection is built into the chat UI and can prompt for Anthropic or OpenAI/Codex auth as needed.
+- **Model picker + auth-aware UX** — model selection is built into the chat UI and can prompt for Anthropic or OpenAI/Codex auth as needed. For Anthropic, model metadata (available models, context window, output tokens, reasoning-effort options) is refreshed from the Anthropic API and merged over built-in defaults; the refresh is lazy (never on activation) and falls back to built-in static metadata when offline. Toggle with `agentlink.anthropic.dynamicModelCapabilities` (default on).
 
 ### Built-in agent vs external MCP clients
 
@@ -399,6 +399,7 @@ For external MCP clients, AgentLink establishes a trusted workspace session firs
 - **Handshake/trust** — a session must establish workspace trust before other tools can be used
 - **Native tools** — file, terminal, search, diagnostics, and language-server-backed tools
 - **MCP meta tools** — built-in tools for exploring connected MCP resources and prompts from inside the built-in agent
+- **MCP URL elicitation** — when the built-in AgentLink chat connects out to an MCP server that asks the user to complete a browser flow, AgentLink shows an explicit URL prompt in both the VS Code chat and browser gateway. URLs are never auto-opened; only `http`/`https` URLs are accepted, and local/private network targets are called out before the user proceeds.
 
 ## Tools
 
@@ -1032,7 +1033,7 @@ Use this for larger tasks that benefit from explicit progress tracking. During o
 
 ## Built-in MCP client tools
 
-These are available to the built-in AgentLink chat when it connects out to other MCP servers from project/global MCP config.
+These are available to the built-in AgentLink chat when it connects out to other MCP servers from project/global MCP config. Connected MCP servers may also request user input through MCP elicitation; URL-mode elicitations are surfaced as explicit, approval-gated browser-flow prompts in both the VS Code chat and browser gateway.
 
 ### find_mcp_tools
 

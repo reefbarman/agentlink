@@ -13,6 +13,8 @@ import { agentMessagesToChatMessages, initialState, reducer } from "../App";
 import type { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
 
+const TOOL_GROUP_SETTLE_MS_FOR_TEST = 350;
+
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
@@ -742,7 +744,7 @@ describe("MessageBubble slash-command rendering", () => {
     expect(toolGroup?.nextElementSibling).toBe(textBlock);
   });
 
-  it("defers completed tool grouping while streaming, then settles into a summary", () => {
+  it("settles completed tools into a summary while streaming and keeps running tools standalone", () => {
     vi.useFakeTimers();
 
     let state = reducer(initialState, {
@@ -796,6 +798,20 @@ describe("MessageBubble slash-command rendering", () => {
       screen.getByRole("button", { name: /execute_command/i }),
     ).toBeTruthy();
 
+    act(() => {
+      vi.advanceTimersByTime(TOOL_GROUP_SETTLE_MS_FOR_TEST);
+    });
+
+    const streamingGroup = screen.getByRole("button", {
+      name: /tools explored 1 file, 1 search/i,
+    });
+    expect(streamingGroup.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: /read_file/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /search_files/i })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /execute_command/i }),
+    ).toBeTruthy();
+
     state = reducer(state, {
       type: "TOOL_COMPLETE",
       toolCallId: "tool-3",
@@ -812,14 +828,8 @@ describe("MessageBubble slash-command rendering", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /tools/i })).toBeNull();
-
-    act(() => {
-      vi.advanceTimersByTime(350);
-    });
-
     const groupButton = screen.getByRole("button", {
-      name: /tools explored 1 file, 1 search/i,
+      name: /tools explored 1 file, 1 search · ran 1 command/i,
     });
     expect(groupButton.getAttribute("aria-expanded")).toBe("false");
     expect(

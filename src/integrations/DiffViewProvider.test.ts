@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFormatOnSaveReport,
+  createUserEditsPatch,
   isIgnorableTabCloseError,
 } from "./DiffViewProvider.js";
 
@@ -48,8 +49,13 @@ describe("createFormatOnSaveReport", () => {
     );
 
     expect(report).toMatchObject({ format_on_save: true });
-    expect(report?.format_on_save_edits).toContain("const value={a:1}");
-    expect(report?.format_on_save_edits).toContain("const value = { a: 1 };");
+    expect(report?.format_on_save_edits).toContain("Index: src/example.ts");
+    expect(report?.format_on_save_edits).toContain(
+      "--- src/example.ts\tproposed",
+    );
+    expect(report?.format_on_save_edits).toContain("+++ src/example.ts\tsaved");
+    expect(report?.format_on_save_edits).toContain("-const value={a:1}");
+    expect(report?.format_on_save_edits).toContain("+const value = { a: 1 };");
   });
 
   it("omits oversized format patches with a structured fallback", () => {
@@ -81,6 +87,32 @@ describe("createFormatOnSaveReport", () => {
       format_on_save: true,
       eol_changed: true,
     });
+  });
+});
+
+describe("createUserEditsPatch", () => {
+  it("returns undefined when edited content matches proposed content", () => {
+    expect(
+      createUserEditsPatch(
+        "src/example.ts",
+        "const value = 1;\n",
+        "const value = 1;\n",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("returns a patch from proposed to user-edited content", () => {
+    const patch = createUserEditsPatch(
+      "src/example.ts",
+      "const value = 1;\n",
+      "const value = 2;\n",
+    );
+
+    expect(patch).toContain("Index: src/example.ts");
+    expect(patch).toContain("--- src/example.ts\tproposed");
+    expect(patch).toContain("+++ src/example.ts\tuser-edited");
+    expect(patch).toContain("-const value = 1;");
+    expect(patch).toContain("+const value = 2;");
   });
 });
 

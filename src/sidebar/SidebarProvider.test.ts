@@ -32,6 +32,9 @@ const mockVscode = {
   ConfigurationTarget: {
     Global: 1,
   },
+  ViewColumn: {
+    One: 1,
+  },
 };
 
 vi.mock("vscode", () => mockVscode);

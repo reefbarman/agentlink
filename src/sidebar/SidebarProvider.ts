@@ -15,6 +15,7 @@ import type {
   ToolCallTracker,
   TrackedCallInfo,
 } from "../server/ToolCallTracker.js";
+import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
 import { getAgentById, matchClientName } from "../agents/registry.js";
 
@@ -410,7 +411,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               ".agentlink",
               "agentlink-feedback.jsonl",
             );
-            vscode.window.showTextDocument(vscode.Uri.file(feedbackPath));
+            vscode.window.showTextDocument(
+              vscode.Uri.file(feedbackPath),
+              withPrimaryEditorColumn(),
+            );
           }
           break;
         // Codebase index commands
@@ -752,7 +756,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         "agentlink.json",
       );
     }
-    vscode.window.showTextDocument(vscode.Uri.file(filePath));
+    vscode.window.showTextDocument(
+      vscode.Uri.file(filePath),
+      withPrimaryEditorColumn(),
+    );
   }
 
   private getMasterBypass(): boolean {

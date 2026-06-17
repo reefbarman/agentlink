@@ -174,6 +174,8 @@ describe("FanoutAgentUiPublisher", () => {
       publishQuestionRequest: vi.fn(),
       publishQuestionCleared: vi.fn(),
       publishQuestionProgress: vi.fn(),
+      publishUrlElicitationRequest: vi.fn(),
+      publishUrlElicitationCleared: vi.fn(),
     };
     const right = {
       publishApproval: vi.fn(),
@@ -181,6 +183,8 @@ describe("FanoutAgentUiPublisher", () => {
       publishQuestionRequest: vi.fn(),
       publishQuestionCleared: vi.fn(),
       publishQuestionProgress: vi.fn(),
+      publishUrlElicitationRequest: vi.fn(),
+      publishUrlElicitationCleared: vi.fn(),
     };
 
     const publisher = new FanoutAgentUiPublisher([left, right]);
@@ -201,6 +205,17 @@ describe("FanoutAgentUiPublisher", () => {
       notes: { note: "hello" },
       origin: "test-origin",
     });
+    publisher.publishUrlElicitationRequest({
+      id: "url-1",
+      serverName: "payments",
+      message: "Complete checkout",
+      url: "https://example.com/checkout",
+      elicitationId: "elicit-1",
+      origin: "https://example.com",
+      host: "example.com",
+      isLocalAddress: false,
+    });
+    publisher.publishUrlElicitationCleared("url-1");
 
     for (const target of [left, right]) {
       expect(target.publishApproval).toHaveBeenCalledWith({
@@ -224,6 +239,17 @@ describe("FanoutAgentUiPublisher", () => {
         notes: { note: "hello" },
         origin: "test-origin",
       });
+      expect(target.publishUrlElicitationRequest).toHaveBeenCalledWith({
+        id: "url-1",
+        serverName: "payments",
+        message: "Complete checkout",
+        url: "https://example.com/checkout",
+        elicitationId: "elicit-1",
+        origin: "https://example.com",
+        host: "example.com",
+        isLocalAddress: false,
+      });
+      expect(target.publishUrlElicitationCleared).toHaveBeenCalledWith("url-1");
     }
   });
 });
