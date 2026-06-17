@@ -716,6 +716,66 @@ describe("ChatViewProvider session state sync", () => {
     ).toBe(true);
   });
 
+  it("keeps hidden agent warnings out of the webview transcript", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    const handleAgentEvent = (
+      provider as unknown as {
+        handleAgentEvent: (
+          sessionId: string,
+          event:
+            | { type: "warning"; message: string; visible?: boolean }
+            | { type: "error"; error: string; retryable: boolean },
+        ) => void;
+      }
+    ).handleAgentEvent;
+
+    handleAgentEvent.call(provider, "session-1", {
+      type: "warning",
+      message: "Provider returned an empty response — retrying…",
+      visible: false,
+    });
+
+    expect(
+      mockOutputChannel.appendLine.mock.calls.some(([line]) =>
+        line.includes(
+          "[agent] warning: Provider returned an empty response — retrying…",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      mockPostMessage.mock.calls.some(
+        ([message]) => message.type === "agentWarning",
+      ),
+    ).toBe(false);
+
+    handleAgentEvent.call(provider, "session-1", {
+      type: "error",
+      error:
+        "Provider returned empty responses 3 times in a row. Please retry.",
+      retryable: true,
+    });
+
+    expect(
+      mockPostMessage.mock.calls.some(
+        ([message]) =>
+          message.type === "agentError" &&
+          message.error ===
+            "Provider returned empty responses 3 times in a row. Please retry.",
+      ),
+    ).toBe(true);
+  });
+
   it("replays queued webview messages after postMessage delivery fails", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 

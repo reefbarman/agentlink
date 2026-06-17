@@ -1266,6 +1266,7 @@ export class AgentEngine {
               yield {
                 type: "warning",
                 message: "Provider returned an empty response — retrying…",
+                visible: false,
               };
             } else {
               // Subsequent retries: nudge the model with an explicit continuation prompt
@@ -1273,6 +1274,7 @@ export class AgentEngine {
                 type: "warning",
                 message:
                   "Provider returned an empty response — asking it to continue…",
+                visible: false,
               };
               // Intentionally do not append an empty assistant turn to history.
               session.addUserMessage(

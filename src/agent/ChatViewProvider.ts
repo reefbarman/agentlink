@@ -5053,15 +5053,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "warning":
         this.log(`[agent] warning: ${event.message}`);
-        this.postMessage({
-          type: "agentWarning",
-          sessionId,
-          message: event.message,
-          retryDelayMs: event.retryDelayMs,
-          retryAt: event.retryAt,
-          retryAttempt: event.retryAttempt,
-          retryMaxAttempts: event.retryMaxAttempts,
-        });
+        if (event.visible !== false) {
+          this.postMessage({
+            type: "agentWarning",
+            sessionId,
+            message: event.message,
+            retryDelayMs: event.retryDelayMs,
+            retryAt: event.retryAt,
+            retryAttempt: event.retryAttempt,
+            retryMaxAttempts: event.retryMaxAttempts,
+          });
+        }
         break;
 
       case "status_update":

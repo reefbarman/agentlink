@@ -2117,6 +2117,7 @@ describe("AgentEngine", () => {
         expect.objectContaining({
           type: "warning",
           message: "Provider returned an empty response — retrying…",
+          visible: false,
         }),
       ]);
       expect(doneEvent).toBeDefined();
@@ -2169,6 +2170,7 @@ describe("AgentEngine", () => {
         expect.objectContaining({
           type: "warning",
           message: "Provider returned an empty response — retrying…",
+          visible: false,
         }),
       ]);
     });
@@ -2206,6 +2208,7 @@ describe("AgentEngine", () => {
         expect.objectContaining({
           type: "warning",
           message: "Provider returned an empty response — retrying…",
+          visible: false,
         }),
       );
       expect(warnings).toContainEqual(
@@ -2213,6 +2216,7 @@ describe("AgentEngine", () => {
           type: "warning",
           message:
             "Provider returned an empty response — asking it to continue…",
+          visible: false,
         }),
       );
       expect(doneEvent).toBeUndefined();

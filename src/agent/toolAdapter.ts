@@ -69,6 +69,14 @@ import {
   createVscodeWriteApprovalPolicyProvider,
 } from "../adapters/vscode/editReviewCapabilities.js";
 import {
+  createVscodeCompletionsProvider,
+  createVscodeDiagnosticsProvider,
+  createVscodeHoverProvider,
+  createVscodeNavigationProvider,
+  createVscodeReferencesProvider,
+  createVscodeSymbolsProvider,
+} from "../adapters/vscode/languageCapabilities.js";
+import {
   createVscodeAdvertisedArtifactProvider,
   createVscodeContextDocumentProvider,
   createVscodeContextEnrichmentProvider,
@@ -97,6 +105,14 @@ import type {
   RenameSymbolProvider,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
+import type {
+  DiagnosticsProvider,
+  LanguageCompletionsProvider,
+  LanguageHoverProvider,
+  LanguageNavigationProvider,
+  LanguageReferencesProvider,
+  LanguageSymbolsProvider,
+} from "../core/capabilities/language.js";
 import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { randomUUID } from "crypto";
@@ -1088,6 +1104,18 @@ export interface ToolDispatchContext {
   multiFileEditReviewProvider?: MultiFileEditReviewProvider;
   /** Rename-symbol implementation for runtimes with language refactor + workspace edit support. */
   renameSymbolProvider?: RenameSymbolProvider;
+  /** Diagnostics implementation for runtimes with language diagnostics support. */
+  diagnosticsProvider?: DiagnosticsProvider;
+  /** Navigation implementation for runtimes with language definition/type/implementation support. */
+  navigationProvider?: LanguageNavigationProvider;
+  /** References implementation for runtimes with language reference support. */
+  referencesProvider?: LanguageReferencesProvider;
+  /** Symbols implementation for runtimes with document/workspace symbol support. */
+  symbolsProvider?: LanguageSymbolsProvider;
+  /** Hover implementation for runtimes with language hover support. */
+  hoverProvider?: LanguageHoverProvider;
+  /** Completion implementation for runtimes with language completion support. */
+  completionsProvider?: LanguageCompletionsProvider;
 }
 
 export function createAgentToolRuntime(
@@ -1644,51 +1672,52 @@ export async function dispatchToolCall(
 
     // --- Diagnostics & language ---
     case "get_diagnostics":
-      return handleGetDiagnostics(params);
+      return handleGetDiagnostics(params, {
+        diagnosticsProvider:
+          ctx.diagnosticsProvider ?? createVscodeDiagnosticsProvider(),
+      });
     case "go_to_definition":
-      return handleGoToDefinition(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGoToDefinition(params, sessionId, {
+        navigationProvider:
+          ctx.navigationProvider ??
+          createVscodeNavigationProvider(approvalManager, approvalPanel),
+      });
     case "go_to_implementation":
-      return handleGoToImplementation(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGoToImplementation(params, sessionId, {
+        navigationProvider:
+          ctx.navigationProvider ??
+          createVscodeNavigationProvider(approvalManager, approvalPanel),
+      });
     case "go_to_type_definition":
-      return handleGoToTypeDefinition(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGoToTypeDefinition(params, sessionId, {
+        navigationProvider:
+          ctx.navigationProvider ??
+          createVscodeNavigationProvider(approvalManager, approvalPanel),
+      });
     case "get_references":
-      return handleGetReferences(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGetReferences(params, sessionId, {
+        referencesProvider:
+          ctx.referencesProvider ??
+          createVscodeReferencesProvider(approvalManager, approvalPanel),
+      });
     case "get_symbols":
-      return handleGetSymbols(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGetSymbols(params, sessionId, {
+        symbolsProvider:
+          ctx.symbolsProvider ??
+          createVscodeSymbolsProvider(approvalManager, approvalPanel),
+      });
     case "get_hover":
-      return handleGetHover(params, approvalManager, approvalPanel, sessionId);
+      return handleGetHover(params, sessionId, {
+        hoverProvider:
+          ctx.hoverProvider ??
+          createVscodeHoverProvider(approvalManager, approvalPanel),
+      });
     case "get_completions":
-      return handleGetCompletions(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGetCompletions(params, sessionId, {
+        completionsProvider:
+          ctx.completionsProvider ??
+          createVscodeCompletionsProvider(approvalManager, approvalPanel),
+      });
     case "get_code_actions":
       return handleGetCodeActions(
         params,

@@ -161,6 +161,8 @@ export type AgentEvent =
   | {
       type: "warning";
       message: string;
+      /** Defaults to true. Set false for transient retry notices that should remain log/trace-only. */
+      visible?: boolean;
       retryDelayMs?: number;
       retryAt?: number;
       retryAttempt?: number;

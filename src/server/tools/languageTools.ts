@@ -1,33 +1,61 @@
+import {
+  applyCodeActionSchema,
+  getCallHierarchySchema,
+  getCodeActionsSchema,
+  getCompletionsSchema,
+  getInlayHintsSchema,
+  getReferencesSchema,
+  getSymbolsSchema,
+  getTypeHierarchySchema,
+  positionSchema,
+} from "../../shared/toolSchemas.js";
+import {
+  createVscodeCompletionsProvider,
+  createVscodeHoverProvider,
+  createVscodeNavigationProvider,
+  createVscodeReferencesProvider,
+  createVscodeSymbolsProvider,
+} from "../../adapters/vscode/languageCapabilities.js";
+import {
+  handleApplyCodeAction,
+  handleGetCodeActions,
+} from "../../tools/codeActions.js";
+
+import type { ToolRegistrationContext } from "./types.js";
+import { handleGetCallHierarchy } from "../../tools/getCallHierarchy.js";
+import { handleGetCompletions } from "../../tools/getCompletions.js";
+import { handleGetHover } from "../../tools/getHover.js";
+import { handleGetInlayHints } from "../../tools/getInlayHints.js";
+import { handleGetReferences } from "../../tools/getReferences.js";
+import { handleGetSymbols } from "../../tools/getSymbols.js";
+import { handleGetTypeHierarchy } from "../../tools/getTypeHierarchy.js";
 import { handleGoToDefinition } from "../../tools/goToDefinition.js";
 import { handleGoToImplementation } from "../../tools/goToImplementation.js";
 import { handleGoToTypeDefinition } from "../../tools/goToTypeDefinition.js";
-import { handleGetReferences } from "../../tools/getReferences.js";
-import { handleGetSymbols } from "../../tools/getSymbols.js";
-import { handleGetHover } from "../../tools/getHover.js";
-import { handleGetCompletions } from "../../tools/getCompletions.js";
-import {
-  handleGetCodeActions,
-  handleApplyCodeAction,
-} from "../../tools/codeActions.js";
-import { handleGetCallHierarchy } from "../../tools/getCallHierarchy.js";
-import { handleGetTypeHierarchy } from "../../tools/getTypeHierarchy.js";
-import { handleGetInlayHints } from "../../tools/getInlayHints.js";
-import {
-  positionSchema,
-  getReferencesSchema,
-  getSymbolsSchema,
-  getCompletionsSchema,
-  getCodeActionsSchema,
-  applyCodeActionSchema,
-  getCallHierarchySchema,
-  getTypeHierarchySchema,
-  getInlayHintsSchema,
-} from "../../shared/toolSchemas.js";
-import type { ToolRegistrationContext } from "./types.js";
 
 export function registerLanguageTools(ctx: ToolRegistrationContext): void {
   const { server, tracker, approvalManager, approvalPanel, sid, touch, desc } =
     ctx;
+  const navigationProvider = createVscodeNavigationProvider(
+    approvalManager,
+    approvalPanel,
+  );
+  const referencesProvider = createVscodeReferencesProvider(
+    approvalManager,
+    approvalPanel,
+  );
+  const symbolsProvider = createVscodeSymbolsProvider(
+    approvalManager,
+    approvalPanel,
+  );
+  const hoverProvider = createVscodeHoverProvider(
+    approvalManager,
+    approvalPanel,
+  );
+  const completionsProvider = createVscodeCompletionsProvider(
+    approvalManager,
+    approvalPanel,
+  );
 
   server.registerTool(
     "go_to_definition",
@@ -40,12 +68,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "go_to_definition",
       (params) => {
         touch();
-        return handleGoToDefinition(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGoToDefinition(params, sid(), { navigationProvider });
       },
       (p) => `${p.path}:${p.line}`,
       sid,
@@ -63,12 +86,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "get_references",
       (params) => {
         touch();
-        return handleGetReferences(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGetReferences(params, sid(), { referencesProvider });
       },
       (p) => `${p.path}:${p.line}`,
       sid,
@@ -86,7 +104,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "get_symbols",
       (params) => {
         touch();
-        return handleGetSymbols(params, approvalManager, approvalPanel, sid());
+        return handleGetSymbols(params, sid(), { symbolsProvider });
       },
       (p) => String(p.path ?? p.query ?? ""),
       sid,
@@ -104,7 +122,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "get_hover",
       (params) => {
         touch();
-        return handleGetHover(params, approvalManager, approvalPanel, sid());
+        return handleGetHover(params, sid(), { hoverProvider });
       },
       (p) => `${p.path}:${p.line}`,
       sid,
@@ -122,12 +140,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "go_to_implementation",
       (params) => {
         touch();
-        return handleGoToImplementation(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGoToImplementation(params, sid(), { navigationProvider });
       },
       (p) => `${p.path}:${p.line}`,
       sid,
@@ -145,12 +158,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "go_to_type_definition",
       (params) => {
         touch();
-        return handleGoToTypeDefinition(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGoToTypeDefinition(params, sid(), { navigationProvider });
       },
       (p) => `${p.path}:${p.line}`,
       sid,
@@ -282,12 +290,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "get_completions",
       (params) => {
         touch();
-        return handleGetCompletions(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGetCompletions(params, sid(), { completionsProvider });
       },
       (p) => `${p.path}:${p.line}`,
       sid,

@@ -1,88 +1,47 @@
-import * as vscode from "vscode";
-
-import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import {
-  resolveAndOpenDocument,
-  toPosition,
-  serializeLocation,
-} from "./languageFeatures.js";
-
+import type {
+  LanguagePositionParams,
+  LanguageReferencesProvider,
+} from "../core/capabilities/language.js";
 import { type ToolResult } from "../shared/types.js";
 
-const MAX_REFERENCES = 200;
+export interface GetReferencesParams extends LanguagePositionParams {
+  include_declaration?: boolean;
+}
+
+export interface LanguageReferencesProviders {
+  referencesProvider?: LanguageReferencesProvider;
+}
+
+function unavailableReferencesResult(params: GetReferencesParams): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          error:
+            "Language references are unavailable in this runtime. Provide a LanguageReferencesProvider to enable get_references.",
+          path: params.path,
+          line: params.line,
+          column: params.column,
+        }),
+      },
+    ],
+  };
+}
 
 export async function handleGetReferences(
-  params: {
-    path: string;
-    line: number;
-    column: number;
-    include_declaration?: boolean;
-  },
-  approvalManager: ApprovalManager,
-  approvalPanel: ApprovalPanelProvider,
+  params: GetReferencesParams,
   sessionId: string,
+  providers: LanguageReferencesProviders = {},
 ): Promise<ToolResult> {
   try {
-    const { uri } = await resolveAndOpenDocument(
-      params.path,
-      approvalManager,
-      approvalPanel,
+    if (!providers.referencesProvider) {
+      return unavailableReferencesResult(params);
+    }
+    return await providers.referencesProvider.getReferences({
+      ...params,
       sessionId,
-    );
-    const position = toPosition(params.line, params.column);
-
-    const locations = await vscode.commands.executeCommand<vscode.Location[]>(
-      "vscode.executeReferenceProvider",
-      uri,
-      position,
-    );
-
-    if (!locations || locations.length === 0) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              total_references: 0,
-              truncated: false,
-              references: [],
-            }),
-          },
-        ],
-      };
-    }
-
-    // Filter out the declaration itself if requested
-    let filtered = locations;
-    if (params.include_declaration === false) {
-      filtered = locations.filter(
-        (loc) =>
-          !(
-            loc.uri.fsPath === uri.fsPath &&
-            loc.range.start.line === position.line &&
-            loc.range.start.character <= position.character &&
-            loc.range.end.character >= position.character
-          ),
-      );
-    }
-
-    const total = filtered.length;
-    const truncated = total > MAX_REFERENCES;
-    const capped = truncated ? filtered.slice(0, MAX_REFERENCES) : filtered;
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            total_references: total,
-            truncated,
-            references: capped.map(serializeLocation),
-          }),
-        },
-      ],
-    };
+    });
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
       return err as ToolResult;

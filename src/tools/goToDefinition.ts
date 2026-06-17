@@ -1,60 +1,45 @@
-import * as vscode from "vscode";
-
-import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import {
-  resolveAndOpenDocument,
-  toPosition,
-  serializeLocation,
-} from "./languageFeatures.js";
-
+import type {
+  LanguageNavigationProvider,
+  LanguagePositionParams,
+} from "../core/capabilities/language.js";
 import { type ToolResult } from "../shared/types.js";
 
+export interface LanguageNavigationProviders {
+  navigationProvider?: LanguageNavigationProvider;
+}
+
+function unavailableNavigationResult(
+  toolName: string,
+  params: LanguagePositionParams,
+): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          error: `Language navigation is unavailable in this runtime. Provide a LanguageNavigationProvider to enable ${toolName}.`,
+          path: params.path,
+          line: params.line,
+          column: params.column,
+        }),
+      },
+    ],
+  };
+}
+
 export async function handleGoToDefinition(
-  params: { path: string; line: number; column: number },
-  approvalManager: ApprovalManager,
-  approvalPanel: ApprovalPanelProvider,
+  params: LanguagePositionParams,
   sessionId: string,
+  providers: LanguageNavigationProviders = {},
 ): Promise<ToolResult> {
   try {
-    const { uri } = await resolveAndOpenDocument(
-      params.path,
-      approvalManager,
-      approvalPanel,
-      sessionId,
-    );
-    const position = toPosition(params.line, params.column);
-
-    const results = await vscode.commands.executeCommand<
-      (vscode.Location | vscode.LocationLink)[]
-    >("vscode.executeDefinitionProvider", uri, position);
-
-    if (!results || results.length === 0) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              definitions: [],
-              message: "No definition found",
-            }),
-          },
-        ],
-      };
+    if (!providers.navigationProvider) {
+      return unavailableNavigationResult("go_to_definition", params);
     }
-
-    const definitions = results.map((result) => {
-      // LocationLink has targetUri + targetRange; Location has uri + range
-      if ("targetUri" in result) {
-        const loc = new vscode.Location(result.targetUri, result.targetRange);
-        return serializeLocation(loc);
-      }
-      return serializeLocation(result);
+    return await providers.navigationProvider.goToDefinition({
+      ...params,
+      sessionId,
     });
-
-    return {
-      content: [{ type: "text", text: JSON.stringify({ definitions }) }],
-    };
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
       return err as ToolResult;

@@ -21,6 +21,7 @@ import {
 } from "../../shared/toolSchemas.js";
 
 import type { ToolRegistrationContext } from "./types.js";
+import { createVscodeDiagnosticsProvider } from "../../adapters/vscode/languageCapabilities.js";
 import { handleGetContext } from "../../tools/context/getContext.js";
 import { handleGetDiagnostics } from "../../tools/getDiagnostics.js";
 import { handleGetModuleNeighbors } from "../../tools/getModuleNeighbors.js";
@@ -243,7 +244,9 @@ export function registerFileTools(ctx: ToolRegistrationContext): void {
       "get_diagnostics",
       (params) => {
         touch();
-        return handleGetDiagnostics(params);
+        return handleGetDiagnostics(params, {
+          diagnosticsProvider: createVscodeDiagnosticsProvider(),
+        });
       },
       (p) => String(p.path ?? "workspace"),
       sid,

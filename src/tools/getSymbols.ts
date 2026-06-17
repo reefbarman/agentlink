@@ -1,145 +1,44 @@
-import * as vscode from "vscode";
-
-import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import { getRelativePath } from "../util/paths.js";
-import {
-  resolveAndOpenDocument,
-  SYMBOL_KIND_NAMES,
-} from "./languageFeatures.js";
-
+import type {
+  LanguageSymbolsParams,
+  LanguageSymbolsProvider,
+} from "../core/capabilities/language.js";
 import { type ToolResult } from "../shared/types.js";
 
-const MAX_WORKSPACE_SYMBOLS = 100;
-
-interface SerializedSymbol {
-  name: string;
-  kind: string;
-  line: number;
-  endLine: number;
-  children: SerializedSymbol[];
+export interface LanguageSymbolsProviders {
+  symbolsProvider?: LanguageSymbolsProvider;
 }
 
-function serializeDocumentSymbol(sym: vscode.DocumentSymbol): SerializedSymbol {
+function unavailableSymbolsResult(
+  params: Omit<LanguageSymbolsParams, "sessionId">,
+): ToolResult {
   return {
-    name: sym.name,
-    kind: SYMBOL_KIND_NAMES[sym.kind] ?? "symbol",
-    line: sym.range.start.line + 1,
-    endLine: sym.range.end.line + 1,
-    children: sym.children.map(serializeDocumentSymbol),
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          error:
+            "Language symbols are unavailable in this runtime. Provide a LanguageSymbolsProvider to enable get_symbols.",
+          path: params.path,
+          query: params.query,
+        }),
+      },
+    ],
   };
 }
 
 export async function handleGetSymbols(
-  params: { path?: string; query?: string },
-  approvalManager: ApprovalManager,
-  approvalPanel: ApprovalPanelProvider,
+  params: Omit<LanguageSymbolsParams, "sessionId">,
   sessionId: string,
+  providers: LanguageSymbolsProviders = {},
 ): Promise<ToolResult> {
   try {
-    if (!params.path && !params.query) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error:
-                "Either 'path' (for document symbols) or 'query' (for workspace symbol search) is required",
-            }),
-          },
-        ],
-      };
+    if (!providers.symbolsProvider) {
+      return unavailableSymbolsResult(params);
     }
-
-    // Document symbols mode
-    if (params.path) {
-      const { uri, relPath } = await resolveAndOpenDocument(
-        params.path,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
-
-      const symbols = await vscode.commands.executeCommand<
-        vscode.DocumentSymbol[]
-      >("vscode.executeDocumentSymbolProvider", uri);
-
-      if (!symbols || symbols.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                mode: "document",
-                path: relPath,
-                symbols: [],
-              }),
-            },
-          ],
-        };
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              mode: "document",
-              path: relPath,
-              symbols: symbols.map(serializeDocumentSymbol),
-            }),
-          },
-        ],
-      };
-    }
-
-    // Workspace symbols mode
-    const query = params.query!;
-    const symbols = await vscode.commands.executeCommand<
-      vscode.SymbolInformation[]
-    >("vscode.executeWorkspaceSymbolProvider", query);
-
-    if (!symbols || symbols.length === 0) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              mode: "workspace",
-              query,
-              total: 0,
-              symbols: [],
-            }),
-          },
-        ],
-      };
-    }
-
-    const total = symbols.length;
-    const capped = symbols.slice(0, MAX_WORKSPACE_SYMBOLS);
-
-    const serialized = capped.map((sym) => ({
-      name: sym.name,
-      kind: SYMBOL_KIND_NAMES[sym.kind] ?? "symbol",
-      path: getRelativePath(sym.location.uri.fsPath),
-      line: sym.location.range.start.line + 1,
-      containerName: sym.containerName || undefined,
-    }));
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            mode: "workspace",
-            query,
-            total,
-            truncated: total > MAX_WORKSPACE_SYMBOLS,
-            symbols: serialized,
-          }),
-        },
-      ],
-    };
+    return await providers.symbolsProvider.getSymbols({
+      ...params,
+      sessionId,
+    });
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
       return err as ToolResult;
