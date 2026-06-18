@@ -360,6 +360,7 @@ export function CommandCard({
     ) : undefined;
 
   const reason = request.reason;
+  const inlineFiles = request.inlineFiles ?? [];
 
   return (
     <ApprovalLayout
@@ -381,6 +382,34 @@ export function CommandCard({
           <span>{reason}</span>
         </div>
       )}
+      {inlineFiles.length > 0 && (
+        <div class="terminal-box inline-files-box">
+          <div class="terminal-header">
+            <span class="codicon codicon-files" />
+            <span>Attached temp files</span>
+          </div>
+          <div class="inline-files-list">
+            {inlineFiles.map((file) => (
+              <details class="inline-file-preview" key={file.name} open>
+                <summary>
+                  <span class="inline-file-name">{file.name}</span>
+                  {file.ext && <span class="inline-file-ext">.{file.ext}</span>}
+                  <span class="inline-file-meta">
+                    {file.bytes} bytes · {file.sha256.slice(0, 12)}
+                    {file.truncated ? " · preview truncated" : ""}
+                    {file.executable ? " · executable" : ""}
+                  </span>
+                </summary>
+                <div class="inline-file-path" title={file.path}>
+                  {file.path}
+                </div>
+                <pre class="inline-file-content">{file.preview}</pre>
+              </details>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div class="terminal-box">
         <div class="terminal-header">
           <span class="codicon codicon-terminal" />

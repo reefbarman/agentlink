@@ -1,5 +1,6 @@
 import * as fs from "fs/promises";
 import * as http from "http";
+import * as os from "os";
 import * as path from "path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -184,7 +185,7 @@ describe("browser gateway helper bootstrap", () => {
 
   it("fails fast when helper bundle is missing", async () => {
     const tempRoot = await fs.mkdtemp(
-      path.join(process.cwd(), ".tmp-helper-missing-"),
+      path.join(os.tmpdir(), ".tmp-helper-missing-"),
     );
 
     await expect(

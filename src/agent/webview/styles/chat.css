@@ -4196,6 +4196,69 @@ body.approval-resizing {
 .approval-panel-embed .terminal-input.edited {
   color: var(--vscode-terminal-ansiYellow, #e5c07b);
 }
+.approval-panel-embed .inline-files-box {
+  background: var(--vscode-editor-background);
+}
+.approval-panel-embed .inline-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.approval-panel-embed .inline-file-preview {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.approval-panel-embed .inline-file-preview summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+  font-size: 12px;
+}
+.approval-panel-embed .inline-file-name,
+.approval-panel-embed .inline-file-ext {
+  font-family: var(
+    --vscode-terminal-fontFamily,
+    var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace)
+  );
+  color: var(--vscode-terminal-ansiCyan, #4ec9b0);
+}
+.approval-panel-embed .inline-file-meta {
+  color: var(--vscode-descriptionForeground);
+  margin-left: 4px;
+}
+.approval-panel-embed .inline-file-path {
+  padding: 6px 8px 0;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(
+    --vscode-terminal-fontFamily,
+    var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace)
+  );
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.approval-panel-embed .inline-file-content {
+  margin: 6px 8px 8px;
+  padding: 8px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.1));
+  color: var(--vscode-editor-foreground, var(--vscode-foreground));
+  font-family: var(
+    --vscode-terminal-fontFamily,
+    var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace)
+  );
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
 .approval-panel-embed .edited-badge {
   display: inline-flex;
   align-items: center;

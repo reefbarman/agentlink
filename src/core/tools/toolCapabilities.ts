@@ -174,7 +174,7 @@ const toolCapabilities = [
   ),
   metadata(
     "start_worktree_agent",
-    "terminal",
+    "background",
     ["worktree.manage", "agent.launch"],
     "execute",
     "always",

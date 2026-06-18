@@ -174,6 +174,7 @@ const mockCtx: ToolDispatchContext = {
   sessionId: "test-session",
   extensionUri: {} as any,
   onApprovalRequest: mockOnApprovalRequest,
+  terminalProvider: {} as any,
 };
 
 const ddgMcpTools: ToolDefinition[] = [
@@ -685,6 +686,43 @@ describe("spawn_background_agent tool", () => {
     });
   });
 
+  it("prefers backgroundAgentProvider over legacy spawn callback", async () => {
+    const onSpawnBackground = vi.fn();
+    const backgroundAgentProvider = {
+      spawn: vi.fn().mockResolvedValue({
+        sessionId: "bg-provider",
+        resolvedMode: "code",
+        resolvedModel: "model",
+        resolvedProvider: "provider",
+        taskClass: "general",
+        routingReason: "provider",
+        fallbackUsed: false,
+      }),
+      getStatus: vi.fn(),
+      getResult: vi.fn(),
+      kill: vi.fn(),
+    };
+
+    const result = await dispatchToolCall(
+      "spawn_background_agent",
+      { task: "Provider task", message: "Provider message" },
+      { ...mockCtx, onSpawnBackground, backgroundAgentProvider },
+    );
+
+    expect(backgroundAgentProvider.spawn).toHaveBeenCalledWith({
+      task: "Provider task",
+      message: "Provider message",
+      mode: undefined,
+      model: undefined,
+      provider: undefined,
+      taskClass: undefined,
+      modelTier: undefined,
+    });
+    expect(onSpawnBackground).not.toHaveBeenCalled();
+    const text = (result.content[0] as { type: string; text: string }).text;
+    expect(JSON.parse(text)).toMatchObject({ sessionId: "bg-provider" });
+  });
+
   it("kill_background_agent tool exists in schema", () => {
     const killTool = getAgentTools().find(
       (t) => t.name === "kill_background_agent",
@@ -727,6 +765,27 @@ describe("spawn_background_agent tool", () => {
       taskClass: "readonly-research",
       toolCalls: 1,
       tokenUsage: 100,
+    });
+  });
+
+  it("dispatches get_background_result through backgroundAgentProvider", async () => {
+    const backgroundAgentProvider = {
+      spawn: vi.fn(),
+      getStatus: vi.fn(),
+      getResult: vi.fn().mockResolvedValue("done output"),
+      kill: vi.fn(),
+    };
+
+    const result = await dispatchToolCall(
+      "get_background_result",
+      { sessionId: "bg-789" },
+      { ...mockCtx, backgroundAgentProvider },
+    );
+
+    expect(backgroundAgentProvider.getResult).toHaveBeenCalledWith("bg-789");
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "done output",
     });
   });
 
@@ -786,6 +845,34 @@ describe("dispatchToolCall", () => {
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: JSON.stringify({ ok: true }),
+    });
+  });
+
+  it("prefers sessionStatusProvider over legacy final status callbacks", async () => {
+    const onFinalStatus = vi.fn();
+    const onCompleteTodos = vi.fn(() => []);
+    const sessionStatusProvider = {
+      setFinalStatus: vi.fn(),
+      completeTodos: vi.fn(() => ["todo-a", "todo-b"]),
+    };
+
+    const result = await dispatchToolCall(
+      "set_task_status",
+      { status: "completed", summary: "Done", completeTodos: true },
+      { ...mockCtx, onFinalStatus, onCompleteTodos, sessionStatusProvider },
+    );
+
+    expect(sessionStatusProvider.setFinalStatus).toHaveBeenCalledWith({
+      status: "completed",
+      source: "tool",
+      summary: "Done",
+    });
+    expect(sessionStatusProvider.completeTodos).toHaveBeenCalledTimes(1);
+    expect(onFinalStatus).not.toHaveBeenCalled();
+    expect(onCompleteTodos).not.toHaveBeenCalled();
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: JSON.stringify({ ok: true, completedTodos: 2 }),
     });
   });
 
@@ -1155,6 +1242,101 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  describe("start_worktree_agent", () => {
+    it("dispatches through worktreeAgentLaunchProvider when supplied", async () => {
+      const worktreeAgentLaunchProvider = {
+        start: vi.fn().mockResolvedValue({
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                status: "opened",
+                worktreePath: "/workspace/worktrees/task",
+              }),
+            },
+          ],
+        }),
+      };
+
+      const result = await dispatchToolCall(
+        "start_worktree_agent",
+        {
+          task: "Launch task",
+          prompt: "Do the work",
+          sourcePath: "/workspace/agentlink",
+          branch: "agentlink/task",
+          baseRef: "HEAD",
+          worktreePath: "/workspace/worktrees/task",
+          mode: "code",
+          autoSubmit: false,
+        },
+        { ...mockCtx, worktreeAgentLaunchProvider },
+      );
+
+      expect(worktreeAgentLaunchProvider.start).toHaveBeenCalledWith({
+        task: "Launch task",
+        prompt: "Do the work",
+        sourcePath: "/workspace/agentlink",
+        branch: "agentlink/task",
+        baseRef: "HEAD",
+        worktreePath: "/workspace/worktrees/task",
+        mode: "code",
+        autoSubmit: false,
+      });
+      expect(result.content[0]).toMatchObject({ type: "text" });
+      expect(
+        JSON.parse((result.content[0] as { type: "text"; text: string }).text),
+      ).toMatchObject({ status: "opened" });
+    });
+
+    it("does not require VS Code global storage when provider is supplied", async () => {
+      const worktreeAgentLaunchProvider = {
+        start: vi.fn().mockResolvedValue({
+          content: [
+            { type: "text" as const, text: JSON.stringify({ ok: true }) },
+          ],
+        }),
+      };
+
+      await dispatchToolCall(
+        "start_worktree_agent",
+        { task: "Task", prompt: "Prompt" },
+        {
+          ...mockCtx,
+          globalStorageUri: undefined,
+          worktreeAgentLaunchProvider,
+        },
+      );
+
+      expect(worktreeAgentLaunchProvider.start).toHaveBeenCalledWith({
+        task: "Task",
+        prompt: "Prompt",
+        sourcePath: undefined,
+        branch: undefined,
+        baseRef: undefined,
+        worktreePath: undefined,
+        mode: undefined,
+        autoSubmit: undefined,
+      });
+    });
+
+    it("returns unavailable error without provider or global storage fallback", async () => {
+      const result = await dispatchToolCall(
+        "start_worktree_agent",
+        { task: "Task", prompt: "Prompt" },
+        { ...mockCtx, globalStorageUri: undefined },
+      );
+
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("not available"),
+      });
+    });
+  });
+
   it("dispatches execute_command to handleExecuteCommand", async () => {
     const { handleExecuteCommand } = await import("../tools/executeCommand.js");
     const result = await dispatchToolCall(
@@ -1168,6 +1350,7 @@ describe("dispatchToolCall", () => {
       mockCtx.approvalPanel,
       mockCtx.sessionId,
       mockCtx.trackerCtx,
+      { terminalProvider: mockCtx.terminalProvider },
     );
     expect(result.content[0]).toMatchObject({ type: "text", text: "output" });
   });
@@ -1286,7 +1469,7 @@ describe("dispatchToolCall", () => {
     );
   });
 
-  it("dispatches get_terminal_output without ctx (params only)", async () => {
+  it("dispatches get_terminal_output with a terminal provider", async () => {
     const { handleGetTerminalOutput } =
       await import("../tools/getTerminalOutput.js");
     await dispatchToolCall(
@@ -1294,7 +1477,91 @@ describe("dispatchToolCall", () => {
       { terminal_id: "t1" },
       mockCtx,
     );
-    expect(handleGetTerminalOutput).toHaveBeenCalledWith({ terminal_id: "t1" });
+    expect(handleGetTerminalOutput).toHaveBeenCalledWith(
+      { terminal_id: "t1" },
+      { terminalProvider: mockCtx.terminalProvider },
+    );
+  });
+
+  describe("switch_mode", () => {
+    it("dispatches mode switches through modeSwitchProvider when supplied", async () => {
+      const onModeSwitch = vi.fn();
+      const modeSwitchProvider = {
+        switchMode: vi.fn().mockResolvedValue({
+          approved: true,
+          mode: "architect",
+          followUp: "Use provider-owned approval state.",
+        }),
+      };
+
+      const result = await dispatchToolCall(
+        "switch_mode",
+        { mode: "architect", reason: "Need a plan" },
+        { ...mockCtx, onModeSwitch, modeSwitchProvider },
+      );
+
+      expect(modeSwitchProvider.switchMode).toHaveBeenCalledWith({
+        mode: "architect",
+        reason: "Need a plan",
+      });
+      expect(onModeSwitch).not.toHaveBeenCalled();
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed).toEqual({
+        ok: true,
+        mode: "architect",
+        follow_up: "Use provider-owned approval state.",
+      });
+    });
+
+    it("returns approval follow-up to the agent", async () => {
+      const onModeSwitch = vi.fn().mockResolvedValue({
+        approved: true,
+        mode: "architect",
+        followUp: "Use the RFC template first.",
+      });
+
+      const result = await dispatchToolCall(
+        "switch_mode",
+        { mode: "architect", reason: "Need a plan" },
+        { ...mockCtx, onModeSwitch },
+      );
+
+      expect(onModeSwitch).toHaveBeenCalledWith("architect", "Need a plan");
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed).toEqual({
+        ok: true,
+        mode: "architect",
+        follow_up: "Use the RFC template first.",
+      });
+    });
+
+    it("returns the typed rejection reason when rejected", async () => {
+      const onModeSwitch = vi.fn().mockResolvedValue({
+        approved: false,
+        mode: "architect",
+        rejectionReason: "Stay in code mode and make the small fix.",
+        followUp: "Do not ask again; continue in code mode.",
+      });
+
+      const result = await dispatchToolCall(
+        "switch_mode",
+        { mode: "architect" },
+        { ...mockCtx, onModeSwitch },
+      );
+
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed).toEqual({
+        status: "rejected_by_user",
+        reason: "Stay in code mode and make the small fix.",
+        follow_up: "Do not ask again; continue in code mode.",
+      });
+    });
   });
 
   describe("ask_user", () => {
@@ -1310,14 +1577,149 @@ describe("dispatchToolCall", () => {
       expect(askUserTool?.input_schema.required).toEqual(["questions"]);
     });
 
+    it("dispatches structured questions through userQuestionProvider when supplied", async () => {
+      const onQuestion = vi.fn();
+      const userQuestionProvider = {
+        ask: vi.fn().mockResolvedValue({
+          answers: { choice: "Provider fix" },
+          notes: { choice: "Use provider seam" },
+        }),
+      };
+
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          context: "I need your input to choose the next step.",
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              question: "How should we proceed?",
+              context: "This affects the capability boundary.",
+              options: ["Provider fix", "UI-only fix"],
+              recommended: "Provider fix",
+            },
+          ],
+        },
+        {
+          ...mockCtx,
+          onQuestion,
+          userQuestionProvider,
+        },
+      );
+
+      expect(userQuestionProvider.ask).toHaveBeenCalledWith({
+        context: "I need your input to choose the next step.",
+        questions: [
+          expect.objectContaining({
+            id: "choice",
+            context: "This affects the capability boundary.",
+          }),
+        ],
+        sessionId: "test-session",
+      });
+      expect(onQuestion).not.toHaveBeenCalled();
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed).toEqual({
+        context: "I need your input to choose the next step.",
+        responses: [
+          {
+            question: "How should we proceed?",
+            context: "This affects the capability boundary.",
+            answer: "Provider fix",
+            note: "Use provider seam",
+          },
+        ],
+      });
+    });
+
+    it("does not call userQuestionProvider when visible context validation fails", async () => {
+      const userQuestionProvider = {
+        ask: vi.fn(),
+      };
+
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              question: "How should we proceed?",
+              options: ["Plan first", "Just implement"],
+            },
+          ],
+        },
+        { ...mockCtx, userQuestionProvider },
+      );
+
+      expect(userQuestionProvider.ask).not.toHaveBeenCalled();
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed.error).toContain("requires visible context");
+    });
+
+    it("performs a silent mode switch through modeSwitchProvider when the user's answer is mapped", async () => {
+      const onQuestion = vi.fn().mockResolvedValue({
+        answers: { choice: "Plan first" },
+        notes: { choice: "Use the RFC first" },
+      });
+      const onModeSwitch = vi.fn();
+      const modeSwitchProvider = {
+        switchMode: vi.fn().mockResolvedValue({
+          approved: true,
+          mode: "architect",
+          followUp: "Start by drafting the risk section.",
+        }),
+      };
+
+      const result = await dispatchToolCall(
+        "ask_user",
+        {
+          context: "I need your input to choose the next step.",
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              question: "How should we proceed?",
+              options: ["Plan first", "Just implement"],
+              recommended: "Plan first",
+              modeSwitch: {
+                "Plan first": "architect",
+                "Just implement": "code",
+              },
+            },
+          ],
+        },
+        { ...mockCtx, onQuestion, onModeSwitch, modeSwitchProvider },
+      );
+
+      expect(modeSwitchProvider.switchMode).toHaveBeenCalledWith({
+        mode: "architect",
+        reason: 'ask_user: "Plan first" — Use the RFC first',
+        silent: true,
+      });
+      expect(onModeSwitch).not.toHaveBeenCalled();
+      const parsed = JSON.parse(
+        (result.content[0] as { type: "text"; text: string }).text,
+      );
+      expect(parsed.modeSwitched).toBe("architect");
+      expect(parsed.follow_up).toBe("Start by drafting the risk section.");
+    });
+
     it("performs a silent mode switch when the user's answer is mapped", async () => {
       const onQuestion = vi.fn().mockResolvedValue({
         answers: { choice: "Plan first" },
         notes: {},
       });
-      const onModeSwitch = vi
-        .fn()
-        .mockResolvedValue({ approved: true, mode: "architect" });
+      const onModeSwitch = vi.fn().mockResolvedValue({
+        approved: true,
+        mode: "architect",
+        followUp: "Start by drafting the risk section.",
+      });
 
       const ctx: ToolDispatchContext = {
         ...mockCtx,
@@ -1361,6 +1763,7 @@ describe("dispatchToolCall", () => {
       const text = (result.content[0] as { type: "text"; text: string }).text;
       const parsed = JSON.parse(text);
       expect(parsed.modeSwitched).toBe("architect");
+      expect(parsed.follow_up).toBe("Start by drafting the risk section.");
       expect(parsed.context).toBe("I need your input to choose the next step.");
       expect(parsed.responses).toEqual([
         {
@@ -1628,6 +2031,70 @@ describe("dispatchToolCall", () => {
     expect(parsed.totalMatches).toBe(1);
   });
 
+  it("dispatches MCP discovery through a provider with normalized params and active skill allowlist", async () => {
+    const discoverTools = vi.fn().mockReturnValue({
+      tools: [
+        {
+          server: "linear",
+          tool: "list_issues",
+          name: "linear__list_issues",
+          description: "List Linear issues",
+        },
+      ],
+      totalMatches: 1,
+      truncated: false,
+      schemaCount: 0,
+      schemaLimited: false,
+    });
+    const skillAllowedTools = ["linear__list_issues"];
+
+    const result = await dispatchToolCall(
+      "find_mcp_tools",
+      {
+        query: "issues",
+        server: "linear",
+        includeSchemas: "true",
+        schemaLimit: "2",
+        limit: "10",
+      },
+      {
+        ...mockCtx,
+        mcpToolDiscoveryProvider: { discoverTools },
+        skillAllowedTools,
+      },
+    );
+
+    expect(discoverTools).toHaveBeenCalledTimes(1);
+    const request = discoverTools.mock.calls[0][0];
+    expect(request).toMatchObject({
+      query: "issues",
+      server: "linear",
+      includeSchemas: true,
+      schemaLimit: 2,
+      limit: 10,
+    });
+    expect(request.skillAllowlist).toBeInstanceOf(Set);
+    expect([...request.skillAllowlist]).toEqual(skillAllowedTools);
+    const parsed = JSON.parse(
+      (result.content[0] as { type: string; text: string }).text,
+    );
+    expect(parsed).toEqual({
+      tools: [
+        {
+          server: "linear",
+          tool: "list_issues",
+          name: "linear__list_issues",
+          description: "List Linear issues",
+        },
+      ],
+      count: 1,
+      totalMatches: 1,
+      truncated: false,
+      schemaCount: 0,
+      schemaLimited: false,
+    });
+  });
+
   it("filters MCP resources and prompts by active skill server allowlist", async () => {
     const mcpHub = {
       getAllResources: vi.fn().mockReturnValue([
@@ -1659,6 +2126,57 @@ describe("dispatchToolCall", () => {
       },
     );
 
+    expect(JSON.parse((resources.content[0] as { text: string }).text)).toEqual(
+      [{ serverName: "linear", uri: "linear://issues" }],
+    );
+    expect(JSON.parse((prompts.content[0] as { text: string }).text)).toEqual([
+      { serverName: "linear", name: "issue-summary" },
+    ]);
+  });
+
+  it("dispatches MCP resource and prompt listing through provider when supplied", async () => {
+    const mcpHub = {
+      getAllResources: vi.fn(),
+      getAllPrompts: vi.fn(),
+    };
+    const mcpResourcePromptProvider = {
+      listResources: vi.fn().mockReturnValue([
+        { serverName: "linear", uri: "linear://issues" },
+        { serverName: "notion", uri: "notion://pages" },
+      ]),
+      readResource: vi.fn(),
+      listPrompts: vi.fn().mockReturnValue([
+        { serverName: "linear", name: "issue-summary" },
+        { serverName: "notion", name: "page-summary" },
+      ]),
+      getPrompt: vi.fn(),
+    };
+
+    const resources = await dispatchToolCall(
+      "list_mcp_resources",
+      {},
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        mcpResourcePromptProvider,
+        skillAllowedTools: ["linear"],
+      },
+    );
+    const prompts = await dispatchToolCall(
+      "list_mcp_prompts",
+      {},
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        mcpResourcePromptProvider,
+        skillAllowedTools: ["linear"],
+      },
+    );
+
+    expect(mcpResourcePromptProvider.listResources).toHaveBeenCalledTimes(1);
+    expect(mcpResourcePromptProvider.listPrompts).toHaveBeenCalledTimes(1);
+    expect(mcpHub.getAllResources).not.toHaveBeenCalled();
+    expect(mcpHub.getAllPrompts).not.toHaveBeenCalled();
     expect(JSON.parse((resources.content[0] as { text: string }).text)).toEqual(
       [{ serverName: "linear", uri: "linear://issues" }],
     );
@@ -1700,6 +2218,66 @@ describe("dispatchToolCall", () => {
     expect((prompt.content[0] as { text: string }).text).toContain(
       "not allowed by the active skill allowed-tools allowlist",
     );
+  });
+
+  it("dispatches MCP resource reads and prompt gets through provider when supplied", async () => {
+    const mcpHub = {
+      readResource: vi.fn(),
+      getPrompt: vi.fn(),
+    };
+    const mcpResourcePromptProvider = {
+      listResources: vi.fn(),
+      readResource: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "resource body" }],
+      }),
+      listPrompts: vi.fn(),
+      getPrompt: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "user: prompt body" }],
+      }),
+    };
+
+    const resource = await dispatchToolCall(
+      "read_mcp_resource",
+      { server: "linear", uri: "linear://issues" },
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        mcpResourcePromptProvider,
+        skillAllowedTools: ["linear"],
+      },
+    );
+    const prompt = await dispatchToolCall(
+      "get_mcp_prompt",
+      {
+        server: "linear",
+        name: "issue-summary",
+        arguments: { issueId: "AL-123" },
+      },
+      {
+        ...mockCtx,
+        mcpHub: mcpHub as any,
+        mcpResourcePromptProvider,
+        skillAllowedTools: ["linear"],
+      },
+    );
+
+    expect(mcpResourcePromptProvider.readResource).toHaveBeenCalledWith(
+      "linear",
+      "linear://issues",
+    );
+    expect(mcpResourcePromptProvider.getPrompt).toHaveBeenCalledWith(
+      "linear",
+      "issue-summary",
+      { issueId: "AL-123" },
+    );
+    expect(mcpHub.readResource).not.toHaveBeenCalled();
+    expect(mcpHub.getPrompt).not.toHaveBeenCalled();
+    expect(resource).toEqual({
+      content: [{ type: "text", text: "resource body" }],
+    });
+    expect(prompt).toEqual({
+      content: [{ type: "text", text: "user: prompt body" }],
+    });
   });
 
   it("limits broad MCP discovery schema output by default", async () => {
@@ -1854,6 +2432,92 @@ describe("dispatchToolCall", () => {
     expect(
       parsed.tools.slice(1).map((tool: { name: string }) => tool.name),
     ).toContain("linear__list_issue_labels");
+  });
+
+  it("dispatches direct MCP tool calls through invocation provider when supplied", async () => {
+    const mcpHub = {
+      getServerConfig: vi.fn(),
+      callTool: vi.fn(),
+    };
+    const mcpToolInvocationProvider = {
+      getToolDefs: vi.fn(),
+      getServerConfig: vi.fn().mockReturnValue({ toolPolicy: "allow" }),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+
+    const result = await dispatchToolCall(
+      "linear__list_issues",
+      { query: "bug" },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        mcpHub: mcpHub as any,
+        mcpToolInvocationProvider,
+      },
+    );
+
+    expect(mcpToolInvocationProvider.getServerConfig).toHaveBeenCalledWith(
+      "linear",
+    );
+    expect(mcpToolInvocationProvider.callTool).toHaveBeenCalledWith({
+      toolName: "linear__list_issues",
+      input: { query: "bug" },
+      signal: undefined,
+    });
+    expect(mcpHub.getServerConfig).not.toHaveBeenCalled();
+    expect(mcpHub.callTool).not.toHaveBeenCalled();
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: JSON.stringify({ ok: true }),
+    });
+  });
+
+  it("uses invocation provider for call_mcp_tool target lookup and execution", async () => {
+    const mcpHub = {
+      getToolDefs: vi.fn(),
+      getServerConfig: vi.fn(),
+      callTool: vi.fn(),
+    };
+    const mcpToolInvocationProvider = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue({ toolPolicy: "allow" }),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+
+    await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "list_issues", input: { query: "bug" } },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        mcpHub: mcpHub as any,
+        mcpToolInvocationProvider,
+      },
+    );
+
+    expect(mcpToolInvocationProvider.getToolDefs).toHaveBeenCalledTimes(1);
+    expect(mcpToolInvocationProvider.callTool).toHaveBeenCalledWith({
+      toolName: "linear__list_issues",
+      input: { query: "bug" },
+      signal: undefined,
+    });
+    expect(mcpHub.getToolDefs).not.toHaveBeenCalled();
+    expect(mcpHub.getServerConfig).not.toHaveBeenCalled();
+    expect(mcpHub.callTool).not.toHaveBeenCalled();
   });
 
   it("allows call_mcp_tool bare tool names containing the MCP separator", async () => {
@@ -2270,6 +2934,43 @@ describe("dispatchToolCall", () => {
 
     expect(onApprovalRequest).toHaveBeenCalled();
     expect(approveMcpTool).not.toHaveBeenCalled();
+    expect(result.uiMeta?.mcpApprovalPromotion).toEqual({
+      serverName: "notion",
+      bareToolName: "search",
+      scopes: ["session", "project", "global"],
+    });
+  });
+
+  it("keeps MCP approval promotion metadata when invocation provider returns an error", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
+    const mcpToolInvocationProvider = {
+      getToolDefs: vi.fn(),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn().mockRejectedValue(new Error("provider failed")),
+    };
+
+    const result = await dispatchToolCall(
+      "notion__search",
+      { query: "docs" },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        onApprovalRequest,
+        mcpToolInvocationProvider,
+      },
+    );
+
+    expect(onApprovalRequest).toHaveBeenCalled();
+    expect(mcpToolInvocationProvider.callTool).toHaveBeenCalledWith({
+      toolName: "notion__search",
+      input: { query: "docs" },
+      signal: undefined,
+    });
+    expect((result.content[0] as { text: string }).text).toContain(
+      "provider failed",
+    );
     expect(result.uiMeta?.mcpApprovalPromotion).toEqual({
       serverName: "notion",
       bareToolName: "search",

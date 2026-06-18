@@ -143,8 +143,10 @@ export interface CommandResult {
   total_lines?: number;
   lines_shown?: number;
   command?: string;
+  command_template?: string;
   command_modified?: boolean;
   original_command?: string;
+  inline_files?: Array<{ name: string; bytes: number; sha256: string }>;
   follow_up?: string;
   approval?:
     | { by: "master_bypass" }
@@ -225,8 +227,7 @@ function findAndStripMarker(
       ? searchFrom + promptMatch.index
       : undefined;
   const useExit =
-    exitIdx !== undefined &&
-    (promptIdx === undefined || exitIdx <= promptIdx);
+    exitIdx !== undefined && (promptIdx === undefined || exitIdx <= promptIdx);
   const match = useExit ? exitMatch! : promptMatch!;
 
   // Use the match index within the region to find the exact marker position,

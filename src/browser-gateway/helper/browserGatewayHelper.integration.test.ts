@@ -33,7 +33,7 @@ async function waitForListening(
 
 async function makeExtensionRoot(): Promise<string> {
   const extensionRootPath = await fs.mkdtemp(
-    path.join(process.cwd(), ".tmp-helper-extension-root-"),
+    path.join(os.tmpdir(), ".tmp-helper-extension-root-"),
   );
   await fs.mkdir(path.join(extensionRootPath, "dist"), { recursive: true });
   await fs.mkdir(path.join(extensionRootPath, "media"), { recursive: true });
@@ -95,7 +95,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
   it("requires shared-secret auth for internal lease endpoints", async () => {
     const extensionRootPath = await fs.mkdtemp(
-      path.join(process.cwd(), ".tmp-helper-extension-root-"),
+      path.join(os.tmpdir(), ".tmp-helper-extension-root-"),
     );
     await fs.mkdir(path.join(extensionRootPath, "dist"), { recursive: true });
     await fs.mkdir(path.join(extensionRootPath, "media"), { recursive: true });
@@ -259,7 +259,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
   it("requires browser session cookie for browser-facing helper APIs", async () => {
     const extensionRootPath = await fs.mkdtemp(
-      path.join(process.cwd(), ".tmp-helper-extension-root-"),
+      path.join(os.tmpdir(), ".tmp-helper-extension-root-"),
     );
     await fs.mkdir(path.join(extensionRootPath, "dist"), { recursive: true });
     await fs.mkdir(path.join(extensionRootPath, "media"), { recursive: true });
@@ -450,7 +450,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
 
     const extensionRootPath = await fs.mkdtemp(
-      path.join(process.cwd(), ".tmp-helper-extension-root-"),
+      path.join(os.tmpdir(), ".tmp-helper-extension-root-"),
     );
     await fs.mkdir(path.join(extensionRootPath, "dist"), { recursive: true });
     await fs.mkdir(path.join(extensionRootPath, "media"), { recursive: true });

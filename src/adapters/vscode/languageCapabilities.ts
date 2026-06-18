@@ -11,17 +11,35 @@ import {
 } from "../../tools/languageFeatures.js";
 import type {
   DiagnosticsProvider,
+  LanguageCodeActionsProvider,
   LanguageCompletionsProvider,
+  LanguageHierarchyParams,
+  LanguageHierarchyProvider,
   LanguageHoverProvider,
+  LanguageInlayHintsProvider,
   LanguageNavigationParams,
   LanguageNavigationProvider,
   LanguageReferencesProvider,
   LanguageSymbolsProvider,
 } from "../../core/capabilities/language.js";
-import { getRelativePath, resolveAndValidatePath } from "../../util/paths.js";
+import {
+  anyMemoryProtectedPath,
+  isMemoryProtectedPath,
+} from "../../approvals/protectedPaths.js";
+import {
+  clearCachedCodeActions,
+  getCachedCodeActions,
+  setCachedCodeActions,
+} from "../../tools/codeActionCache.js";
+import {
+  getRelativePath,
+  resolveAndValidatePath,
+  tryGetFirstWorkspaceRoot,
+} from "../../util/paths.js";
 
 import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
+import { withPrimaryEditorColumn } from "../../util/editorPlacement.js";
 
 export function createVscodeNavigationProvider(
   approvalManager: ApprovalManager,
@@ -372,6 +390,330 @@ export function createVscodeCompletionsProvider(
   };
 }
 
+export function createVscodeCodeActionsProvider(
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+): LanguageCodeActionsProvider {
+  return {
+    async getCodeActions(params) {
+      const { uri } = await resolveAndOpenDocument(
+        params.path,
+        approvalManager,
+        approvalPanel,
+        params.sessionId,
+      );
+
+      const startPos = toPosition(params.line, params.column);
+      const endPos = params.end_line
+        ? toPosition(params.end_line, params.end_column ?? params.column)
+        : startPos;
+      const range = new vscode.Range(startPos, endPos);
+
+      let actions = await vscode.commands.executeCommand<vscode.CodeAction[]>(
+        "vscode.executeCodeActionProvider",
+        uri,
+        range,
+        params.kind,
+      );
+
+      if (!actions || actions.length === 0) {
+        clearCachedCodeActions(params.sessionId);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                actions: [],
+                message: "No code actions available",
+              }),
+            },
+          ],
+        };
+      }
+
+      if (params.only_preferred) {
+        actions = actions.filter((a) => a.isPreferred);
+      }
+
+      setCachedCodeActions(params.sessionId, {
+        path: params.path,
+        line: params.line,
+        column: params.column,
+        actions,
+      });
+
+      const serialized = actions.map((action, index) => {
+        const result: Record<string, unknown> = {
+          index,
+          title: action.title,
+        };
+        if (action.kind) result.kind = action.kind.value;
+        if (action.isPreferred) result.preferred = true;
+        if (action.diagnostics?.length) {
+          result.fixes_diagnostics = action.diagnostics.map((d) => ({
+            message: d.message,
+            severity:
+              d.severity === vscode.DiagnosticSeverity.Error
+                ? "error"
+                : d.severity === vscode.DiagnosticSeverity.Warning
+                  ? "warning"
+                  : "info",
+          }));
+        }
+        if (action.edit) {
+          const entries = action.edit.entries();
+          const fileCount = entries.length;
+          const editCount = entries.reduce(
+            (sum, [, edits]) => sum + edits.length,
+            0,
+          );
+          result.changes = { files: fileCount, edits: editCount };
+        }
+        if (action.command) {
+          result.has_command = true;
+        }
+        return result;
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ actions: serialized }, null, 2),
+          },
+        ],
+      };
+    },
+    async applyCodeAction(params) {
+      const cachedActions = getCachedCodeActions(params.sessionId);
+      if (!cachedActions) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: "No cached code actions. Call get_code_actions first.",
+              }),
+            },
+          ],
+        };
+      }
+
+      const { actions } = cachedActions;
+
+      if (params.index < 0 || params.index >= actions.length) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: `Invalid index ${params.index}. Available: 0-${actions.length - 1}`,
+              }),
+            },
+          ],
+        };
+      }
+
+      const action = actions[params.index];
+      const changedFiles: string[] = [];
+      const cachedTargetPath = path.isAbsolute(cachedActions.path)
+        ? cachedActions.path
+        : path.resolve(
+            tryGetFirstWorkspaceRoot() ?? process.cwd(),
+            cachedActions.path,
+          );
+      const cachedTargetIsProtected = isMemoryProtectedPath(cachedTargetPath);
+
+      if (cachedTargetIsProtected && action.command) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "rejected",
+                action: action.title,
+                reason:
+                  "Code action includes an executable command while targeting a protected instructions/memory file. Command side effects cannot be preflighted; use write_file/apply_diff with explicit user approval or propose_memory instead.",
+                protected_files: [getRelativePath(cachedTargetPath)],
+              }),
+            },
+          ],
+        };
+      }
+
+      if (action.edit) {
+        const editFiles = action.edit.entries().map(([uri]) => uri.fsPath);
+        if (anyMemoryProtectedPath(editFiles)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "rejected",
+                  action: action.title,
+                  reason:
+                    "Code action edits a protected instructions/memory file. Use write_file/apply_diff with explicit user approval or propose_memory instead.",
+                  protected_files: editFiles
+                    .filter((filePath) => anyMemoryProtectedPath([filePath]))
+                    .map((filePath) => getRelativePath(filePath)),
+                }),
+              },
+            ],
+          };
+        }
+
+        const success = await vscode.workspace.applyEdit(action.edit);
+        if (!success) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: "Failed to apply workspace edit",
+                  action: action.title,
+                }),
+              },
+            ],
+          };
+        }
+
+        for (const [uri] of action.edit.entries()) {
+          changedFiles.push(getRelativePath(uri.fsPath));
+          const doc = vscode.workspace.textDocuments.find(
+            (d) => d.uri.fsPath === uri.fsPath,
+          );
+          if (doc?.isDirty) {
+            await doc.save();
+          }
+        }
+      }
+
+      if (action.command) {
+        await vscode.commands.executeCommand(
+          action.command.command,
+          ...(action.command.arguments ?? []),
+        );
+      }
+
+      clearCachedCodeActions(params.sessionId);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "applied",
+              action: action.title,
+              kind: action.kind?.value,
+              ...(changedFiles.length > 0 && { changed_files: changedFiles }),
+            }),
+          },
+        ],
+      };
+    },
+  };
+}
+
+export function createVscodeHierarchyProvider(
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+): LanguageHierarchyProvider {
+  return {
+    getCallHierarchy(params) {
+      return executeCallHierarchyProvider(
+        params,
+        approvalManager,
+        approvalPanel,
+      );
+    },
+    getTypeHierarchy(params) {
+      return executeTypeHierarchyProvider(
+        params,
+        approvalManager,
+        approvalPanel,
+      );
+    },
+  };
+}
+
+export function createVscodeInlayHintsProvider(
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+): LanguageInlayHintsProvider {
+  return {
+    async getInlayHints(params) {
+      const { uri, document } = await resolveAndOpenDocument(
+        params.path,
+        approvalManager,
+        approvalPanel,
+        params.sessionId,
+      );
+
+      // Inlay hint providers may require the document to be visible in an editor.
+      await vscode.window.showTextDocument(
+        document,
+        withPrimaryEditorColumn({
+          preserveFocus: true,
+          preview: true,
+        }),
+      );
+
+      const startLine = Math.max(0, (params.start_line ?? 1) - 1);
+      const endLine = Math.min(
+        document.lineCount,
+        params.end_line ?? document.lineCount,
+      );
+      const range = new vscode.Range(
+        new vscode.Position(startLine, 0),
+        new vscode.Position(endLine, 0),
+      );
+
+      const hints = await vscode.commands.executeCommand<vscode.InlayHint[]>(
+        "vscode.executeInlayHintProvider",
+        uri,
+        range,
+      );
+
+      if (!hints || hints.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                hints: [],
+                message: "No inlay hints in this range",
+              }),
+            },
+          ],
+        };
+      }
+
+      const serialized = hints.map((hint) => {
+        const result: Record<string, unknown> = {
+          line: hint.position.line + 1,
+          column: hint.position.character + 1,
+          label: extractInlayHintLabel(hint.label),
+        };
+        if (hint.kind !== undefined) {
+          result.kind = INLAY_HINT_KIND_NAMES[hint.kind] ?? "unknown";
+        }
+        if (hint.paddingLeft) result.padding_left = true;
+        if (hint.paddingRight) result.padding_right = true;
+        return result;
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ hints: serialized }, null, 2),
+          },
+        ],
+      };
+    },
+  };
+}
+
 export function createVscodeDiagnosticsProvider(): DiagnosticsProvider {
   return {
     async getDiagnostics(params) {
@@ -467,6 +809,241 @@ export function createVscodeDiagnosticsProvider(): DiagnosticsProvider {
   };
 }
 
+async function executeCallHierarchyProvider(
+  params: LanguageHierarchyParams,
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+) {
+  const { uri } = await resolveAndOpenDocument(
+    params.path,
+    approvalManager,
+    approvalPanel,
+    params.sessionId,
+  );
+  const position = toPosition(params.line, params.column);
+
+  const items = await vscode.commands.executeCommand<
+    vscode.CallHierarchyItem[]
+  >("vscode.prepareCallHierarchy", uri, position);
+
+  if (!items || items.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            message: "No call hierarchy available at this position",
+          }),
+        },
+      ],
+    };
+  }
+
+  const item = items[0];
+  const result: Record<string, unknown> = {
+    symbol: serializeHierarchyItem(item),
+  };
+
+  const maxDepth = Math.min(params.max_depth ?? 1, 3);
+  const direction = params.direction ?? "both";
+
+  if (direction === "incoming" || direction === "both") {
+    result.incoming = await getIncomingCalls(item, maxDepth, 1);
+  }
+
+  if (direction === "outgoing" || direction === "both") {
+    result.outgoing = await getOutgoingCalls(item, maxDepth, 1);
+  }
+
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+  };
+}
+
+async function executeTypeHierarchyProvider(
+  params: LanguageHierarchyParams,
+  approvalManager: ApprovalManager,
+  approvalPanel: ApprovalPanelProvider,
+) {
+  const { uri } = await resolveAndOpenDocument(
+    params.path,
+    approvalManager,
+    approvalPanel,
+    params.sessionId,
+  );
+  const position = toPosition(params.line, params.column);
+
+  const items = await vscode.commands.executeCommand<
+    vscode.TypeHierarchyItem[]
+  >("vscode.prepareTypeHierarchy", uri, position);
+
+  if (!items || items.length === 0) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            message: "No type hierarchy available at this position",
+          }),
+        },
+      ],
+    };
+  }
+
+  const item = items[0];
+  const result: Record<string, unknown> = {
+    symbol: serializeHierarchyItem(item),
+  };
+
+  const maxDepth = Math.min(params.max_depth ?? 2, 5);
+  const direction = params.direction ?? "both";
+
+  if (direction === "supertypes" || direction === "both") {
+    result.supertypes = await getSupertypes(item, maxDepth, 1);
+  }
+
+  if (direction === "subtypes" || direction === "both") {
+    result.subtypes = await getSubtypes(item, maxDepth, 1);
+  }
+
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+  };
+}
+
+async function getIncomingCalls(
+  item: vscode.CallHierarchyItem,
+  maxDepth: number,
+  currentDepth: number,
+): Promise<unknown[]> {
+  const calls = await vscode.commands.executeCommand<
+    vscode.CallHierarchyIncomingCall[]
+  >("vscode.provideIncomingCalls", item);
+
+  if (!calls || calls.length === 0) return [];
+
+  const results: unknown[] = [];
+  for (const call of calls) {
+    const entry: Record<string, unknown> = {
+      from: serializeHierarchyItem(call.from),
+      call_sites: call.fromRanges.map((r) => ({
+        line: r.start.line + 1,
+        column: r.start.character + 1,
+      })),
+    };
+
+    if (currentDepth < maxDepth) {
+      const nested = await getIncomingCalls(
+        call.from,
+        maxDepth,
+        currentDepth + 1,
+      );
+      if (nested.length > 0) entry.incoming = nested;
+    }
+
+    results.push(entry);
+  }
+  return results;
+}
+
+async function getOutgoingCalls(
+  item: vscode.CallHierarchyItem,
+  maxDepth: number,
+  currentDepth: number,
+): Promise<unknown[]> {
+  const calls = await vscode.commands.executeCommand<
+    vscode.CallHierarchyOutgoingCall[]
+  >("vscode.provideOutgoingCalls", item);
+
+  if (!calls || calls.length === 0) return [];
+
+  const results: unknown[] = [];
+  for (const call of calls) {
+    const entry: Record<string, unknown> = {
+      to: serializeHierarchyItem(call.to),
+      call_sites: call.fromRanges.map((r) => ({
+        line: r.start.line + 1,
+        column: r.start.character + 1,
+      })),
+    };
+
+    if (currentDepth < maxDepth) {
+      const nested = await getOutgoingCalls(
+        call.to,
+        maxDepth,
+        currentDepth + 1,
+      );
+      if (nested.length > 0) entry.outgoing = nested;
+    }
+
+    results.push(entry);
+  }
+  return results;
+}
+
+async function getSupertypes(
+  item: vscode.TypeHierarchyItem,
+  maxDepth: number,
+  currentDepth: number,
+): Promise<unknown[]> {
+  const supertypes = await vscode.commands.executeCommand<
+    vscode.TypeHierarchyItem[]
+  >("vscode.provideTypeHierarchySupertypes", item);
+
+  if (!supertypes || supertypes.length === 0) return [];
+
+  const results: unknown[] = [];
+  for (const st of supertypes) {
+    const entry: Record<string, unknown> = serializeHierarchyItem(st);
+
+    if (currentDepth < maxDepth) {
+      const nested = await getSupertypes(st, maxDepth, currentDepth + 1);
+      if (nested.length > 0) entry.supertypes = nested;
+    }
+
+    results.push(entry);
+  }
+  return results;
+}
+
+async function getSubtypes(
+  item: vscode.TypeHierarchyItem,
+  maxDepth: number,
+  currentDepth: number,
+): Promise<unknown[]> {
+  const subtypes = await vscode.commands.executeCommand<
+    vscode.TypeHierarchyItem[]
+  >("vscode.provideTypeHierarchySubtypes", item);
+
+  if (!subtypes || subtypes.length === 0) return [];
+
+  const results: unknown[] = [];
+  for (const st of subtypes) {
+    const entry: Record<string, unknown> = serializeHierarchyItem(st);
+
+    if (currentDepth < maxDepth) {
+      const nested = await getSubtypes(st, maxDepth, currentDepth + 1);
+      if (nested.length > 0) entry.subtypes = nested;
+    }
+
+    results.push(entry);
+  }
+  return results;
+}
+
+function serializeHierarchyItem(
+  item: vscode.CallHierarchyItem | vscode.TypeHierarchyItem,
+): Record<string, unknown> {
+  return {
+    name: item.name,
+    kind: SYMBOL_KIND_NAMES[item.kind] ?? "symbol",
+    path: getRelativePath(item.uri.fsPath),
+    line: item.selectionRange.start.line + 1,
+    column: item.selectionRange.start.character + 1,
+    ...(item.detail && { detail: item.detail }),
+  };
+}
+
 async function executeNavigationProvider({
   params,
   approvalManager,
@@ -549,6 +1126,13 @@ function serializeDocumentSymbol(
   };
 }
 
+function extractInlayHintLabel(
+  label: string | vscode.InlayHintLabelPart[],
+): string {
+  if (typeof label === "string") return label;
+  return label.map((part) => part.value).join("");
+}
+
 function extractCompletionDocumentation(
   doc: string | vscode.MarkdownString | undefined,
 ): string | undefined {
@@ -571,6 +1155,11 @@ function extractCompletionInsertText(
   const label = typeof item.label === "string" ? item.label : item.label.label;
   return text === label ? undefined : text;
 }
+
+const INLAY_HINT_KIND_NAMES: Record<number, string> = {
+  [vscode.InlayHintKind.Type]: "type",
+  [vscode.InlayHintKind.Parameter]: "parameter",
+};
 
 const DEFAULT_COMPLETIONS_LIMIT = 50;
 const MAX_COMPLETION_DOC_LENGTH = 200;

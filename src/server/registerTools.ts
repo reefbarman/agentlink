@@ -28,6 +28,7 @@ import {
   createVscodeWriteApprovalPolicyProvider,
 } from "../adapters/vscode/editReviewCapabilities.js";
 import { createVscodeSemanticSearchProvider } from "../adapters/vscode/readSearchCapabilities.js";
+import { createVscodeWorktreeAgentLaunchProvider } from "../adapters/vscode/worktreeAgentLaunchCapabilities.js";
 import { type ToolResult } from "../shared/types.js";
 
 /** Closures for per-session trust state, provided by McpServerHost. */
@@ -121,6 +122,11 @@ export function registerTools(
       extensionUri,
     ),
     renameSymbolProvider: createVscodeRenameSymbolProvider(approvalManager),
+    worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
+      globalStorageUri,
+      // Server-side worktree launches preserve the existing modal approval fallback.
+      sessionId: sid,
+    }),
   };
 
   // --- Register all tool groups ---

@@ -9,6 +9,10 @@ import type {
 
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { appendFeedback } from "../util/feedbackStore.js";
+import type {
+  ToolUsageOutcome,
+  ToolUsageTelemetry,
+} from "../telemetry/ToolUsageTelemetry.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -140,6 +144,20 @@ function formatParamsForDisplay(params: Record<string, unknown>): string {
   }
 }
 
+function getOutcomeFromToolResult(result: ToolResult): ToolUsageOutcome {
+  const text = result.content.find((item) => item.type === "text")?.text;
+  if (!text) return "ok";
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; status?: unknown };
+    if (typeof parsed.error !== "undefined") return "error";
+    if (parsed.status === "cancelled") return "cancelled";
+    if (parsed.status === "error") return "error";
+  } catch {
+    // Plain text output is a normal successful tool result.
+  }
+  return "ok";
+}
+
 // ── ToolCallTracker ──────────────────────────────────────────────────────────
 
 const COMPLETED_TTL_MS = 8_000;
@@ -176,11 +194,21 @@ export class ToolCallTracker extends EventEmitter {
   private log: (msg: string) => void;
   private extensionVersion: string;
   private _defaultGate?: () => ToolResult | null;
+  private toolUsageTelemetry?: ToolUsageTelemetry;
 
-  constructor(log?: (msg: string) => void, extensionVersion?: string) {
+  constructor(
+    log?: (msg: string) => void,
+    extensionVersion?: string,
+    toolUsageTelemetry?: ToolUsageTelemetry,
+  ) {
     super();
     this.log = log ?? (() => {});
     this.extensionVersion = extensionVersion ?? "unknown";
+    this.toolUsageTelemetry = toolUsageTelemetry;
+  }
+
+  setToolUsageTelemetry(telemetry: ToolUsageTelemetry | undefined): void {
+    this.toolUsageTelemetry = telemetry;
   }
 
   /**
@@ -378,6 +406,7 @@ export class ToolCallTracker extends EventEmitter {
       if (gate) {
         const gateResult = gate();
         if (gateResult) {
+          this.recordUsage(toolName, params, "rejected", tracked.startedAt);
           this.log(
             `REJECTED ${toolName} (${id.slice(0, 8)}) — gate returned rejection`,
           );
@@ -447,11 +476,18 @@ export class ToolCallTracker extends EventEmitter {
 
       try {
         const result = await Promise.race([handler(params, ctx), forcePromise]);
+        this.recordUsage(
+          toolName,
+          params,
+          getOutcomeFromToolResult(result),
+          tracked.startedAt,
+        );
         if (__DEV_BUILD__) {
           this.recordResultFailure(toolName, params, result, getSessionId());
         }
         return result;
       } catch (err) {
+        this.recordUsage(toolName, params, "error", tracked.startedAt);
         if (__DEV_BUILD__) {
           this.recordExceptionFailure(toolName, params, err, getSessionId());
         }
@@ -467,6 +503,21 @@ export class ToolCallTracker extends EventEmitter {
         this.emit("change");
       }
     };
+  }
+
+  private recordUsage(
+    toolName: string,
+    params: Record<string, unknown>,
+    outcome: ToolUsageOutcome,
+    startedAt: number,
+  ): void {
+    this.toolUsageTelemetry?.record({
+      toolName,
+      params,
+      source: "mcp",
+      outcome,
+      durationMs: Date.now() - startedAt,
+    });
   }
 
   // ── Cancel ───────────────────────────────────────────────────────────────

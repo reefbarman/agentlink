@@ -1,16 +1,19 @@
-import { handleExecuteCommand } from "../../tools/executeCommand.js";
-import { handleGetTerminalOutput } from "../../tools/getTerminalOutput.js";
-import { handleCloseTerminals } from "../../tools/closeTerminals.js";
 import {
+  closeTerminalsSchema,
   executeCommandSchema,
   getTerminalOutputSchema,
-  closeTerminalsSchema,
 } from "../../shared/toolSchemas.js";
+
 import type { ToolRegistrationContext } from "./types.js";
+import { createVscodeTerminalProvider } from "../../adapters/vscode/terminalCapabilities.js";
+import { handleCloseTerminals } from "../../tools/closeTerminals.js";
+import { handleExecuteCommand } from "../../tools/executeCommand.js";
+import { handleGetTerminalOutput } from "../../tools/getTerminalOutput.js";
 
 export function registerTerminalTools(ctx: ToolRegistrationContext): void {
   const { server, tracker, approvalManager, approvalPanel, sid, touch, desc } =
     ctx;
+  const terminalProvider = createVscodeTerminalProvider();
 
   server.registerTool(
     "execute_command",
@@ -29,6 +32,7 @@ export function registerTerminalTools(ctx: ToolRegistrationContext): void {
           approvalPanel,
           sid(),
           ctx,
+          { terminalProvider },
         );
       },
       (p) => String(p.command ?? "").slice(0, 80),
@@ -51,7 +55,7 @@ export function registerTerminalTools(ctx: ToolRegistrationContext): void {
       "close_terminals",
       (params) => {
         touch();
-        return handleCloseTerminals(params);
+        return handleCloseTerminals(params, { terminalProvider });
       },
       (p) =>
         Array.isArray(p.names) ? (p.names as string[]).join(", ") : "all",
@@ -70,7 +74,7 @@ export function registerTerminalTools(ctx: ToolRegistrationContext): void {
       "get_terminal_output",
       (params) => {
         touch();
-        return handleGetTerminalOutput(params);
+        return handleGetTerminalOutput(params, { terminalProvider });
       },
       (p) => String(p.terminal_id ?? ""),
       sid,

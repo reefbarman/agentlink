@@ -504,6 +504,38 @@ export const executeCommandSchema = {
     .describe(
       'Environment variables to set for this command (e.g. {"CI":"1"}). Merged with the terminal\'s base execution environment.',
     ),
+  files: z
+    .array(
+      z.object({
+        name: z
+          .string()
+          .regex(/^[A-Za-z0-9_.-]{1,64}$/)
+          .describe(
+            "Logical name referenced in the command via $AL_FILE(name).",
+          ),
+        content: z
+          .string()
+          .describe("Full file content written to a temporary file."),
+        ext: z
+          .string()
+          .regex(/^[A-Za-z0-9]{1,16}$/)
+          .optional()
+          .describe(
+            "Optional extension hint for the temp filename (e.g. 'md', 'py'). No leading dot or separators.",
+          ),
+        mode: z
+          .enum(["644", "755"])
+          .optional()
+          .describe(
+            "Optional file mode. Use 755 only for scripts you execute directly.",
+          ),
+      }),
+    )
+    .max(8)
+    .optional()
+    .describe(
+      "Throwaway temp files created before the command runs. Reference each path in command with $AL_FILE(name). Files live in the OS temp dir and are deleted after the command completes. Not a replacement for write_file; large or diff-worthy content should use write_file.",
+    ),
   output_head: z.coerce
     .number()
     .optional()

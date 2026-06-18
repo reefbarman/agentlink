@@ -124,6 +124,16 @@ function getToolSummary(
         parts.push({ type: "text", text: `\x00exit:${exitCode}` }); // sentinel for exit badge — rendered before command
       }
       if (approvalBadge) parts.push({ type: "badge", ...approvalBadge });
+      const inlineFiles = Array.isArray(resultPayload?.inline_files)
+        ? resultPayload.inline_files
+        : [];
+      if (inlineFiles.length > 0) {
+        parts.push({
+          type: "badge",
+          text: `+${inlineFiles.length} files`,
+          title: "Temporary inline files were attached to this command",
+        });
+      }
       parts.push({
         type: "text",
         text: `${parts.length ? " " : ""}${cmdText}`,

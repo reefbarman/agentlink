@@ -1,22 +1,7 @@
-export interface SpawnBackgroundRequest {
-  task: string;
-  message: string;
-  mode?: string;
-  model?: string;
-  provider?: string;
-  taskClass?: string;
-  modelTier?: ModelTier;
-}
-
-export interface SpawnBackgroundResult {
-  sessionId: string;
-  resolvedMode: string;
-  resolvedModel: string;
-  resolvedProvider: string;
-  taskClass: string;
-  routingReason: string;
-  fallbackUsed: boolean;
-}
+export type {
+  SpawnBackgroundRequest,
+  SpawnBackgroundResult,
+} from "../core/capabilities/background.js";
 
 export type ProviderStrategy = "same" | "opposite" | "specific";
 export type ModelTier = "cheap" | "balanced" | "deep_reasoning";

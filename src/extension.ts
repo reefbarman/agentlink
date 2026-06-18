@@ -70,6 +70,10 @@ import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewa
 import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js";
 import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
 import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
+import {
+  createToolUsageTelemetry,
+  type ToolUsageTelemetry,
+} from "./telemetry/ToolUsageTelemetry.js";
 
 export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
@@ -94,6 +98,7 @@ let browserGatewayAuthToken: string | null = null;
 let browserGatewayHelperDiscovery:
   | import("./browser-gateway/protocol.js").BrowserGatewayHelperDiscoveryRecord
   | null = null;
+let toolUsageTelemetry: ToolUsageTelemetry | null = null;
 
 /**
  * Preferred → fallback URL list for opening the browser gateway from VS Code.
@@ -805,7 +810,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const extVersion =
     (context.extension.packageJSON as { version?: string })?.version ??
     "unknown";
-  toolCallTracker = new ToolCallTracker(log, extVersion);
+  toolUsageTelemetry = createToolUsageTelemetry({
+    extensionVersion: extVersion,
+    log,
+  });
+  context.subscriptions.push(toolUsageTelemetry);
+  toolCallTracker = new ToolCallTracker(log, extVersion, toolUsageTelemetry);
 
   // Status bar manager (unified status bar for port info + approval alerts)
   statusBarManager = new StatusBarManager();
@@ -1349,6 +1359,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onKillBackground: (sessionId, reason) =>
       agentSessionManager.killBackground(sessionId, reason),
     toolCallTracker,
+    toolUsageTelemetry: toolUsageTelemetry ?? undefined,
   });
 
   chatViewProvider.setApprovalManager(approvalManager);
@@ -2296,5 +2307,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+  toolUsageTelemetry?.dispose();
+  toolUsageTelemetry = null;
   stopServer();
 }

@@ -1,4 +1,4 @@
-import { getTerminalManager } from "../integrations/TerminalManager.js";
+import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 
 import { type ToolResult } from "../shared/types.js";
@@ -42,18 +42,45 @@ function detectPromptBlock(output: string): {
   return { blocked_on_prompt: false };
 }
 
-export async function handleGetTerminalOutput(params: {
+export interface GetTerminalOutputProviders {
+  terminalProvider?: TerminalProvider;
+}
+
+function unavailableTerminalOutputResult(params: {
   terminal_id: string;
-  wait_seconds?: number;
-  kill?: boolean;
-  output_head?: number;
-  output_tail?: number;
-  output_offset?: number;
-  output_grep?: string;
-  output_grep_context?: number;
-}): Promise<ToolResult> {
-  const terminalManager = getTerminalManager();
-  const log = terminalManager.log;
+}): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          error:
+            "Terminal output is unavailable in this runtime. Provide a TerminalProvider to enable get_terminal_output.",
+          terminal_id: params.terminal_id,
+        }),
+      },
+    ],
+  };
+}
+
+export async function handleGetTerminalOutput(
+  params: {
+    terminal_id: string;
+    wait_seconds?: number;
+    kill?: boolean;
+    output_head?: number;
+    output_tail?: number;
+    output_offset?: number;
+    output_grep?: string;
+    output_grep_context?: number;
+  },
+  providers: GetTerminalOutputProviders = {},
+): Promise<ToolResult> {
+  if (!providers.terminalProvider) {
+    return unavailableTerminalOutputResult(params);
+  }
+  const terminalProvider = providers.terminalProvider;
+  const log = terminalProvider.log;
   const startTime = Date.now();
 
   log?.(
@@ -66,14 +93,16 @@ export async function handleGetTerminalOutput(params: {
   // wait_seconds effectively useless.
   if (params.wait_seconds && params.wait_seconds > 0) {
     const deadline = Date.now() + params.wait_seconds * 1000;
-    const initialState = terminalManager.getBackgroundState(params.terminal_id);
+    const initialState = terminalProvider.getBackgroundState(
+      params.terminal_id,
+    );
 
     log?.(
       `[get_terminal_output] POLL_START is_running=${initialState?.is_running ?? "unknown"}`,
     );
 
     while (Date.now() < deadline) {
-      const current = terminalManager.getBackgroundState(params.terminal_id);
+      const current = terminalProvider.getBackgroundState(params.terminal_id);
       if (!current) break;
 
       // Stop waiting only when the command has finished
@@ -88,15 +117,15 @@ export async function handleGetTerminalOutput(params: {
   // Kill the running process if requested
   if (params.kill) {
     log?.(`[get_terminal_output] KILL terminal_id=${params.terminal_id}`);
-    terminalManager.interruptTerminal(params.terminal_id);
+    terminalProvider.interruptTerminal(params.terminal_id);
     // Brief wait for the process to respond to SIGINT
     await sleep(500);
   }
 
-  const state = terminalManager.getBackgroundState(params.terminal_id);
+  const state = terminalProvider.getBackgroundState(params.terminal_id);
 
   if (!state) {
-    const recent = terminalManager.getRecentlyClosedTerminals(5).map((t) => ({
+    const recent = terminalProvider.getRecentlyClosedTerminals(5).map((t) => ({
       terminal_id: t.id,
       terminal_name: t.name,
       closed_at: new Date(t.closedAt).toISOString(),

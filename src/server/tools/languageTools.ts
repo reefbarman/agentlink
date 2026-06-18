@@ -10,8 +10,11 @@ import {
   positionSchema,
 } from "../../shared/toolSchemas.js";
 import {
+  createVscodeCodeActionsProvider,
   createVscodeCompletionsProvider,
+  createVscodeHierarchyProvider,
   createVscodeHoverProvider,
+  createVscodeInlayHintsProvider,
   createVscodeNavigationProvider,
   createVscodeReferencesProvider,
   createVscodeSymbolsProvider,
@@ -53,6 +56,18 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
     approvalPanel,
   );
   const completionsProvider = createVscodeCompletionsProvider(
+    approvalManager,
+    approvalPanel,
+  );
+  const inlayHintsProvider = createVscodeInlayHintsProvider(
+    approvalManager,
+    approvalPanel,
+  );
+  const hierarchyProvider = createVscodeHierarchyProvider(
+    approvalManager,
+    approvalPanel,
+  );
+  const codeActionsProvider = createVscodeCodeActionsProvider(
     approvalManager,
     approvalPanel,
   );
@@ -176,12 +191,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "get_code_actions",
       (params) => {
         touch();
-        return handleGetCodeActions(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGetCodeActions(params, sid(), { codeActionsProvider });
       },
       (p) => `${p.path}:${p.line}`,
       sid,
@@ -203,7 +213,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "apply_code_action",
       (params) => {
         touch();
-        return handleApplyCodeAction(params, sid());
+        return handleApplyCodeAction(params, sid(), { codeActionsProvider });
       },
       (p) => `action[${p.index}]`,
       sid,
@@ -221,12 +231,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "get_call_hierarchy",
       (params) => {
         touch();
-        return handleGetCallHierarchy(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGetCallHierarchy(params, sid(), { hierarchyProvider });
       },
       (p) => `${p.path}:${p.line}`,
       sid,
@@ -244,12 +249,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "get_type_hierarchy",
       (params) => {
         touch();
-        return handleGetTypeHierarchy(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGetTypeHierarchy(params, sid(), { hierarchyProvider });
       },
       (p) => `${p.path}:${p.line}`,
       sid,
@@ -267,12 +267,7 @@ export function registerLanguageTools(ctx: ToolRegistrationContext): void {
       "get_inlay_hints",
       (params) => {
         touch();
-        return handleGetInlayHints(
-          params,
-          approvalManager,
-          approvalPanel,
-          sid(),
-        );
+        return handleGetInlayHints(params, sid(), { inlayHintsProvider });
       },
       (p) => String(p.path ?? ""),
       sid,

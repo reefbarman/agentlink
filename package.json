@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.16.42",
+  "version": "1.16.45",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -577,6 +577,8 @@
     "release": "bash scripts/release.sh",
     "audit:assistant-runtime": "node scripts/audit-assistant-runtime.mjs",
     "benchmark:codex-oauth-models": "node --experimental-strip-types scripts/benchmark-codex-oauth-models.mts",
+    "telemetry:tools": "node scripts/report-tool-usage-telemetry.mjs",
+    "telemetry:tools:csv": "node scripts/report-tool-usage-telemetry.mjs --csv",
     "lint": "bash -c 'e=0; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; oxlint src/ --deny-warnings || e=1; exit $e'",
     "test": "vitest run",
     "test:watch": "vitest"

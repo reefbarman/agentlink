@@ -848,6 +848,7 @@ Common response fields include `terminal_id` (for reuse/polling), `output`, and 
 | `command`             | string   | Shell command to execute                                                                                                                                |
 | `cwd`                 | string?  | Working directory                                                                                                                                       |
 | `env`                 | object?  | Environment variables to merge into the terminal's base execution environment                                                                           |
+| `files`               | array?   | Throwaway temp files to create for this command. Reference paths with `$AL_FILE(name)`. POSIX shells only; incompatible with `background=true`.         |
 | `terminal_id`         | string?  | Reuse a specific terminal by ID. Usually omit for sequential commands so AgentLink can auto-reuse the default terminal.                                 |
 | `terminal_name`       | string?  | Run in a named terminal (e.g. `Server`, `Tests`). Use only when intentionally creating/reusing a separate terminal.                                     |
 | `split_from`          | string?  | Split alongside an existing terminal, creating a visual group (for intentionally separate terminals).                                                   |
@@ -861,6 +862,23 @@ Common response fields include `terminal_id` (for reuse/polling), `output`, and 
 | `reason`              | string?  | Short reason explaining why the agent needs to run this command (shown in the approval dialog)                                                          |
 | `force`               | boolean? | Bypass command validation only for false-positive rejections of direct file-reading commands                                                            |
 | `force_reason`        | string?  | Required when `force=true`; explain why the validator rejection was a false positive                                                                    |
+
+`files` entries are `{ name, content, ext?, mode? }`. `name` must match `/^[A-Za-z0-9_.-]{1,64}$/`, `ext` must match `/^[A-Za-z0-9]{1,16}$/`, and `mode` may be `"644"` or `"755"`. AgentLink writes these files under the OS temp directory, substitutes each `$AL_FILE(name)` token with a quoted absolute path, shows bounded previews in the command approval UI, runs the command, then deletes the temp directory. This is intended for ephemeral CLI inputs such as `gh --body-file`, not for creating or editing workspace files.
+
+Example:
+
+```json
+{
+  "command": "gh pr comment 42 --body-file $AL_FILE(body)",
+  "files": [
+    {
+      "name": "body",
+      "ext": "md",
+      "content": "Looks good. Preserves `foo` and doesn't break quoting."
+    }
+  ]
+}
+```
 
 ### close_terminals
 

@@ -11,6 +11,7 @@ import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvide
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SemanticSearchProvider } from "../../core/capabilities/readSearch.js";
 import type { ToolCallTracker } from "../ToolCallTracker.js";
+import type { WorktreeAgentLaunchProvider } from "../../core/capabilities/worktree.js";
 
 /** Shared dependencies passed to each tool registration module. */
 export interface ToolRegistrationContext {
@@ -29,4 +30,5 @@ export interface ToolRegistrationContext {
   writeApprovalPolicyProvider: WriteApprovalPolicyProvider;
   multiFileEditReviewProvider: MultiFileEditReviewProvider;
   renameSymbolProvider: RenameSymbolProvider;
+  worktreeAgentLaunchProvider: WorktreeAgentLaunchProvider;
 }

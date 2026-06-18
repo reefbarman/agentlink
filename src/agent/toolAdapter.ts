@@ -69,9 +69,12 @@ import {
   createVscodeWriteApprovalPolicyProvider,
 } from "../adapters/vscode/editReviewCapabilities.js";
 import {
+  createVscodeCodeActionsProvider,
   createVscodeCompletionsProvider,
   createVscodeDiagnosticsProvider,
+  createVscodeHierarchyProvider,
   createVscodeHoverProvider,
+  createVscodeInlayHintsProvider,
   createVscodeNavigationProvider,
   createVscodeReferencesProvider,
   createVscodeSymbolsProvider,
@@ -86,6 +89,8 @@ import {
   createVscodeStructuralGraphProvider,
   createVscodeWorkspaceFileProvider,
 } from "../adapters/vscode/readSearchCapabilities.js";
+import { createVscodeTerminalProvider } from "../adapters/vscode/terminalCapabilities.js";
+import { createVscodeWorktreeAgentLaunchProvider } from "../adapters/vscode/worktreeAgentLaunchCapabilities.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
 import { handleOpenFile } from "../tools/openFile.js";
@@ -96,7 +101,7 @@ import { handleRenameSymbol } from "../tools/renameSymbol.js";
 import { handleSearchFiles } from "../tools/searchFiles.js";
 import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleShowNotification } from "../tools/showNotification.js";
-import { handleStartWorktreeAgent } from "../tools/startWorktreeAgent.js";
+
 import { handleWriteFile } from "../tools/writeFile.js";
 import type {
   EditReviewProvider,
@@ -107,13 +112,35 @@ import type {
 } from "../core/capabilities/editReview.js";
 import type {
   DiagnosticsProvider,
+  LanguageCodeActionsProvider,
   LanguageCompletionsProvider,
+  LanguageHierarchyProvider,
   LanguageHoverProvider,
+  LanguageInlayHintsProvider,
   LanguageNavigationProvider,
   LanguageReferencesProvider,
   LanguageSymbolsProvider,
 } from "../core/capabilities/language.js";
 import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js";
+import type { TerminalProvider } from "../core/capabilities/terminal.js";
+import type { WorktreeAgentLaunchProvider } from "../core/capabilities/worktree.js";
+import type { BackgroundAgentProvider } from "../core/capabilities/background.js";
+import type {
+  ModeSwitchProvider,
+  SessionStatusProvider,
+  UserQuestionProvider,
+  UserQuestionResponse,
+} from "../core/capabilities/sessionControl.js";
+import type {
+  McpResourcePromptProvider,
+  McpToolDiscoveryProvider,
+  McpToolDiscoveryRequest,
+  McpToolInvocationProvider,
+} from "../core/capabilities/mcp.js";
+import type {
+  ToolUsageOutcome,
+  ToolUsageTelemetry,
+} from "../telemetry/ToolUsageTelemetry.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { randomUUID } from "crypto";
 import { z } from "zod";
@@ -260,7 +287,7 @@ const CALL_MCP_TOOL: ToolDefinition = {
 };
 
 function skillAllowlistAllowsMcpServer(
-  allowlist: Set<string> | undefined,
+  allowlist: ReadonlySet<string> | undefined,
   serverName: string,
 ): boolean {
   if (!allowlist) return true;
@@ -272,7 +299,7 @@ function skillAllowlistAllowsMcpServer(
 }
 
 function skillAllowlistAllowsMcpTool(
-  allowlist: Set<string> | undefined,
+  allowlist: ReadonlySet<string> | undefined,
   fullToolName: string,
 ): boolean {
   if (!allowlist) return true;
@@ -285,7 +312,7 @@ function skillAllowlistAllowsMcpTool(
 }
 
 function skillAllowlistHasMcpTargets(
-  allowlist: Set<string> | undefined,
+  allowlist: ReadonlySet<string> | undefined,
   mcpToolDefs: ToolDefinition[] | undefined,
 ): boolean {
   if (!allowlist || !mcpToolDefs?.length) return false;
@@ -833,10 +860,7 @@ export function getAgentTools(
 /**
  * Context needed by the tool dispatcher.
  */
-export interface QuestionResponse {
-  answers: Record<string, string | string[] | number | boolean | undefined>;
-  notes: Record<string, string>;
-}
+export type QuestionResponse = UserQuestionResponse;
 
 function jsonTextResult(value: unknown): ToolResult {
   return {
@@ -846,6 +870,20 @@ function jsonTextResult(value: unknown): ToolResult {
 
 function errorTextResult(error: string): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify({ error }) }] };
+}
+
+function getToolUsageOutcomeFromResult(result: ToolResult): ToolUsageOutcome {
+  const text = result.content.find((item) => item.type === "text")?.text;
+  if (!text) return "ok";
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; status?: unknown };
+    if (typeof parsed.error !== "undefined") return "error";
+    if (parsed.status === "cancelled") return "cancelled";
+    if (parsed.status === "error") return "error";
+  } catch {
+    // Plain text tool output is a successful result.
+  }
+  return "ok";
 }
 
 const SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE =
@@ -966,13 +1004,12 @@ function scoreMcpToolDiscovery(
 
 function discoverMcpTools(
   mcpHub: McpClientHub,
-  params: Record<string, unknown>,
-  skillAllowlist?: Set<string>,
-): ToolResult {
+  params: McpToolDiscoveryRequest,
+): ReturnType<McpToolDiscoveryProvider["discoverTools"]> {
   const queryTokens = discoveryTokens(String(params.query ?? ""));
   const serverFilter = String(params.server ?? "").trim();
-  const includeSchemas =
-    params.includeSchemas === true || params.includeSchemas === "true";
+  const skillAllowlist = params.skillAllowlist;
+  const includeSchemas = params.includeSchemas === true;
   const schemaLimit = includeSchemas ? clampSchemaLimit(params.schemaLimit) : 0;
   const limit = clampToolLimit(params.limit);
 
@@ -1006,14 +1043,110 @@ function discoverMcpTools(
       : summary;
   });
 
-  return jsonTextResult({
+  return {
     tools,
-    count: tools.length,
     totalMatches: rankedTools.length,
     truncated: rankedTools.length > limit,
     schemaCount: includeSchemas ? Math.min(tools.length, schemaLimit) : 0,
     schemaLimited: includeSchemas && tools.length > schemaLimit,
+  };
+}
+
+function mcpDiscoveryResultToToolResult(
+  result: ReturnType<McpToolDiscoveryProvider["discoverTools"]>,
+): ToolResult {
+  return jsonTextResult({
+    ...result,
+    count: result.tools.length,
   });
+}
+
+function createMcpToolDiscoveryProvider(
+  mcpHub: McpClientHub,
+): McpToolDiscoveryProvider {
+  return {
+    discoverTools(request) {
+      return discoverMcpTools(mcpHub, request);
+    },
+  };
+}
+
+function createMcpResourcePromptProvider(
+  mcpHub: McpClientHub,
+): McpResourcePromptProvider {
+  return {
+    listResources() {
+      return mcpHub.getAllResources();
+    },
+    readResource(server, uri) {
+      return mcpHub.readResource(server, uri);
+    },
+    listPrompts() {
+      return mcpHub.getAllPrompts();
+    },
+    getPrompt(server, name, args) {
+      return mcpHub.getPrompt(server, name, args);
+    },
+  };
+}
+
+function createMcpToolInvocationProvider(
+  mcpHub: McpClientHub,
+): McpToolInvocationProvider {
+  return {
+    getToolDefs() {
+      return mcpHub.getToolDefs();
+    },
+    getServerConfig(serverName) {
+      return mcpHub.getServerConfig(serverName);
+    },
+    callTool(request) {
+      return mcpHub.callTool(request.toolName, request.input, {
+        signal: request.signal,
+      });
+    },
+  };
+}
+
+function createUserQuestionProvider(
+  onQuestion: NonNullable<ToolDispatchContext["onQuestion"]>,
+): UserQuestionProvider {
+  return {
+    ask(request) {
+      return onQuestion(
+        request.context,
+        request.questions as Question[],
+        request.sessionId,
+      );
+    },
+  };
+}
+
+function createSessionStatusProvider(
+  ctx: ToolDispatchContext,
+): SessionStatusProvider {
+  return {
+    setFinalStatus(marker) {
+      ctx.onFinalStatus?.(marker);
+    },
+    completeTodos: ctx.onCompleteTodos
+      ? () => ctx.onCompleteTodos?.() ?? []
+      : undefined,
+  };
+}
+
+function createModeSwitchProvider(
+  onModeSwitch: NonNullable<ToolDispatchContext["onModeSwitch"]>,
+): ModeSwitchProvider {
+  return {
+    switchMode(request) {
+      // Preserve legacy explicit switch_mode callback shape: only ask_user
+      // modeSwitch consent should pass the silent third argument.
+      return request.silent === undefined
+        ? onModeSwitch(request.mode, request.reason)
+        : onModeSwitch(request.mode, request.reason, request.silent);
+    },
+  };
 }
 
 export interface SessionImageReference {
@@ -1045,7 +1178,12 @@ export interface ToolDispatchContext {
      * represents consent (per-question modeSwitch map).
      */
     silent?: boolean,
-  ) => Promise<{ approved: boolean; mode: string }>;
+  ) => Promise<{
+    approved: boolean;
+    mode: string;
+    followUp?: string;
+    rejectionReason?: string;
+  }>;
   onApprovalRequest?: import("../shared/types.js").OnApprovalRequest;
   onQuestion?: (
     context: string,
@@ -1092,6 +1230,10 @@ export interface ToolDispatchContext {
   onFinalStatus?: (marker: FinalMessageMarker) => void;
   /** Marks the current foreground todo list complete and returns the updated tree. */
   onCompleteTodos?: () => TodoItem[];
+  /** Final status/todo implementation for runtimes that can own foreground session markers. */
+  sessionStatusProvider?: SessionStatusProvider;
+  /** Mode-switch implementation for runtimes that can request or perform agent mode changes. */
+  modeSwitchProvider?: ModeSwitchProvider;
   /** Semantic codebase search implementation for runtimes that can provide an index. */
   semanticSearchProvider?: SemanticSearchProvider;
   /** Editor reveal implementation for runtimes that can open/highlight files. */
@@ -1116,6 +1258,28 @@ export interface ToolDispatchContext {
   hoverProvider?: LanguageHoverProvider;
   /** Completion implementation for runtimes with language completion support. */
   completionsProvider?: LanguageCompletionsProvider;
+  /** Inlay-hints implementation for runtimes with language inlay-hints support. */
+  inlayHintsProvider?: LanguageInlayHintsProvider;
+  /** Hierarchy implementation for runtimes with language call/type hierarchy support. */
+  hierarchyProvider?: LanguageHierarchyProvider;
+  /** Code-action retrieval/apply implementation for runtimes with language code-action support. */
+  codeActionsProvider?: LanguageCodeActionsProvider;
+  /** Terminal/process implementation for runtimes with managed terminal support. */
+  terminalProvider?: TerminalProvider;
+  /** Worktree/agent-launch implementation for runtimes that can create/open worktree agent sessions. */
+  worktreeAgentLaunchProvider?: WorktreeAgentLaunchProvider;
+  /** Background-agent lifecycle implementation for runtimes that can spawn/manage agent sessions. */
+  backgroundAgentProvider?: BackgroundAgentProvider;
+  /** MCP tool discovery implementation for runtimes with connected MCP clients. */
+  mcpToolDiscoveryProvider?: McpToolDiscoveryProvider;
+  /** MCP resource/prompt implementation for runtimes with connected MCP clients. */
+  mcpResourcePromptProvider?: McpResourcePromptProvider;
+  /** MCP tool invocation implementation for runtimes with connected MCP clients. */
+  mcpToolInvocationProvider?: McpToolInvocationProvider;
+  /** User-question implementation for runtimes that can ask structured questions. */
+  userQuestionProvider?: UserQuestionProvider;
+  /** Local aggregate usage recorder for tool/parameter deprecation analysis. */
+  toolUsageTelemetry?: ToolUsageTelemetry;
 }
 
 export function createAgentToolRuntime(
@@ -1132,24 +1296,46 @@ export function createAgentToolRuntime(
         request.allMcpToolDefsForSkillAllowlist,
       );
     },
-    executeTool(request: AgentToolExecutionRequest) {
-      return dispatchToolCall(request.name, request.input, {
-        ...ctx,
-        sessionId: request.context.sessionId,
-        mode: request.context.mode,
-        trackerCtx: request.context
-          .trackerCtx as ToolDispatchContext["trackerCtx"],
-        toolAbortSignal: request.context.toolAbortSignal,
-        getAdvertisedSkills: request.context.getAdvertisedSkills,
-        getAdvertisedRules: request.context.getAdvertisedRules,
-        onSkillLoad: request.context.onSkillLoad,
-        skillAllowedTools: request.context.skillAllowedTools,
-        onFinalStatus: request.context.onFinalStatus,
-        onCompleteTodos: request.context.onCompleteTodos as
-          | ToolDispatchContext["onCompleteTodos"]
-          | undefined,
-        getSessionImages: request.context.getSessionImages,
-      });
+    async executeTool(request: AgentToolExecutionRequest) {
+      const startedAt = Date.now();
+      try {
+        const result = await dispatchToolCall(request.name, request.input, {
+          ...ctx,
+          sessionId: request.context.sessionId,
+          mode: request.context.mode,
+          trackerCtx: request.context
+            .trackerCtx as ToolDispatchContext["trackerCtx"],
+          toolAbortSignal: request.context.toolAbortSignal,
+          getAdvertisedSkills: request.context.getAdvertisedSkills,
+          getAdvertisedRules: request.context.getAdvertisedRules,
+          onSkillLoad: request.context.onSkillLoad,
+          skillAllowedTools: request.context.skillAllowedTools,
+          onFinalStatus: request.context.onFinalStatus,
+          onCompleteTodos: request.context.onCompleteTodos as
+            | ToolDispatchContext["onCompleteTodos"]
+            | undefined,
+          getSessionImages: request.context.getSessionImages,
+        });
+        ctx.toolUsageTelemetry?.record({
+          toolName: request.name,
+          params: request.input,
+          source: "agent",
+          mode: request.context.mode,
+          outcome: getToolUsageOutcomeFromResult(result),
+          durationMs: Date.now() - startedAt,
+        });
+        return result;
+      } catch (err) {
+        ctx.toolUsageTelemetry?.record({
+          toolName: request.name,
+          params: request.input,
+          source: "agent",
+          mode: request.context.mode,
+          outcome: "error",
+          durationMs: Date.now() - startedAt,
+        });
+        throw err;
+      }
     },
     isParallelSafe(toolName) {
       return READ_ONLY_TOOLS.has(toolName);
@@ -1197,7 +1383,10 @@ export async function dispatchToolCall(
         `MCP tool is not allowed by the active skill allowed-tools allowlist: ${toolName}`,
       );
     }
-    if (!mcpHub) {
+    const mcpToolInvocationProvider =
+      ctx.mcpToolInvocationProvider ??
+      (mcpHub ? createMcpToolInvocationProvider(mcpHub) : undefined);
+    if (!mcpToolInvocationProvider) {
       return {
         content: [
           {
@@ -1223,7 +1412,7 @@ export async function dispatchToolCall(
       };
     }
     const { serverName, bareToolName } = parsedToolName;
-    const serverConfig = mcpHub.getServerConfig(serverName);
+    const serverConfig = mcpToolInvocationProvider.getServerConfig(serverName);
     const isAutoApproved =
       serverConfig?.toolPolicy === "allow" ||
       serverConfig?.allowedTools?.includes(bareToolName) ||
@@ -1350,10 +1539,8 @@ export async function dispatchToolCall(
       }
     }
 
-    const result = await mcpHub
-      .callTool(toolName, input, {
-        signal: toolAbortSignal,
-      })
+    const result = await mcpToolInvocationProvider
+      .callTool({ toolName, input, signal: toolAbortSignal })
       .catch(handleToolError);
     if (promotionMeta) {
       result.uiMeta = {
@@ -1407,11 +1594,13 @@ export async function dispatchToolCall(
           ? { continueAction: { label: continueLabel, prompt: continuePrompt } }
           : {}),
       };
-      ctx.onFinalStatus?.(marker);
+      const sessionStatusProvider =
+        ctx.sessionStatusProvider ?? createSessionStatusProvider(ctx);
+      sessionStatusProvider.setFinalStatus(marker);
       const completeTodosRequested = params.completeTodos === true;
       const completedTodos =
         status === "completed" && completeTodosRequested
-          ? ctx.onCompleteTodos?.()
+          ? sessionStatusProvider.completeTodos?.()
           : undefined;
       const completeTodosIgnored =
         completeTodosRequested && status !== "completed";
@@ -1630,13 +1819,32 @@ export async function dispatchToolCall(
         approvalPanel,
         sessionId,
         trackerCtx,
+        {
+          terminalProvider:
+            ctx.terminalProvider ?? createVscodeTerminalProvider(),
+        },
       );
     case "get_terminal_output":
-      return handleGetTerminalOutput(params);
+      return handleGetTerminalOutput(params, {
+        terminalProvider:
+          ctx.terminalProvider ?? createVscodeTerminalProvider(),
+      });
     case "close_terminals":
-      return handleCloseTerminals(params);
-    case "start_worktree_agent":
-      if (!ctx.globalStorageUri) {
+      return handleCloseTerminals(params, {
+        terminalProvider:
+          ctx.terminalProvider ?? createVscodeTerminalProvider(),
+      });
+    case "start_worktree_agent": {
+      const worktreeAgentLaunchProvider =
+        ctx.worktreeAgentLaunchProvider ??
+        (ctx.globalStorageUri
+          ? createVscodeWorktreeAgentLaunchProvider({
+              globalStorageUri: ctx.globalStorageUri,
+              onApprovalRequest,
+              sessionId,
+            })
+          : undefined);
+      if (!worktreeAgentLaunchProvider) {
         return {
           content: [
             {
@@ -1650,11 +1858,35 @@ export async function dispatchToolCall(
           ],
         };
       }
-      return handleStartWorktreeAgent(params, {
-        globalStorageUri: ctx.globalStorageUri,
-        onApprovalRequest,
-        sessionId,
+      return worktreeAgentLaunchProvider.start({
+        task: String(params.task ?? ""),
+        prompt: String(params.prompt ?? ""),
+        sourcePath:
+          params.sourcePath !== undefined && params.sourcePath !== null
+            ? String(params.sourcePath)
+            : undefined,
+        branch:
+          params.branch !== undefined && params.branch !== null
+            ? String(params.branch)
+            : undefined,
+        baseRef:
+          params.baseRef !== undefined && params.baseRef !== null
+            ? String(params.baseRef)
+            : undefined,
+        worktreePath:
+          params.worktreePath !== undefined && params.worktreePath !== null
+            ? String(params.worktreePath)
+            : undefined,
+        mode:
+          params.mode !== undefined && params.mode !== null
+            ? String(params.mode)
+            : undefined,
+        autoSubmit:
+          typeof params.autoSubmit === "boolean"
+            ? params.autoSubmit
+            : undefined,
       });
+    }
 
     // --- Editor ---
     case "open_file":
@@ -1719,35 +1951,35 @@ export async function dispatchToolCall(
           createVscodeCompletionsProvider(approvalManager, approvalPanel),
       });
     case "get_code_actions":
-      return handleGetCodeActions(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGetCodeActions(params, sessionId, {
+        codeActionsProvider:
+          ctx.codeActionsProvider ??
+          createVscodeCodeActionsProvider(approvalManager, approvalPanel),
+      });
     case "apply_code_action":
-      return handleApplyCodeAction(params, sessionId);
+      return handleApplyCodeAction(params, sessionId, {
+        codeActionsProvider:
+          ctx.codeActionsProvider ??
+          createVscodeCodeActionsProvider(approvalManager, approvalPanel),
+      });
     case "get_call_hierarchy":
-      return handleGetCallHierarchy(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGetCallHierarchy(params, sessionId, {
+        hierarchyProvider:
+          ctx.hierarchyProvider ??
+          createVscodeHierarchyProvider(approvalManager, approvalPanel),
+      });
     case "get_type_hierarchy":
-      return handleGetTypeHierarchy(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGetTypeHierarchy(params, sessionId, {
+        hierarchyProvider:
+          ctx.hierarchyProvider ??
+          createVscodeHierarchyProvider(approvalManager, approvalPanel),
+      });
     case "get_inlay_hints":
-      return handleGetInlayHints(
-        params,
-        approvalManager,
-        approvalPanel,
-        sessionId,
-      );
+      return handleGetInlayHints(params, sessionId, {
+        inlayHintsProvider:
+          ctx.inlayHintsProvider ??
+          createVscodeInlayHintsProvider(approvalManager, approvalPanel),
+      });
 
     // --- Search ---
     case "codebase_search": {
@@ -1764,12 +1996,41 @@ export async function dispatchToolCall(
     }
 
     case "find_mcp_tools": {
-      if (!mcpHub) return errorTextResult("MCP hub not available");
-      return discoverMcpTools(mcpHub, params, skillAllowlist);
+      const mcpToolDiscoveryProvider =
+        ctx.mcpToolDiscoveryProvider ??
+        (mcpHub ? createMcpToolDiscoveryProvider(mcpHub) : undefined);
+      if (!mcpToolDiscoveryProvider)
+        return errorTextResult("MCP hub not available");
+      return mcpDiscoveryResultToToolResult(
+        mcpToolDiscoveryProvider.discoverTools({
+          query: params.query !== undefined ? String(params.query) : undefined,
+          server:
+            params.server !== undefined ? String(params.server) : undefined,
+          includeSchemas:
+            params.includeSchemas === true || params.includeSchemas === "true",
+          schemaLimit:
+            typeof params.schemaLimit === "number"
+              ? params.schemaLimit
+              : params.schemaLimit !== undefined
+                ? Number(params.schemaLimit)
+                : undefined,
+          limit:
+            typeof params.limit === "number"
+              ? params.limit
+              : params.limit !== undefined
+                ? Number(params.limit)
+                : undefined,
+          skillAllowlist,
+        }),
+      );
     }
 
     case "call_mcp_tool": {
-      if (!mcpHub) return errorTextResult("MCP hub not available");
+      const mcpToolInvocationProvider =
+        ctx.mcpToolInvocationProvider ??
+        (mcpHub ? createMcpToolInvocationProvider(mcpHub) : undefined);
+      if (!mcpToolInvocationProvider)
+        return errorTextResult("MCP hub not available");
       const server = String(params.server ?? "").trim();
       const tool = String(params.tool ?? "").trim();
       if (!server || !tool) {
@@ -1786,7 +2047,11 @@ export async function dispatchToolCall(
           `MCP tool is not allowed by the active skill allowed-tools allowlist: ${toolName}`,
         );
       }
-      if (!mcpHub.getToolDefs().some((toolDef) => toolDef.name === toolName)) {
+      if (
+        !mcpToolInvocationProvider
+          .getToolDefs()
+          .some((toolDef) => toolDef.name === toolName)
+      ) {
         return errorTextResult(
           `MCP tool not found: ${toolName}. Use find_mcp_tools to discover available tools.`,
         );
@@ -1844,9 +2109,13 @@ export async function dispatchToolCall(
     }
 
     case "list_mcp_resources": {
-      if (!mcpHub) return errorTextResult("MCP hub not available");
-      const resources = mcpHub
-        .getAllResources()
+      const mcpResourcePromptProvider =
+        ctx.mcpResourcePromptProvider ??
+        (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
+      if (!mcpResourcePromptProvider)
+        return errorTextResult("MCP hub not available");
+      const resources = mcpResourcePromptProvider
+        .listResources()
         .filter((resource) =>
           skillAllowlistAllowsMcpServer(skillAllowlist, resource.serverName),
         );
@@ -1856,20 +2125,31 @@ export async function dispatchToolCall(
     }
 
     case "read_mcp_resource": {
-      if (!mcpHub) return errorTextResult("MCP hub not available");
+      const mcpResourcePromptProvider =
+        ctx.mcpResourcePromptProvider ??
+        (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
+      if (!mcpResourcePromptProvider)
+        return errorTextResult("MCP hub not available");
       const server = String(params.server ?? "").trim();
       if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
         return errorTextResult(
           `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
         );
       }
-      return mcpHub.readResource(server, String(params.uri ?? ""));
+      return mcpResourcePromptProvider.readResource(
+        server,
+        String(params.uri ?? ""),
+      );
     }
 
     case "list_mcp_prompts": {
-      if (!mcpHub) return errorTextResult("MCP hub not available");
-      const prompts = mcpHub
-        .getAllPrompts()
+      const mcpResourcePromptProvider =
+        ctx.mcpResourcePromptProvider ??
+        (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
+      if (!mcpResourcePromptProvider)
+        return errorTextResult("MCP hub not available");
+      const prompts = mcpResourcePromptProvider
+        .listPrompts()
         .filter((prompt) =>
           skillAllowlistAllowsMcpServer(skillAllowlist, prompt.serverName),
         );
@@ -1879,7 +2159,11 @@ export async function dispatchToolCall(
     }
 
     case "get_mcp_prompt": {
-      if (!mcpHub) return errorTextResult("MCP hub not available");
+      const mcpResourcePromptProvider =
+        ctx.mcpResourcePromptProvider ??
+        (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
+      if (!mcpResourcePromptProvider)
+        return errorTextResult("MCP hub not available");
       const server = String(params.server ?? "").trim();
       if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
         return errorTextResult(
@@ -1887,11 +2171,20 @@ export async function dispatchToolCall(
         );
       }
       const args = params.arguments as Record<string, string> | undefined;
-      return mcpHub.getPrompt(server, String(params.name ?? ""), args);
+      return mcpResourcePromptProvider.getPrompt(
+        server,
+        String(params.name ?? ""),
+        args,
+      );
     }
 
     case "ask_user": {
-      if (!ctx.onQuestion) {
+      const userQuestionProvider =
+        ctx.userQuestionProvider ??
+        (ctx.onQuestion
+          ? createUserQuestionProvider(ctx.onQuestion)
+          : undefined);
+      if (!userQuestionProvider) {
         return {
           content: [
             {
@@ -1961,7 +2254,11 @@ export async function dispatchToolCall(
         };
       }
 
-      const response = await ctx.onQuestion(context, questions, ctx.sessionId);
+      const response = await userQuestionProvider.ask({
+        context,
+        questions,
+        sessionId: ctx.sessionId,
+      });
       // Format as a readable responses array so Claude sees question + answer + note together
       const responses = questions.map((q) => {
         const answer = response.answers[q.id];
@@ -1978,7 +2275,13 @@ export async function dispatchToolCall(
       // If the user picked an answer mapped to a mode, perform the switch
       // silently (their choice is the consent).
       let modeSwitched: string | undefined;
-      if (modeSwitchQuestion && ctx.onModeSwitch) {
+      let modeSwitchFollowUp: string | undefined;
+      const modeSwitchProvider =
+        ctx.modeSwitchProvider ??
+        (ctx.onModeSwitch
+          ? createModeSwitchProvider(ctx.onModeSwitch)
+          : undefined);
+      if (modeSwitchQuestion && modeSwitchProvider) {
         const answer = response.answers[modeSwitchQuestion.id];
         const mapping = modeSwitchQuestion.modeSwitch;
         if (mapping && typeof answer === "string") {
@@ -1989,13 +2292,14 @@ export async function dispatchToolCall(
               ? `ask_user: "${answer}" — ${note}`
               : `ask_user: "${answer}"`;
             try {
-              const switchResult = await ctx.onModeSwitch(
-                targetMode,
-                switchReason,
-                true,
-              );
+              const switchResult = await modeSwitchProvider.switchMode({
+                mode: targetMode,
+                reason: switchReason,
+                silent: true,
+              });
               if (switchResult.approved) {
                 modeSwitched = switchResult.mode;
+                modeSwitchFollowUp = switchResult.followUp?.trim() || undefined;
               }
             } catch {
               // ignore — fall back to no switch; agent can call switch_mode if needed
@@ -2006,6 +2310,7 @@ export async function dispatchToolCall(
 
       const payload: Record<string, unknown> = { context, responses };
       if (modeSwitched) payload.modeSwitched = modeSwitched;
+      if (modeSwitchFollowUp) payload.follow_up = modeSwitchFollowUp;
       return {
         content: [{ type: "text", text: JSON.stringify(payload) }],
       };
@@ -2014,7 +2319,12 @@ export async function dispatchToolCall(
     case "switch_mode": {
       const mode = String(params.mode ?? "");
       const reason = params.reason ? String(params.reason) : undefined;
-      if (!ctx.onModeSwitch) {
+      const modeSwitchProvider =
+        ctx.modeSwitchProvider ??
+        (ctx.onModeSwitch
+          ? createModeSwitchProvider(ctx.onModeSwitch)
+          : undefined);
+      if (!modeSwitchProvider) {
         return {
           content: [
             {
@@ -2026,7 +2336,10 @@ export async function dispatchToolCall(
           ],
         };
       }
-      const switchResult = await ctx.onModeSwitch(mode, reason);
+      const switchResult = await modeSwitchProvider.switchMode({
+        mode,
+        reason,
+      });
       if (!switchResult.approved) {
         return {
           content: [
@@ -2034,7 +2347,12 @@ export async function dispatchToolCall(
               type: "text",
               text: JSON.stringify({
                 status: "rejected_by_user",
-                reason: `User denied mode switch to "${mode}"`,
+                reason:
+                  switchResult.rejectionReason?.trim() ||
+                  `User denied mode switch to "${mode}"`,
+                ...(switchResult.followUp?.trim()
+                  ? { follow_up: switchResult.followUp.trim() }
+                  : {}),
               }),
             },
           ],
@@ -2044,14 +2362,24 @@ export async function dispatchToolCall(
         content: [
           {
             type: "text",
-            text: JSON.stringify({ ok: true, mode: switchResult.mode }),
+            text: JSON.stringify({
+              ok: true,
+              mode: switchResult.mode,
+              ...(switchResult.followUp?.trim()
+                ? { follow_up: switchResult.followUp.trim() }
+                : {}),
+            }),
           },
         ],
       };
     }
 
     case "spawn_background_agent": {
-      if (!ctx.onSpawnBackground) {
+      const spawnBackground = ctx.backgroundAgentProvider
+        ? (request: SpawnBackgroundRequest) =>
+            ctx.backgroundAgentProvider!.spawn(request)
+        : ctx.onSpawnBackground;
+      if (!spawnBackground) {
         return {
           content: [
             {
@@ -2063,7 +2391,7 @@ export async function dispatchToolCall(
           ],
         };
       }
-      const result = await ctx.onSpawnBackground({
+      const result = await spawnBackground({
         task: String(params.task ?? ""),
         message: String(params.message ?? ""),
         mode:
@@ -2099,7 +2427,11 @@ export async function dispatchToolCall(
     }
 
     case "get_background_status": {
-      if (!ctx.onGetBackgroundStatus) {
+      const getBackgroundStatus = ctx.backgroundAgentProvider
+        ? (sessionId: string) =>
+            ctx.backgroundAgentProvider!.getStatus(sessionId)
+        : ctx.onGetBackgroundStatus;
+      if (!getBackgroundStatus) {
         return {
           content: [
             {
@@ -2111,16 +2443,18 @@ export async function dispatchToolCall(
           ],
         };
       }
-      const statusResult = ctx.onGetBackgroundStatus(
-        String(params.sessionId ?? ""),
-      );
+      const statusResult = getBackgroundStatus(String(params.sessionId ?? ""));
       return {
         content: [{ type: "text", text: JSON.stringify(statusResult) }],
       };
     }
 
     case "get_background_result": {
-      if (!ctx.onGetBackgroundResult) {
+      const getBackgroundResult = ctx.backgroundAgentProvider
+        ? (sessionId: string) =>
+            ctx.backgroundAgentProvider!.getResult(sessionId)
+        : ctx.onGetBackgroundResult;
+      if (!getBackgroundResult) {
         return {
           content: [
             {
@@ -2132,7 +2466,7 @@ export async function dispatchToolCall(
           ],
         };
       }
-      const bgResult = await ctx.onGetBackgroundResult(
+      const bgResult = await getBackgroundResult(
         String(params.sessionId ?? ""),
       );
       return {
@@ -2141,7 +2475,11 @@ export async function dispatchToolCall(
     }
 
     case "kill_background_agent": {
-      if (!ctx.onKillBackground) {
+      const killBackground = ctx.backgroundAgentProvider
+        ? (sessionId: string, reason?: string) =>
+            ctx.backgroundAgentProvider!.kill(sessionId, reason)
+        : ctx.onKillBackground;
+      if (!killBackground) {
         return {
           content: [
             {
@@ -2153,7 +2491,7 @@ export async function dispatchToolCall(
           ],
         };
       }
-      const killResult = ctx.onKillBackground(
+      const killResult = killBackground(
         String(params.sessionId ?? ""),
         params.reason !== undefined ? String(params.reason) : undefined,
       );

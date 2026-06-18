@@ -11,22 +11,14 @@ import {
   successResult,
   errorResult,
 } from "../shared/types.js";
+import type { WorktreeAgentLaunchRequest } from "../core/capabilities/worktree.js";
 import { WorktreeAgentIntentStore } from "../worktree/WorktreeAgentIntentStore.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_INTENT_TTL_MS = 10 * 60 * 1000;
 const SAFE_BRANCH_RE = /^[A-Za-z0-9._/-]+$/;
 
-export interface StartWorktreeAgentParams {
-  task: string;
-  prompt: string;
-  sourcePath?: string;
-  branch?: string;
-  baseRef?: string;
-  worktreePath?: string;
-  mode?: string;
-  autoSubmit?: boolean;
-}
+export interface StartWorktreeAgentParams extends WorktreeAgentLaunchRequest {}
 
 export interface GitRunner {
   (args: string[], cwd: string): Promise<string>;

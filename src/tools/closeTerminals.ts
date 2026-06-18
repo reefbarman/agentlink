@@ -1,20 +1,41 @@
-import { getTerminalManager } from "../integrations/TerminalManager.js";
-
+import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import { type ToolResult } from "../shared/types.js";
 
-export async function handleCloseTerminals(params: {
-  names?: string[];
-}): Promise<ToolResult> {
-  const tm = getTerminalManager();
+export interface CloseTerminalsProviders {
+  terminalProvider?: TerminalProvider;
+}
 
-  const before = tm.listTerminals();
+function unavailableCloseTerminalsResult(): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          error:
+            "Terminal management is unavailable in this runtime. Provide a TerminalProvider to enable close_terminals.",
+        }),
+      },
+    ],
+  };
+}
+
+export async function handleCloseTerminals(
+  params: { names?: string[] },
+  providers: CloseTerminalsProviders = {},
+): Promise<ToolResult> {
+  if (!providers.terminalProvider) {
+    return unavailableCloseTerminalsResult();
+  }
+  const terminalProvider = providers.terminalProvider;
+
+  const before = terminalProvider.listTerminals();
   if (before.length === 0) {
     return {
       content: [{ type: "text", text: "No managed terminals to close." }],
     };
   }
 
-  const result = tm.closeTerminals(
+  const result = terminalProvider.closeTerminals(
     params.names && params.names.length > 0 ? params.names : undefined,
   );
 
@@ -25,7 +46,7 @@ export async function handleCloseTerminals(params: {
         text: JSON.stringify({
           closed: result.closed,
           ...(result.not_found && { not_found: result.not_found }),
-          remaining: tm.listTerminals(),
+          remaining: terminalProvider.listTerminals(),
         }),
       },
     ],

@@ -1424,7 +1424,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     mode: string,
     reason?: string,
     silent?: boolean,
-  ): Promise<{ approved: boolean; mode: string }> {
+  ): Promise<{
+    approved: boolean;
+    mode: string;
+    followUp?: string;
+    rejectionReason?: string;
+  }> {
     const requestedBy =
       reason && reason.trim().length > 0 ? reason.trim() : "agent";
 
@@ -1459,7 +1464,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             text: `Mode switch to "${mode}" denied: ${reasonText}`,
             badge: "rejection",
           });
-          return { approved: false, mode };
+          return { approved: false, mode, followUp, rejectionReason };
         }
       } catch (err) {
         this.log(`[mode] approval flow failed for switch to ${mode}: ${err}`);
@@ -1469,7 +1474,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (!this.sessionManager) {
       this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
-      return { approved: true, mode };
+      return { approved: true, mode, followUp };
     }
 
     try {
@@ -1477,7 +1482,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!session) {
         // No active session yet — fall back to creating a new session in target mode.
         this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
-        return { approved: true, mode };
+        return { approved: true, mode, followUp };
       }
       // Reset session-level write approval when switching modes — "session"
       // approval was granted for the previous mode, not the new one.
@@ -1492,11 +1497,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.log(
         `[mode] switched foreground session ${session.id} to ${mode}${tag}${suffix}`,
       );
-      return { approved: true, mode };
+      return { approved: true, mode, followUp };
     } catch (err) {
       this.log(`[mode] failed to switch mode in-place: ${err}`);
       this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
-      return { approved: true, mode };
+      return { approved: true, mode, followUp };
     }
   }
 

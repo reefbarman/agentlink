@@ -1673,6 +1673,9 @@ export function BrowserGatewayApp({
     data: Omit<DecisionMessage, "type">,
   ): void => {
     const submittedApprovalId = data.id;
+    const followUp =
+      data.followUp?.trim() || forwardedFollowUpRef.current.trim();
+    forwardedFollowUpRef.current = "";
     setLocalDismissedApprovalId(submittedApprovalId);
     void (async () => {
       const response = await fetch(buildApiPath("/api/approval"), {
@@ -1683,7 +1686,7 @@ export function BrowserGatewayApp({
         },
         body: JSON.stringify({
           ...data,
-          followUp: forwardedFollowUpRef.current,
+          ...(followUp ? { followUp } : { followUp: undefined }),
         }),
       });
       const body = (await response.json()) as { ok?: boolean; error?: string };

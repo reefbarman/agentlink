@@ -2,6 +2,17 @@
 
 export type CommandTierLevel = "safe" | "sensitive" | "dangerous";
 
+export interface InlineCommandFilePreview {
+  name: string;
+  path: string;
+  ext?: string;
+  bytes: number;
+  sha256: string;
+  truncated: boolean;
+  executable: boolean;
+  preview: string;
+}
+
 export interface SubCommandEntry {
   /** The raw sub-command text */
   command: string;
@@ -36,6 +47,8 @@ export interface ApprovalRequest {
   command?: string;
   /** For commands: expanded sub-commands with existing rule info */
   subCommands?: SubCommandEntry[];
+  /** For commands: throwaway inline files materialized for this command */
+  inlineFiles?: InlineCommandFilePreview[];
   /** For paths/writes: the file path */
   filePath?: string;
   /** For writes: create or modify */

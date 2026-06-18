@@ -16,7 +16,7 @@ import { PairingBroker } from "./pairingBroker.js";
 
 async function makeExtensionRoot(): Promise<string> {
   const root = await fs.mkdtemp(
-    path.join(process.cwd(), ".tmp-helper-pairing-"),
+    path.join(os.tmpdir(), ".tmp-helper-pairing-"),
   );
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
   await fs.mkdir(path.join(root, "media"), { recursive: true });

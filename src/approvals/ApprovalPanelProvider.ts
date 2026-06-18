@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type {
   ApprovalRequest,
   DecisionMessage,
+  InlineCommandFilePreview,
   MemoryOperation,
   MemoryScope,
   MemoryTier,
@@ -99,6 +100,7 @@ interface InternalRequest {
   fullCommand?: string;
   filePath?: string;
   subCommands?: SubCommandEntry[];
+  inlineFiles?: InlineCommandFilePreview[];
   /** Agent-provided reason for running a command */
   reason?: string;
   /** Working directory a command will run in */
@@ -200,6 +202,7 @@ export class ApprovalPanelProvider
     fullCommand: string,
     options?: {
       subCommands?: SubCommandEntry[];
+      inlineFiles?: InlineCommandFilePreview[];
       reason?: string;
       cwd?: string;
     },
@@ -211,6 +214,7 @@ export class ApprovalPanelProvider
       command,
       fullCommand,
       subCommands: options?.subCommands,
+      inlineFiles: options?.inlineFiles,
       reason: options?.reason,
       cwd: options?.cwd,
     }) as Promise<CommandApprovalResponse>;
@@ -391,6 +395,7 @@ export class ApprovalPanelProvider
         id: request.id,
         command: request.command,
         subCommands: request.subCommands,
+        inlineFiles: request.inlineFiles,
         reason: request.reason,
         cwd: request.cwd,
         filePath: request.filePath,
@@ -461,6 +466,7 @@ export class ApprovalPanelProvider
       id: request.id,
       command: request.command,
       subCommands: request.subCommands,
+      inlineFiles: request.inlineFiles,
       reason: request.reason,
       cwd: request.cwd,
       filePath: request.filePath,
@@ -998,6 +1004,7 @@ export class ApprovalPanelProvider
     options?: { allowPathApprovals?: boolean },
   ): boolean {
     if (this.isProtectedWriteRequest(request)) return false;
+    if (request.kind === "command" && request.inlineFiles?.length) return false;
     const identifier =
       request.kind === "command"
         ? request.fullCommand

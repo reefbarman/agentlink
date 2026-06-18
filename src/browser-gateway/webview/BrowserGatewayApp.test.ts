@@ -810,6 +810,73 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     expect(screen.queryByRole("button", { name: /View diff/ })).toBeNull();
   });
 
+  it("renders inline command file previews in browser approvals", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const snapshot = createSnapshot();
+    snapshot.ui.approval = {
+      kind: "command",
+      id: "approval-1",
+      command: "gh pr comment 1 --body-file '/tmp/agentlink-cmd/body.md'",
+      inlineFiles: [
+        {
+          name: "body",
+          path: "/tmp/agentlink-cmd/body.md",
+          ext: "md",
+          bytes: 19,
+          sha256:
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          truncated: false,
+          executable: false,
+          preview: "hello `code` world",
+        },
+      ],
+    };
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "awaiting_approval", label: "Approval" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ ok: true });
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Attached temp files")).toBeTruthy();
+    });
+    expect(screen.getByText("body")).toBeTruthy();
+    expect(screen.getByText(".md")).toBeTruthy();
+    expect(screen.getByText(/0123456789ab/)).toBeTruthy();
+    expect(screen.getByText("/tmp/agentlink-cmd/body.md")).toBeTruthy();
+    expect(screen.getByText("hello `code` world")).toBeTruthy();
+  });
+
   it("opens the mobile review pane for diff approvals matched by request id", async () => {
     installMatchMediaMock(true);
 

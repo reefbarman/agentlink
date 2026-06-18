@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createVscodeCodeActionsProvider,
   createVscodeCompletionsProvider,
   createVscodeDiagnosticsProvider,
+  createVscodeHierarchyProvider,
   createVscodeHoverProvider,
+  createVscodeInlayHintsProvider,
   createVscodeNavigationProvider,
   createVscodeReferencesProvider,
   createVscodeSymbolsProvider,
@@ -11,9 +14,16 @@ import {
 const executeCommand = vi.hoisted(() => vi.fn());
 const getDiagnostics = vi.hoisted(() => vi.fn());
 const openTextDocument = vi.hoisted(() => vi.fn());
+const showTextDocument = vi.hoisted(() => vi.fn());
+const applyEdit = vi.hoisted(() => vi.fn());
+const textDocuments = vi.hoisted(() => [] as Array<unknown>);
 const resolveAndValidatePath = vi.hoisted(() => vi.fn());
+const tryGetFirstWorkspaceRoot = vi.hoisted(() => vi.fn());
 const getRelativePath = vi.hoisted(() => vi.fn());
 const approveOutsideWorkspaceAccess = vi.hoisted(() => vi.fn());
+const clearCachedCodeActions = vi.hoisted(() => vi.fn());
+const getCachedCodeActions = vi.hoisted(() => vi.fn());
+const setCachedCodeActions = vi.hoisted(() => vi.fn());
 
 vi.mock("vscode", () => {
   class Position {
@@ -30,6 +40,13 @@ vi.mock("vscode", () => {
     ) {}
   }
 
+  class Range {
+    constructor(
+      public start: unknown,
+      public end: unknown,
+    ) {}
+  }
+
   class MarkdownString {
     constructor(public value: string) {}
   }
@@ -43,7 +60,13 @@ vi.mock("vscode", () => {
     },
     Position,
     Location,
+    Range,
     MarkdownString,
+    ViewColumn: { One: 1 },
+    InlayHintKind: {
+      Type: 1,
+      Parameter: 2,
+    },
     SymbolKind: {
       File: 0,
       Module: 1,
@@ -102,8 +125,11 @@ vi.mock("vscode", () => {
     Uri: { file: (fsPath: string) => ({ fsPath }) },
     commands: { executeCommand },
     languages: { getDiagnostics },
+    window: { showTextDocument },
     workspace: {
+      applyEdit,
       openTextDocument,
+      textDocuments,
       workspaceFolders: [{ uri: { fsPath: "/workspace" } }],
     },
   };
@@ -112,10 +138,17 @@ vi.mock("vscode", () => {
 vi.mock("../../util/paths.js", () => ({
   getRelativePath,
   resolveAndValidatePath,
+  tryGetFirstWorkspaceRoot,
 }));
 
 vi.mock("../../tools/pathAccessUI.js", () => ({
   approveOutsideWorkspaceAccess,
+}));
+
+vi.mock("../../tools/codeActionCache.js", () => ({
+  clearCachedCodeActions,
+  getCachedCodeActions,
+  setCachedCodeActions,
 }));
 
 function diagnostic({
@@ -1072,5 +1105,733 @@ describe("createVscodeCompletionsProvider", () => {
         },
       ],
     });
+  });
+});
+
+describe("createVscodeCodeActionsProvider", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    openTextDocument.mockResolvedValue({
+      uri: { fsPath: "/workspace/src/file.ts" },
+    });
+    approveOutsideWorkspaceAccess.mockResolvedValue({ approved: true });
+    applyEdit.mockResolvedValue(true);
+    textDocuments.length = 0;
+    getCachedCodeActions.mockReturnValue(null);
+    tryGetFirstWorkspaceRoot.mockReturnValue("/workspace");
+    getRelativePath.mockImplementation((absolutePath: string) =>
+      absolutePath.replace("/workspace/", ""),
+    );
+    resolveAndValidatePath.mockImplementation((inputPath: string) => ({
+      absolutePath: `/workspace/${inputPath}`,
+      inWorkspace: true,
+    }));
+  });
+
+  it("returns the legacy empty code-actions shape and clears the session cache", async () => {
+    executeCommand.mockResolvedValue(undefined);
+    const provider = createVscodeCodeActionsProvider({} as never, {} as never);
+
+    await expect(
+      provider.getCodeActions({
+        path: "src/file.ts",
+        line: 3,
+        column: 5,
+        sessionId: "session-1",
+      }),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            actions: [],
+            message: "No code actions available",
+          }),
+        },
+      ],
+    });
+    expect(clearCachedCodeActions).toHaveBeenCalledWith("session-1");
+  });
+
+  it("returns the legacy cache-miss result when applying without cached actions", async () => {
+    const provider = createVscodeCodeActionsProvider({} as never, {} as never);
+
+    await expect(
+      provider.applyCodeAction({ sessionId: "session-1", index: 0 }),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            error: "No cached code actions. Call get_code_actions first.",
+          }),
+        },
+      ],
+    });
+  });
+
+  it("returns the legacy invalid-index result for cached actions", async () => {
+    getCachedCodeActions.mockReturnValue({
+      path: "src/file.ts",
+      line: 3,
+      column: 5,
+      actions: [{ title: "Fix issue" }],
+    });
+    const provider = createVscodeCodeActionsProvider({} as never, {} as never);
+
+    await expect(
+      provider.applyCodeAction({ sessionId: "session-1", index: 2 }),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            error: "Invalid index 2. Available: 0-0",
+          }),
+        },
+      ],
+    });
+  });
+
+  it("applies cached edits, saves dirty documents, executes commands, and clears the session cache", async () => {
+    const save = vi.fn(async () => undefined);
+    textDocuments.push({
+      uri: { fsPath: "/workspace/src/file.ts" },
+      isDirty: true,
+      save,
+    });
+    const edit = {
+      entries: vi.fn(() => [
+        [{ fsPath: "/workspace/src/file.ts" }, [{ newText: "fixed" }]],
+      ]),
+    };
+    getCachedCodeActions.mockReturnValue({
+      path: "src/file.ts",
+      line: 3,
+      column: 5,
+      actions: [
+        {
+          title: "Fix issue",
+          kind: { value: "quickfix" },
+          edit,
+          command: { command: "do.fix", arguments: ["arg"] },
+        },
+      ],
+    });
+    const provider = createVscodeCodeActionsProvider({} as never, {} as never);
+
+    const result = await provider.applyCodeAction({
+      sessionId: "session-1",
+      index: 0,
+    });
+
+    expect(applyEdit).toHaveBeenCalledWith(edit);
+    expect(save).toHaveBeenCalled();
+    expect(executeCommand).toHaveBeenCalledWith("do.fix", "arg");
+    expect(clearCachedCodeActions).toHaveBeenCalledWith("session-1");
+    expect(JSON.parse(textPayload(result))).toEqual({
+      status: "applied",
+      action: "Fix issue",
+      kind: "quickfix",
+      changed_files: ["src/file.ts"],
+    });
+  });
+
+  it("rejects command actions targeting protected instruction files", async () => {
+    getCachedCodeActions.mockReturnValue({
+      path: "CLAUDE.md",
+      line: 3,
+      column: 5,
+      actions: [
+        {
+          title: "Run protected command",
+          command: { command: "do.protected" },
+        },
+      ],
+    });
+    const provider = createVscodeCodeActionsProvider({} as never, {} as never);
+
+    const result = await provider.applyCodeAction({
+      sessionId: "session-1",
+      index: 0,
+    });
+
+    expect(executeCommand).not.toHaveBeenCalledWith("do.protected");
+    expect(JSON.parse(textPayload(result))).toEqual({
+      status: "rejected",
+      action: "Run protected command",
+      reason:
+        "Code action includes an executable command while targeting a protected instructions/memory file. Command side effects cannot be preflighted; use write_file/apply_diff with explicit user approval or propose_memory instead.",
+      protected_files: ["CLAUDE.md"],
+    });
+  });
+
+  it("rejects cached edits that modify protected instruction files", async () => {
+    getCachedCodeActions.mockReturnValue({
+      path: "src/file.ts",
+      line: 3,
+      column: 5,
+      actions: [
+        {
+          title: "Edit protected file",
+          edit: {
+            entries: vi.fn(() => [
+              [{ fsPath: "/workspace/.agentlink/memory.md" }, [{}]],
+            ]),
+          },
+        },
+      ],
+    });
+    const provider = createVscodeCodeActionsProvider({} as never, {} as never);
+
+    const result = await provider.applyCodeAction({
+      sessionId: "session-1",
+      index: 0,
+    });
+
+    expect(applyEdit).not.toHaveBeenCalled();
+    expect(JSON.parse(textPayload(result))).toEqual({
+      status: "rejected",
+      action: "Edit protected file",
+      reason:
+        "Code action edits a protected instructions/memory file. Use write_file/apply_diff with explicit user approval or propose_memory instead.",
+      protected_files: [".agentlink/memory.md"],
+    });
+  });
+
+  it("serializes code actions, filters preferred actions, and updates the session cache", async () => {
+    const edit = {
+      entries: vi.fn(() => [
+        [{ fsPath: "/workspace/src/a.ts" }, [{}, {}]],
+        [{ fsPath: "/workspace/src/b.ts" }, [{}]],
+      ]),
+    };
+    const preferredAction = {
+      title: "Fix issue",
+      kind: { value: "quickfix" },
+      isPreferred: true,
+      diagnostics: [
+        { message: "broken", severity: 0 },
+        { message: "warn", severity: 1 },
+        { message: "info", severity: 2 },
+      ],
+      edit,
+      command: { command: "do.fix" },
+    };
+    const nonPreferredAction = {
+      title: "Other action",
+      isPreferred: false,
+    };
+    executeCommand.mockResolvedValue([preferredAction, nonPreferredAction]);
+    const provider = createVscodeCodeActionsProvider({} as never, {} as never);
+
+    const result = await provider.getCodeActions({
+      path: "src/file.ts",
+      line: 3,
+      column: 5,
+      end_line: 4,
+      end_column: 7,
+      kind: "quickfix",
+      only_preferred: true,
+      sessionId: "session-1",
+    });
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      "vscode.executeCodeActionProvider",
+      { fsPath: "/workspace/src/file.ts" },
+      expect.objectContaining({
+        start: expect.objectContaining({ line: 2, character: 4 }),
+        end: expect.objectContaining({ line: 3, character: 6 }),
+      }),
+      "quickfix",
+    );
+    expect(setCachedCodeActions).toHaveBeenCalledWith("session-1", {
+      path: "src/file.ts",
+      line: 3,
+      column: 5,
+      actions: [preferredAction],
+    });
+    expect(JSON.parse(textPayload(result))).toEqual({
+      actions: [
+        {
+          index: 0,
+          title: "Fix issue",
+          kind: "quickfix",
+          preferred: true,
+          fixes_diagnostics: [
+            { message: "broken", severity: "error" },
+            { message: "warn", severity: "warning" },
+            { message: "info", severity: "info" },
+          ],
+          changes: { files: 2, edits: 3 },
+          has_command: true,
+        },
+      ],
+    });
+  });
+});
+
+describe("createVscodeInlayHintsProvider", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    openTextDocument.mockResolvedValue({
+      uri: { fsPath: "/workspace/src/file.ts" },
+      lineCount: 10,
+    });
+    showTextDocument.mockResolvedValue(undefined);
+    approveOutsideWorkspaceAccess.mockResolvedValue({ approved: true });
+    getRelativePath.mockImplementation((absolutePath: string) =>
+      absolutePath.replace("/workspace/", ""),
+    );
+    resolveAndValidatePath.mockImplementation((inputPath: string) => ({
+      absolutePath: `/workspace/${inputPath}`,
+      inWorkspace: true,
+    }));
+  });
+
+  it("shows the document, executes the provider over the requested range, and returns legacy serialized hints", async () => {
+    executeCommand.mockResolvedValue([
+      {
+        position: { line: 1, character: 4 },
+        label: ": string",
+        kind: 1,
+        paddingLeft: true,
+      },
+      {
+        position: { line: 2, character: 8 },
+        label: [{ value: "param" }, { value: ": " }],
+        kind: 2,
+        paddingRight: true,
+      },
+      {
+        position: { line: 3, character: 0 },
+        label: "unknown",
+        kind: 999,
+      },
+    ]);
+    const provider = createVscodeInlayHintsProvider({} as never, {} as never);
+
+    const result = await provider.getInlayHints({
+      path: "src/file.ts",
+      start_line: 2,
+      end_line: 20,
+      sessionId: "session-1",
+    });
+
+    expect(resolveAndValidatePath).toHaveBeenCalledWith("src/file.ts");
+    expect(openTextDocument).toHaveBeenCalledWith({
+      fsPath: "/workspace/src/file.ts",
+    });
+    expect(showTextDocument).toHaveBeenCalledWith(
+      { uri: { fsPath: "/workspace/src/file.ts" }, lineCount: 10 },
+      expect.objectContaining({ preserveFocus: true, preview: true }),
+    );
+    expect(executeCommand).toHaveBeenCalledWith(
+      "vscode.executeInlayHintProvider",
+      { fsPath: "/workspace/src/file.ts" },
+      expect.objectContaining({
+        start: expect.objectContaining({ line: 1, character: 0 }),
+        end: expect.objectContaining({ line: 10, character: 0 }),
+      }),
+    );
+    expect(JSON.parse(textPayload(result))).toEqual({
+      hints: [
+        {
+          line: 2,
+          column: 5,
+          label: ": string",
+          kind: "type",
+          padding_left: true,
+        },
+        {
+          line: 3,
+          column: 9,
+          label: "param: ",
+          kind: "parameter",
+          padding_right: true,
+        },
+        {
+          line: 4,
+          column: 1,
+          label: "unknown",
+          kind: "unknown",
+        },
+      ],
+    });
+  });
+
+  it("uses the full document range by default and returns the legacy empty shape", async () => {
+    executeCommand.mockResolvedValue([]);
+    const provider = createVscodeInlayHintsProvider({} as never, {} as never);
+
+    await expect(
+      provider.getInlayHints({
+        path: "src/file.ts",
+        sessionId: "session-1",
+      }),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            hints: [],
+            message: "No inlay hints in this range",
+          }),
+        },
+      ],
+    });
+    expect(executeCommand).toHaveBeenCalledWith(
+      "vscode.executeInlayHintProvider",
+      { fsPath: "/workspace/src/file.ts" },
+      expect.objectContaining({
+        start: expect.objectContaining({ line: 0, character: 0 }),
+        end: expect.objectContaining({ line: 10, character: 0 }),
+      }),
+    );
+  });
+});
+
+function hierarchyItem({
+  name,
+  kind = 11,
+  path = "/workspace/src/target.ts",
+  line = 1,
+  column = 2,
+  detail,
+}: {
+  name: string;
+  kind?: number;
+  path?: string;
+  line?: number;
+  column?: number;
+  detail?: string;
+}) {
+  return {
+    name,
+    kind,
+    uri: { fsPath: path },
+    selectionRange: { start: { line, character: column } },
+    detail,
+  };
+}
+
+describe("createVscodeHierarchyProvider", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    openTextDocument.mockResolvedValue({
+      uri: { fsPath: "/workspace/src/file.ts" },
+    });
+    approveOutsideWorkspaceAccess.mockResolvedValue({ approved: true });
+    getRelativePath.mockImplementation((absolutePath: string) =>
+      absolutePath.replace("/workspace/", ""),
+    );
+    resolveAndValidatePath.mockImplementation((inputPath: string) => ({
+      absolutePath: `/workspace/${inputPath}`,
+      inWorkspace: true,
+    }));
+  });
+
+  it("returns the legacy empty call hierarchy shape", async () => {
+    executeCommand.mockResolvedValueOnce([]);
+    const provider = createVscodeHierarchyProvider({} as never, {} as never);
+
+    await expect(
+      provider.getCallHierarchy({
+        path: "src/file.ts",
+        line: 3,
+        column: 5,
+        direction: "both",
+        sessionId: "session-1",
+      }),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            message: "No call hierarchy available at this position",
+          }),
+        },
+      ],
+    });
+    expect(executeCommand).toHaveBeenCalledWith(
+      "vscode.prepareCallHierarchy",
+      { fsPath: "/workspace/src/file.ts" },
+      expect.objectContaining({ line: 2, character: 4 }),
+    );
+  });
+
+  it("returns incoming and outgoing call hierarchy in the legacy recursive shape", async () => {
+    const root = hierarchyItem({ name: "root", detail: "root detail" });
+    const incoming = hierarchyItem({ name: "caller", line: 4, column: 1 });
+    const nestedIncoming = hierarchyItem({
+      name: "grandCaller",
+      line: 6,
+      column: 3,
+    });
+    const outgoing = hierarchyItem({ name: "callee", line: 8, column: 5 });
+    const nestedOutgoing = hierarchyItem({
+      name: "grandCallee",
+      line: 10,
+      column: 7,
+    });
+    executeCommand.mockImplementation(
+      async (command: string, item?: unknown) => {
+        if (command === "vscode.prepareCallHierarchy") return [root];
+        if (command === "vscode.provideIncomingCalls") {
+          if (item === root) {
+            return [
+              {
+                from: incoming,
+                fromRanges: [{ start: { line: 20, character: 2 } }],
+              },
+            ];
+          }
+          if (item === incoming) {
+            return [
+              {
+                from: nestedIncoming,
+                fromRanges: [{ start: { line: 21, character: 4 } }],
+              },
+            ];
+          }
+          return [];
+        }
+        if (command === "vscode.provideOutgoingCalls") {
+          if (item === root) {
+            return [
+              {
+                to: outgoing,
+                fromRanges: [{ start: { line: 30, character: 6 } }],
+              },
+            ];
+          }
+          if (item === outgoing) {
+            return [
+              {
+                to: nestedOutgoing,
+                fromRanges: [{ start: { line: 31, character: 8 } }],
+              },
+            ];
+          }
+          return [];
+        }
+        return [];
+      },
+    );
+    const provider = createVscodeHierarchyProvider({} as never, {} as never);
+
+    const result = await provider.getCallHierarchy({
+      path: "src/file.ts",
+      line: 3,
+      column: 5,
+      direction: "both",
+      max_depth: 99,
+      sessionId: "session-1",
+    });
+
+    expect(JSON.parse(textPayload(result))).toEqual({
+      symbol: {
+        name: "root",
+        kind: "function",
+        path: "src/target.ts",
+        line: 2,
+        column: 3,
+        detail: "root detail",
+      },
+      incoming: [
+        {
+          from: {
+            name: "caller",
+            kind: "function",
+            path: "src/target.ts",
+            line: 5,
+            column: 2,
+          },
+          call_sites: [{ line: 21, column: 3 }],
+          incoming: [
+            {
+              from: {
+                name: "grandCaller",
+                kind: "function",
+                path: "src/target.ts",
+                line: 7,
+                column: 4,
+              },
+              call_sites: [{ line: 22, column: 5 }],
+            },
+          ],
+        },
+      ],
+      outgoing: [
+        {
+          to: {
+            name: "callee",
+            kind: "function",
+            path: "src/target.ts",
+            line: 9,
+            column: 6,
+          },
+          call_sites: [{ line: 31, column: 7 }],
+          outgoing: [
+            {
+              to: {
+                name: "grandCallee",
+                kind: "function",
+                path: "src/target.ts",
+                line: 11,
+                column: 8,
+              },
+              call_sites: [{ line: 32, column: 9 }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const incomingOnly = await provider.getCallHierarchy({
+      path: "src/file.ts",
+      line: 3,
+      column: 5,
+      direction: "incoming",
+      max_depth: 1,
+      sessionId: "session-1",
+    });
+    const incomingOnlyPayload = JSON.parse(textPayload(incomingOnly));
+    expect(incomingOnlyPayload.incoming).toHaveLength(1);
+    expect(incomingOnlyPayload).not.toHaveProperty("outgoing");
+  });
+
+  it("returns the legacy empty type hierarchy shape", async () => {
+    executeCommand.mockResolvedValueOnce([]);
+    const provider = createVscodeHierarchyProvider({} as never, {} as never);
+
+    await expect(
+      provider.getTypeHierarchy({
+        path: "src/file.ts",
+        line: 3,
+        column: 5,
+        direction: "both",
+        sessionId: "session-1",
+      }),
+    ).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            message: "No type hierarchy available at this position",
+          }),
+        },
+      ],
+    });
+    expect(executeCommand).toHaveBeenCalledWith(
+      "vscode.prepareTypeHierarchy",
+      { fsPath: "/workspace/src/file.ts" },
+      expect.objectContaining({ line: 2, character: 4 }),
+    );
+  });
+
+  it("returns supertypes and subtypes in the legacy recursive shape", async () => {
+    const root = hierarchyItem({
+      name: "RootType",
+      kind: 10,
+      detail: "interface",
+    });
+    const supertype = hierarchyItem({ name: "BaseType", kind: 4, line: 4 });
+    const nestedSupertype = hierarchyItem({
+      name: "BaseBase",
+      kind: 4,
+      line: 5,
+    });
+    const subtype = hierarchyItem({ name: "ChildType", kind: 4, line: 6 });
+    const nestedSubtype = hierarchyItem({
+      name: "GrandChild",
+      kind: 4,
+      line: 7,
+    });
+    executeCommand.mockImplementation(
+      async (command: string, item?: unknown) => {
+        if (command === "vscode.prepareTypeHierarchy") return [root];
+        if (command === "vscode.provideTypeHierarchySupertypes") {
+          if (item === root) return [supertype];
+          if (item === supertype) return [nestedSupertype];
+          return [];
+        }
+        if (command === "vscode.provideTypeHierarchySubtypes") {
+          if (item === root) return [subtype];
+          if (item === subtype) return [nestedSubtype];
+          return [];
+        }
+        return [];
+      },
+    );
+    const provider = createVscodeHierarchyProvider({} as never, {} as never);
+
+    const result = await provider.getTypeHierarchy({
+      path: "src/file.ts",
+      line: 3,
+      column: 5,
+      direction: "both",
+      max_depth: 2,
+      sessionId: "session-1",
+    });
+
+    expect(JSON.parse(textPayload(result))).toEqual({
+      symbol: {
+        name: "RootType",
+        kind: "interface",
+        path: "src/target.ts",
+        line: 2,
+        column: 3,
+        detail: "interface",
+      },
+      supertypes: [
+        {
+          name: "BaseType",
+          kind: "class",
+          path: "src/target.ts",
+          line: 5,
+          column: 3,
+          supertypes: [
+            {
+              name: "BaseBase",
+              kind: "class",
+              path: "src/target.ts",
+              line: 6,
+              column: 3,
+            },
+          ],
+        },
+      ],
+      subtypes: [
+        {
+          name: "ChildType",
+          kind: "class",
+          path: "src/target.ts",
+          line: 7,
+          column: 3,
+          subtypes: [
+            {
+              name: "GrandChild",
+              kind: "class",
+              path: "src/target.ts",
+              line: 8,
+              column: 3,
+            },
+          ],
+        },
+      ],
+    });
+
+    const supertypesOnly = await provider.getTypeHierarchy({
+      path: "src/file.ts",
+      line: 3,
+      column: 5,
+      direction: "supertypes",
+      max_depth: 1,
+      sessionId: "session-1",
+    });
+    const supertypesOnlyPayload = JSON.parse(textPayload(supertypesOnly));
+    expect(supertypesOnlyPayload.supertypes).toHaveLength(1);
+    expect(supertypesOnlyPayload).not.toHaveProperty("subtypes");
   });
 });

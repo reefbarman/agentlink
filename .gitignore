@@ -4,6 +4,7 @@ dist/
 .claude/
 .vscode/
 .agentlink/
+telemetry-reports/
 releases/
 .env.local
 plans/

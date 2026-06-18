@@ -39,10 +39,10 @@ import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvide
 import { FindReplacePreviewPanel } from "../../findReplace/FindReplacePreviewPanel.js";
 import type { WriteApprovalResponse } from "../../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "../../tools/pathAccessUI.js";
-import { withPrimaryEditorColumn } from "../../util/editorPlacement.js";
 import { getRelativePath } from "../../util/paths.js";
 import { resolveAndValidatePath } from "../../util/paths.js";
 import { withFileLock } from "../../util/fileLock.js";
+import { withPrimaryEditorColumn } from "../../util/editorPlacement.js";
 
 export function createVscodeEditorRevealProvider(): EditorRevealProvider {
   return {
@@ -319,6 +319,10 @@ export function createVscodeMultiFileEditReviewProvider(
               typeof approvalResponse === "string"
                 ? undefined
                 : approvalResponse.followUp;
+            const rejectionReason =
+              typeof approvalResponse === "string"
+                ? undefined
+                : approvalResponse.rejectionReason;
             if (decision === "reject") {
               return {
                 content: [
@@ -328,6 +332,8 @@ export function createVscodeMultiFileEditReviewProvider(
                       status: "rejected_by_user",
                       find: params.find,
                       replace: params.replace,
+                      ...(rejectionReason ? { reason: rejectionReason } : {}),
+                      ...(followUp ? { follow_up: followUp } : {}),
                     }),
                   },
                 ],
@@ -617,6 +623,8 @@ export function createVscodeRenameSymbolProvider(
             typeof result === "string" ? result : result.decision;
           renameFollowUp =
             typeof result === "string" ? undefined : result.followUp;
+          const rejectionReason =
+            typeof result === "string" ? undefined : result.rejectionReason;
           if (decision === "reject") {
             return {
               content: [
@@ -626,6 +634,8 @@ export function createVscodeRenameSymbolProvider(
                     status: "rejected_by_user",
                     old_name: oldName,
                     new_name: params.newName,
+                    ...(rejectionReason ? { reason: rejectionReason } : {}),
+                    ...(renameFollowUp ? { follow_up: renameFollowUp } : {}),
                   }),
                 },
               ],
