@@ -25,91 +25,21 @@ import type {
   ContentBlock,
   MessageParam,
   ToolDefinition,
-  ReasoningEffort,
 } from "../types.js";
 import {
   AnthropicModelCatalog,
-  type AnthropicModelCapabilities,
   type ModelCatalogPersistence,
-  type StaticModelEntry,
-} from "./anthropicModelCatalog.js";
+} from "../../../core/model/providers/anthropic/anthropicModelCatalog.js";
+import {
+  ANTHROPIC_CONDENSE_MODEL,
+  ANTHROPIC_MODEL_CAPABILITIES,
+  ANTHROPIC_MODEL_DISPLAY_NAMES,
+  ANTHROPIC_STATIC_MODEL_ORDER,
+  DEFAULT_ANTHROPIC_MODEL_CAPABILITIES,
+  buildAnthropicStaticModelEntries,
+} from "../../../core/model/providers/anthropic/anthropicModels.js";
 
-const CLAUDE_REASONING_EFFORTS = [
-  "none",
-  "low",
-  "medium",
-  "high",
-  "max",
-] as const satisfies readonly ReasoningEffort[];
-
-const ANTHROPIC_MODEL_CAPABILITIES: Record<string, AnthropicModelCapabilities> =
-  {
-    "claude-opus-4-8": {
-      supportsThinking: true,
-      supportsAdaptiveThinking: true,
-      supportsCaching: true,
-      supportsImages: true,
-      supportsToolUse: true,
-      contextWindow: 1_000_000,
-      maxOutputTokens: 128_000,
-      reasoningEfforts: [...CLAUDE_REASONING_EFFORTS],
-      defaultReasoningEffort: "high",
-    },
-    "claude-sonnet-4-6": {
-      supportsThinking: true,
-      supportsAdaptiveThinking: true,
-      supportsCaching: true,
-      supportsImages: true,
-      supportsToolUse: true,
-      contextWindow: 1_000_000,
-      maxOutputTokens: 64_000,
-      reasoningEfforts: [...CLAUDE_REASONING_EFFORTS],
-      defaultReasoningEffort: "high",
-    },
-    "claude-haiku-4-5-20251001": {
-      supportsThinking: false,
-      supportsAdaptiveThinking: false,
-      supportsCaching: true,
-      supportsImages: true,
-      supportsToolUse: true,
-      contextWindow: 200_000,
-      maxOutputTokens: 64_000,
-    },
-  };
-
-/** Display names for the statically-known models (merge base + offline fallback). */
-const ANTHROPIC_MODEL_DISPLAY_NAMES: Record<string, string> = {
-  "claude-sonnet-4-6": "Claude Sonnet 4.6",
-  "claude-opus-4-8": "Claude Opus 4.8",
-  "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
-};
-
-/** Static-listing order preserved from the original hard-coded `listModels()`. */
-const ANTHROPIC_STATIC_MODEL_ORDER = [
-  "claude-sonnet-4-6",
-  "claude-opus-4-8",
-  "claude-haiku-4-5-20251001",
-] as const;
-
-function buildStaticModelEntries(): StaticModelEntry[] {
-  return ANTHROPIC_STATIC_MODEL_ORDER.map((id) => ({
-    id,
-    displayName: ANTHROPIC_MODEL_DISPLAY_NAMES[id] ?? id,
-    capabilities: ANTHROPIC_MODEL_CAPABILITIES[id],
-  }));
-}
-
-const DEFAULT_CAPABILITIES: AnthropicModelCapabilities = {
-  supportsThinking: false,
-  supportsCaching: true,
-  supportsImages: true,
-  supportsToolUse: true,
-  contextWindow: 200_000,
-  maxOutputTokens: 128_000,
-};
-
-/** The preferred cheap/fast model for condensing. */
-export const ANTHROPIC_CONDENSE_MODEL = "claude-haiku-4-5-20251001";
+export { ANTHROPIC_CONDENSE_MODEL };
 
 /** Options accepted by AnthropicProvider for dynamic model capabilities. */
 export interface AnthropicProviderOptions {
@@ -117,6 +47,11 @@ export interface AnthropicProviderOptions {
   modelCatalogPersistence?: ModelCatalogPersistence;
   /** Feature flag (Q1 default true). When false, only static metadata is used. */
   dynamicCapabilitiesEnabled?: boolean;
+  /** Optional host-injected client factory for resolved credentials outside VS Code. */
+  createClient?: (apiKey: string | undefined) => {
+    client: Anthropic;
+    authSource: AuthSource;
+  };
 }
 
 export class AnthropicProvider implements ModelProvider {
@@ -130,6 +65,10 @@ export class AnthropicProvider implements ModelProvider {
   private log?: (msg: string) => void;
   private readonly catalog: AnthropicModelCatalog;
   private readonly dynamicCapabilitiesEnabled: boolean;
+  private readonly createClient: (apiKey: string | undefined) => {
+    client: Anthropic;
+    authSource: AuthSource;
+  };
 
   constructor(
     apiKey?: string,
@@ -138,11 +77,13 @@ export class AnthropicProvider implements ModelProvider {
   ) {
     this.apiKey = apiKey;
     this.log = log;
+    this.createClient =
+      options?.createClient ?? ((key) => createAnthropicClient(key, this.log));
     this.dynamicCapabilitiesEnabled =
       options?.dynamicCapabilitiesEnabled ?? true;
     this.catalog = new AnthropicModelCatalog({
       providerId: this.id,
-      staticModels: buildStaticModelEntries(),
+      staticModels: buildAnthropicStaticModelEntries(),
       // Flag off ⇒ no persisted seed, no snapshot-driven getters (kill switch).
       persistence: this.dynamicCapabilitiesEnabled
         ? options?.modelCatalogPersistence
@@ -161,7 +102,10 @@ export class AnthropicProvider implements ModelProvider {
       const dynamic = this.catalog.getCapabilities(model);
       if (dynamic) return dynamic;
     }
-    return ANTHROPIC_MODEL_CAPABILITIES[model] ?? DEFAULT_CAPABILITIES;
+    return copyModelCapabilities(
+      ANTHROPIC_MODEL_CAPABILITIES[model] ??
+        DEFAULT_ANTHROPIC_MODEL_CAPABILITIES,
+    );
   }
 
   listModels(): ModelInfo[] {
@@ -209,7 +153,7 @@ export class AnthropicProvider implements ModelProvider {
             client as unknown as {
               models: {
                 list: () => Promise<{
-                  data: import("./anthropicModelCatalog.js").SdkModelInfo[];
+                  data: import("../../../core/model/providers/anthropic/anthropicModelCatalog.js").SdkModelInfo[];
                 }>;
               };
             }
@@ -556,7 +500,7 @@ export class AnthropicProvider implements ModelProvider {
 
   private tryInitializeClient(): void {
     try {
-      const result = createAnthropicClient(this.apiKey, this.log);
+      const result = this.createClient(this.apiKey);
       this.client = result.client;
       this.authSource = result.authSource;
     } catch (err) {
@@ -572,7 +516,7 @@ export class AnthropicProvider implements ModelProvider {
 
   private getClient(): Anthropic {
     if (this.client) return this.client;
-    const result = createAnthropicClient(this.apiKey, this.log);
+    const result = this.createClient(this.apiKey);
     this.client = result.client;
     this.authSource = result.authSource;
     return result.client;
@@ -580,6 +524,17 @@ export class AnthropicProvider implements ModelProvider {
 }
 
 // ── Helpers (moved from AgentEngine.ts) ──
+
+function copyModelCapabilities(
+  capabilities: ModelCapabilities,
+): ModelCapabilities {
+  return {
+    ...capabilities,
+    ...(capabilities.reasoningEfforts
+      ? { reasoningEfforts: [...capabilities.reasoningEfforts] }
+      : {}),
+  };
+}
 
 /** Static fallback used when dynamic model capabilities are disabled. */
 function staticSupportsAdaptiveThinking(model: string): boolean {

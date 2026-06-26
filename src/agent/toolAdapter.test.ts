@@ -366,6 +366,23 @@ describe("getAgentTools", () => {
     expect(names).toContain("set_task_status");
   });
 
+  it("guides set_task_status continuations for concrete follow-up work", () => {
+    const tool = getAgentTools().find((t) => t.name === "set_task_status");
+    expect(tool?.description).toContain(
+      "when the summary mentions a concrete next phase, MVP slice, remaining plan item, follow-up task, or validation step",
+    );
+    const properties = tool?.input_schema.properties as Record<
+      string,
+      { description?: string }
+    >;
+    expect(properties.continueLabel.description).toContain(
+      "when the final summary names a concrete follow-up",
+    );
+    expect(properties.continuePrompt.description).toContain(
+      "remaining work from the original plan",
+    );
+  });
+
   it("excludes set_task_status from background and profile-restricted tool sets", () => {
     expect(
       getAgentTools(undefined, undefined, true).map((t) => t.name),

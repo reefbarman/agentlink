@@ -11,13 +11,14 @@ import {
   BrowserGatewayHelper,
   type HelperRuntimeOptions,
 } from "./browserGatewayHelper.js";
+import { BrowserGatewayAskAgentHistoryStore } from "../browserGatewayAskAgentHistory.js";
+import { BrowserGatewayAskAgentMemoryStore } from "../browserGatewayAskAgentMemory.js";
+import { BrowserGatewayAskAgentPreferencesStore } from "../browserGatewayAskAgentPreferences.js";
 import { DeviceStore } from "./deviceStore.js";
 import { PairingBroker } from "./pairingBroker.js";
 
 async function makeExtensionRoot(): Promise<string> {
-  const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), ".tmp-helper-pairing-"),
-  );
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), ".tmp-helper-pairing-"));
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
   await fs.mkdir(path.join(root, "media"), { recursive: true });
   for (const name of [
@@ -40,8 +41,42 @@ function readSetCookie(header: string | null): string {
 describe("BrowserGatewayHelper pairing flow", () => {
   const roots: string[] = [];
   const deviceStores: string[] = [];
+  const askAgentStoreDirs: string[] = [];
   let helper: BrowserGatewayHelper | null = null;
   const servers: http.Server[] = [];
+
+  type BrowserGatewayHelperInjectables = NonNullable<
+    ConstructorParameters<typeof BrowserGatewayHelper>[2]
+  >;
+
+  async function createIsolatedHelper(
+    options: HelperRuntimeOptions,
+    server: http.Server,
+    injectables: BrowserGatewayHelperInjectables = {},
+  ): Promise<BrowserGatewayHelper> {
+    const storeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), ".tmp-helper-pairing-ask-agent-store-"),
+    );
+    askAgentStoreDirs.push(storeDir);
+    return new BrowserGatewayHelper(options, server, {
+      ...injectables,
+      askAgentPreferencesStore:
+        injectables.askAgentPreferencesStore ??
+        new BrowserGatewayAskAgentPreferencesStore({
+          filePath: path.join(storeDir, "preferences.json"),
+        }),
+      askAgentHistoryStore:
+        injectables.askAgentHistoryStore ??
+        new BrowserGatewayAskAgentHistoryStore({
+          filePath: path.join(storeDir, "history.json"),
+        }),
+      askAgentMemoryStore:
+        injectables.askAgentMemoryStore ??
+        new BrowserGatewayAskAgentMemoryStore({
+          filePath: path.join(storeDir, "memory.json"),
+        }),
+    });
+  }
 
   afterEach(async () => {
     if (helper) {
@@ -64,6 +99,14 @@ describe("BrowserGatewayHelper pairing flow", () => {
       const p = deviceStores.pop()!;
       try {
         await fs.rm(path.dirname(p), { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+    while (askAgentStoreDirs.length > 0) {
+      const p = askAgentStoreDirs.pop()!;
+      try {
+        await fs.rm(p, { recursive: true, force: true });
       } catch {
         // ignore
       }
@@ -94,7 +137,7 @@ describe("BrowserGatewayHelper pairing flow", () => {
       extensionRootPath,
       lanAccess: false,
     };
-    helper = new BrowserGatewayHelper(options, helperServer, {
+    helper = await createIsolatedHelper(options, helperServer, {
       deviceStore: new DeviceStore({ filePath: deviceStorePath }),
       pairingBroker: new PairingBroker({ ttlMs: 60_000 }),
     });
@@ -211,7 +254,7 @@ describe("BrowserGatewayHelper pairing flow", () => {
       extensionRootPath,
       lanAccess: false,
     };
-    helper = new BrowserGatewayHelper(options, helperServer);
+    helper = await createIsolatedHelper(options, helperServer);
     helperServer.on("request", helper.handleRequest);
     await helper.start();
 

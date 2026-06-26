@@ -47,6 +47,23 @@ import { withPrimaryEditorColumn } from "../../util/editorPlacement.js";
 export function createVscodeEditorRevealProvider(): EditorRevealProvider {
   return {
     async reveal(params: EditorRevealParams) {
+      const uri = vscode.Uri.file(params.absolutePath);
+      const stat = await fs.stat(params.absolutePath);
+      if (stat.isDirectory()) {
+        await vscode.commands.executeCommand("revealInExplorer", uri);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "revealed",
+                path: getRelativePath(params.absolutePath),
+              }),
+            },
+          ],
+        };
+      }
+
       const doc = await vscode.workspace.openTextDocument(params.absolutePath);
       const editor = await vscode.window.showTextDocument(
         doc,

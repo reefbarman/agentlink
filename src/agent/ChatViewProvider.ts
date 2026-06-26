@@ -26,7 +26,15 @@ import type {
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
   RevertRecoveryNotice,
+  ToolResult,
 } from "../shared/types.js";
+import type {
+  McpConfigSnapshot,
+  McpManagerProfile,
+  McpManagerScope,
+  McpManagerServerDraft,
+  McpManagerView,
+} from "../shared/mcpManagerTypes.js";
 import type { McpUrlElicitationRequest } from "../shared/mcpUrlElicitation.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 import type { InstructionBlock } from "./configLoader.js";
@@ -37,6 +45,8 @@ import {
 import type { TodoItem } from "./todoTool.js";
 import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
 import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
+import { dispatchToolCall, getAgentTools } from "./toolAdapter.js";
+import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../shared/mcpToolDefinitions.js";
 import {
   type AgentUiPublisher,
   FanoutAgentUiPublisher,
@@ -45,11 +55,18 @@ import {
   WebviewAgentUiPublisher,
 } from "./AgentUiPublisher.js";
 import {
-  loadMcpConfigs,
+  buildMcpConfigEntries,
+  getAskAgentMcpConfigPaths,
+  getAskAgentMcpConfigFilePaths,
   getMcpConfigFilePaths,
+  getMcpConfigSources,
+  loadAskAgentMcpConfigs,
+  loadMcpConfigs,
   persistMcpToolApproval,
+  removeMcpConfigServer,
+  upsertMcpConfigServer,
 } from "./mcpConfig.js";
-import { loadCustomModes, getAllModes } from "./modes.js";
+import { BUILT_IN_MODES, loadCustomModes, getAllModes } from "./modes.js";
 import {
   buildSystemPrompt,
   formatRuleCatalogPath,
@@ -386,6 +403,7 @@ export type ExtensionToWebview =
   | {
       type: "agentMcpStatus";
       open?: boolean;
+      view?: McpManagerView;
       infos: Array<{
         name: string;
         status: string;
@@ -394,6 +412,7 @@ export type ExtensionToWebview =
         resourceCount: number;
         promptCount: number;
       }>;
+      configSnapshot?: McpConfigSnapshot;
     }
   | { type: "showApproval"; request: ApprovalRequest }
   | { type: "idle" }
@@ -812,6 +831,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private pendingMessages: ExtensionToWebview[] = [];
   private slashRegistry: SlashCommandRegistry | undefined;
   private mcpHub: McpClientHub;
+  private askAgentMcpHub: McpClientHub;
   private fileWatchers: vscode.Disposable[] = [];
   private cwd: string = "";
   private pendingElicitations = new Map<
@@ -887,12 +907,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private browserGatewayAdminClient:
     | import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient
     | undefined;
+  private browserGatewayModelAuthProvider:
+    | import("../core/modelAuth.js").CoreModelAuthProvider
+    | undefined;
   private pairingPollTimers = new Map<string, ReturnType<typeof setInterval>>();
   private specialBlockPanel: vscode.WebviewPanel | undefined;
   private lastMcpStatuses = new Map<
     string,
     { status: string; error?: string }
   >();
+  private lastAskAgentMcpStatuses = new Map<
+    string,
+    { status: string; error?: string }
+  >();
+  private lastMcpPromptSignature = "";
+  private mcpConfigVersion = 0;
+  private askAgentMcpConfigVersion = 0;
   private readonly uiEventHub: InMemoryAgentUiEventHub;
   private readonly uiPublisher: AgentUiPublisher;
   private browserGatewayThemeSnapshot: BrowserGatewayThemeSnapshot | null =
@@ -927,7 +957,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.uiEventHub,
     ]);
     this.mcpHub = new McpClientHub(globalState);
-    this.mcpHub.onSampling = async ({
+    this.askAgentMcpHub = new McpClientHub(globalState, "ask-agent");
+
+    const handleMcpSampling: McpClientHub["onSampling"] = async ({
       messages,
       systemPrompt,
       maxTokens,
@@ -959,8 +991,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         };
       }
     };
+    this.mcpHub.onSampling = handleMcpSampling;
+    this.askAgentMcpHub.onSampling = handleMcpSampling;
 
-    this.mcpHub.onElicitation = (request, resolve, cancel) => {
+    const handleMcpElicitation: NonNullable<McpClientHub["onElicitation"]> = (
+      request,
+      resolve,
+      cancel,
+    ) => {
       const id = `elicit_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       this.pendingElicitations.set(id, { resolve, cancel });
       // Best-effort attribution: MCP elicitation callbacks do not currently carry
@@ -983,8 +1021,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         required: request.required,
       } as unknown as ExtensionToWebview);
     };
+    this.mcpHub.onElicitation = handleMcpElicitation;
+    this.askAgentMcpHub.onElicitation = handleMcpElicitation;
 
-    this.mcpHub.onUrlElicitation = (request, resolve) => {
+    const handleMcpUrlElicitation: NonNullable<
+      McpClientHub["onUrlElicitation"]
+    > = (request, resolve) => {
       this.cancelPendingUrlElicitations();
       this.pendingUrlElicitations.set(request.id, { request, resolve });
       if (request.expiresAt) {
@@ -998,8 +1040,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       this.uiPublisher.publishUrlElicitationRequest(request);
     };
+    this.mcpHub.onUrlElicitation = handleMcpUrlElicitation;
+    this.askAgentMcpHub.onUrlElicitation = handleMcpUrlElicitation;
 
-    this.mcpHub.onUrlElicitationComplete = (_serverName, elicitationId) => {
+    const handleMcpUrlElicitationComplete: NonNullable<
+      McpClientHub["onUrlElicitationComplete"]
+    > = (_serverName, elicitationId) => {
       for (const pending of this.pendingUrlElicitations.values()) {
         if (pending.request.elicitationId === elicitationId) {
           this.clearUrlElicitation(pending.request.id);
@@ -1007,6 +1053,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
     };
+    this.mcpHub.onUrlElicitationComplete = handleMcpUrlElicitationComplete;
+    this.askAgentMcpHub.onUrlElicitationComplete =
+      handleMcpUrlElicitationComplete;
   }
 
   dispose(): void {
@@ -1058,6 +1107,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.fileWatchers = [];
     this.approvalManagerListener?.dispose();
     this.mcpHub?.disconnectAll().catch(() => undefined);
+    this.askAgentMcpHub?.disconnectAll().catch(() => undefined);
   }
 
   getUiEventHub(): ReadableAgentUiEventHub {
@@ -1099,6 +1149,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     client: import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient,
   ): void {
     this.browserGatewayAdminClient = client;
+  }
+
+  setBrowserGatewayModelAuthProvider(
+    provider: import("../core/modelAuth.js").CoreModelAuthProvider,
+  ): void {
+    this.browserGatewayModelAuthProvider = provider;
   }
 
   /**
@@ -1162,6 +1218,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     | import("../browser-gateway/helper/BrowserGatewayHelperAdminClient.js").BrowserGatewayHelperAdminClient
     | undefined {
     return this.browserGatewayAdminClient;
+  }
+
+  getBrowserGatewayModelAuthProvider():
+    | import("../core/modelAuth.js").CoreModelAuthProvider
+    | undefined {
+    return this.browserGatewayModelAuthProvider;
   }
 
   /**
@@ -1322,48 +1384,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await this.slashRegistry.reload();
 
     this.mcpHub.onStatusChange = (infos) => {
-      if (infos.length === 0) {
-        this.log(`[mcp] status update: no configured servers`);
-      } else {
-        const transitions: string[] = [];
-        for (const info of infos) {
-          const prev = this.lastMcpStatuses.get(info.name);
-          const prevStatus = prev?.status ?? "unknown";
-          const prevErr = prev?.error ?? "";
-          const nextErr = info.error ?? "";
-          const changed = prevStatus !== info.status || prevErr !== nextErr;
-          if (changed) {
-            const errSuffix = info.error ? ` error=${info.error}` : "";
-            transitions.push(
-              `${info.name}: ${prevStatus} -> ${info.status}${errSuffix}`,
-            );
-          }
-          this.lastMcpStatuses.set(info.name, {
-            status: info.status,
-            error: info.error,
-          });
-        }
+      this.logMcpStatusTransitions("mcp", this.lastMcpStatuses, infos);
 
-        if (transitions.length > 0) {
-          this.log(`[mcp] status transition(s): ${transitions.join(" | ")}`);
-        } else {
-          const snapshot = infos
-            .map((i) => `${i.name}=${i.status}${i.error ? `(${i.error})` : ""}`)
-            .join(", ");
-          this.log(`[mcp] status update (no transition): ${snapshot}`);
-        }
+      // Push live updates to the status panel if it's open.
+      void this.postMcpManagerSnapshot({ profile: "main", infos });
+
+      const promptSignature = this.buildMcpPromptSignature(infos);
+      if (promptSignature !== this.lastMcpPromptSignature) {
+        this.lastMcpPromptSignature = promptSignature;
+        void this.rebuildSessionSystemPromptsForMcp();
       }
-
-      // Push live updates to the status panel if it's open
-      this.postMessage({
-        type: "agentMcpStatus",
+    };
+    this.askAgentMcpHub.onStatusChange = (infos) => {
+      this.logMcpStatusTransitions(
+        "ask-agent:mcp",
+        this.lastAskAgentMcpStatuses,
         infos,
-      } as ExtensionToWebview);
+      );
     };
     this.mcpHub.onLog = (message) => {
       this.log(message);
     };
+    this.askAgentMcpHub.onLog = (message) => {
+      this.log(`[ask-agent] ${message}`);
+    };
     await this.refreshMcpConnections();
+    await this.refreshAskAgentMcpConnections();
 
     // File watchers for hot reload
     this.setupFileWatchers(cwd);
@@ -1381,6 +1427,74 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.mcpHub;
   }
 
+  /** Returns the Ask Agent MCP client hub (always defined, may not yet be connected). */
+  getAskAgentMcpHub(): McpClientHub {
+    return this.askAgentMcpHub;
+  }
+
+  private logMcpStatusTransitions(
+    prefix: string,
+    previousStatuses: Map<string, { status: string; error?: string }>,
+    infos: McpServerInfo[],
+  ): void {
+    if (infos.length === 0) {
+      this.log(`[${prefix}] status update: no configured servers`);
+      return;
+    }
+
+    const transitions: string[] = [];
+    for (const info of infos) {
+      const prev = previousStatuses.get(info.name);
+      const prevStatus = prev?.status ?? "unknown";
+      const prevErr = prev?.error ?? "";
+      const nextErr = info.error ?? "";
+      const changed = prevStatus !== info.status || prevErr !== nextErr;
+      if (changed) {
+        const errSuffix = info.error ? ` error=${info.error}` : "";
+        transitions.push(
+          `${info.name}: ${prevStatus} -> ${info.status}${errSuffix}`,
+        );
+      }
+      previousStatuses.set(info.name, {
+        status: info.status,
+        error: info.error,
+      });
+    }
+
+    if (transitions.length > 0) {
+      this.log(`[${prefix}] status transition(s): ${transitions.join(" | ")}`);
+    } else {
+      const snapshot = infos
+        .map((i) => `${i.name}=${i.status}${i.error ? `(${i.error})` : ""}`)
+        .join(", ");
+      this.log(`[${prefix}] status update (no transition): ${snapshot}`);
+    }
+  }
+
+  private buildMcpPromptSignature(infos: McpServerInfo[]): string {
+    return infos
+      .filter((info) => info.status === "connected" && info.toolCount > 0)
+      .map((info) => {
+        const tools = info.tools
+          .map((tool) => `${tool.name}:${tool.description ?? ""}`)
+          .sort()
+          .join(",");
+        return `${info.name}:${info.toolCount}:${tools}`;
+      })
+      .sort()
+      .join("|");
+  }
+
+  private async rebuildSessionSystemPromptsForMcp(): Promise<void> {
+    if (!this.sessionManager) return;
+    try {
+      await this.sessionManager.rebuildSystemPrompts();
+      this.log("[mcp] Rebuilt system prompt after MCP availability change");
+    } catch (err) {
+      this.log(`[mcp] Failed to rebuild system prompt: ${err}`);
+    }
+  }
+
   private async refreshMcpConnections(options?: {
     interactiveForNewServers?: boolean;
   }): Promise<void> {
@@ -1396,15 +1510,95 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async openMcpConfig(scope: "project" | "global"): Promise<void> {
-    if (!this.cwd) return;
-    const paths = getMcpConfigFilePaths(this.cwd);
-    const filePath = scope === "global" ? paths.global : paths.project;
+  private async refreshAskAgentMcpConnections(options?: {
+    interactiveForNewServers?: boolean;
+  }): Promise<void> {
+    if (!this.askAgentMcpHub) return;
+    try {
+      const configs = await loadAskAgentMcpConfigs();
+      await this.askAgentMcpHub.connect(configs, {
+        interactiveForNewServers: options?.interactiveForNewServers,
+      });
+      this.log(`[ask-agent:mcp] connected ${configs.length} server(s)`);
+    } catch (err) {
+      this.log(`[ask-agent:mcp] connection error: ${err}`);
+    }
+  }
 
+  private async buildMcpConfigSnapshot(
+    profile: McpManagerProfile,
+    statusInfos?: McpServerInfo[],
+  ): Promise<McpConfigSnapshot> {
+    const infos =
+      statusInfos ??
+      (profile === "ask-agent"
+        ? (this.askAgentMcpHub?.getServerInfos() ?? [])
+        : this.mcpHub.getServerInfos());
+    const sources =
+      profile === "ask-agent"
+        ? await getMcpConfigSources("ask-agent")
+        : await getMcpConfigSources("main", this.cwd ?? process.cwd());
+    const entries =
+      profile === "ask-agent"
+        ? await buildMcpConfigEntries("ask-agent")
+        : await buildMcpConfigEntries("main", this.cwd ?? process.cwd());
+
+    return {
+      profile,
+      version:
+        profile === "ask-agent"
+          ? this.askAgentMcpConfigVersion
+          : this.mcpConfigVersion,
+      sources,
+      entries,
+      statusInfos: infos,
+      capabilities: {
+        canEditConfig: true,
+        canOpenRawConfig: true,
+        canReconnect: true,
+        canReauthenticate: true,
+        canDisable: true,
+        canUseProjectConfig: profile === "main",
+      },
+    };
+  }
+
+  private async postMcpManagerSnapshot(options: {
+    profile: McpManagerProfile;
+    open?: boolean;
+    view?: McpManagerView;
+    infos?: McpServerInfo[];
+  }): Promise<void> {
+    const infos =
+      options.infos ??
+      (options.profile === "ask-agent"
+        ? (this.askAgentMcpHub?.getServerInfos() ?? [])
+        : this.mcpHub.getServerInfos());
+    this.postMessage({
+      type: "agentMcpStatus",
+      infos,
+      open: options.open,
+      view: options.view,
+      configSnapshot: await this.buildMcpConfigSnapshot(options.profile, infos),
+    } as ExtensionToWebview);
+  }
+
+  private async openRawMcpConfig(
+    profile: McpManagerProfile,
+    scope: McpManagerScope,
+  ): Promise<void> {
+    if (profile === "ask-agent") {
+      if (scope !== "ask-agent-global") return;
+      await this.openMcpConfigFile(getAskAgentMcpConfigFilePaths().global);
+      return;
+    }
+    if (scope !== "global" && scope !== "project") return;
+    await this.openMcpConfig(scope);
+  }
+
+  private async openMcpConfigFile(filePath: string): Promise<void> {
     const fs = require("fs");
     const pathMod = require("path");
-
-    // Create with template if missing
     if (!fs.existsSync(filePath)) {
       fs.mkdirSync(pathMod.dirname(filePath), { recursive: true });
       fs.writeFileSync(
@@ -1413,10 +1607,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         "utf-8",
       );
     }
-
     const uri = vscode.Uri.file(filePath);
     const doc = await vscode.workspace.openTextDocument(uri);
     await vscode.window.showTextDocument(doc, withPrimaryEditorColumn());
+  }
+
+  private async openMcpConfig(scope: "project" | "global"): Promise<void> {
+    if (!this.cwd) return;
+    const paths = getMcpConfigFilePaths(this.cwd);
+    const filePath = scope === "global" ? paths.global : paths.project;
+
+    await this.openMcpConfigFile(filePath);
   }
 
   /** Called by the tool dispatcher when the agent requests a mode switch. */
@@ -1850,6 +2051,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           notes: (raw.notes as Record<string, string>) ?? {},
         });
       });
+      const foregroundSession = this.sessionManager?.getForegroundSession();
+      if (foregroundSession?.id === sessionId) {
+        this.ensureProjectedForegroundSession(foregroundSession);
+        this.applyProjectedAction({
+          type: "SET_QUESTION",
+          id,
+          context,
+          questions,
+          ...(backgroundTask ? { backgroundTask } : {}),
+        });
+      }
       this.uiPublisher.publishQuestionRequest(
         id,
         context,
@@ -2048,27 +2260,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return { ok: false, error: "session_not_foreground" };
       }
       this.ensureProjectedForegroundSession(foregroundSession);
-      if (this.projectedForegroundState.messageQueue.length > 0) {
-        return { ok: false, error: "queue_full" };
-      }
 
       const queueId = randomUUID();
       const displayQueueText = displayText ?? text;
       const displayMedia = mediaToDisplayMedia({ images, documents });
-      const queued = effectiveSession.setPendingInterjection(
-        resolvedText,
-        queueId,
-        input.id,
-        displayQueueText,
-        isSlashCommand,
-        slashCommandLabel,
-        undefined,
-        images.length > 0 ? images : undefined,
-        documents.length > 0 ? documents : undefined,
-      );
-      if (!queued) {
-        return { ok: false, error: "queue_full" };
-      }
 
       this.postMessage({
         type: "agentQueuedMessage",
@@ -2465,6 +2660,104 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
+  public async submitBrowserAskAgentMcpTool(input: {
+    name?: string;
+    input?: Record<string, unknown>;
+    sessionId?: string;
+    signal?: AbortSignal;
+  }): Promise<{
+    ok: boolean;
+    result?: ToolResult;
+    tools?: ReturnType<typeof getAgentTools>;
+    error?: string;
+  }> {
+    const toolName = input.name?.trim();
+    if (!toolName) return { ok: false, error: "invalid_request" };
+    const sessionId =
+      input.sessionId?.trim() || "browser-gateway:ask-agent:mcp";
+    const mcpToolDefs = this.askAgentMcpHub.getToolDefs();
+    const codeMode = BUILT_IN_MODES[0];
+    const tools = getAgentTools(codeMode, mcpToolDefs).filter(
+      (tool) =>
+        McpClientHub.isMcpTool(tool.name) ||
+        MCP_TOOL_BRIDGE_TOOL_NAMES.includes(tool.name),
+    );
+    if (!tools.some((tool) => tool.name === toolName)) {
+      return { ok: false, error: "tool_not_available", tools };
+    }
+    if (!this.approvalManager) {
+      return { ok: false, error: "approval_manager_unavailable", tools };
+    }
+    const result = await dispatchToolCall(toolName, input.input ?? {}, {
+      approvalManager: this.approvalManager,
+      approvalPanel: undefined as never,
+      sessionId,
+      extensionUri: this.extensionUri,
+      mcpHub: this.askAgentMcpHub,
+      mode: "code",
+      onApprovalRequest: (request, requestSessionId) =>
+        this.requestApproval(request, requestSessionId),
+      toolAbortSignal: input.signal,
+      toolCallTracker: this.toolCallTracker,
+    });
+    return { ok: true, result, tools };
+  }
+
+  public async submitBrowserAskAgentMcpStatus(): Promise<{
+    ok: boolean;
+    infos: McpServerInfo[];
+    configSnapshot: McpConfigSnapshot;
+  }> {
+    const infos = this.askAgentMcpHub.getServerInfos();
+    return {
+      ok: true,
+      infos,
+      configSnapshot: await this.buildMcpConfigSnapshot("ask-agent", infos),
+    };
+  }
+
+  public async submitBrowserAskAgentMcpRefresh(): Promise<{
+    ok: boolean;
+    infos: McpServerInfo[];
+    configSnapshot?: McpConfigSnapshot;
+    error?: string;
+  }> {
+    try {
+      await this.refreshAskAgentMcpConnections({
+        interactiveForNewServers: false,
+      });
+      const infos = this.askAgentMcpHub.getServerInfos();
+      return {
+        ok: true,
+        infos,
+        configSnapshot: await this.buildMcpConfigSnapshot("ask-agent", infos),
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        infos: this.askAgentMcpHub.getServerInfos(),
+        error: String(err),
+      };
+    }
+  }
+
+  public submitBrowserAskAgentMcpTools(): {
+    ok: boolean;
+    tools: ReturnType<typeof getAgentTools>;
+  } {
+    return {
+      ok: true,
+      tools: getAgentTools(
+        BUILT_IN_MODES[0],
+        this.askAgentMcpHub.getToolDefs(),
+      ).filter(
+        (tool) =>
+          McpClientHub.isMcpTool(tool.name) ||
+          MCP_TOOL_BRIDGE_TOOL_NAMES.includes(tool.name),
+      ),
+    };
+  }
+
   public submitBrowserMcpAction(
     serverName: string,
     action: "disable" | "reconnect" | "reauthenticate",
@@ -2481,12 +2774,110 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       } else if (action === "reauthenticate") {
         await this.mcpHub.reauthenticateServer(serverName);
       }
-      this.postMessage({
-        type: "agentMcpStatus",
-        infos: this.mcpHub.getServerInfos(),
-      } as ExtensionToWebview);
+      await this.postMcpManagerSnapshot({ profile: "main" });
     })();
     return { ok: true, infos: this.mcpHub.getServerInfos() };
+  }
+
+  public async submitBrowserMcpConfigSnapshot(
+    profile: McpManagerProfile,
+  ): Promise<{ ok: true; configSnapshot: McpConfigSnapshot }> {
+    return {
+      ok: true,
+      configSnapshot: await this.buildMcpConfigSnapshot(profile),
+    };
+  }
+
+  public async submitBrowserMcpConfigServer(input: {
+    profile: McpManagerProfile;
+    scope: McpManagerScope;
+    server: McpManagerServerDraft;
+    allowMainProfileMutation?: boolean;
+  }): Promise<{
+    ok: boolean;
+    configSnapshot?: McpConfigSnapshot;
+    error?: string;
+  }> {
+    try {
+      if (input.profile !== "ask-agent" && !input.allowMainProfileMutation) {
+        throw new Error("main_profile_read_only_in_browser");
+      }
+      await upsertMcpConfigServer(input, this.cwd);
+      if (input.profile === "ask-agent") {
+        this.askAgentMcpConfigVersion += 1;
+        await this.refreshAskAgentMcpConnections({
+          interactiveForNewServers: false,
+        });
+      } else {
+        this.mcpConfigVersion += 1;
+        await this.refreshMcpConnections({ interactiveForNewServers: true });
+      }
+      return {
+        ok: true,
+        configSnapshot: await this.buildMcpConfigSnapshot(input.profile),
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  public async submitBrowserMcpConfigRemove(input: {
+    profile: McpManagerProfile;
+    scope: McpManagerScope;
+    serverName: string;
+    allowMainProfileMutation?: boolean;
+  }): Promise<{
+    ok: boolean;
+    configSnapshot?: McpConfigSnapshot;
+    error?: string;
+  }> {
+    try {
+      if (input.profile !== "ask-agent" && !input.allowMainProfileMutation) {
+        throw new Error("main_profile_read_only_in_browser");
+      }
+      await removeMcpConfigServer(
+        input.profile,
+        input.scope,
+        input.serverName,
+        this.cwd,
+      );
+      if (input.profile === "ask-agent") {
+        this.askAgentMcpConfigVersion += 1;
+        await this.refreshAskAgentMcpConnections({
+          interactiveForNewServers: false,
+        });
+      } else {
+        this.mcpConfigVersion += 1;
+        await this.refreshMcpConnections({ interactiveForNewServers: true });
+      }
+      return {
+        ok: true,
+        configSnapshot: await this.buildMcpConfigSnapshot(input.profile),
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  public async submitBrowserMcpConfigOpenRaw(input: {
+    profile: McpManagerProfile;
+    scope: McpManagerScope;
+  }): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await this.openRawMcpConfig(input.profile, input.scope);
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   public async submitBrowserAttachFile(): Promise<{ files: string[] }> {
@@ -2512,7 +2903,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * exits streaming state. Shared by the VS Code webview "agentStop" message
    * and the browser gateway stop endpoint.
    */
-  private stopSessionFromUi(sessionId: string): void {
+  private stopSessionFromUi(
+    sessionId: string,
+    opts?: { drainBrowserQueue?: boolean },
+  ): void {
     if (!this.sessionManager) return;
     const session = this.sessionManager.getSession(sessionId);
     this.sessionManager.stopSession(sessionId);
@@ -2574,13 +2968,110 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       totalCacheReadTokens: session?.totalCacheReadTokens ?? 0,
       totalCacheCreationTokens: session?.totalCacheCreationTokens ?? 0,
     });
-    if (session?.background !== true) {
-      this.drainBrowserQueuedInterjection(sessionId);
+    if (session?.background !== true && opts?.drainBrowserQueue !== false) {
+      this.drainBrowserQueuedMessage(sessionId);
     }
     // If this was a bg session, push updated status so the strip/block
     // shows the cancelled state immediately.
     if (session?.background) {
       this.sendBgSessionsUpdate();
+    }
+  }
+
+  private async steerQueuedMessageFromUi(input: {
+    sessionId: string;
+    queueId: string;
+    text: string;
+    displayText?: string;
+    isSlashCommand?: boolean;
+    slashCommandLabel?: string;
+    attachments: string[];
+    source?: "vscode" | "browser";
+    images: Array<{ name: string; mimeType: string; base64: string }>;
+    documents: Array<{ name: string; mimeType: string; base64: string }>;
+  }): Promise<void> {
+    if (!input.sessionId || !input.queueId || !this.sessionManager) return;
+    const session = this.sessionManager.getSession(input.sessionId);
+    if (!session) return;
+
+    this.applyProjectedAction({
+      type: "REMOVE_FROM_QUEUE",
+      id: input.queueId,
+    });
+    this.postMessage({
+      type: "agentRemoveQueuedMessage",
+      sessionId: input.sessionId,
+      queueId: input.queueId,
+    });
+
+    const isRunning =
+      session.status === "streaming" ||
+      session.status === "tool_executing" ||
+      session.status === "awaiting_approval";
+    if (isRunning) {
+      this.stopSessionFromUi(input.sessionId, { drainBrowserQueue: false });
+    }
+
+    const resolvedText = await this.resolveAttachments(
+      input.text,
+      input.attachments,
+    );
+    const displayText = input.displayText ?? input.text;
+    const reasoningEffort = session.reasoningEffort;
+    const thinkingEnabled = reasoningEffort !== "none";
+    const displayMedia = mediaToDisplayMedia({
+      images: input.images,
+      documents: input.documents,
+    });
+
+    this.postMessage({
+      type: "agentCommittedUserMessage",
+      sessionId: input.sessionId,
+      text: resolvedText,
+      displayText,
+      isSlashCommand: input.isSlashCommand,
+      slashCommandLabel: input.slashCommandLabel,
+      origin: input.source === "browser" ? "browser" : "vscode",
+      displayMedia,
+    });
+
+    this.sessionManager
+      .sendMessage(input.sessionId, resolvedText, session.mode, {
+        thinkingEnabled,
+        reasoningEffort,
+        activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+        displayText,
+        isSlashCommand: input.isSlashCommand,
+        slashCommandLabel: input.slashCommandLabel,
+        origin: input.source === "browser" ? "browser" : "vscode",
+        images: input.images.length > 0 ? input.images : undefined,
+        documents: input.documents.length > 0 ? input.documents : undefined,
+      })
+      .catch((err) => {
+        this.log(`[error] steer queued message failed: ${err}`);
+      });
+
+    const fg = this.sessionManager.getForegroundSession();
+    if (fg) {
+      const condenseThreshold = this.getConfiguredCondenseThreshold(fg.model);
+      this.postMessage({
+        type: "stateUpdate",
+        state: {
+          sessionId: fg.id,
+          mode: fg.mode,
+          model: fg.model,
+          streaming: true,
+          condenseThreshold,
+          contextBudget: this.buildContextBudget(
+            fg,
+            fg.model,
+            condenseThreshold,
+          ),
+          agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
+            fg.id,
+          ),
+        },
+      });
     }
   }
 
@@ -2720,6 +3211,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     configWatcher.onDidDelete(reloadConfig);
     this.fileWatchers.push(configWatcher);
 
+    for (const filePath of getAskAgentMcpConfigPaths()) {
+      const askAgentMcpWatcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(
+          path.dirname(filePath),
+          path.basename(filePath),
+        ),
+      );
+      const reloadAskAgentMcp = () => {
+        this.refreshAskAgentMcpConnections({ interactiveForNewServers: true });
+      };
+      askAgentMcpWatcher.onDidChange(reloadAskAgentMcp);
+      askAgentMcpWatcher.onDidCreate(reloadAskAgentMcp);
+      askAgentMcpWatcher.onDidDelete(reloadAskAgentMcp);
+      this.fileWatchers.push(askAgentMcpWatcher);
+    }
+
     // Watch instruction files for system prompt hot-reload
     const instructionPattern = new vscode.RelativePattern(
       cwd,
@@ -2763,23 +3270,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Lazy (non-blocking) dynamic model refresh — never on activation; runs once
     // per session, re-sends models + signals the browser when it lands (Target A).
     this.maybeRefreshAnthropicModels();
-    const allModels = providerRegistry.listAllModels();
-    const authStatus = await providerRegistry.getAuthStatus();
-    const models = allModels.map((m) => ({
-      id: m.id,
-      displayName: m.displayName,
-      provider: m.provider,
-      contextWindow: m.capabilities.contextWindow,
-      maxInputTokens: m.capabilities.maxInputTokens,
-      maxOutputTokens: m.capabilities.maxOutputTokens,
-      reasoningEfforts: m.capabilities.reasoningEfforts,
-      defaultReasoningEffort: m.capabilities.defaultReasoningEffort,
-      authenticated: authStatus[m.provider] ?? false,
-      condenseThreshold: this.getConfiguredCondenseThreshold(m.id),
-    }));
     this.postMessage({
       type: "agentModelsUpdate",
-      models,
+      models: await this.getBrowserModels(),
     } as ExtensionToWebview);
   }
 
@@ -3057,12 +3550,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSend": {
         const text = msg.text as string;
         const mode = (msg.mode as string) ?? "code";
-        this.applyProjectedAction({
-          type: "ADD_USER_MESSAGE",
-          text: (msg.displayText as string | undefined) ?? text,
-          isSlashCommand: msg.isSlashCommand === true,
-          slashCommandLabel: msg.slashCommandLabel as string | undefined,
-        });
         const sessionId = msg.sessionId as string | undefined;
         const reasoningEffort =
           (msg.reasoningEffort as
@@ -3072,34 +3559,65 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const thinkingEnabled = reasoningEffort
           ? reasoningEffort !== "none"
           : msg.thinkingEnabled !== false;
-        const displayText = msg.displayText as string | undefined;
-        const isSlashCommand = msg.isSlashCommand === true;
-        const slashCommandLabel = msg.slashCommandLabel as string | undefined;
-        const attachments = (msg.attachments as string[]) ?? [];
-        const images =
-          (msg.images as
-            | Array<{ name: string; mimeType: string; base64: string }>
-            | undefined) ?? [];
-        const documents =
-          (msg.documents as
-            | Array<{ name: string; mimeType: string; base64: string }>
-            | undefined) ?? [];
+        const rawMessages = Array.isArray(msg.messages)
+          ? (msg.messages as Array<Record<string, unknown>>)
+          : [
+              {
+                text,
+                displayText: msg.displayText,
+                isSlashCommand: msg.isSlashCommand,
+                slashCommandLabel: msg.slashCommandLabel,
+                attachments: msg.attachments,
+                images: msg.images,
+                documents: msg.documents,
+              },
+            ];
+        const sendMessages = await Promise.all(
+          rawMessages.map(async (raw) => {
+            const messageText = String(raw.text ?? "");
+            const attachments = (raw.attachments as string[] | undefined) ?? [];
+            const images =
+              (raw.images as
+                | Array<{ name: string; mimeType: string; base64: string }>
+                | undefined) ?? [];
+            const documents =
+              (raw.documents as
+                | Array<{ name: string; mimeType: string; base64: string }>
+                | undefined) ?? [];
+            return {
+              text: await this.resolveAttachments(messageText, attachments),
+              displayText: raw.displayText as string | undefined,
+              isSlashCommand: raw.isSlashCommand === true,
+              slashCommandLabel: raw.slashCommandLabel as string | undefined,
+              attachments,
+              images,
+              documents,
+            };
+          }),
+        );
+        const nonEmptyMessages = sendMessages.filter(
+          (message) =>
+            message.text.trim().length > 0 ||
+            message.images.length > 0 ||
+            message.documents.length > 0,
+        );
 
-        if (
-          !text?.trim() &&
-          attachments.length === 0 &&
-          images.length === 0 &&
-          documents.length === 0
-        )
-          return;
+        if (nonEmptyMessages.length === 0) return;
 
-        const resolvedText = await this.resolveAttachments(text, attachments);
+        for (const message of nonEmptyMessages) {
+          this.applyProjectedAction({
+            type: "ADD_USER_MESSAGE",
+            text: message.displayText ?? message.text,
+            isSlashCommand: message.isSlashCommand,
+            slashCommandLabel: message.slashCommandLabel,
+          });
+        }
 
         this.log(
-          `[send] session=${sessionId ?? "new"} mode=${mode} reasoning=${reasoningEffort ?? (thinkingEnabled ? "default" : "none")} attachments=${attachments.length} images=${images.length} documents=${documents.length} text="${resolvedText.slice(0, 80)}${resolvedText.length > 80 ? "..." : ""}"`,
+          `[send] session=${sessionId ?? "new"} mode=${mode} reasoning=${reasoningEffort ?? (thinkingEnabled ? "default" : "none")} messages=${nonEmptyMessages.length} text="${nonEmptyMessages[0]!.text.slice(0, 80)}${nonEmptyMessages[0]!.text.length > 80 ? "..." : ""}"`,
         );
-        if (images.length > 0) {
-          for (const img of images) {
+        for (const message of nonEmptyMessages) {
+          for (const img of message.images) {
             this.log(
               `[send:image] name="${img.name}" mimeType="${img.mimeType}" base64Length=${img.base64?.length ?? 0}`,
             );
@@ -3120,16 +3638,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         mgr
-          .sendMessage(effectiveSessionId, resolvedText, mode, {
+          .sendMessage(effectiveSessionId, nonEmptyMessages[0]!.text, mode, {
             thinkingEnabled,
             reasoningEffort,
             activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
-            displayText,
-            isSlashCommand,
-            slashCommandLabel,
+            displayText: nonEmptyMessages[0]!.displayText,
+            isSlashCommand: nonEmptyMessages[0]!.isSlashCommand,
+            slashCommandLabel: nonEmptyMessages[0]!.slashCommandLabel,
             origin: "vscode",
-            images: images.length > 0 ? images : undefined,
-            documents: documents.length > 0 ? documents : undefined,
+            images:
+              nonEmptyMessages[0]!.images.length > 0
+                ? nonEmptyMessages[0]!.images
+                : undefined,
+            documents:
+              nonEmptyMessages[0]!.documents.length > 0
+                ? nonEmptyMessages[0]!.documents
+                : undefined,
+            additionalMessages: nonEmptyMessages.slice(1).map((message) => ({
+              text: message.text,
+              displayText: message.displayText,
+              isSlashCommand: message.isSlashCommand,
+              slashCommandLabel: message.slashCommandLabel,
+              origin: "vscode",
+              images: message.images.length > 0 ? message.images : undefined,
+              documents:
+                message.documents.length > 0 ? message.documents : undefined,
+            })),
           })
           .catch((err) => {
             this.log(`[error] send failed: ${err}`);
@@ -3166,6 +3700,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (sessionId) {
           this.stopSessionFromUi(sessionId);
         }
+        break;
+      }
+
+      case "cancelToolCall": {
+        const id = msg.id as string | undefined;
+        if (id) {
+          void vscode.commands.executeCommand("agentlink.cancelToolCall", id);
+        }
+        break;
+      }
+
+      case "completeToolCall": {
+        const id = msg.id as string | undefined;
+        if (id) {
+          void vscode.commands.executeCommand("agentlink.completeToolCall", id);
+        }
+        break;
+      }
+
+      case "agentSteerQueuedMessage": {
+        await this.steerQueuedMessageFromUi({
+          sessionId: msg.sessionId as string,
+          queueId: msg.queueId as string,
+          text: msg.text as string,
+          displayText: msg.displayText as string | undefined,
+          isSlashCommand: msg.isSlashCommand === true,
+          slashCommandLabel: msg.slashCommandLabel as string | undefined,
+          attachments: (msg.attachments as string[] | undefined) ?? [],
+          source: msg.source as "vscode" | "browser" | undefined,
+          images:
+            (msg.images as
+              | Array<{ name: string; mimeType: string; base64: string }>
+              | undefined) ?? [],
+          documents:
+            (msg.documents as
+              | Array<{ name: string; mimeType: string; base64: string }>
+              | undefined) ?? [],
+        });
         break;
       }
 
@@ -3420,11 +3992,61 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } else if (action === "reauthenticate") {
           await this.mcpHub.reauthenticateServer(serverName);
         }
-        // Push updated status to webview
-        this.postMessage({
-          type: "agentMcpStatus",
-          infos: this.mcpHub.getServerInfos(),
-        } as ExtensionToWebview);
+        await this.postMcpManagerSnapshot({ profile: "main" });
+        break;
+      }
+
+      case "agentMcpConfigSave": {
+        const result = await this.submitBrowserMcpConfigServer({
+          profile: (msg.profile as McpManagerProfile) ?? "main",
+          scope: msg.scope as McpManagerScope,
+          server: msg.server as McpManagerServerDraft,
+          allowMainProfileMutation: true,
+        });
+        if (!result.ok) {
+          vscode.window.showErrorMessage(
+            `Failed to save MCP server: ${result.error ?? "unknown error"}`,
+          );
+        } else if (result.configSnapshot) {
+          this.postMessage({
+            type: "agentMcpStatus",
+            infos: result.configSnapshot.statusInfos,
+            open: true,
+            view: "config",
+            configSnapshot: result.configSnapshot,
+          } as ExtensionToWebview);
+        }
+        break;
+      }
+
+      case "agentMcpConfigRemove": {
+        const result = await this.submitBrowserMcpConfigRemove({
+          profile: (msg.profile as McpManagerProfile) ?? "main",
+          scope: msg.scope as McpManagerScope,
+          serverName: String(msg.serverName ?? ""),
+          allowMainProfileMutation: true,
+        });
+        if (!result.ok) {
+          vscode.window.showErrorMessage(
+            `Failed to remove MCP server: ${result.error ?? "unknown error"}`,
+          );
+        } else if (result.configSnapshot) {
+          this.postMessage({
+            type: "agentMcpStatus",
+            infos: result.configSnapshot.statusInfos,
+            open: true,
+            view: "config",
+            configSnapshot: result.configSnapshot,
+          } as ExtensionToWebview);
+        }
+        break;
+      }
+
+      case "agentMcpConfigOpenRaw": {
+        await this.openRawMcpConfig(
+          (msg.profile as McpManagerProfile) ?? "main",
+          msg.scope as McpManagerScope,
+        );
         break;
       }
 
@@ -3553,7 +4175,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               totalCacheReadTokens: fg.totalCacheReadTokens,
               totalCacheCreationTokens: fg.totalCacheCreationTokens,
             });
-            this.drainBrowserQueuedInterjection(fg.id);
+            this.drainBrowserQueuedMessage(fg.id);
           }
         } else if (name === "checkpoint") {
           const checkpoint =
@@ -3609,18 +4231,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.outputChannel.appendLine(lines.join("\n"));
           this.outputChannel.show(true);
         } else if (name === "mcp") {
-          const infos = this.mcpHub.getServerInfos();
-          this.postMessage({
-            type: "agentMcpStatus",
-            infos,
-            open: true,
-          } as ExtensionToWebview);
+          await this.postMcpManagerSnapshot({ profile: "main", open: true });
         } else if (name === "mcp-config") {
-          const scope =
-            (msg.args as string) === "global" ? "global" : "project";
-          await this.openMcpConfig(scope);
+          const args = String(msg.args ?? "")
+            .trim()
+            .toLowerCase();
+          if (args === "global" || args === "raw global") {
+            await this.openMcpConfig("global");
+          } else if (args === "project" || args === "raw project") {
+            await this.openMcpConfig("project");
+          } else if (args === "ask-agent" || args === "raw ask-agent") {
+            await this.openRawMcpConfig("ask-agent", "ask-agent-global");
+          } else {
+            await this.postMcpManagerSnapshot({
+              profile: "main",
+              open: true,
+              view: "config",
+            });
+          }
         } else if (name === "mcp-refresh") {
           await this.refreshMcpConnections();
+          await this.postMcpManagerSnapshot({ profile: "main" });
           vscode.window.showInformationMessage("MCP servers reconnected.");
         } else if (name === "btw") {
           const question = String(msg.args ?? "").trim();
@@ -3649,22 +4280,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const filePath = msg.path as string;
         const line = msg.line as number | undefined;
         if (!filePath) break;
-        const path = require("path");
         const workspaceRoot =
           vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
         const absPath = path.isAbsolute(filePath)
           ? filePath
           : path.join(workspaceRoot, filePath);
         const uri = vscode.Uri.file(absPath);
-        const options: vscode.TextDocumentShowOptions =
-          withPrimaryEditorColumn();
-        if (line) {
-          const pos = new vscode.Position(line - 1, 0);
-          options.selection = new vscode.Range(pos, pos);
-        }
-        vscode.window.showTextDocument(uri, options).then(undefined, (err) => {
-          this.log(`[error] Failed to open file: ${err}`);
-        });
+        fs.promises
+          .stat(absPath)
+          .then(async (stat) => {
+            if (stat.isDirectory()) {
+              await vscode.commands.executeCommand("revealInExplorer", uri);
+              return;
+            }
+
+            const options: vscode.TextDocumentShowOptions =
+              withPrimaryEditorColumn();
+            if (line) {
+              const pos = new vscode.Position(line - 1, 0);
+              options.selection = new vscode.Range(pos, pos);
+            }
+            await vscode.window.showTextDocument(uri, options);
+          })
+          .then(undefined, (err) => {
+            this.log(`[error] Failed to open path: ${err}`);
+          });
         break;
       }
 
@@ -5142,7 +5782,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }),
         });
         if (!isBackground) {
-          this.drainBrowserQueuedInterjection(sessionId);
+          this.drainBrowserQueuedMessage(sessionId);
         }
         // Refresh session list after save (SessionStore.save is called in SessionManager)
         this.sendSessionList();
@@ -5996,57 +6636,80 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }));
   }
 
-  private drainBrowserQueuedInterjection(sessionId: string): void {
+  private drainBrowserQueuedMessage(sessionId: string): void {
     const session = this.sessionManager?.getSession(sessionId);
     if (!session) return;
-    const queued = this.projectedForegroundState.messageQueue.find(
-      (entry) =>
-        entry.source === "browser" && session.hasPendingInterjection(entry.id),
+    const queuedMessages = this.projectedForegroundState.messageQueue.filter(
+      (entry) => entry.source === "browser",
     );
-    if (!queued) return;
+    if (queuedMessages.length === 0) return;
 
-    const pending = session.clearPendingInterjectionIf(queued.id);
-    if (!pending) return;
-
-    this.applyProjectedAction({ type: "REMOVE_FROM_QUEUE", id: queued.id });
-    this.sendOrQueueWebviewMessage({
-      type: "agentRemoveQueuedMessage",
-      sessionId,
-      queueId: queued.id,
-    });
+    for (const queued of queuedMessages) {
+      this.applyProjectedAction({ type: "REMOVE_FROM_QUEUE", id: queued.id });
+      this.sendOrQueueWebviewMessage({
+        type: "agentRemoveQueuedMessage",
+        sessionId,
+        queueId: queued.id,
+      });
+    }
 
     const mode = session.mode;
     const reasoningEffort = session.reasoningEffort;
     const thinkingEnabled = reasoningEffort !== "none";
-    const displayText = pending.displayText ?? pending.text;
-    const displayMedia = mediaToDisplayMedia({
-      images: pending.images,
-      documents: pending.documents,
+    const sendMessages = queuedMessages.map((queued) => {
+      const documents = queued.documents?.filter(
+        (
+          document,
+        ): document is { name: string; mimeType: string; base64: string } =>
+          typeof document.base64 === "string",
+      );
+      return {
+        text: queued.fullText ?? queued.text,
+        displayText: queued.text,
+        isSlashCommand: queued.isSlashCommand,
+        slashCommandLabel: queued.slashCommandLabel,
+        images: queued.images,
+        documents,
+        displayMedia: mediaToDisplayMedia({
+          images: queued.images,
+          documents: queued.documents,
+        }),
+      };
     });
 
-    this.postMessage({
-      type: "agentCommittedUserMessage",
-      sessionId,
-      id: pending.messageId,
-      text: pending.text,
-      displayText,
-      isSlashCommand: pending.isSlashCommand,
-      slashCommandLabel: pending.slashCommandLabel,
-      origin: "browser",
-      displayMedia,
-    });
+    for (const message of sendMessages) {
+      this.postMessage({
+        type: "agentCommittedUserMessage",
+        sessionId,
+        text: message.text,
+        displayText: message.displayText,
+        isSlashCommand: message.isSlashCommand,
+        slashCommandLabel: message.slashCommandLabel,
+        origin: "browser",
+        displayMedia: message.displayMedia,
+      });
+    }
 
     this.sessionManager
-      ?.sendMessage(sessionId, pending.text, mode, {
+      ?.sendMessage(sessionId, sendMessages[0]!.text, mode, {
         thinkingEnabled,
         reasoningEffort,
         activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
-        displayText,
-        isSlashCommand: pending.isSlashCommand,
-        slashCommandLabel: pending.slashCommandLabel,
+        displayText: sendMessages[0]!.displayText,
+        isSlashCommand: sendMessages[0]!.isSlashCommand,
+        slashCommandLabel: sendMessages[0]!.slashCommandLabel,
         origin: "browser",
-        images: pending.images,
-        documents: pending.documents,
+        images: sendMessages[0]!.images,
+        documents: sendMessages[0]!.documents,
+        additionalMessages: sendMessages.slice(1).map((message) => ({
+          text: message.text,
+          displayText: message.displayText,
+          isSlashCommand: message.isSlashCommand,
+          slashCommandLabel: message.slashCommandLabel,
+          origin: "browser",
+          images: message.images,
+          documents: message.documents,
+        })),
       })
       .catch((err) => {
         this.log(`[error] browser queued send failed: ${err}`);

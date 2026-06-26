@@ -16,6 +16,7 @@ const showTextDocument = vi.hoisted(() => vi.fn());
 const getConfiguration = vi.hoisted(() => vi.fn());
 const applyEdit = vi.hoisted(() => vi.fn(async () => true));
 const executeCommand = vi.hoisted(() => vi.fn());
+const stat = vi.hoisted(() => vi.fn());
 const acceptedMatchIds = vi.hoisted(() => new Set<string>(["0:0"]));
 const textDocuments = vi.hoisted(
   () =>
@@ -28,6 +29,15 @@ const textDocuments = vi.hoisted(
 const workspaceEditInstances = vi.hoisted(
   () => [] as Array<{ replace: ReturnType<typeof vi.fn> }>,
 );
+
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  return {
+    ...actual,
+    default: { ...actual, stat },
+    stat,
+  };
+});
 
 vi.mock("vscode", () => {
   class Position {
@@ -102,6 +112,7 @@ describe("createVscodeEditorRevealProvider", () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((_key: string, fallback?: unknown) => fallback),
     });
+    stat.mockResolvedValue({ isDirectory: () => false });
     openTextDocument.mockResolvedValue({
       uri: { fsPath: "/workspace/src/file.ts" },
     });
@@ -127,6 +138,26 @@ describe("createVscodeEditorRevealProvider", () => {
     expect(JSON.parse(text)).toEqual({
       status: "opened",
       path: "src/file.ts",
+    });
+  });
+
+  it("reveals directories in Explorer instead of opening an editor", async () => {
+    stat.mockResolvedValue({ isDirectory: () => true });
+    const provider = createVscodeEditorRevealProvider();
+
+    const result = await provider.reveal({
+      absolutePath: "/workspace/src/agent",
+    });
+
+    expect(openTextDocument).not.toHaveBeenCalled();
+    expect(showTextDocument).not.toHaveBeenCalled();
+    expect(executeCommand).toHaveBeenCalledWith("revealInExplorer", {
+      fsPath: "/workspace/src/agent",
+    });
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(JSON.parse(text)).toEqual({
+      status: "revealed",
+      path: "src/agent",
     });
   });
 

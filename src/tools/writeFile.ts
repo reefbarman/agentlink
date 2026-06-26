@@ -102,7 +102,10 @@ export async function handleWriteFile(
       });
     }
 
-    const warnings = getWriteRiskWarnings(relPath, params.content);
+    const warnings =
+      result.status === "accepted"
+        ? getWriteRiskWarnings(relPath, params.content)
+        : undefined;
     const {
       finalContent: _finalContent,
       decision: _decision,

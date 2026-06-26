@@ -364,8 +364,57 @@ describe("AgentSessionManager background agents", () => {
     expect(killResult.killed).toBe(true);
     expect(killResult.partialOutput).toBeDefined();
 
+    const status = mgr.getBackgroundStatus(result.sessionId);
+    expect(status).toMatchObject({ status: "cancelled", done: true });
+
+    const info = mgr
+      .getBgSessionInfos()
+      .find((s: any) => s.id === result.sessionId);
+    expect(info).toMatchObject({ status: "cancelled" });
+    expect(info?.completedAt).toEqual(expect.any(Number));
+    await expect(mgr.waitForBackground(result.sessionId)).resolves.toBe(
+      "background result",
+    );
+
     // Cleanup: resolve the pending promise so the generator can exit
     yieldControl();
+  });
+
+  it("killBackground stops an awaiting-approval background session", async () => {
+    let release: (() => void) | undefined;
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        yield { type: "done" };
+      })(),
+    );
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const result = await mgr.spawnBackground({
+      task: "approval task",
+      message: "wait for approval",
+    });
+    const session = (mgr as any).sessions.get(result.sessionId);
+    session.status = "awaiting_approval";
+
+    const killResult = mgr.killBackground(result.sessionId, "approval stuck");
+    expect(killResult.killed).toBe(true);
+
+    expect(mgr.getBackgroundStatus(result.sessionId)).toMatchObject({
+      status: "cancelled",
+      done: true,
+    });
+    const info = mgr
+      .getBgSessionInfos()
+      .find((s: any) => s.id === result.sessionId);
+    expect(info).toMatchObject({ status: "cancelled" });
+    expect(info?.completedAt).toEqual(expect.any(Number));
+
+    release?.();
   });
 
   it("killBackground returns false for non-existent session", () => {

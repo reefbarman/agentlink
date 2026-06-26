@@ -140,3 +140,18 @@ export function wrapTextInBackticks(text: string): string {
   const end = start + trimmed.length;
   return `${text.slice(0, start)}\`${trimmed}\`${text.slice(end)}`;
 }
+
+export function wrapSlashCommandInBackticks(text: string): string {
+  const commandStart = findSlashCommandStart(text);
+  if (commandStart < 0) {
+    return text;
+  }
+
+  const commandEnd = text.trimEnd().length;
+  const commandText = text.slice(commandStart, commandEnd).trim();
+  if (!commandText) {
+    return text;
+  }
+
+  return `${text.slice(0, commandStart)}\`${commandText}\`${text.slice(commandEnd)}`;
+}

@@ -14,6 +14,8 @@ export interface SkillEntry {
   description: string;
   /** Absolute path to the SKILL.md file — passed to the model so it can load_skill it */
   skillPath: string;
+  /** Full SKILL.md body. Only populated by loaders that explicitly request it. */
+  body?: string;
   /** Optional tool allowlist declared by SKILL.md frontmatter. */
   allowedTools?: string[];
   /** Optional invocation mode declared by SKILL.md frontmatter. */
@@ -103,6 +105,13 @@ function asString(value: FrontmatterValue | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function stripFrontmatterBody(content: string): string {
+  if (!content.startsWith("---")) return content.trim();
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return content.trim();
+  return content.slice(end + 4).trim();
+}
+
 function asStringArray(
   value: FrontmatterValue | undefined,
 ): string[] | undefined {
@@ -140,7 +149,10 @@ function parseInvocation(
  * Scan a skills directory for sub-directories containing a SKILL.md.
  * Returns a map of skill name → RawSkill. Only the frontmatter is read, not the body.
  */
-async function scanSkillsDir(dir: string): Promise<Map<string, RawSkill>> {
+async function scanSkillsDir(
+  dir: string,
+  options: { includeBody?: boolean } = {},
+): Promise<Map<string, RawSkill>> {
   const result = new Map<string, RawSkill>();
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -161,6 +173,7 @@ async function scanSkillsDir(dir: string): Promise<Map<string, RawSkill>> {
           name,
           description,
           skillPath: skillMd,
+          ...(options.includeBody ? { body: stripFrontmatterBody(raw) } : {}),
           modeSlugs,
           allowedTools,
           invocation,
@@ -196,13 +209,9 @@ async function scanSkillsDir(dir: string): Promise<Map<string, RawSkill>> {
  * Skills that declare `modeSlugs` in their SKILL.md frontmatter are only included
  * when the current mode slug appears in that list.
  */
-export async function loadSkills(
-  cwd: string,
-  modeSlug: string,
-): Promise<SkillEntry[]> {
+function projectlessSkillSources(modeSlug: string): string[] {
   const home = os.homedir();
-
-  const sources = [
+  return [
     ...BUNDLED_SKILLS_DIRS,
     path.join(home, ".agents", "skills"),
     path.join(home, ".agents", `skills-${modeSlug}`),
@@ -210,6 +219,55 @@ export async function loadSkills(
     path.join(home, ".claude", `skills-${modeSlug}`),
     path.join(home, ".agentlink", "skills"),
     path.join(home, ".agentlink", `skills-${modeSlug}`),
+  ];
+}
+
+async function loadSkillsFromSources(
+  sources: readonly string[],
+  modeSlug: string,
+  options: { includeBody?: boolean } = {},
+): Promise<SkillEntry[]> {
+  // Merge visible skills in priority order — later sources win on name collision.
+  // Mode-incompatible skills should not mask lower-priority skills that are visible.
+  const merged = new Map<string, RawSkill>();
+  for (const dir of sources) {
+    const entries = await scanSkillsDir(dir, options);
+    for (const [name, skill] of entries) {
+      if (skill.modeSlugs && !skill.modeSlugs.includes(modeSlug)) continue;
+      merged.set(name, skill);
+    }
+  }
+
+  return Array.from(merged.values()).map(
+    ({ name, description, skillPath, body, allowedTools, invocation }) => ({
+      name,
+      description,
+      skillPath,
+      ...(body ? { body } : {}),
+      allowedTools,
+      invocation,
+    }),
+  );
+}
+
+/**
+ * Discover bundled/global skills visible to a projectless surface.
+ * Project-local skills are intentionally excluded.
+ */
+export async function loadProjectlessSkills(
+  modeSlug: string,
+): Promise<SkillEntry[]> {
+  return loadSkillsFromSources(projectlessSkillSources(modeSlug), modeSlug, {
+    includeBody: true,
+  });
+}
+
+export async function loadSkills(
+  cwd: string,
+  modeSlug: string,
+): Promise<SkillEntry[]> {
+  const sources = [
+    ...projectlessSkillSources(modeSlug),
     path.join(cwd, ".agents", "skills"),
     path.join(cwd, ".agents", `skills-${modeSlug}`),
     path.join(cwd, ".claude", "skills"),
@@ -218,24 +276,5 @@ export async function loadSkills(
     path.join(cwd, ".agentlink", `skills-${modeSlug}`),
   ];
 
-  // Merge visible skills in priority order — later sources win on name collision.
-  // Mode-incompatible skills should not mask lower-priority skills that are visible.
-  const merged = new Map<string, RawSkill>();
-  for (const dir of sources) {
-    const entries = await scanSkillsDir(dir);
-    for (const [name, skill] of entries) {
-      if (skill.modeSlugs && !skill.modeSlugs.includes(modeSlug)) continue;
-      merged.set(name, skill);
-    }
-  }
-
-  return Array.from(merged.values()).map(
-    ({ name, description, skillPath, allowedTools, invocation }) => ({
-      name,
-      description,
-      skillPath,
-      allowedTools,
-      invocation,
-    }),
-  );
+  return loadSkillsFromSources(sources, modeSlug);
 }

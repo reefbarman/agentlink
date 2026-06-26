@@ -3,6 +3,10 @@ import type {
   RequestContextBreakdown,
   RevertRecoveryNotice,
 } from "../../shared/types.js";
+import type {
+  McpConfigSnapshot,
+  McpManagerView,
+} from "../../shared/mcpManagerTypes.js";
 
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
@@ -298,6 +302,7 @@ export type ExtensionMessage =
   | {
       type: "agentMcpStatus";
       open?: boolean;
+      view?: McpManagerView;
       infos: Array<{
         name: string;
         status: string;
@@ -307,6 +312,7 @@ export type ExtensionMessage =
         promptCount: number;
         tools: Array<{ name: string; description?: string }>;
       }>;
+      configSnapshot?: McpConfigSnapshot;
     }
   | {
       type: "showApproval";
@@ -713,6 +719,11 @@ export interface ChatMessage {
     images: Array<{ name: string; mimeType: string; src: string }>;
     documents: Array<{ name: string; mimeType: string }>;
   };
+  /** Raw user-provided media retained server-side for model input; stripped from browser snapshots. */
+  media?: {
+    images?: Array<{ name: string; mimeType: string; base64: string }>;
+    documents?: Array<{ name: string; mimeType: string; base64: string }>;
+  };
   /**
    * Checkpoint ID rendered on the user message immediately preceding that
    * checkpoint snapshot.
@@ -729,6 +740,18 @@ export interface ChatMessage {
       signInAnotherAccount?: boolean;
       condense?: boolean;
     };
+  };
+  /** Display-only metadata for Ask Agent local conversation memory injected into a turn. */
+  memoryDisclosure?: {
+    status: "used";
+    summaryCount: number;
+    transcriptExcerptCount: number;
+    sources: Array<{
+      label: string;
+      title?: string;
+      score?: number;
+      kind: "summary" | "transcript";
+    }>;
   };
   apiRequest?: {
     requestId: string;

@@ -32,7 +32,10 @@ import {
   installHooks,
 } from "./setup.js";
 
-import { setStoredAnthropicApiKey } from "./agent/clientFactory.js";
+import {
+  resolveAnthropicModelAuth,
+  setStoredAnthropicApiKey,
+} from "./agent/clientFactory.js";
 import { IndexerManager } from "./indexer/IndexerManager.js";
 import type { SemanticReadinessReason } from "./shared/semanticReadiness.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
@@ -66,6 +69,10 @@ import {
 import { readBrowserGatewayHelperDiscovery } from "./browser-gateway/browserGatewayHelperDiscovery.js";
 import { BrowserGatewayHelperAdminClient } from "./browser-gateway/helper/BrowserGatewayHelperAdminClient.js";
 import { BrowserGatewayHelperLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperLeaseClient.js";
+import { BrowserGatewayHelperModelAuthLeaseClient } from "./browser-gateway/helper/BrowserGatewayHelperModelAuthLeaseClient.js";
+import type { BrowserGatewayCoreOwnerLeaseRegistration } from "./browser-gateway/protocol.js";
+import type { CoreModelCatalogEntry } from "./core/modelCatalog.js";
+import { normalizeBrowserGatewayModelCredentialProviderId } from "./browser-gateway/browserGatewayModelProviderIds.js";
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
 import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js";
 import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
@@ -125,6 +132,8 @@ function collectGatewayUrls(
 let browserGatewayHelperLeaseClient: BrowserGatewayHelperLeaseClient | null =
   null;
 let browserGatewayHelperAdminClient: BrowserGatewayHelperAdminClient | null =
+  null;
+let browserGatewayHelperModelAuthLeaseClient: BrowserGatewayHelperModelAuthLeaseClient | null =
   null;
 
 const SEMANTIC_SETUP_PROMPT_DISMISSED_KEY =
@@ -905,7 +914,7 @@ export function activate(context: vscode.ExtensionContext): void {
     modelCatalogPersistence: {
       load: () =>
         context.globalState.get<
-          import("./agent/providers/anthropic/anthropicModelCatalog.js").AnthropicModelCatalogSnapshot
+          import("./core/model/providers/anthropic/anthropicModelCatalog.js").AnthropicModelCatalogSnapshot
         >(ANTHROPIC_MODEL_CATALOG_KEY),
       save: (snapshot) => {
         void context.globalState.update(ANTHROPIC_MODEL_CATALOG_KEY, snapshot);
@@ -934,9 +943,79 @@ export function activate(context: vscode.ExtensionContext): void {
       getConfiguredThresholdWithCapabilities(startupModel),
   };
 
+  const publishBrowserGatewayModelCatalog = async (): Promise<void> => {
+    const discovery = browserGatewayHelperDiscovery;
+    const client = browserGatewayHelperModelAuthLeaseClient;
+    if (!discovery?.helperGenerationId || !client) return;
+    try {
+      const models = (await chatViewProvider.getBrowserModels()).map(
+        (model): CoreModelCatalogEntry => ({
+          id: model.id,
+          displayName: model.displayName,
+          providerId: model.provider,
+          contextWindow: model.contextWindow,
+          maxInputTokens: model.maxInputTokens,
+          maxOutputTokens: model.maxOutputTokens,
+          reasoningEfforts: model.reasoningEfforts,
+          defaultReasoningEffort: model.defaultReasoningEffort,
+          authenticated: model.authenticated,
+          condenseThreshold: model.condenseThreshold,
+        }),
+      );
+      const result = await client.publishModelCatalog({
+        helperGenerationId: discovery.helperGenerationId,
+        models,
+      });
+      log(
+        `[browser-gateway-helper] published model catalog to helper modelCount=${result.modelCount}`,
+      );
+    } catch (err) {
+      log(`[browser-gateway-helper] model catalog publish failed: ${err}`);
+    }
+  };
+
+  const publishableBrowserGatewayModelCredentialProviderIds = [
+    "openai-codex",
+    "anthropic",
+  ] as const;
+
+  const grantBrowserGatewayModelCredentials = async (): Promise<void> => {
+    const discovery = browserGatewayHelperDiscovery;
+    const client = browserGatewayHelperModelAuthLeaseClient;
+    if (!discovery?.helperGenerationId || !client) return;
+    for (const providerId of publishableBrowserGatewayModelCredentialProviderIds) {
+      try {
+        const credential = await client.grantCredential({
+          helperGenerationId: discovery.helperGenerationId,
+          modelScopes: ["chat"],
+          now: Date.now(),
+          providerId,
+        });
+        if (credential) {
+          log(
+            `[browser-gateway-helper] granted cached ${credential.providerId} model credentials to helper`,
+          );
+          continue;
+        }
+        const removed = await client.clearCredential(providerId);
+        if (removed) {
+          log(
+            `[browser-gateway-helper] cleared cached ${providerId} model credentials from helper`,
+          );
+        }
+      } catch (err) {
+        log(
+          `[browser-gateway-helper] ${providerId} model credential grant failed: ${err}`,
+        );
+      }
+    }
+  };
+
   // Re-send model list to webview when OpenAI/Codex auth state changes.
   openAiCodexAuthManager.onAuthStateChanged = () => {
     chatViewProvider.refreshModels();
+    void publishBrowserGatewayModelCatalog();
+    void grantBrowserGatewayModelCredentials();
   };
   agentSessionManager = new AgentSessionManager(
     agentConfig,
@@ -994,6 +1073,21 @@ export function activate(context: vscode.ExtensionContext): void {
     (context.extension.packageJSON as { version?: string })?.version ??
     "unknown";
   const helperClientId = browserGatewayInstanceId;
+  const helperCoreOwnerGenerationId = randomUUID();
+  const helperCoreOwner: BrowserGatewayCoreOwnerLeaseRegistration = {
+    ownerId: browserGatewayInstanceId,
+    ownerKind: "vscode",
+    displayName: `VS Code — ${browserWorkspaceName}`,
+    scope: {
+      kind: "workspace",
+      workspaceId: browserGatewayWorkspaceInstanceId,
+      displayName: browserWorkspaceName,
+      rootPathLabel: browserWorkspacePath,
+    },
+    ownerGenerationId: helperCoreOwnerGenerationId,
+    instanceId: browserGatewayInstanceId,
+    processId: process.pid,
+  };
 
   let browserGatewayActivationDisposed = false;
   let browserGatewayHelperBootstrapPromise: Promise<string> | null = null;
@@ -1128,6 +1222,7 @@ export function activate(context: vscode.ExtensionContext): void {
         helperUrl: result.discovery.url,
         clientId: helperClientId,
         clientSharedSecret: result.discovery.clientSharedSecret,
+        coreOwner: helperCoreOwner,
         log,
       });
       await browserGatewayHelperLeaseClient.start();
@@ -1147,6 +1242,62 @@ export function activate(context: vscode.ExtensionContext): void {
       chatViewProvider.setBrowserGatewayAdminClient(
         browserGatewayHelperAdminClient,
       );
+
+      if (browserGatewayHelperModelAuthLeaseClient) {
+        browserGatewayHelperModelAuthLeaseClient.setHelperUrl(
+          result.discovery.url,
+        );
+        browserGatewayHelperModelAuthLeaseClient.setSharedSecret(
+          result.discovery.clientSharedSecret,
+        );
+      } else {
+        browserGatewayHelperModelAuthLeaseClient =
+          new BrowserGatewayHelperModelAuthLeaseClient({
+            helperUrl: result.discovery.url,
+            clientSharedSecret: result.discovery.clientSharedSecret,
+            grantedByOwnerId: helperCoreOwner.ownerId,
+            resolveModelAuth: async (request) => {
+              // Legacy lease callers omitted providerId when Codex was the only
+              // browser-helper credential family. Preserve that default while
+              // accepting the VS Code registry provider id (`codex`) as an alias.
+              const providerId =
+                normalizeBrowserGatewayModelCredentialProviderId(
+                  request?.providerId ?? "openai-codex",
+                );
+              if (providerId === "openai-codex") {
+                const auth = await openAiCodexAuthManager.resolveModelAuth();
+                if (!auth) return null;
+                return {
+                  providerId: "openai-codex",
+                  method: auth.method,
+                  bearerToken: auth.bearerToken,
+                  accountId: auth.accountId,
+                  accountLabel:
+                    auth.oauthAccountLabel ?? auth.oauthAccountEmail,
+                  canRefresh: auth.canRefresh,
+                };
+              }
+              if (providerId === "anthropic") {
+                const auth = resolveAnthropicModelAuth();
+                if (!auth) return null;
+                return {
+                  providerId: "anthropic",
+                  method: auth.method,
+                  bearerToken: auth.bearerToken,
+                  accountLabel: auth.accountLabel,
+                  canRefresh: auth.canRefresh,
+                };
+              }
+              return null;
+            },
+            log,
+          });
+      }
+      chatViewProvider.setBrowserGatewayModelAuthProvider(
+        browserGatewayHelperModelAuthLeaseClient,
+      );
+      void publishBrowserGatewayModelCatalog();
+      void grantBrowserGatewayModelCredentials();
 
       return result.discovery.url;
     })()
@@ -1195,6 +1346,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!(await isCurrentBrowserGatewayHelperHealthy())) {
         await ensureBrowserGatewayHelperReady();
       }
+      await grantBrowserGatewayModelCredentials();
     })().finally(() => {
       browserGatewayRuntimeEnsurePromise = null;
     });
@@ -1720,6 +1872,8 @@ export function activate(context: vscode.ExtensionContext): void {
         await context.secrets.store("anthropicApiKey", key.trim());
         setStoredAnthropicApiKey(key.trim());
         chatViewProvider.refreshModels();
+        void publishBrowserGatewayModelCatalog();
+        void grantBrowserGatewayModelCredentials();
         vscode.window.showInformationMessage(
           "Anthropic API key stored securely.",
         );

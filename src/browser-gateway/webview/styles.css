@@ -111,6 +111,21 @@ textarea {
   text-overflow: ellipsis;
 }
 
+.memory-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--ag-accent-2);
+  color: var(--vscode-button-foreground, #fff);
+  font-size: 10px;
+  line-height: 1;
+}
+
 .session-history-error {
   display: flex;
   align-items: flex-start;
@@ -153,6 +168,121 @@ textarea {
 .revert-recovery-notice .codicon {
   flex: 0 0 auto;
   margin-top: 1px;
+}
+
+.ask-agent-status-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ask-agent-status-notice > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ask-agent-status-notice strong {
+  color: var(--vscode-foreground, #e6edf3);
+}
+
+.ask-agent-status-notice .codicon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.ask-agent-status-notice-info {
+  border: 1px solid var(--vscode-inputValidation-infoBorder, #3794ff);
+  color: var(--vscode-editorInfo-foreground, #3794ff);
+  background: var(--vscode-inputValidation-infoBackground, transparent);
+}
+
+.ask-agent-status-notice-warning {
+  border: 1px solid var(--vscode-inputValidation-warningBorder, #cca700);
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  background: var(--vscode-inputValidation-warningBackground, transparent);
+}
+
+.ask-agent-memory-candidate-nudge {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--vscode-inputValidation-infoBorder, #3794ff);
+  border-radius: 6px;
+  background: var(--vscode-inputValidation-infoBackground, transparent);
+  color: var(--ag-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ask-agent-memory-candidate-nudge > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ask-agent-memory-candidate-nudge strong {
+  color: var(--ag-text);
+}
+
+.ask-agent-memory-candidate-nudge code {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 6px;
+  border: 1px solid var(--ag-border);
+  border-radius: 4px;
+  background: var(--ag-panel);
+  color: var(--ag-text);
+}
+
+.ask-agent-memory-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ask-agent-handoff-card pre {
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--ag-border);
+  border-radius: 4px;
+  background: var(--ag-panel);
+  color: var(--ag-text);
+  white-space: pre-wrap;
+}
+
+.ask-agent-handoff-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+}
+
+.ask-agent-handoff-details dt {
+  color: var(--ag-muted);
+}
+
+.ask-agent-handoff-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ag-text);
 }
 
 .browser-instance-tabs {
@@ -618,6 +748,14 @@ textarea {
   cursor: col-resize;
 }
 
+.browser-layout-chat-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.browser-layout-chat-only .browser-main {
+  grid-column: 1;
+}
+
 .browser-main {
   grid-column: 2;
   grid-row: 1;
@@ -747,6 +885,162 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.ask-agent-memory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 6px;
+  background: var(--ag-panel-2);
+  font-size: 12px;
+}
+
+.ask-agent-memory-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ask-agent-memory-panel-header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ask-agent-memory-panel-header strong {
+  color: var(--ag-text);
+}
+
+.ask-agent-memory-panel-header span,
+.ask-agent-memory-empty,
+.ask-agent-memory-recent small,
+.ask-agent-memory-actions span {
+  color: var(--ag-muted);
+}
+
+.ask-agent-memory-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ask-agent-memory-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ag-border);
+  border-radius: 4px;
+  background: var(--ag-panel);
+}
+
+.ask-agent-memory-stats span {
+  color: var(--ag-muted);
+  font-size: 11px;
+}
+
+.ask-agent-memory-stats strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-agent-memory-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ask-agent-memory-recent ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ask-agent-memory-recent li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ask-agent-memory-recent li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-agent-memory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ask-agent-handoff-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ask-agent-handoff-field span {
+  color: var(--ag-muted);
+  font-size: 11px;
+}
+
+.ask-agent-handoff-field input,
+.ask-agent-handoff-field select,
+.ask-agent-handoff-field textarea {
+  width: 100%;
+}
+
+.ask-agent-read-grants-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ask-agent-read-grants-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--ag-border);
+  border-radius: 4px;
+  background: var(--ag-panel);
+}
+
+.ask-agent-read-grants-list li > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ask-agent-read-grants-list strong,
+.ask-agent-read-grants-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-agent-read-grants-list span {
+  color: var(--ag-muted);
+  font-size: 11px;
 }
 
 .mobile-secondary-pane {
@@ -1199,6 +1493,10 @@ pre {
     grid-template-rows: minmax(0, auto) minmax(0, 1fr);
   }
 
+  .browser-layout-chat-only {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
   .browser-column-resize-handle {
     display: none;
   }
@@ -1214,6 +1512,10 @@ pre {
 
   .browser-main {
     grid-row: 2;
+  }
+
+  .browser-layout-chat-only .browser-main {
+    grid-row: 1;
   }
 
   .browser-side-top .pane-card {

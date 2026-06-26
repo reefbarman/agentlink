@@ -136,6 +136,7 @@ export class AgentSession {
 
   private abortController: AbortController | null = null;
   private _abortSignal: AbortSignal | undefined;
+  private _abortGeneration = 0;
   private _pendingInterjection: {
     text: string;
     queueId: string;
@@ -742,9 +743,14 @@ export class AgentSession {
   }
 
   abort(): void {
+    this._abortGeneration++;
     this.abortController?.abort();
     this.abortController = null;
     this._pendingModeResume = null;
+  }
+
+  get abortGeneration(): number {
+    return this._abortGeneration;
   }
 
   get isAborted(): boolean {

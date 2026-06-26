@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 
 export interface BgSessionInfoProps {
   id: string;
@@ -248,9 +248,7 @@ export function BackgroundSessionStrip({
                   {formatElapsed(startedAt.get(s.id)!, now)}
                 </span>
               )}
-              {(s.status === "pending" ||
-                s.status === "streaming" ||
-                s.status === "tool_executing") && (
+              {ACTIVE_STATUSES.has(s.status) && (
                 <button
                   class="icon-button bg-session-stop"
                   onClick={() => onStop(s.id)}

@@ -216,7 +216,11 @@ export function buildRepoMapPayload(args: {
       fileTotal: fileCandidates.length,
       includeExternal,
     });
-    if (payloadLength(nextPayload) <= maxChars) directories = nextDirectories;
+    if (payloadLength(nextPayload) <= maxChars) {
+      directories = nextDirectories;
+    } else {
+      break;
+    }
   }
 
   for (const candidate of externalCandidates) {
@@ -241,6 +245,8 @@ export function buildRepoMapPayload(args: {
     });
     if (payloadLength(nextPayload) <= maxChars) {
       externalDependencies = nextExternalDependencies;
+    } else {
+      break;
     }
   }
 
@@ -265,7 +271,11 @@ export function buildRepoMapPayload(args: {
       fileTotal: fileCandidates.length,
       includeExternal,
     });
-    if (payloadLength(nextPayload) <= maxChars) files = nextFiles;
+    if (payloadLength(nextPayload) <= maxChars) {
+      files = nextFiles;
+    } else {
+      break;
+    }
   }
 
   return withActualChars(make());

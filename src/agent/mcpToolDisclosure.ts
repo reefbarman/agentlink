@@ -141,7 +141,7 @@ export function buildMcpToolCatalogSection(
         .join("\n")}`
     : "";
 
-  return `\n\n## MCP Tool Catalog\n\nSome connected MCP servers have large tool schemas. Their full schemas may be deferred to reduce context bloat. Use MCP discovery tools before calling tools from these servers.\n\n${lines.join("\n")}${hints}`;
+  return `\n\n## MCP Tool Catalog\n\nConnected MCP servers are available now. If a server is listed as "tools available directly", call its tools by their full \`server__tool\` names. If a server is listed as deferred, first use \`find_mcp_tools\` to discover the relevant tool and schema, then call it with \`call_mcp_tool\`. Do not tell the user there is no way to interact with a listed MCP server.\n\n${lines.join("\n")}${hints}`;
 }
 
 export function partitionMcpToolsForDisclosure(
@@ -197,30 +197,21 @@ export function partitionMcpToolsForDisclosure(
     );
     const capabilities = detectMcpCapabilities(serverName, allBareToolNames);
 
-    if (!shouldDefer) {
-      inlineTools.push(...serverTools);
-      if (capabilities?.length) {
-        catalog.push({
-          serverName,
-          toolCount: serverTools.length,
-          estimatedTokens: measurement.estimatedTokens,
-          representativeTools,
-          capabilities,
-          deferred: false,
-        });
-      }
-      continue;
-    }
-
-    deferredTools.push(...serverTools);
     catalog.push({
       serverName,
       toolCount: serverTools.length,
       estimatedTokens: measurement.estimatedTokens,
       representativeTools,
       capabilities,
-      deferred: true,
+      deferred: shouldDefer,
     });
+
+    if (!shouldDefer) {
+      inlineTools.push(...serverTools);
+      continue;
+    }
+
+    deferredTools.push(...serverTools);
   }
 
   return {

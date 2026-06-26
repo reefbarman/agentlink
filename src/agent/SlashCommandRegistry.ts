@@ -2,7 +2,7 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 
-import { loadSkills } from "./skillLoader.js";
+import { loadProjectlessSkills, loadSkills } from "./skillLoader.js";
 
 export interface SlashCommand {
   name: string;
@@ -44,7 +44,7 @@ function parseFrontmatter(content: string): {
  * Load slash commands from a directory of .md files.
  * Each file becomes a command named after its basename (without extension).
  */
-async function loadCommandsFromDir(
+export async function loadCommandsFromDir(
   dir: string,
   source: SlashCommand["source"],
   prefix = "",
@@ -86,6 +86,13 @@ async function loadCommandsFromDir(
     return [];
   }
 }
+
+const ASK_AGENT_SAFE_PROMPT_BUILTIN_COMMAND_NAMES = new Set(["remember"]);
+const ASK_AGENT_SAFE_ACTION_BUILTIN_COMMAND_NAMES = new Set([
+  "mcp",
+  "mcp-config",
+  "mcp-refresh",
+]);
 
 /** Built-in slash commands. */
 export const BUILTIN_COMMANDS: SlashCommand[] = [
@@ -154,7 +161,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   },
   {
     name: "mcp-config",
-    description: "Open MCP server config (project or global)",
+    description: "Open MCP server config (status-only in Browser Ask Agent)",
     source: "builtin",
     builtin: true,
   },
@@ -178,6 +185,137 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     builtin: true,
   },
 ];
+
+function skillToSlashCommand(skill: {
+  name: string;
+  description: string;
+  skillPath: string;
+}): SlashCommand {
+  return {
+    name: `skill:${skill.name}`,
+    description: skill.description || `Use skill ${skill.name}`,
+    source: "skill",
+    builtin: false,
+    body: `Use the skill "${skill.name}" by calling load_skill with path ${JSON.stringify(skill.skillPath)}, then follow its instructions for this request.`,
+    skillPath: skill.skillPath,
+  };
+}
+
+function skillToAskAgentSlashCommand(skill: {
+  name: string;
+  description: string;
+  skillPath: string;
+  body?: string;
+}): SlashCommand {
+  const body = skill.body?.trim();
+  return {
+    name: `skill:${skill.name}`,
+    description: skill.description || `Use skill ${skill.name}`,
+    source: "skill",
+    builtin: false,
+    body: body
+      ? `Use the following AgentLink skill instructions for this request. Stay within Ask Agent's read-only, projectless constraints; do not run tools, edit files, or assume workspace access.\n\nSkill: ${skill.name}\nPath: ${skill.skillPath}\n\n${body}`
+      : `Use the skill "${skill.name}" for this request. Stay within Ask Agent's read-only, projectless constraints; do not run tools, edit files, or assume workspace access.`,
+    skillPath: skill.skillPath,
+  };
+}
+
+function isAskAgentSafeSkill(skill: { allowedTools?: string[] }): boolean {
+  // In projectless Ask Agent, skills must be prompt-only/manual initially. Any
+  // declared tool allowlist can expand capabilities, so keep those out until the
+  // Ask Agent runtime has explicit safe tool enforcement.
+  return !skill.allowedTools || skill.allowedTools.length === 0;
+}
+
+async function loadAskAgentSkillCommands(
+  modeSlug: string,
+): Promise<SlashCommand[]> {
+  const skills = await loadProjectlessSkills(modeSlug);
+  return skills.filter(isAskAgentSafeSkill).map(skillToAskAgentSlashCommand);
+}
+
+function asAskAgentRuleCommand(command: SlashCommand): SlashCommand {
+  return {
+    ...command,
+    description: command.description || `Apply global rule /${command.name}`,
+    body: command.body
+      ? `Apply the following global rule for this Ask Agent request. Stay within Ask Agent's read-only, projectless constraints; do not run tools, edit files, or assume workspace access.\n\n${command.body}`
+      : command.body,
+  };
+}
+
+async function loadProjectlessGlobalCommandPrompts(): Promise<SlashCommand[]> {
+  const home = os.homedir();
+  const sources = await Promise.all([
+    loadCommandsFromDir(path.join(home, ".agents", "commands"), "global"),
+    loadCommandsFromDir(path.join(home, ".claude", "commands"), "global"),
+    loadCommandsFromDir(path.join(home, ".agentlink", "commands"), "global"),
+  ]);
+
+  const byName = new Map<string, SlashCommand>();
+  for (const commands of sources) {
+    for (const command of commands) {
+      if (command.builtin) continue;
+      byName.set(command.name, command);
+    }
+  }
+  return Array.from(byName.values());
+}
+
+async function loadProjectlessGlobalRulePrompts(): Promise<SlashCommand[]> {
+  const home = os.homedir();
+  const sources = await Promise.all([
+    loadCommandsFromDir(path.join(home, ".agents", "rules"), "global", "rule"),
+    loadCommandsFromDir(path.join(home, ".claude", "rules"), "global", "rule"),
+    loadCommandsFromDir(
+      path.join(home, ".agentlink", "rules"),
+      "global",
+      "rule",
+    ),
+  ]);
+
+  const byName = new Map<string, SlashCommand>();
+  for (const commands of sources) {
+    for (const command of commands) {
+      if (!command.body?.trim()) continue;
+      byName.set(command.name, asAskAgentRuleCommand(command));
+    }
+  }
+  return Array.from(byName.values());
+}
+
+/**
+ * Load slash commands for Browser Ask Agent's projectless/safe surface.
+ *
+ * This intentionally excludes workspace-local commands/skills and unsafe
+ * execution built-ins. Only prompt-template built-ins, safe MCP status/config
+ * action built-ins, global prompt commands, and safe packaged/global generated
+ * skill prompt commands are exposed.
+ */
+export async function loadAskAgentSlashCommands(
+  modeSlug = "ask",
+): Promise<SlashCommand[]> {
+  const safeBuiltins = BUILTIN_COMMANDS.filter((command) =>
+    command.builtin
+      ? ASK_AGENT_SAFE_ACTION_BUILTIN_COMMAND_NAMES.has(command.name)
+      : ASK_AGENT_SAFE_PROMPT_BUILTIN_COMMAND_NAMES.has(command.name),
+  );
+  const sources = await Promise.all([
+    loadProjectlessGlobalCommandPrompts(),
+    loadProjectlessGlobalRulePrompts(),
+    loadAskAgentSkillCommands(modeSlug),
+  ]);
+
+  const byName = new Map<string, SlashCommand>();
+  // Keep Ask Agent executable built-ins authoritative so a prompt command named
+  // /mcp cannot shadow the browser-safe action handler.
+  for (const commands of [...sources, safeBuiltins]) {
+    for (const command of commands) {
+      byName.set(command.name, command);
+    }
+  }
+  return Array.from(byName.values());
+}
 
 export class SlashCommandRegistry {
   private commands: SlashCommand[] = [...BUILTIN_COMMANDS];
@@ -237,14 +375,7 @@ export class SlashCommandRegistry {
 
   private async loadSkillCommands(): Promise<SlashCommand[]> {
     const skills = await loadSkills(this.cwd, this.modeSlug);
-    return skills.map((skill) => ({
-      name: `skill:${skill.name}`,
-      description: skill.description || `Use skill ${skill.name}`,
-      source: "skill" as const,
-      builtin: false,
-      body: `Use the skill "${skill.name}" by calling load_skill with path ${JSON.stringify(skill.skillPath)}, then follow its instructions for this request.`,
-      skillPath: skill.skillPath,
-    }));
+    return skills.map(skillToSlashCommand);
   }
 
   getAll(): SlashCommand[] {

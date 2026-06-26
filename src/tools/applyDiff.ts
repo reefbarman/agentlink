@@ -860,13 +860,14 @@ export async function handleApplyDiff(
     }
 
     if (
-      blocks.length > 1 ||
-      lockedBlockResults.some(
-        (blockResult) =>
-          blockResult.status === "failed" ||
-          (blockResult.status === "applied" &&
-            blockResult.matchType !== "exact"),
-      )
+      result.status === "accepted" &&
+      (blocks.length > 1 ||
+        lockedBlockResults.some(
+          (blockResult) =>
+            blockResult.status === "failed" ||
+            (blockResult.status === "applied" &&
+              blockResult.matchType !== "exact"),
+        ))
     ) {
       responseObj.block_results = lockedBlockResults.map((blockResult) =>
         describeBlockResult(blockResult),

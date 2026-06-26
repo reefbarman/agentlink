@@ -596,6 +596,109 @@ describe("AgentSessionManager activity tracing", () => {
     });
   });
 
+  it("does not emit late events from an aborted overlapping run", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-manager-overlap-"),
+    );
+    try {
+      const mgr = new AgentSessionManager(makeConfig(), workspace);
+      const session = await mgr.createSession("code");
+      const messages: AgentMessage[] = [];
+      let abortGeneration = 0;
+      let abortController: AbortController | undefined;
+      let abortSignal: AbortSignal | undefined;
+      (session as any).messageCount = 0;
+      (session as any).lastActiveAt = 123;
+      (session as any).createAbortController = vi.fn(() => {
+        abortController = new AbortController();
+        abortSignal = abortController.signal;
+        return abortController;
+      });
+      (session as any).abort = vi.fn(() => {
+        abortGeneration++;
+        abortController?.abort();
+        abortController = undefined;
+      });
+      Object.defineProperty(session, "abortGeneration", {
+        configurable: true,
+        get: () => abortGeneration,
+      });
+      Object.defineProperty(session, "isAborted", {
+        configurable: true,
+        get: () => abortSignal?.aborted ?? false,
+      });
+      (session as any).getAllMessages = vi.fn(() => messages);
+      (session as any).addUserMessage = vi.fn((text: string) => {
+        messages.push({ role: "user", content: text });
+        (session as any).messageCount += 1;
+        session.lastActiveAt = Date.now();
+      });
+      (session as any).autoTitle = vi.fn();
+      (session as any).consumePendingInterjection = vi.fn(() => null);
+      (session as any).consumePendingModeResume = vi.fn(() => null);
+
+      let releaseFirst: (() => void) | undefined;
+      const engine = {
+        run: vi
+          .fn()
+          .mockImplementationOnce(async function* () {
+            await new Promise<void>((resolve) => {
+              releaseFirst = resolve;
+            });
+            yield { type: "text_delta", text: "late first text" };
+            yield {
+              type: "done",
+              totalInputTokens: 1,
+              totalOutputTokens: 1,
+              totalCacheReadTokens: 0,
+              totalCacheCreationTokens: 0,
+            };
+          })
+          .mockImplementationOnce(async function* () {
+            yield { type: "text_delta", text: "second text" };
+            yield {
+              type: "done",
+              totalInputTokens: 2,
+              totalOutputTokens: 2,
+              totalCacheReadTokens: 0,
+              totalCacheCreationTokens: 0,
+            };
+          }),
+      };
+      (mgr as any).engine = engine;
+      const onEvent = vi.fn();
+      mgr.onEvent = onEvent;
+
+      const firstSend = mgr.sendMessage(session.id, "first", session.mode);
+      await flushPromises();
+      mgr.stopSession(session.id);
+      const secondSend = mgr.sendMessage(session.id, "second", session.mode);
+      await flushPromises();
+
+      releaseFirst?.();
+      await Promise.all([firstSend, secondSend]);
+
+      expect(onEvent).toHaveBeenCalledWith(
+        session.id,
+        expect.objectContaining({ type: "text_delta", text: "second text" }),
+      );
+      expect(onEvent).not.toHaveBeenCalledWith(
+        session.id,
+        expect.objectContaining({
+          type: "text_delta",
+          text: "late first text",
+        }),
+      );
+      expect(
+        onEvent.mock.calls.filter(
+          ([, event]) => (event as { type?: string }).type === "done",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("records forwarded agent events to a bounded session trace", async () => {
     const workspace = fs.mkdtempSync(
       path.join(os.tmpdir(), "agentlink-manager-trace-"),
@@ -1160,6 +1263,88 @@ describe("AgentSessionManager checkpoints", () => {
         turnIndex: 2,
       }),
     );
+  });
+
+  it("waits for an aborted run to settle before starting a replacement send", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const session = await mgr.createSession("code");
+    const messages: AgentMessage[] = [];
+    Object.assign(session, {
+      reasoningEffort: "high",
+      thinkingBudget: 0,
+      messageCount: 0,
+      lastActiveAt: 1,
+      abortGeneration: 0,
+      isAborted: false,
+      addUserMessage: vi.fn((text: string) => {
+        messages.push({ role: "user", content: text });
+        (session as any).messageCount = messages.length;
+        session.lastActiveAt += 1;
+      }),
+      getAllMessages: vi.fn(() => messages),
+      consumePendingInterjection: vi.fn(() => null),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+      abort: vi.fn(() => {
+        (session as any).isAborted = true;
+        (session as any).abortGeneration += 1;
+      }),
+    });
+
+    let releaseFirstRun!: () => void;
+    let firstRunStarted = false;
+    let firstRunSettled = false;
+    const engine = {
+      run: vi.fn(async function* () {
+        if (!firstRunStarted) {
+          firstRunStarted = true;
+          await new Promise<void>((resolve) => {
+            releaseFirstRun = resolve;
+          });
+          firstRunSettled = true;
+          return;
+        }
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+    (mgr as any).engine = engine;
+
+    const firstSend = mgr.sendMessage(session.id, "first prompt", session.mode);
+    await flushPromises();
+    expect(firstRunStarted).toBe(true);
+
+    mgr.stopSession(session.id);
+    const secondSend = mgr.sendMessage(
+      session.id,
+      "replacement prompt",
+      session.mode,
+    );
+    await flushPromises();
+
+    expect(firstRunSettled).toBe(false);
+    expect(session.addUserMessage).toHaveBeenCalledTimes(1);
+    expect(session.addUserMessage).toHaveBeenLastCalledWith(
+      "first prompt",
+      expect.any(Object),
+    );
+
+    (session as any).isAborted = false;
+    releaseFirstRun();
+    await firstSend;
+    await secondSend;
+
+    expect(session.addUserMessage).toHaveBeenCalledTimes(2);
+    expect(session.addUserMessage).toHaveBeenLastCalledWith(
+      "replacement prompt",
+      expect.any(Object),
+    );
+    expect(engine.run).toHaveBeenCalledTimes(2);
   });
 
   it("creates a checkpoint when a queued message is injected mid-turn", async () => {

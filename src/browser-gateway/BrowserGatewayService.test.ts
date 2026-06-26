@@ -106,6 +106,11 @@ describe("BrowserGatewayService", () => {
   it("tracks approval and question state from hub events", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();
+    let projectedQuestionRequest: {
+      id: string;
+      context: string;
+      questions: Array<{ id: string; type: "yes_no"; question: string }>;
+    } | null = null;
     const service = new BrowserGatewayService(
       hub,
       sessionManager as never,
@@ -135,7 +140,7 @@ describe("BrowserGatewayService", () => {
         thinkingEnabled: true,
         reasoningEffort: "high",
         messageQueue: [],
-        questionRequest: null,
+        questionRequest: projectedQuestionRequest,
         detectedQuestion: null,
         todos: [],
         debugInfo: null,
@@ -268,13 +273,22 @@ describe("BrowserGatewayService", () => {
     ]);
     expect(onDidChange).toHaveBeenCalled();
 
-    hub.publishQuestionRequest("question-1", "Need confirmation.", [
-      {
-        id: "q1",
-        type: "yes_no",
-        question: "Continue?",
-      },
-    ]);
+    projectedQuestionRequest = {
+      id: "question-1",
+      context: "Need confirmation.",
+      questions: [
+        {
+          id: "q1",
+          type: "yes_no",
+          question: "Continue?",
+        },
+      ],
+    };
+    hub.publishQuestionRequest(
+      projectedQuestionRequest.id,
+      projectedQuestionRequest.context,
+      projectedQuestionRequest.questions,
+    );
 
     expect(service.getUiState()).toMatchObject({
       approval: {
@@ -312,6 +326,7 @@ describe("BrowserGatewayService", () => {
     });
 
     service.dispose();
+    projectedQuestionRequest = null;
     hub.publishApproval({
       kind: "write",
       id: "approval-after-dispose",
@@ -409,6 +424,190 @@ describe("BrowserGatewayService", () => {
       question: undefined,
       recentEvents: [],
     });
+    hub.dispose();
+  });
+
+  it("does not expose stale foreground questions from the hub snapshot", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    hub.publishQuestionRequest("stale-question", "Old question.", [
+      {
+        id: "continue",
+        type: "yes_no",
+        question: "Continue?",
+      },
+    ]);
+
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => ({
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        streaming: false,
+        statusOverride: null,
+        projectedMessages: [],
+        lastInputTokens: 10,
+        lastOutputTokens: 20,
+        lastCacheReadTokens: 3,
+        estimatedTotalUsed: 33,
+        thinkingEnabled: true,
+        reasoningEffort: "high",
+        messageQueue: [],
+        questionRequest: null,
+        detectedQuestion: null,
+        todos: [],
+        debugInfo: null,
+        systemPrompt: null,
+        loadedInstructions: null,
+        restoringSession: false,
+        revertRecoveryNotice: null,
+      }),
+      () => [],
+    );
+
+    expect(service.getUiState().question).toBeUndefined();
+    expect(service.getSerializableState().question).toBeNull();
+
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("does not expose a question when the projected state belongs to another foreground session", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => ({
+        sessionId: "session-2",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        streaming: false,
+        statusOverride: null,
+        projectedMessages: [],
+        lastInputTokens: 10,
+        lastOutputTokens: 20,
+        lastCacheReadTokens: 3,
+        estimatedTotalUsed: 33,
+        thinkingEnabled: true,
+        reasoningEffort: "high",
+        messageQueue: [],
+        questionRequest: {
+          id: "wrong-session-question",
+          context: "Question for another session.",
+          questions: [
+            {
+              id: "continue",
+              type: "yes_no",
+              question: "Continue?",
+            },
+          ],
+        },
+        detectedQuestion: null,
+        todos: [],
+        debugInfo: null,
+        systemPrompt: null,
+        loadedInstructions: null,
+        restoringSession: false,
+        revertRecoveryNotice: null,
+      }),
+      () => [],
+    );
+
+    hub.publishQuestionRequest(
+      "wrong-session-question",
+      "Question for another session.",
+      [
+        {
+          id: "continue",
+          type: "yes_no",
+          question: "Continue?",
+        },
+      ],
+    );
+
+    expect(service.getUiState().question).toBeUndefined();
+    expect(service.getSerializableState().question).toBeNull();
+
+    service.dispose();
+    hub.dispose();
+  });
+
+  it("keeps background-agent questions visible without a foreground projection", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => ({
+        sessionId: "session-1",
+        mode: "code",
+        model: "claude-sonnet-4-6",
+        streaming: false,
+        statusOverride: null,
+        projectedMessages: [],
+        lastInputTokens: 10,
+        lastOutputTokens: 20,
+        lastCacheReadTokens: 3,
+        estimatedTotalUsed: 33,
+        thinkingEnabled: true,
+        reasoningEffort: "high",
+        messageQueue: [],
+        questionRequest: null,
+        detectedQuestion: null,
+        todos: [],
+        debugInfo: null,
+        systemPrompt: null,
+        loadedInstructions: null,
+        restoringSession: false,
+        revertRecoveryNotice: null,
+      }),
+      () => [],
+    );
+
+    hub.publishQuestionRequest(
+      "background-question",
+      "Background task needs input.",
+      [],
+      "Review implementation",
+    );
+    hub.publishQuestionProgress({
+      id: "background-question",
+      step: 1,
+      answers: { continue: true },
+      notes: {},
+      origin: "browser",
+    });
+
+    expect(service.getSerializableState()).toMatchObject({
+      question: {
+        id: "background-question",
+        context: "Background task needs input.",
+        questions: [],
+        backgroundTask: "Review implementation",
+      },
+      questionProgress: {
+        id: "background-question",
+        step: 1,
+        answers: { continue: true },
+      },
+    });
+
+    service.dispose();
     hub.dispose();
   });
 

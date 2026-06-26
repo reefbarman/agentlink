@@ -35,6 +35,10 @@ import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { McpClientHub } from "./McpClientHub.js";
 import type { Question } from "./webview/types.js";
 import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
+import {
+  CALL_MCP_TOOL_DEFINITION,
+  MCP_META_TOOL_DEFINITIONS,
+} from "../shared/mcpToolDefinitions.js";
 import type { TodoItem } from "./todoTool.js";
 import { handleToolError, type ToolResult } from "../shared/types.js";
 import { getToolsForMode } from "./toolPermissions.js";
@@ -261,30 +265,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
     : {}),
 };
 
-const CALL_MCP_TOOL: ToolDefinition = {
-  name: "call_mcp_tool",
-  description:
-    "Call a tool from a connected MCP server after discovering it with find_mcp_tools. Uses the same approval policy as directly exposed MCP tools.",
-  input_schema: {
-    type: "object",
-    properties: {
-      server: {
-        type: "string",
-        description: "MCP server name, e.g. linear or notion.",
-      },
-      tool: {
-        type: "string",
-        description:
-          "Bare MCP tool name without the server prefix, e.g. list_issues. Do not include server__.",
-      },
-      input: {
-        type: "object",
-        description: "Arguments object to pass to the MCP tool.",
-      },
-    },
-    required: ["server", "tool", "input"],
-  },
-};
+const CALL_MCP_TOOL: ToolDefinition = CALL_MCP_TOOL_DEFINITION;
 
 function skillAllowlistAllowsMcpServer(
   allowlist: ReadonlySet<string> | undefined,
@@ -321,84 +302,7 @@ function skillAllowlistHasMcpTargets(
   );
 }
 
-const MCP_META_TOOLS: ToolDefinition[] = [
-  {
-    name: "find_mcp_tools",
-    description:
-      "Discover tools available from connected MCP servers. Use this before calling tools whose full schemas were deferred from the system prompt.",
-    input_schema: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description:
-            "Optional case-insensitive search over server name, tool name, and description.",
-        },
-        server: {
-          type: "string",
-          description: "Optional MCP server name to restrict results to.",
-        },
-        includeSchemas: {
-          type: "boolean",
-          description:
-            "Include full input schemas for matching tools. Default false. When true, schemas are limited by schemaLimit to keep discovery compact.",
-        },
-        schemaLimit: {
-          type: "number",
-          description:
-            "Maximum number of returned tools that include full schemas when includeSchemas=true (default 1, max 20).",
-        },
-        limit: {
-          type: "number",
-          description: "Maximum tools to return (default 50, max 200).",
-        },
-      },
-    },
-  },
-  {
-    name: "list_mcp_resources",
-    description: "List all resources available from connected MCP servers.",
-    input_schema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "read_mcp_resource",
-    description: "Read a resource from an MCP server by URI.",
-    input_schema: {
-      type: "object",
-      properties: {
-        server: { type: "string", description: "Server name" },
-        uri: { type: "string", description: "Resource URI" },
-      },
-      required: ["server", "uri"],
-    },
-  },
-  {
-    name: "list_mcp_prompts",
-    description:
-      "List all prompt templates available from connected MCP servers.",
-    input_schema: {
-      type: "object",
-      properties: {},
-    },
-  },
-  {
-    name: "get_mcp_prompt",
-    description:
-      "Get a prompt template from an MCP server, optionally filling in arguments.",
-    input_schema: {
-      type: "object",
-      properties: {
-        server: { type: "string", description: "Server name" },
-        name: { type: "string", description: "Prompt name" },
-        arguments: { type: "object", description: "Optional prompt arguments" },
-      },
-      required: ["server", "name"],
-    },
-  },
-];
+const MCP_META_TOOLS: ToolDefinition[] = MCP_META_TOOL_DEFINITIONS;
 
 /** Schema for the ask_user tool (always available in all modes). */
 const ASK_USER_TOOL: ToolDefinition = {
@@ -497,7 +401,7 @@ const ASK_USER_TOOL: ToolDefinition = {
 const SET_TASK_STATUS_TOOL: ToolDefinition = {
   name: "set_task_status",
   description:
-    "Mark the current turn's final status. Use only when your response is final: completed, waiting_for_user, blocked, or cancelled. Do not call before ask_user or for intermediate progress updates. The summary is the user-facing final response itself, not a meta-description of what you did. If the user asked for a concrete artifact (prompt, code, command, plan, review, answer), that artifact must be visible either in normal text before this tool call or fully inside summary. Never use summary as a teaser such as 'Here is the prompt' or 'See below'; content after this tool call is not a reliable place to deliver the answer. For code-modifying work, structure the summary around what changed, why it matters, validation run or skipped, and concrete follow-up. Optionally include a short continuation button label and prompt when the user can safely continue with one click.",
+    "Mark the current turn's final status. Use only when your response is final: completed, waiting_for_user, blocked, or cancelled. Do not call before ask_user or for intermediate progress updates. The summary is the user-facing final response itself, not a meta-description of what you did. If the user asked for a concrete artifact (prompt, code, command, plan, review, answer), that artifact must be visible either in normal text before this tool call or fully inside summary. Never use summary as a teaser such as 'Here is the prompt' or 'See below'; content after this tool call is not a reliable place to deliver the answer. For code-modifying work, structure the summary around what changed, why it matters, validation run or skipped, and concrete follow-up. Include a short continuation button label and prompt when the user can safely continue with one click, especially when the summary mentions a concrete next phase, MVP slice, remaining plan item, follow-up task, or validation step.",
   input_schema: {
     type: "object",
     properties: {
@@ -512,7 +416,8 @@ const SET_TASK_STATUS_TOOL: ToolDefinition = {
       },
       continueLabel: {
         type: "string",
-        description: "Optional button label for a clear next-step continuation",
+        description:
+          "Button label for a clear next-step continuation. Provide this with continuePrompt when the final summary names a concrete follow-up, next phase, MVP slice, remaining plan item, subtask, or validation step.",
       },
       completeTodos: {
         type: "boolean",
@@ -522,7 +427,7 @@ const SET_TASK_STATUS_TOOL: ToolDefinition = {
       continuePrompt: {
         type: "string",
         description:
-          "Optional visible user message sent when the continuation button is clicked",
+          "Visible user message sent when the continuation button is clicked. Make it specific enough to start the named next step, not just a generic 'continue', whenever there is remaining work from the original plan or a concrete follow-up in the summary.",
       },
     },
     required: ["status"],

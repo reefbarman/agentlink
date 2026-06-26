@@ -1,129 +1,61 @@
 /**
- * Provider-agnostic type system for AgentLink.
+ * Compatibility barrel for the legacy agent provider surface.
  *
- * These types replace all `Anthropic.*` types in internal code.
- * They are intentionally similar to Anthropic's types (the most mature API
- * for agentic use) but owned by us, enabling multi-provider support.
- *
- * Design note: unified `ContentBlock`
- * Anthropic has separate types for "what you send" (ContentBlockParam) vs
- * "what you receive" (ContentBlock). Our type is **unified**: ContentBlock
- * covers both directions. This simplifies the internal API.
+ * Provider-neutral model DTOs are now owned by `src/core/modelRuntime.ts`.
+ * Keep these legacy names while the agent/session/provider call sites migrate to
+ * the core-owned model runtime boundary.
  */
 
-// ── Content blocks ──
+import type {
+  CoreModelCacheOptions,
+  CoreModelCapabilities,
+  CoreModelCompleteRequest,
+  CoreModelCompleteResult,
+  CoreModelContentBlock,
+  CoreModelDocumentBlock,
+  CoreModelImageBlock,
+  CoreModelImageMediaType,
+  CoreModelJsonSchema,
+  CoreModelMessage,
+  CoreModelStateOptions,
+  CoreModelStreamEvent,
+  CoreModelStreamRequest,
+  CoreModelTextBlock,
+  CoreModelThinkingBlock,
+  CoreModelToolDefinition,
+  CoreModelToolResultBlock,
+  CoreModelToolUseBlock,
+} from "../../core/modelRuntime.js";
 
-export type ContentBlock =
-  | TextBlock
-  | ThinkingBlock
-  | ToolUseBlock
-  | ToolResultBlock
-  | ImageBlock
-  | DocumentBlock;
+import type { CoreReasoningEffort } from "../../core/modelCatalog.js";
+import { toCoreModelImageMediaType } from "../../core/modelRuntime.js";
 
-export interface TextBlock {
-  type: "text";
-  text: string;
-  cache_control?: { type: "ephemeral" };
-}
+export type ContentBlock = CoreModelContentBlock;
+export type TextBlock = CoreModelTextBlock;
+export type ThinkingBlock = CoreModelThinkingBlock;
+export type ToolUseBlock = CoreModelToolUseBlock;
+export type ToolResultBlock = CoreModelToolResultBlock;
+export type ImageBlock = CoreModelImageBlock;
+export type DocumentBlock = CoreModelDocumentBlock;
+export type MessageParam = CoreModelMessage;
+export type ToolDefinition = CoreModelToolDefinition;
+export type JsonSchema = CoreModelJsonSchema;
+export type ProviderCacheOptions = CoreModelCacheOptions;
+export type ProviderStateOptions = CoreModelStateOptions;
+export type ReasoningEffort = CoreReasoningEffort;
+export type StreamRequest = CoreModelStreamRequest;
+export type CompleteRequest = CoreModelCompleteRequest;
+export type CompleteResult = CoreModelCompleteResult;
+export type ProviderStreamEvent = CoreModelStreamEvent;
+export type ModelCapabilities = CoreModelCapabilities;
 
-export interface ThinkingBlock {
-  type: "thinking";
-  thinking: string;
-  signature: string;
-}
+/** MIME types accepted by model providers for image content. */
+export type ImageMediaType = CoreModelImageMediaType;
 
-export interface ToolUseBlock {
-  type: "tool_use";
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
+/** Legacy name for the core-owned image MIME normalizer. */
+export const toSupportedImageMediaType = toCoreModelImageMediaType;
 
-export interface ToolResultBlock {
-  type: "tool_result";
-  tool_use_id: string;
-  content: string | ContentBlock[];
-  is_error?: boolean;
-}
-
-/** MIME types accepted by the Anthropic Messages API for image content. */
-export type ImageMediaType =
-  | "image/jpeg"
-  | "image/png"
-  | "image/gif"
-  | "image/webp";
-
-const SUPPORTED_IMAGE_TYPES = new Set<ImageMediaType>([
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-]);
-
-/** Map common non-standard MIME strings to a supported ImageMediaType. */
-const MIME_ALIASES: Record<string, ImageMediaType> = {
-  "image/jpg": "image/jpeg",
-  "image/x-png": "image/png",
-};
-
-/**
- * Normalise a MIME type string to a supported ImageMediaType.
- * Returns null if the type is not recognised/supported.
- */
-export function toSupportedImageMediaType(
-  mimeType: string,
-): ImageMediaType | null {
-  if (SUPPORTED_IMAGE_TYPES.has(mimeType as ImageMediaType)) {
-    return mimeType as ImageMediaType;
-  }
-  return MIME_ALIASES[mimeType] ?? null;
-}
-
-export interface ImageBlock {
-  type: "image";
-  source: {
-    type: "base64";
-    media_type: ImageMediaType;
-    data: string;
-  };
-}
-
-export interface DocumentBlock {
-  type: "document";
-  source: {
-    type: "base64";
-    media_type: string;
-    data: string;
-  };
-  title?: string;
-}
-
-// ── Messages ──
-
-export interface MessageParam {
-  role: "user" | "assistant";
-  content: string | ContentBlock[];
-}
-
-// ── Tools ──
-
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  input_schema: JsonSchema;
-  cache_control?: { type: "ephemeral" };
-}
-
-export type JsonSchema = {
-  type: string;
-  properties?: Record<string, unknown>;
-  required?: string[];
-  description?: string;
-  [key: string]: unknown;
-};
-
-// ── Provider interface ──
+// ── Legacy provider interface ──
 
 export interface ModelProvider {
   readonly id: string;
@@ -167,102 +99,6 @@ export interface ModelProvider {
    * that just need a final result.
    */
   complete(request: CompleteRequest): Promise<CompleteResult>;
-}
-
-export interface ProviderCacheOptions {
-  key?: string;
-  retention?: "in_memory" | "24h";
-}
-
-export interface ProviderStateOptions {
-  previousResponseId?: string;
-  store?: boolean;
-}
-
-export type ReasoningEffort =
-  | "none"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max";
-
-export interface StreamRequest {
-  model: string;
-  systemPrompt: string;
-  messages: MessageParam[];
-  tools?: ToolDefinition[];
-  maxTokens: number;
-  thinking?: { budgetTokens: number };
-  /** Override reasoning effort. "none" disables provider reasoning when supported. */
-  reasoningEffort?: ReasoningEffort;
-  cache?: ProviderCacheOptions;
-  state?: ProviderStateOptions;
-  signal?: AbortSignal;
-}
-
-export interface CompleteRequest {
-  model: string;
-  systemPrompt: string;
-  messages: MessageParam[];
-  maxTokens: number;
-  /** Optional sampling temperature. Use 0 for deterministic tasks like condensing. */
-  temperature?: number;
-  /** Override reasoning effort. If omitted, the provider uses the model's default. */
-  reasoningEffort?: ReasoningEffort;
-  cache?: ProviderCacheOptions;
-  state?: ProviderStateOptions;
-  signal?: AbortSignal;
-}
-
-export interface CompleteResult {
-  text: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadTokens?: number;
-    cacheCreationTokens?: number;
-  };
-  providerResponseId?: string;
-}
-
-export type ProviderStreamEvent =
-  | { type: "thinking_start"; thinkingId: string }
-  | { type: "thinking_delta"; thinkingId: string; text: string }
-  | { type: "thinking_end"; thinkingId: string }
-  | { type: "text_delta"; text: string }
-  | { type: "tool_start"; toolCallId: string; toolName: string }
-  | { type: "tool_input_delta"; toolCallId: string; partialJson: string }
-  | {
-      type: "tool_done";
-      toolCallId: string;
-      toolName: string;
-      input: unknown;
-    }
-  | { type: "content_blocks"; blocks: ContentBlock[] }
-  | {
-      type: "usage";
-      inputTokens: number;
-      outputTokens: number;
-      cacheReadTokens?: number;
-      cacheCreationTokens?: number;
-      providerResponseId?: string;
-    }
-  | { type: "done" };
-
-export interface ModelCapabilities {
-  supportsThinking: boolean;
-  supportsCaching: boolean;
-  supportsImages: boolean;
-  supportsToolUse: boolean;
-  /** Advertised total context envelope. Some providers split this into separate input/output caps. */
-  contextWindow: number;
-  /** Provider-enforced request input cap. When omitted, callers derive it from the total context envelope. */
-  maxInputTokens?: number;
-  maxOutputTokens: number;
-  reasoningEfforts?: ReasoningEffort[];
-  defaultReasoningEffort?: ReasoningEffort;
 }
 
 export interface ModelInfo {

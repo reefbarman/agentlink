@@ -400,6 +400,10 @@ body {
   font-size: 13px;
 }
 
+.user-content .markdown-body {
+  white-space: normal;
+}
+
 /* ── User Message Attachment Chips ── */
 
 .user-attachments {
@@ -958,6 +962,18 @@ body {
   font-size: 12px;
 }
 
+.tool-call-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.tool-call-row-with-actions .tool-call-header {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .tool-call-header {
   display: inline-flex;
   align-items: center;
@@ -1065,6 +1081,60 @@ body {
   opacity: 0.4;
   flex-shrink: 0;
   margin-left: 2px;
+}
+
+.tool-call-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.tool-call-inline-action {
+  align-items: center;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  height: 18px;
+  justify-content: center;
+  padding: 0;
+  width: 18px;
+}
+
+.tool-call-inline-action .codicon {
+  font-size: 11px;
+}
+
+.tool-call-inline-complete {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+
+.tool-call-inline-complete:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.tool-call-inline-cancel {
+  background: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 12%,
+    transparent
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 35%,
+    transparent
+  );
+  color: var(--vscode-errorForeground);
+}
+
+.tool-call-inline-cancel:hover {
+  background: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 20%,
+    transparent
+  );
 }
 
 .tool-call-meta {
@@ -1636,6 +1706,8 @@ body {
 .final-marker-summary {
   color: var(--vscode-foreground);
   overflow-wrap: anywhere;
+  padding-right: 28px;
+  position: relative;
   width: 100%;
 }
 
@@ -2933,6 +3005,66 @@ body {
   opacity: 0.7;
 }
 
+.memory-disclosure-block {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.memory-disclosure-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 2px 0;
+  font-size: 10px;
+  opacity: 0.62;
+}
+
+.memory-disclosure-header:hover {
+  opacity: 0.85;
+}
+
+.memory-disclosure-header .codicon {
+  font-size: 10px;
+}
+
+.memory-disclosure-content {
+  padding: 4px 0 2px 18px;
+  font-size: 10px;
+  opacity: 0.82;
+}
+
+.memory-disclosure-note {
+  margin-bottom: 4px;
+}
+
+.memory-disclosure-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding-left: 14px;
+}
+
+.memory-disclosure-sources li {
+  padding-left: 2px;
+}
+
+.memory-disclosure-source-kind {
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.memory-disclosure-source-title {
+  color: var(--vscode-foreground);
+}
+
+.memory-disclosure-source-score {
+  margin-left: 6px;
+  opacity: 0.7;
+}
+
 /* ── Copy Button (message level) ── */
 
 .assistant-blocks {
@@ -2971,7 +3103,8 @@ body {
 }
 
 .assistant-content:hover .copy-button,
-.user-message:hover .copy-button {
+.user-message:hover .copy-button,
+.final-marker-summary:hover .copy-button {
   opacity: 1;
 }
 

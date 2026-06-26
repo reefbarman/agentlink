@@ -36,7 +36,14 @@ describe("partitionMcpToolsForDisclosure", () => {
       "small__fetch",
     ]);
     expect(partition.deferredTools).toHaveLength(0);
-    expect(partition.catalog).toHaveLength(0);
+    expect(partition.catalog).toEqual([
+      expect.objectContaining({
+        serverName: "small",
+        toolCount: 2,
+        representativeTools: ["fetch", "search"],
+        deferred: false,
+      }),
+    ]);
   });
 
   it("defers auto-mode servers at or above the configured token threshold", () => {
@@ -78,8 +85,9 @@ describe("partitionMcpToolsForDisclosure", () => {
     expect(partition.deferredTools.map((t) => t.name)).toEqual([
       "linear__issue",
     ]);
-    expect(partition.catalog.map((entry) => entry.serverName)).toEqual([
-      "linear",
+    expect(partition.catalog).toEqual([
+      expect.objectContaining({ serverName: "linear", deferred: true }),
+      expect.objectContaining({ serverName: "notion", deferred: false }),
     ]);
   });
 
@@ -118,7 +126,12 @@ describe("partitionMcpToolsForDisclosure", () => {
     expect(partition.inlineTools.map((t) => t.name)).toEqual([
       "default__small",
     ]);
-    expect(partition.catalog).toHaveLength(0);
+    expect(partition.catalog).toEqual([
+      expect.objectContaining({
+        serverName: "default",
+        deferred: false,
+      }),
+    ]);
   });
 
   it("sorts catalog entries by server name", () => {
@@ -143,7 +156,7 @@ describe("partitionMcpToolsForDisclosure", () => {
     expect(partition.deferredTools).toHaveLength(0);
   });
 
-  it("adds capability-only catalog entries for known inline MCP servers", () => {
+  it("adds catalog entries for all inline MCP servers", () => {
     const partition = partitionMcpToolsForDisclosure(
       [
         tool("ddg-search__search"),
@@ -165,11 +178,44 @@ describe("partitionMcpToolsForDisclosure", () => {
         capabilities: ["web-search"],
         deferred: false,
       }),
+      expect.objectContaining({
+        serverName: "linear",
+        representativeTools: ["list_issues"],
+        deferred: false,
+      }),
     ]);
 
     const section = buildMcpToolCatalogSection(partition.catalog);
     expect(section).toContain("ddg-search: 2 tools, tools available directly");
+    expect(section).toContain("linear: 1 tools, tools available directly");
     expect(section).not.toContain("ddg-search: 2 tools, ~");
+  });
+
+  it("explicitly tells the model how to use direct and deferred MCP servers", () => {
+    const partition = partitionMcpToolsForDisclosure(
+      [
+        tool("linear__list_issues"),
+        tool("notion__search_pages"),
+        tool("notion__update_page"),
+      ],
+      {
+        perServerTokenThreshold: 10_000,
+        serverConfigs: [
+          { serverName: "linear", mode: "inline" },
+          { serverName: "notion", mode: "deferred" },
+        ],
+      },
+    );
+
+    const section = buildMcpToolCatalogSection(partition.catalog);
+    expect(section).toContain("Connected MCP servers are available now");
+    expect(section).toContain("linear: 1 tools, tools available directly");
+    expect(section).toContain("notion: 2 tools, ~");
+    expect(section).toContain("find_mcp_tools");
+    expect(section).toContain("call_mcp_tool");
+    expect(section).toContain(
+      "Do not tell the user there is no way to interact",
+    );
   });
 
   it("injects web-search and browser-automation capability hints", () => {

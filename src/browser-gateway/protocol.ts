@@ -1,3 +1,17 @@
+import type {
+  CoreCapabilityStatusDto,
+  CoreHostKind,
+  CoreOwnerRegistrationDto,
+  CoreSessionScopeDto,
+} from "../core/sessionProtocol.js";
+import type {
+  CoreModelAuthLease,
+  CoreModelAuthLeaseValidationResult,
+  CoreModelAuthMethod,
+} from "../core/modelAuth.js";
+
+import type { CoreModelCatalogEntry } from "../core/modelCatalog.js";
+
 export const BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION = 1;
 
 export interface BrowserGatewayHelperDiscoveryRecord {
@@ -8,6 +22,7 @@ export interface BrowserGatewayHelperDiscoveryRecord {
   startedAt: string;
   lastHeartbeatAt: string;
   helperVersion: string;
+  helperGenerationId?: string;
   browserBootstrapToken: string;
   clientSharedSecret: string;
   /** True when the helper is bound to 0.0.0.0 and advertising mDNS. */
@@ -31,6 +46,8 @@ export interface BrowserGatewayHelperHealthResponse {
   now: string;
   uptimeMs: number;
   activeClientLeases: number;
+  helperGenerationId?: string;
+  coreOwners?: number;
 }
 
 export type BrowserGatewayInstanceStatusKind =
@@ -47,6 +64,123 @@ export interface BrowserGatewayInstanceStatusSummary {
   sessionTitle?: string;
 }
 
+export interface BrowserGatewayCoreOwnerLeaseRegistration {
+  ownerId: string;
+  ownerKind: CoreHostKind;
+  displayName: string;
+  scope: CoreSessionScopeDto;
+  ownerGenerationId: string;
+  capabilities?: CoreCapabilityStatusDto[];
+  instanceId?: string;
+  processId?: number;
+}
+
+export interface BrowserGatewayCoreOwnerHeartbeatRequest {
+  ownerId: string;
+  ownerGenerationId: string;
+}
+
+export interface BrowserGatewayCoreOwnerRegistrationResponse {
+  ok: true;
+  ownerRegistration: CoreOwnerRegistrationDto;
+}
+
+export interface BrowserGatewayCoreOwnersListResponse {
+  now: number;
+  owners: CoreOwnerRegistrationDto[];
+}
+
+export interface BrowserGatewayModelAuthLeaseRequest {
+  providerId: string;
+  method: CoreModelAuthMethod;
+  grantedByOwnerId: string;
+  grantedToOwnerId: string;
+  grantedToOwnerGenerationId: string;
+  modelScopes: string[];
+  ttlMs?: number;
+  auditId?: string;
+  helperGenerationId?: string;
+}
+
+export interface BrowserGatewayModelAuthLeaseResponse {
+  ok: true;
+  lease: CoreModelAuthLease;
+}
+
+export interface BrowserGatewayModelAuthLeaseValidationRequest {
+  leaseId: string;
+  ownerId: string;
+  ownerGenerationId: string;
+  modelScope: string;
+}
+
+export interface BrowserGatewayModelAuthLeaseValidationResponse {
+  ok: true;
+  validation: CoreModelAuthLeaseValidationResult;
+}
+
+export interface BrowserGatewayModelAuthLeaseRevokeRequest {
+  leaseId: string;
+  reason?: string;
+}
+
+export interface BrowserGatewayModelAuthLeaseRevokeResponse {
+  ok: true;
+  lease?: CoreModelAuthLease;
+}
+
+export interface BrowserGatewayModelCredentialGrantRequest {
+  providerId: string;
+  method: CoreModelAuthMethod;
+  bearerToken: string;
+  grantedByOwnerId: string;
+  modelScopes: string[];
+  helperGenerationId: string;
+  ttlMs?: number;
+  accountId?: string;
+  accountLabel?: string;
+  canRefresh?: boolean;
+}
+
+export interface BrowserGatewayModelCatalogPublishRequest {
+  publishedByOwnerId: string;
+  helperGenerationId: string;
+  models: CoreModelCatalogEntry[];
+}
+
+export interface BrowserGatewayModelCatalogPublishResponse {
+  ok: true;
+  publishedAt: number;
+  modelCount: number;
+}
+
+export interface BrowserGatewayModelCatalogResponse {
+  models: CoreModelCatalogEntry[];
+  publishedByOwnerId?: string;
+  publishedAt?: number;
+  source: "cached" | "fallback";
+}
+
+export interface BrowserGatewayModelCredentialGrantResponse {
+  ok: true;
+  credential: {
+    providerId: string;
+    method: CoreModelAuthMethod;
+    modelScopes: string[];
+    grantedByOwnerId: string;
+    grantedAt: number;
+    expiresAt?: number;
+    accountLabel?: string;
+    canRefresh: boolean;
+  };
+}
+
+export interface BrowserGatewayModelCredentialClearResponse {
+  ok: true;
+  removed: boolean;
+  providerId?: string;
+}
+
 export interface BrowserGatewayClientLeaseRequest {
   clientId: string;
   ttlMs?: number;
@@ -60,10 +194,13 @@ export interface BrowserGatewayClientLeaseResponse {
 
 export interface BrowserGatewayClientReleaseRequest {
   clientId: string;
+  ownerId?: string;
+  ownerGenerationId?: string;
 }
 
 export interface BrowserGatewayClientReleaseResponse {
   ok: true;
+  ownerRegistration?: CoreOwnerRegistrationDto;
 }
 
 export interface BrowserGatewayPairingCreateRequest {

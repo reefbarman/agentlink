@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef } from "preact/hooks";
 
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ChatMessage } from "../types";
@@ -13,6 +13,8 @@ interface ChatViewProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onCompleteToolCall?: (id: string) => void;
+  onCancelToolCall?: (id: string) => void;
   onPromoteMcpToolApproval?: (promotion: {
     serverName: string;
     bareToolName: string;
@@ -46,6 +48,8 @@ export function ChatView({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onCompleteToolCall,
+  onCancelToolCall,
   onPromoteMcpToolApproval,
   onOpenSpecialBlockPanel,
   onRevertCheckpoint,
@@ -89,6 +93,13 @@ export function ChatView({
   // new messages, new blocks, text/input deltas, tool results
   const lastMsg = messages[messages.length - 1];
   const lastBlock = lastMsg?.blocks[lastMsg.blocks.length - 1];
+  const latestUserMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === "user") return messages[i].id;
+    }
+    return null;
+  }, [messages]);
+  const previousLatestUserMessageId = useRef<string | null>(null);
   const scrollKey = lastMsg
     ? `${messages.length}:${lastMsg.blocks.length}:${
         lastBlock?.type === "text"
@@ -106,6 +117,17 @@ export function ChatView({
     shouldAutoScroll.current = true;
     return scrollToBottomAfterLayout();
   }, [sessionId, scrollToBottomAfterLayout]);
+
+  // Always reveal a newly submitted user turn, even if the user had scrolled up
+  // while reading previous output. Subsequent assistant streaming still respects
+  // the user's scroll position through the guarded auto-scroll effect below.
+  useEffect(() => {
+    const previous = previousLatestUserMessageId.current;
+    previousLatestUserMessageId.current = latestUserMessageId;
+    if (!latestUserMessageId || previous === latestUserMessageId) return;
+    shouldAutoScroll.current = true;
+    return scrollToBottomAfterLayout();
+  }, [latestUserMessageId, scrollToBottomAfterLayout]);
 
   // Auto-scroll to bottom when content changes
   useEffect(() => {
@@ -194,6 +216,8 @@ export function ChatView({
           onDetectedQuestionAnswer={onDetectedQuestionAnswer}
           onDismissDetectedQuestion={onDismissDetectedQuestion}
           onOpenFile={onOpenFile}
+          onCompleteToolCall={onCompleteToolCall}
+          onCancelToolCall={onCancelToolCall}
           onPromoteMcpToolApproval={onPromoteMcpToolApproval}
           onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
           onRetry={onRetry}

@@ -11,11 +11,11 @@ import {
 import {
   CODEX_API_BASE_URL,
   OPENAI_API_BASE_URL,
-} from "../agent/providers/codex/openaiClient.js";
+} from "../core/model/providers/codex/openaiClient.js";
 import {
   CODEX_DEFAULT_MODEL,
   remapToChatgptBackendModel,
-} from "../agent/providers/codex/models.js";
+} from "../core/model/providers/codex/models.js";
 import type { SessionImageReference } from "../agent/toolAdapter.js";
 import { toSupportedImageMediaType } from "../agent/providers/types.js";
 import {

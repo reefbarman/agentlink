@@ -121,7 +121,10 @@ export class McpClientHub {
   private interactiveAuthUseCounts = new Map<string, number>();
   private static readonly MAX_AUTH_RETRIES = 3;
 
-  constructor(globalState?: vscode.Memento) {
+  constructor(
+    globalState?: vscode.Memento,
+    private readonly storageNamespace?: string,
+  ) {
     this.globalState = globalState;
   }
 
@@ -364,6 +367,7 @@ export class McpClientHub {
           cfg.name,
           cfg.url,
           this.globalState,
+          this.storageNamespace,
         );
         oauthProvider.onLog = (message) => this.log(message);
         oauthProvider.onBeforeAuthorizationOpen = () =>
@@ -1039,6 +1043,7 @@ export class McpClientHub {
         cfg.name,
         cfg.url,
         this.globalState,
+        this.storageNamespace,
       );
       provider.onLog = (message) => this.log(message);
       provider.onBeforeAuthorizationOpen = () =>

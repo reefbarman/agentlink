@@ -20,6 +20,72 @@ afterEach(() => {
   cleanup();
 });
 
+describe("MessageBubble memory disclosure rendering", () => {
+  it("renders compact memory source metadata without raw transcript text", () => {
+    const message: ChatMessage = {
+      id: "assistant-memory",
+      role: "assistant",
+      content: "Memory-informed answer.",
+      timestamp: Date.now(),
+      blocks: [{ type: "text", text: "Memory-informed answer." }],
+      memoryDisclosure: {
+        status: "used",
+        summaryCount: 2,
+        transcriptExcerptCount: 1,
+        sources: [
+          {
+            kind: "summary",
+            label: "summary:prior-memory-chunk",
+            title: "Prior browser memory discussion",
+            score: 0.74,
+          },
+          {
+            kind: "transcript",
+            label: "transcript:prior-memory-chunk",
+            title: "Prior browser memory discussion",
+            score: 0.72,
+          },
+        ],
+      },
+    };
+
+    render(<MessageBubble message={message} streaming={false} />);
+
+    expect(
+      screen.getByText(
+        "Memory used · 2 memory summaries, 1 transcript excerpt",
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByText("Prior browser memory discussion")).toHaveLength(
+      2,
+    );
+    expect(screen.getByText("74%")).toBeTruthy();
+    expect(screen.getByText("72%")).toBeTruthy();
+    expect(
+      screen.getByText(/background recall, not as durable instructions/i),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Should Browser Ask Agent memory be injected as user text?",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not render memory disclosure when metadata is absent", () => {
+    const message: ChatMessage = {
+      id: "assistant-no-memory",
+      role: "assistant",
+      content: "Plain answer.",
+      timestamp: Date.now(),
+      blocks: [{ type: "text", text: "Plain answer." }],
+    };
+
+    render(<MessageBubble message={message} streaming={false} />);
+
+    expect(screen.queryByText(/Memory used/)).toBeNull();
+  });
+});
+
 describe("MessageBubble slash-command rendering", () => {
   it("renders standalone slash command as a tool-call-style block with args", () => {
     const message: ChatMessage = {
@@ -137,6 +203,31 @@ describe("MessageBubble slash-command rendering", () => {
     expect(screen.queryByRole("dialog", { name: "screenshot.png" })).toBeNull();
   });
 
+  it("renders inline code and fenced code blocks in user text", () => {
+    const message: ChatMessage = {
+      id: "user-code-markdown",
+      role: "user",
+      content:
+        "Please run `npm test` after this:\n```ts\nconst answer = 42;\n```",
+      timestamp: Date.now(),
+      blocks: [],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    const inlineCode = Array.from(
+      container.querySelectorAll(".user-content code"),
+    ).find((node) => node.textContent === "npm test");
+    expect(inlineCode).toBeTruthy();
+
+    const fencedCode = container.querySelector(
+      ".user-content pre code.language-ts",
+    );
+    expect(fencedCode?.textContent).toBe("const answer = 42;");
+  });
+
   it("renders inline @path mentions as clickable file links in user text", () => {
     const onOpenFile = vi.fn();
     const message: ChatMessage = {
@@ -164,6 +255,37 @@ describe("MessageBubble slash-command rendering", () => {
     fireEvent.click(fileLink);
     expect(onOpenFile).toHaveBeenCalledWith(
       "src/agent/webview/App.tsx",
+      undefined,
+    );
+  });
+
+  it("renders inline directory paths as clickable links in user text", () => {
+    const onOpenFile = vi.fn();
+    const message: ChatMessage = {
+      id: "user-inline-directory-mention",
+      role: "user",
+      content: "Please check @src/agent/webview/components before continuing",
+      timestamp: Date.now(),
+      blocks: [],
+    };
+
+    const { container } = render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    const fileLink = container.querySelector(
+      ".file-path-link",
+    ) as HTMLAnchorElement;
+    expect(fileLink).toBeTruthy();
+    expect(fileLink.textContent).toBe("@src/agent/webview/components");
+
+    fireEvent.click(fileLink);
+    expect(onOpenFile).toHaveBeenCalledWith(
+      "src/agent/webview/components",
       undefined,
     );
   });
@@ -359,6 +481,42 @@ describe("MessageBubble slash-command rendering", () => {
     expect(screen.getByText("Task complete")).toBeTruthy();
     expect(screen.getByText("Completed with no text body.")).toBeTruthy();
     expect(screen.queryByText("(No response)")).toBeNull();
+  });
+
+  it("copies final marker summaries as Markdown", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const message: ChatMessage = {
+      id: "assistant-final-copy",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [],
+      finalMarker: {
+        status: "completed",
+        source: "tool",
+        summary: "**Done**\n\n- Validated `npm test`.",
+      },
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    const copyButton = container.querySelector(
+      ".final-marker-summary .copy-button",
+    ) as HTMLButtonElement | null;
+    expect(copyButton).toBeTruthy();
+
+    fireEvent.click(copyButton!);
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "**Done**\n\n- Validated `npm test`.",
+      );
+    });
   });
 
   it("renders explicit final marker CTA below the marker text when visible", () => {
@@ -838,6 +996,78 @@ describe("MessageBubble slash-command rendering", () => {
 
     fireEvent.click(groupButton);
     expect(groupButton.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("renders inline controls for running tool calls", () => {
+    const onComplete = vi.fn();
+    const onCancel = vi.fn();
+    const message: ChatMessage = {
+      id: "assistant-running-tool",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "tool_call",
+          id: "tool-running",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: "",
+          complete: false,
+        },
+      ],
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={true}
+        onCompleteToolCall={onComplete}
+        onCancelToolCall={onCancel}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Complete execute_command" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cancel execute_command" }),
+    );
+
+    expect(onComplete).toHaveBeenCalledWith("tool-running");
+    expect(onCancel).toHaveBeenCalledWith("tool-running");
+  });
+
+  it("does not render inline controls for completed tool calls", () => {
+    const message: ChatMessage = {
+      id: "assistant-complete-tool",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "tool_call",
+          id: "tool-complete",
+          name: "execute_command",
+          inputJson: JSON.stringify({ command: "npm test" }),
+          result: JSON.stringify({ exit_code: 0 }),
+          complete: true,
+          durationMs: 12,
+        },
+      ],
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={false}
+        onCompleteToolCall={vi.fn()}
+        onCancelToolCall={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Complete" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 
   it("renders MCP approval promotion actions for completed tool calls", () => {

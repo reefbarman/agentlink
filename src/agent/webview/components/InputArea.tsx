@@ -24,7 +24,7 @@ import {
   getSlashCommandSelectionState,
   parseMatchedSlashCommand,
   shouldOpenSlashPopup,
-  wrapTextInBackticks,
+  wrapSlashCommandInBackticks,
 } from "../slashCommandInput";
 import {
   useCallback,
@@ -182,6 +182,10 @@ interface InputAreaProps {
   allowThinkingToggle?: boolean;
   allowExportTranscript?: boolean;
   submitOnEnter?: boolean;
+  onComposerEvent?: (
+    event: string,
+    fields?: Record<string, string | number | boolean | null | undefined>,
+  ) => void;
 }
 
 export function InputArea({
@@ -217,6 +221,7 @@ export function InputArea({
   allowThinkingToggle = true,
   allowExportTranscript = true,
   submitOnEnter = true,
+  onComposerEvent,
 }: InputAreaProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -319,7 +324,16 @@ export function InputArea({
 
   const handleSubmit = useCallback(() => {
     const trimmed = text.trim();
+    onComposerEvent?.("submit.attempt", {
+      textChars: trimmed.length,
+      hasSubmitContent,
+      streaming,
+      attachmentCount: allowAttachments ? attachments.length : 0,
+      mediaCount: allowMediaPaste ? mediaAttachments.length : 0,
+      slashMatch: Boolean(matchedExecutableSlashCommand),
+    });
     if (!hasSubmitContent) {
+      onComposerEvent?.("submit.ignored", { reason: "empty" });
       return;
     }
 
@@ -336,6 +350,7 @@ export function InputArea({
       const { command, args, displayText, userText, prefixText } =
         matchedExecutableSlashCommand;
       if (command.builtin) {
+        onComposerEvent?.("submit.builtin", { command: command.name });
         onExecuteBuiltinCommand?.(command.name, args);
       } else if (command.body) {
         const contextParts = [prefixText, args].filter(
@@ -345,6 +360,10 @@ export function InputArea({
         const finalText = commandInput
           ? `${commandInput}\n\n${command.body}`
           : command.body;
+        onComposerEvent?.("submit.send", {
+          route: "slash_command_body",
+          command: command.name,
+        });
         onSend(
           finalText,
           submitAttachments,
@@ -356,6 +375,7 @@ export function InputArea({
       return;
     }
 
+    onComposerEvent?.("submit.send", { route: "message" });
     onSend(trimmed, submitAttachments, undefined, undefined, submitMedia);
     setText("");
     setAttachments([]);
@@ -375,6 +395,8 @@ export function InputArea({
     onExecuteBuiltinCommand,
     closeSlash,
     pendingMedia,
+    onComposerEvent,
+    streaming,
   ]);
 
   // Build model list from dynamic provider data, with a fallback for
@@ -770,6 +792,7 @@ export function InputArea({
       }
       if (submitOnEnter && e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        onComposerEvent?.("submit.key", { key: "Enter" });
         handleSubmit();
       }
       if (e.key === "Escape" && pickerOpen) {
@@ -790,6 +813,7 @@ export function InputArea({
       emojiSelectedIdx,
       handleEmojiSelect,
       closeEmoji,
+      onComposerEvent,
     ],
   );
 
@@ -1513,7 +1537,7 @@ export function InputArea({
                 type="button"
                 title="Wrap in backticks to send this slash command as raw text"
                 onClick={() => {
-                  const escaped = wrapTextInBackticks(text);
+                  const escaped = wrapSlashCommandInBackticks(text);
                   setText(escaped);
                   closeSlash();
                   requestAnimationFrame(() => {
@@ -1561,7 +1585,12 @@ export function InputArea({
           {(!streaming || hasSubmitContent) && (
             <button
               class="send-button"
-              onClick={handleSubmit}
+              onClick={() => {
+                onComposerEvent?.("submit.click", {
+                  disabled: !hasSubmitContent,
+                });
+                handleSubmit();
+              }}
               disabled={!hasSubmitContent}
               title={submitOnEnter ? "Send message (Enter)" : "Send message"}
               type="button"

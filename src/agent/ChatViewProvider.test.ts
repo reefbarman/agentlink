@@ -62,6 +62,65 @@ vi.mock("vscode", () => ({
     remoteName: undefined,
   },
   UIKind: { Desktop: 1, Web: 2 },
+  SymbolKind: {
+    File: 0,
+    Module: 1,
+    Namespace: 2,
+    Package: 3,
+    Class: 4,
+    Method: 5,
+    Property: 6,
+    Field: 7,
+    Constructor: 8,
+    Enum: 9,
+    Interface: 10,
+    Function: 11,
+    Variable: 12,
+    Constant: 13,
+    String: 14,
+    Number: 15,
+    Boolean: 16,
+    Array: 17,
+    Object: 18,
+    Key: 19,
+    Null: 20,
+    EnumMember: 21,
+    Struct: 22,
+    Event: 23,
+    Operator: 24,
+    TypeParameter: 25,
+  },
+  CompletionItemKind: {
+    Text: 0,
+    Method: 1,
+    Function: 2,
+    Constructor: 3,
+    Field: 4,
+    Variable: 5,
+    Class: 6,
+    Interface: 7,
+    Module: 8,
+    Property: 9,
+    Unit: 10,
+    Value: 11,
+    Enum: 12,
+    Keyword: 13,
+    Snippet: 14,
+    Color: 15,
+    File: 16,
+    Reference: 17,
+    Folder: 18,
+    EnumMember: 19,
+    Constant: 20,
+    Struct: 21,
+    Event: 22,
+    Operator: 23,
+    TypeParameter: 24,
+  },
+  InlayHintKind: {
+    Type: 1,
+    Parameter: 2,
+  },
   workspace: {
     getConfiguration: mockGetConfiguration,
     workspaceFolders: [],
@@ -201,6 +260,33 @@ describe("ChatViewProvider session state sync", () => {
     vi.resetModules();
     vi.clearAllMocks();
     mockGetConfiguration.mockClear();
+  });
+
+  it("rejects non-MCP native tools from the Ask Agent MCP bridge", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    provider.setApprovalManager({
+      isMcpApproved: vi.fn(() => false),
+      approveMcpTool: vi.fn(),
+      approveMcpServer: vi.fn(),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    } as never);
+
+    const result = await provider.submitBrowserAskAgentMcpTool({
+      name: "execute_command",
+      input: { command: "touch /tmp/should-not-run" },
+      sessionId: "browser-gateway:ask-agent:default",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("tool_not_available");
+    expect(result.tools?.map((tool) => tool.name)).not.toContain(
+      "execute_command",
+    );
   });
 
   it("uses async detect result for projected detected question in browser state", async () => {
@@ -611,6 +697,63 @@ describe("ChatViewProvider session state sync", () => {
     const projected = provider.getBrowserProjectedForegroundState();
     expect(projected?.detectedQuestion?.kind).toBe("yes_no");
     expect(projected?.detectedQuestion?.prompt).toContain("Should I proceed");
+  });
+
+  it("queues browser sends during an active turn without registering an interjection", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const session = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "streaming",
+      title: "Session 1",
+      reasoningEffort: "high",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [] as unknown[],
+      setPendingInterjection: vi.fn(),
+    };
+
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      sendMessage: vi.fn(),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+
+    provider.setSessionManager(manager as never);
+
+    const result = await provider.submitBrowserSend({
+      text: "please do this next",
+      sessionId: "session-1",
+      mode: "code",
+    });
+
+    expect(result).toEqual({ ok: true, queued: true });
+    expect(session.setPendingInterjection).not.toHaveBeenCalled();
+    expect(manager.sendMessage).not.toHaveBeenCalled();
+    expect(
+      provider.getBrowserProjectedForegroundState()?.messageQueue,
+    ).toMatchObject([
+      {
+        text: "please do this next",
+        source: "browser",
+      },
+    ]);
   });
 
   it("clears the projected transcript when creating a new browser session", async () => {

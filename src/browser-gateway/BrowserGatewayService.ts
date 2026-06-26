@@ -309,21 +309,12 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   getUiState(): BrowserGatewayUiState {
+    const question = this.getForegroundQuestion();
+    const questionProgress = this.getForegroundQuestionProgress(question?.id);
     return {
       approval: this.approval,
-      question: this.question
-        ? {
-            id: this.question.id,
-            context: this.question.context,
-            questions: this.question.questions,
-            ...(this.question.backgroundTask
-              ? { backgroundTask: this.question.backgroundTask }
-              : {}),
-          }
-        : undefined,
-      questionProgress: this.questionProgress
-        ? { ...this.questionProgress }
-        : undefined,
+      question,
+      questionProgress,
       urlElicitation: this.urlElicitation
         ? { ...this.urlElicitation }
         : undefined,
@@ -428,21 +419,12 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   getSerializableState(): BrowserGatewayWireState {
+    const question = this.getForegroundQuestion();
     return {
       approval: this.approval ?? null,
-      question: this.question
-        ? {
-            id: this.question.id,
-            context: this.question.context,
-            questions: this.question.questions,
-            ...(this.question.backgroundTask
-              ? { backgroundTask: this.question.backgroundTask }
-              : {}),
-          }
-        : null,
-      questionProgress: this.questionProgress
-        ? { ...this.questionProgress }
-        : null,
+      question: question ?? null,
+      questionProgress:
+        this.getForegroundQuestionProgress(question?.id) ?? null,
       urlElicitation: this.urlElicitation ? { ...this.urlElicitation } : null,
       recentEvents: [...this.recentEvents],
       mcpStatusInfos: this.getMcpStatusInfos(),
@@ -589,6 +571,48 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.recentEvents = [];
     this.lastSerializedSnapshot = "";
     this.onDidChangeEmitter.dispose();
+  }
+
+  private getForegroundQuestion(): BrowserGatewayUiState["question"] {
+    const foreground = this.sessionManager.getForegroundSession();
+    const projected = this.getProjectedForegroundState();
+    if (foreground && projected?.sessionId === foreground.id) {
+      const foregroundQuestion = projected.questionRequest;
+      if (foregroundQuestion) {
+        return {
+          id: foregroundQuestion.id,
+          context: foregroundQuestion.context,
+          questions: foregroundQuestion.questions.map((question) => ({
+            ...question,
+          })),
+          ...(foregroundQuestion.backgroundTask
+            ? { backgroundTask: foregroundQuestion.backgroundTask }
+            : {}),
+        };
+      }
+    }
+
+    if (this.question?.backgroundTask) {
+      return {
+        id: this.question.id,
+        context: this.question.context,
+        questions: this.question.questions.map((question) => ({ ...question })),
+        backgroundTask: this.question.backgroundTask,
+      };
+    }
+
+    return undefined;
+  }
+
+  private getForegroundQuestionProgress(
+    questionId: string | undefined,
+  ): QuestionProgressState | undefined {
+    // Progress is broadcast through the UI event hub, while the visible question
+    // may come from the foreground projection. Both paths use the same request id.
+    if (!questionId || this.questionProgress?.id !== questionId) {
+      return undefined;
+    }
+    return { ...this.questionProgress };
   }
 
   private getRepositoryInfo(): BrowserGatewayRepositoryInfo | null {

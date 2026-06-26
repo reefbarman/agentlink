@@ -36,6 +36,39 @@ export function hasAnthropicApiKey(): boolean {
   );
 }
 
+export function resolveAnthropicModelAuth(): {
+  method: "apiKey" | "oauth";
+  bearerToken: string;
+  accountLabel?: string;
+  canRefresh: boolean;
+} | null {
+  if (storedAnthropicApiKey) {
+    return {
+      method: "apiKey",
+      bearerToken: storedAnthropicApiKey,
+      accountLabel: "Stored Anthropic API key",
+      canRefresh: false,
+    };
+  }
+  if (process.env.ANTHROPIC_API_KEY) {
+    return {
+      method: "apiKey",
+      bearerToken: process.env.ANTHROPIC_API_KEY,
+      accountLabel: "ANTHROPIC_API_KEY",
+      canRefresh: false,
+    };
+  }
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return {
+      method: "oauth",
+      bearerToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+      accountLabel: "CLAUDE_CODE_OAUTH_TOKEN",
+      canRefresh: false,
+    };
+  }
+  return null;
+}
+
 export function readClaudeCliCredentials(): string | undefined {
   try {
     const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
@@ -130,6 +163,19 @@ export async function refreshClaudeCredentials(
  *
  * Throws if no credential is found.
  */
+export function createAnthropicClientFromResolvedCredential(params: {
+  method: "apiKey" | "oauth";
+  bearerToken: string;
+}): Anthropic {
+  if (params.method === "oauth") {
+    return new Anthropic({
+      authToken: params.bearerToken,
+      fetch: agentLinkFetch,
+    });
+  }
+  return new Anthropic({ apiKey: params.bearerToken, fetch: agentLinkFetch });
+}
+
 export function createAnthropicClient(
   explicitApiKey?: string,
   log?: (msg: string) => void,
@@ -144,33 +190,27 @@ export function createAnthropicClient(
     };
   }
 
-  if (storedAnthropicApiKey) {
-    logLine("[auth] using stored API key from secret storage");
+  const resolvedAuth = resolveAnthropicModelAuth();
+  if (resolvedAuth?.method === "apiKey") {
+    logLine(
+      resolvedAuth.accountLabel === "Stored Anthropic API key"
+        ? "[auth] using stored API key from secret storage"
+        : "[auth] using ANTHROPIC_API_KEY env var",
+    );
     return {
       client: new Anthropic({
-        apiKey: storedAnthropicApiKey,
+        apiKey: resolvedAuth.bearerToken,
         fetch: agentLinkFetch,
       }),
       authSource: "env-api-key",
     };
   }
 
-  if (process.env.ANTHROPIC_API_KEY) {
-    logLine("[auth] using ANTHROPIC_API_KEY env var");
-    return {
-      client: new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
-        fetch: agentLinkFetch,
-      }),
-      authSource: "env-api-key",
-    };
-  }
-
-  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+  if (resolvedAuth?.method === "oauth") {
     logLine("[auth] using CLAUDE_CODE_OAUTH_TOKEN env var (Bearer)");
     return {
       client: new Anthropic({
-        authToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+        authToken: resolvedAuth.bearerToken,
         fetch: agentLinkFetch,
       }),
       authSource: "env-oauth-token",

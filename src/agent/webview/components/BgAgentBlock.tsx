@@ -76,7 +76,8 @@ export function BgAgentBlock({
   const isRunning =
     status === "pending" ||
     status === "streaming" ||
-    status === "tool_executing";
+    status === "tool_executing" ||
+    status === "awaiting_approval";
   const isDone = status === "idle" || status === "cancelled";
   const isError = status === "error";
 

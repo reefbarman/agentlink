@@ -25,8 +25,13 @@ export class McpOAuthError extends Error {
   }
 }
 
-function storageKey(serverName: string, suffix: string): string {
-  return `mcp_oauth_${serverName}_${suffix}`;
+function storageKey(
+  serverName: string,
+  suffix: string,
+  namespace?: string,
+): string {
+  const namespacePrefix = namespace ? `${namespace}_` : "";
+  return `mcp_oauth_${namespacePrefix}${serverName}_${suffix}`;
 }
 
 /**
@@ -86,9 +91,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
   async debugStateSnapshot(label: string): Promise<void> {
     const [clientInfo, tokens] = await Promise.all([
       this.storage.get<OAuthClientInformationMixed>(
-        storageKey(this.serverName, "client"),
+        storageKey(this.serverName, "client", this.storageNamespace),
       ),
-      this.storage.get<OAuthTokens>(storageKey(this.serverName, "tokens")),
+      this.storage.get<OAuthTokens>(
+        storageKey(this.serverName, "tokens", this.storageNamespace),
+      ),
     ]);
     this.onLog?.(
       `[mcp:${this.serverName}] oauth state ${label} redirectUrl=${this.redirectUrl} codeVerifierSet=${Boolean(this._codeVerifier)} client=${this.clientSummary(clientInfo)} tokens=${this.tokenSummary(tokens)}`,
@@ -99,6 +106,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
     private readonly serverName: string,
     private readonly serverUrl: string,
     private readonly storage: vscode.Memento,
+    private readonly storageNamespace?: string,
   ) {}
 
   private preferredCallbackPort(
@@ -156,7 +164,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
     if (this._server) return;
 
     const clientInfo = this.storage.get<OAuthClientInformationMixed>(
-      storageKey(this.serverName, "client"),
+      storageKey(this.serverName, "client", this.storageNamespace),
     );
     const preferredPort = this.preferredCallbackPort(clientInfo);
 
@@ -230,7 +238,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
     const info = this.storage.get<OAuthClientInformationMixed>(
-      storageKey(this.serverName, "client"),
+      storageKey(this.serverName, "client", this.storageNamespace),
     );
 
     const redirectUris = this.redirectUrisForClient(info);
@@ -249,18 +257,26 @@ export class McpOAuthProvider implements OAuthClientProvider {
     this.onLog?.(
       `[mcp:${this.serverName}] saveClientInformation() ${this.clientSummary(info)}`,
     );
-    await this.storage.update(storageKey(this.serverName, "client"), info);
+    await this.storage.update(
+      storageKey(this.serverName, "client", this.storageNamespace),
+      info,
+    );
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
-    return this.storage.get<OAuthTokens>(storageKey(this.serverName, "tokens"));
+    return this.storage.get<OAuthTokens>(
+      storageKey(this.serverName, "tokens", this.storageNamespace),
+    );
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
     this.onLog?.(
       `[mcp:${this.serverName}] saveTokens() ${this.tokenSummary(tokens)}`,
     );
-    await this.storage.update(storageKey(this.serverName, "tokens"), tokens);
+    await this.storage.update(
+      storageKey(this.serverName, "tokens", this.storageNamespace),
+      tokens,
+    );
   }
 
   saveCodeVerifier(verifier: string): void {
@@ -276,13 +292,13 @@ export class McpOAuthProvider implements OAuthClientProvider {
   ): Promise<void> {
     if (scope === "all" || scope === "tokens") {
       await this.storage.update(
-        storageKey(this.serverName, "tokens"),
+        storageKey(this.serverName, "tokens", this.storageNamespace),
         undefined,
       );
     }
     if (scope === "all" || scope === "client") {
       await this.storage.update(
-        storageKey(this.serverName, "client"),
+        storageKey(this.serverName, "client", this.storageNamespace),
         undefined,
       );
     }
@@ -298,9 +314,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
     const authRedirectUri = authorizationUrl.searchParams.get("redirect_uri");
     const [clientInfo, existingTokens] = await Promise.all([
       this.storage.get<OAuthClientInformationMixed>(
-        storageKey(this.serverName, "client"),
+        storageKey(this.serverName, "client", this.storageNamespace),
       ),
-      this.storage.get<OAuthTokens>(storageKey(this.serverName, "tokens")),
+      this.storage.get<OAuthTokens>(
+        storageKey(this.serverName, "tokens", this.storageNamespace),
+      ),
     ]);
     const hasSavedTokens = Boolean(existingTokens);
     const hasRefreshToken = Boolean(existingTokens?.refresh_token);
@@ -451,7 +469,10 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   /** Clear saved tokens (e.g. on /mcp-refresh for a broken server). */
   async clearTokens(): Promise<void> {
-    await this.storage.update(storageKey(this.serverName, "tokens"), undefined);
+    await this.storage.update(
+      storageKey(this.serverName, "tokens", this.storageNamespace),
+      undefined,
+    );
   }
 
   /**

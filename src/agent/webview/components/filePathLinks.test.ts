@@ -59,6 +59,80 @@ describe("matchFilePaths", () => {
     ]);
   });
 
+  it("matches relative directory paths without requiring a file extension", () => {
+    const text = "Open src/agent/webview/components/ in the Explorer";
+
+    expect(matchFilePaths(text)).toEqual([
+      {
+        fullMatch: "src/agent/webview/components/",
+        filePath: "src/agent/webview/components/",
+        line: undefined,
+        index: 5,
+      },
+    ]);
+  });
+
+  it("matches @-prefixed directory paths and strips @ from the opened path", () => {
+    const text = "Reveal @src/agent/webview/components in the Explorer";
+
+    expect(matchFilePaths(text)).toEqual([
+      {
+        fullMatch: "@src/agent/webview/components",
+        filePath: "src/agent/webview/components",
+        line: undefined,
+        index: 7,
+      },
+    ]);
+  });
+
+  it("matches absolute directory paths", () => {
+    const text = "Reveal /home/trist/workspace/agentlink/src/agent in Explorer";
+
+    expect(matchFilePaths(text)).toEqual([
+      {
+        fullMatch: "/home/trist/workspace/agentlink/src/agent",
+        filePath: "/home/trist/workspace/agentlink/src/agent",
+        line: undefined,
+        index: 7,
+      },
+    ]);
+  });
+
+  it("does not include trailing punctuation in directory matches", () => {
+    const text = "Reveal src/agent/webview/components, then continue";
+
+    expect(matchFilePaths(text)).toEqual([
+      {
+        fullMatch: "src/agent/webview/components",
+        filePath: "src/agent/webview/components",
+        line: undefined,
+        index: 7,
+      },
+    ]);
+  });
+
+  it("matches dotfile-rooted relative directory paths", () => {
+    const text = "Reveal .github/workflows in the Explorer";
+
+    expect(matchFilePaths(text)).toEqual([
+      {
+        fullMatch: ".github/workflows",
+        filePath: ".github/workflows",
+        line: undefined,
+        index: 7,
+      },
+    ]);
+  });
+
+  it("does not match casual slash-separated words as paths", () => {
+    expect(matchFilePaths("Answer yes/no before continuing")).toEqual([]);
+    expect(matchFilePaths("Pick red/green/blue for the theme")).toEqual([]);
+  });
+
+  it("does not match slash-separated dates as paths", () => {
+    expect(matchFilePaths("Released on 2024/01/15 after testing")).toEqual([]);
+  });
+
   it("does not include surrounding punctuation in the match prefix", () => {
     const text =
       "(/home/trist/workspace/native-claude/src/agent/webview/App.tsx)";

@@ -3,6 +3,7 @@ import {
   getSlashCommandSelectionState,
   parseMatchedSlashCommand,
   shouldOpenSlashPopup,
+  wrapSlashCommandInBackticks,
   wrapTextInBackticks,
 } from "./slashCommandInput";
 
@@ -121,6 +122,21 @@ describe("slashCommandInput", () => {
     expect(wrapTextInBackticks("/mode architect")).toBe("`/mode architect`");
     expect(wrapTextInBackticks("  /mode architect  ")).toBe(
       "  `/mode architect`  ",
+    );
+  });
+
+  it("wraps only the matched slash command in backticks", () => {
+    expect(wrapSlashCommandInBackticks("please run /review this diff")).toBe(
+      "please run `/review this diff`",
+    );
+    expect(
+      wrapSlashCommandInBackticks("  please run /review this diff  "),
+    ).toBe("  please run `/review this diff`  ");
+    expect(wrapSlashCommandInBackticks("/mode architect")).toBe(
+      "`/mode architect`",
+    );
+    expect(wrapSlashCommandInBackticks("please run `/review this diff`")).toBe(
+      "please run `/review this diff`",
     );
   });
 });

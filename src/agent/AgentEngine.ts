@@ -3,6 +3,14 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import type { AgentSession } from "./AgentSession.js";
 import type { AgentEvent } from "./types.js";
+import {
+  buildAgentErrorMessage,
+  getAgentErrorActions,
+  getAgentErrorCode,
+  hasAgentRetryableErrorFlag,
+  isAgentAuthErrorMessage,
+  isAgentRetryableErrorMessage,
+} from "../shared/agentErrors.js";
 import type {
   AgentToolRuntime,
   AgentToolExecutionContext,
@@ -37,46 +45,14 @@ import type {
   ReasoningEffort,
 } from "./providers/types.js";
 import { toSupportedImageMediaType } from "./providers/types.js";
+import { toCoreModelDocumentMediaType } from "../core/modelRuntime.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_API_RETRIES = 3;
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
 
-/** Walk the error cause chain and join unique messages into one string. */
-// (No equivalent exists elsewhere in the codebase.)
-function buildErrorMessage(err: unknown): string {
-  const seen = new Set<unknown>();
-  const parts: string[] = [];
-  let e: unknown = err;
-  while (e instanceof Error && !seen.has(e)) {
-    seen.add(e);
-    if (e.message) parts.push(e.message);
-    e = (e as { cause?: unknown }).cause;
-  }
-  return [...new Set(parts)].join(": ");
-}
-
-/** Returns true for transient errors that are safe to retry. */
-function isRetryableError(msg: string): boolean {
-  const lower = msg.toLowerCase();
-  return (
-    lower.includes("rate_limit") ||
-    lower.includes("overloaded") ||
-    lower.includes("503") ||
-    lower.includes("529") ||
-    lower.includes("connection error") ||
-    lower.includes("econnrefused") ||
-    lower.includes("enotfound") ||
-    lower.includes("etimedout") ||
-    lower.includes("timed out") ||
-    lower.includes("fetch failed") ||
-    lower.includes("other side closed") ||
-    lower.includes("terminated") ||
-    lower.includes("termination") ||
-    lower.includes("an error occurred while processing your request") ||
-    lower.includes("please include the request id")
-  );
-}
+const buildErrorMessage = buildAgentErrorMessage;
+const isRetryableError = isAgentRetryableErrorMessage;
 
 function extractAgentDisplayArgs(
   toolName: string,
@@ -127,15 +103,7 @@ class AuthenticationError extends Error {
   }
 }
 
-/** Returns true for authentication errors (expired token, invalid key). */
-function isAuthError(msg: string): boolean {
-  return (
-    msg.includes("authentication_error") ||
-    msg.includes("invalid x-api-key") ||
-    msg.includes("invalid api key") ||
-    (msg.includes("401") && !msg.includes("tool"))
-  );
-}
+const isAuthError = isAgentAuthErrorMessage;
 
 /**
  * Safety buffer percentage subtracted from the context window when computing
@@ -888,15 +856,28 @@ export class AgentEngine {
                     ? [{ type: "text" as const, text: textContent }]
                     : []),
                   ...imageBlocks,
-                  ...media.documents.map((doc) => ({
-                    type: "document" as const,
-                    source: {
-                      type: "base64" as const,
-                      media_type: doc.mimeType,
-                      data: doc.base64,
-                    },
-                    title: doc.name,
-                  })),
+                  ...media.documents.flatMap((doc) => {
+                    const mediaType = toCoreModelDocumentMediaType(
+                      doc.mimeType,
+                    );
+                    if (!mediaType) {
+                      this.log?.(
+                        `[media] skipping unsupported document type: "${doc.mimeType}" name="${doc.name}"`,
+                      );
+                      return [];
+                    }
+                    return [
+                      {
+                        type: "document" as const,
+                        source: {
+                          type: "base64" as const,
+                          media_type: mediaType,
+                          data: doc.base64,
+                        },
+                        title: doc.name,
+                      },
+                    ];
+                  }),
                   ...existingBlocks,
                 ];
                 this.log?.(
@@ -1522,6 +1503,11 @@ export class AgentEngine {
           let dispatchDone = false;
 
           while (!dispatchDone || dispatchEvents.length > 0) {
+            if (signal.aborted) {
+              dispatchEvents.length = 0;
+              dispatchDone = true;
+              break;
+            }
             if (dispatchEvents.length === 0 && !dispatchDone) {
               const raced = await Promise.race([
                 dispatchDonePromise,
@@ -1540,6 +1526,10 @@ export class AgentEngine {
             }
 
             while (dispatchEvents.length > 0) {
+              if (signal.aborted) {
+                dispatchEvents.length = 0;
+                break;
+              }
               yield dispatchEvents.shift()!;
             }
           }
@@ -1549,6 +1539,8 @@ export class AgentEngine {
             `dispatch=${dispatchBlocks.length} internal=${internalResults.length}`,
           );
         }
+
+        if (signal.aborted) break;
 
         // Merge results back in original order
         const internalResultsById = new Map(
@@ -1675,39 +1667,9 @@ export class AgentEngine {
       const retryable =
         isAuth ||
         isRetryableError(errorMessage) ||
-        !!(
-          err &&
-          typeof err === "object" &&
-          "retryable" in err &&
-          (err as { retryable?: boolean }).retryable
-        );
-      const code =
-        err &&
-        typeof err === "object" &&
-        "code" in err &&
-        typeof (err as { code?: unknown }).code === "string"
-          ? ((err as { code: string }).code as string)
-          : undefined;
-      const actions =
-        err &&
-        typeof err === "object" &&
-        "actions" in err &&
-        (err as { actions?: unknown }).actions &&
-        typeof (err as { actions?: unknown }).actions === "object"
-          ? ((
-              err as {
-                actions: {
-                  signIn?: boolean;
-                  signInAnotherAccount?: boolean;
-                  condense?: boolean;
-                };
-              }
-            ).actions as {
-              signIn?: boolean;
-              signInAnotherAccount?: boolean;
-              condense?: boolean;
-            })
-          : undefined;
+        hasAgentRetryableErrorFlag(err);
+      const code = getAgentErrorCode(err);
+      const actions = getAgentErrorActions(err);
       yield {
         type: "error",
         error: errorMessage,
@@ -1769,33 +1731,53 @@ export class AgentEngine {
       {
         trackerCtx: unknown;
         forcePromise: Promise<ToolResult>;
+        forceResolve: (result: ToolResult) => void;
         controller: AbortController;
       }
     >();
 
-    if (tracker) {
-      for (const call of calls) {
-        let forceResolve!: (result: ToolResult) => void;
-        const forcePromise = new Promise<ToolResult>((resolve) => {
-          forceResolve = resolve;
-        });
-        const controller = new AbortController();
-        const trackerCtx = tracker.registerAgentCall(
-          call.id,
+    for (const call of calls) {
+      let forceResolve!: (result: ToolResult) => void;
+      const forcePromise = new Promise<ToolResult>((resolve) => {
+        forceResolve = resolve;
+      });
+      const controller = new AbortController();
+      const trackerCtx = tracker?.registerAgentCall(
+        call.id,
+        call.name,
+        extractAgentDisplayArgs(
           call.name,
-          extractAgentDisplayArgs(
-            call.name,
-            call.input as Record<string, unknown>,
-          ),
-          session.id,
-          (result) => {
-            controller.abort();
-            forceResolve(result);
-          },
-          JSON.stringify(call.input, null, 2),
-        );
-        trackedCalls.set(call.id, { trackerCtx, forcePromise, controller });
+          call.input as Record<string, unknown>,
+        ),
+        session.id,
+        (result) => {
+          controller.abort();
+          forceResolve(result);
+        },
+        JSON.stringify(call.input, null, 2),
+      );
+      trackedCalls.set(call.id, {
+        trackerCtx,
+        forcePromise,
+        forceResolve,
+        controller,
+      });
+    }
+
+    const forceAbortTrackedCalls = () => {
+      const abortedResult: ToolResult = {
+        content: [{ type: "text", text: JSON.stringify({ error: "Aborted" }) }],
+      };
+      for (const trackedCall of trackedCalls.values()) {
+        trackedCall.controller.abort();
+        trackedCall.forceResolve(abortedResult);
       }
+    };
+
+    if (signal.aborted) {
+      forceAbortTrackedCalls();
+    } else {
+      signal.addEventListener("abort", forceAbortTrackedCalls, { once: true });
     }
 
     const runTrackedToolCall = async (
@@ -1929,6 +1911,8 @@ export class AgentEngine {
       }
       break;
     }
+
+    signal.removeEventListener("abort", forceAbortTrackedCalls);
 
     // Return results in original order, filling any gaps (from abort) with errors.
     // Calls are pre-registered with the sidebar tracker before execution, so any

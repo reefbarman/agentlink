@@ -226,4 +226,34 @@ describe("AgentSessionManager /btw side questions", () => {
     expect(fg.status).toBe("streaming");
     expect(fg.getAllMessages()).toHaveLength(1);
   });
+
+  it("can append queued follow-ups as separate user messages before one run", async () => {
+    const provider = makeProvider(() => textResponse("batch answer"));
+    providerRegistry.register(provider);
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const fg = await mgr.createSession("code");
+
+    await mgr.sendMessage(fg.id, "first queued", "code", {
+      displayText: "first queued",
+      additionalMessages: [
+        {
+          text: "second queued",
+          displayText: "second queued",
+        },
+      ],
+    });
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]?.messages).toEqual([
+      expect.objectContaining({ role: "user", content: "first queued" }),
+      expect.objectContaining({ role: "user", content: "second queued" }),
+    ]);
+    expect(
+      fg
+        .getAllMessages()
+        .filter((message) => message.role === "user")
+        .map((message) => message.content),
+    ).toEqual(["first queued", "second queued"]);
+  });
 });

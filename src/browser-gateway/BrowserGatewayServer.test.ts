@@ -85,6 +85,44 @@ function makeSessionManagerStub() {
   };
 }
 
+function makeMcpConfigSnapshot() {
+  return {
+    profile: "ask-agent" as const,
+    version: 1,
+    sources: [
+      {
+        id: "ask-agent:3",
+        profile: "ask-agent" as const,
+        scope: "ask-agent-global" as const,
+        label: "Ask Agent AgentLink",
+        path: "/home/.agentlink/ask-agent/mcp.json",
+        exists: true,
+        editable: true,
+        priority: 3,
+      },
+    ],
+    entries: [],
+    statusInfos: [
+      {
+        name: "ask-linear",
+        status: "connected",
+        toolCount: 1,
+        resourceCount: 0,
+        promptCount: 0,
+        tools: [{ name: "list_issues", description: "List issues" }],
+      },
+    ],
+    capabilities: {
+      canEditConfig: true,
+      canOpenRawConfig: true,
+      canReconnect: true,
+      canReauthenticate: true,
+      canDisable: true,
+      canUseProjectConfig: false,
+    },
+  };
+}
+
 function makeChatViewProviderStub() {
   return {
     submitBrowserApprovalDecision: vi.fn(() => true),
@@ -138,6 +176,29 @@ function makeChatViewProviderStub() {
     })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
     submitBrowserStopBackground: vi.fn(() => ({ ok: true })),
+    submitBrowserAskAgentMcpStatus: vi.fn(() => ({
+      ok: true,
+      infos: makeMcpConfigSnapshot().statusInfos,
+      configSnapshot: makeMcpConfigSnapshot(),
+    })),
+    submitBrowserAskAgentMcpRefresh: vi.fn(async () => ({
+      ok: true,
+      infos: makeMcpConfigSnapshot().statusInfos,
+      configSnapshot: makeMcpConfigSnapshot(),
+    })),
+    submitBrowserMcpConfigSnapshot: vi.fn(async () => ({
+      ok: true,
+      configSnapshot: makeMcpConfigSnapshot(),
+    })),
+    submitBrowserMcpConfigServer: vi.fn(async () => ({
+      ok: true,
+      configSnapshot: makeMcpConfigSnapshot(),
+    })),
+    submitBrowserMcpConfigRemove: vi.fn(async () => ({
+      ok: true,
+      configSnapshot: makeMcpConfigSnapshot(),
+    })),
+    submitBrowserMcpConfigOpenRaw: vi.fn(async () => ({ ok: true })),
     getBrowserBgTranscript: vi.fn((sessionId: string) => ({
       ok: true,
       transcript: {
@@ -166,6 +227,11 @@ describe("BrowserGatewayServer", () => {
     const sessionManager = makeSessionManagerStub();
     const chatViewProvider = makeChatViewProviderStub();
     let projectedModel = "claude-sonnet-4-6";
+    let projectedQuestionRequest: {
+      id: string;
+      context: string;
+      questions: Array<{ id: string; type: "yes_no"; question: string }>;
+    } | null = null;
     chatViewProvider.submitBrowserSetModel.mockImplementation(
       async (model: string) => {
         projectedModel = model;
@@ -212,7 +278,7 @@ describe("BrowserGatewayServer", () => {
         thinkingEnabled: true,
         reasoningEffort: "high",
         messageQueue: [],
-        questionRequest: null,
+        questionRequest: projectedQuestionRequest,
         detectedQuestion: null,
         todos: [],
         debugInfo: null,
@@ -251,13 +317,22 @@ describe("BrowserGatewayServer", () => {
       filePath: "src/file.ts",
       writeOperation: "modify",
     });
-    hub.publishQuestionRequest("question-1", "Need confirmation.", [
-      {
-        id: "q1",
-        type: "yes_no",
-        question: "Continue?",
-      },
-    ]);
+    projectedQuestionRequest = {
+      id: "question-1",
+      context: "Need confirmation.",
+      questions: [
+        {
+          id: "q1",
+          type: "yes_no",
+          question: "Continue?",
+        },
+      ],
+    };
+    hub.publishQuestionRequest(
+      projectedQuestionRequest.id,
+      projectedQuestionRequest.context,
+      projectedQuestionRequest.questions,
+    );
     diffSnapshotHub.upsert({
       requestId: "approval-1",
       filePath: "src/file.ts",
@@ -316,6 +391,120 @@ describe("BrowserGatewayServer", () => {
       detail: "Awaiting response",
       sessionTitle: "Test Session",
     });
+
+    const unauthorizedAskMcpStatusResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-status`,
+    );
+    expect(unauthorizedAskMcpStatusResponse.status).toBe(401);
+
+    const askMcpStatusResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-status`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(askMcpStatusResponse.ok).toBe(true);
+    expect(await askMcpStatusResponse.json()).toEqual({
+      ok: true,
+      infos: makeMcpConfigSnapshot().statusInfos,
+      configSnapshot: makeMcpConfigSnapshot(),
+    });
+    expect(chatViewProvider.submitBrowserAskAgentMcpStatus).toHaveBeenCalled();
+
+    const askMcpRefreshResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-refresh`,
+      { method: "POST", headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(askMcpRefreshResponse.ok).toBe(true);
+    expect(await askMcpRefreshResponse.json()).toEqual({
+      ok: true,
+      infos: makeMcpConfigSnapshot().statusInfos,
+      configSnapshot: makeMcpConfigSnapshot(),
+    });
+    expect(chatViewProvider.submitBrowserAskAgentMcpRefresh).toHaveBeenCalled();
+
+    const askMcpConfigResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(askMcpConfigResponse.ok).toBe(true);
+    expect(await askMcpConfigResponse.json()).toEqual({
+      ok: true,
+      configSnapshot: makeMcpConfigSnapshot(),
+    });
+    expect(
+      chatViewProvider.submitBrowserMcpConfigSnapshot,
+    ).toHaveBeenCalledWith("ask-agent");
+
+    const askMcpConfigSaveResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+          server: { name: "new", command: "new-mcp" },
+        }),
+      },
+    );
+    expect(askMcpConfigSaveResponse.ok).toBe(true);
+    expect(chatViewProvider.submitBrowserMcpConfigServer).toHaveBeenCalledWith({
+      profile: "ask-agent",
+      scope: "ask-agent-global",
+      server: { name: "new", command: "new-mcp" },
+    });
+
+    const mainMcpConfigSaveResponse = await fetch(
+      `${baseUrl}/api/mcp/config/server`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          profile: "main",
+          scope: "global",
+          server: { name: "host", command: "host-mcp" },
+        }),
+      },
+    );
+    expect(mainMcpConfigSaveResponse.status).toBe(403);
+    expect(await mainMcpConfigSaveResponse.json()).toEqual({
+      error: "main_profile_read_only_in_browser",
+    });
+    expect(
+      chatViewProvider.submitBrowserMcpConfigServer,
+    ).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: "main",
+        scope: "global",
+      }),
+    );
+
+    const askMcpConfigOpenRawResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/mcp-config/open-raw`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          profile: "ask-agent",
+          scope: "ask-agent-global",
+        }),
+      },
+    );
+    expect(askMcpConfigOpenRawResponse.ok).toBe(true);
+    expect(chatViewProvider.submitBrowserMcpConfigOpenRaw).toHaveBeenCalledWith(
+      {
+        profile: "ask-agent",
+        scope: "ask-agent-global",
+      },
+    );
 
     const pageResponse = await fetch(`${baseUrl}/`);
     expect(pageResponse.status).toBe(404);
@@ -428,7 +617,17 @@ describe("BrowserGatewayServer", () => {
           lastCacheReadTokens: 3,
           estimatedTotalUsed: 33,
           messageQueue: [],
-          questionRequest: null,
+          questionRequest: {
+            id: "question-1",
+            context: "Need confirmation.",
+            questions: [
+              {
+                id: "q1",
+                type: "yes_no",
+                question: "Continue?",
+              },
+            ],
+          },
           detectedQuestion: null,
           todos: [],
           debugInfo: null,

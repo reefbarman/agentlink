@@ -233,6 +233,44 @@ describe("handleApplyDiff", () => {
     expect(policy.recordDecision).not.toHaveBeenCalled();
   });
 
+  it("does not report matched blocks as applied when rejected", async () => {
+    const filePath = path.join(workspaceDir, "src", "rejected-blocks.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "alpha\nbeta", "utf-8");
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "rejected_by_user" as const,
+        path: "src/rejected-blocks.ts",
+        reason: "Keep the original wording",
+        decision: "reject" as const,
+      })),
+    };
+    const policy = createApprovalPolicy(false);
+    const diff = [
+      searchReplaceDiff("alpha", "one"),
+      searchReplaceDiff("beta", "two"),
+    ].join("\n");
+
+    const { handleApplyDiff } = await import("./applyDiff.js");
+    const result = await handleApplyDiff(
+      { path: "src/rejected-blocks.ts", diff },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      { editReviewProvider, writeApprovalPolicyProvider: policy },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      status: "rejected_by_user",
+      path: "src/rejected-blocks.ts",
+      reason: "Keep the original wording",
+    });
+    expect(toolJson(result)).not.toHaveProperty("block_results");
+    expect(policy.recordDecision).not.toHaveBeenCalled();
+  });
+
   it("re-applies diffs to current file content inside the provider boundary", async () => {
     const filePath = path.join(workspaceDir, "src", "changed.ts");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });

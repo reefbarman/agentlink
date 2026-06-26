@@ -1,6 +1,11 @@
 import * as http from "http";
 import type * as vscode from "vscode";
 
+import type {
+  McpManagerProfile,
+  McpManagerScope,
+  McpManagerServerDraft,
+} from "../shared/mcpManagerTypes.js";
 import {
   clearBrowserGatewayDiscovery,
   writeBrowserGatewayDiscovery,
@@ -221,18 +226,19 @@ export class BrowserGatewayServer implements vscode.Disposable {
   ): void {
     const method = req.method ?? "GET";
     const url = req.url ?? "/";
+    const pathOnly = url.split("?", 1)[0] ?? url;
 
     if (method === "GET" && url === "/health") {
       this.writeJson(res, 200, { status: "ok" });
       return;
     }
 
-    if (method === "GET" && url === "/api/ui-state") {
+    if (method === "GET" && pathOnly === "/api/ui-state") {
       this.writeJson(res, 200, this.getSnapshot());
       return;
     }
 
-    if (method === "GET" && url === "/api/instance-status") {
+    if (method === "GET" && pathOnly === "/api/instance-status") {
       if (!this.isAuthorized(req)) {
         this.writeJson(res, 401, { error: "unauthorized" });
         return;
@@ -241,17 +247,17 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    if (method === "GET" && url === "/api/instances") {
+    if (method === "GET" && pathOnly === "/api/instances") {
       void this.handleInstancesRequest(res);
       return;
     }
 
-    if (method === "GET" && url.startsWith("/api/diff/")) {
+    if (method === "GET" && pathOnly.startsWith("/api/diff/")) {
       this.handleDiffDetailRequest(req, url, res);
       return;
     }
 
-    if (method === "GET" && url === "/events") {
+    if (method === "GET" && pathOnly === "/events") {
       this.handleSse(req, res);
       return;
     }
@@ -622,7 +628,207 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    if (method === "POST" && url === "/api/mcp/action") {
+    if (method === "GET" && url === "/internal/ask-agent/mcp-tools") {
+      void this.handleAskAgentMcpTools(req, res).catch((err) => {
+        this.log(`[browser-gateway] ask-agent mcp tools failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(res, 500, { error: "internal_error" });
+        }
+      });
+      return;
+    }
+
+    if (method === "GET" && pathOnly === "/internal/ask-agent/mcp-status") {
+      void this.handleAskAgentMcpStatus(req, res).catch((err) => {
+        this.log(`[browser-gateway] ask-agent mcp status failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(res, 500, { error: "internal_error" });
+        }
+      });
+      return;
+    }
+
+    if (method === "GET" && pathOnly === "/internal/ask-agent/mcp-config") {
+      void this.handleMcpConfigSnapshot(
+        req,
+        `${pathOnly}?profile=ask-agent`,
+        res,
+      ).catch((err) => {
+        this.log(`[browser-gateway] ask-agent mcp config failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(res, 500, { error: "internal_error" });
+        }
+      });
+      return;
+    }
+
+    if (
+      method === "POST" &&
+      pathOnly === "/internal/ask-agent/mcp-config/server"
+    ) {
+      void this.handleMcpConfigServer(req, res).catch((err) => {
+        this.log(`[browser-gateway] ask-agent mcp config save failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
+    if (
+      method === "DELETE" &&
+      pathOnly === "/internal/ask-agent/mcp-config/server"
+    ) {
+      void this.handleMcpConfigRemove(req, res).catch((err) => {
+        this.log(
+          `[browser-gateway] ask-agent mcp config remove failed: ${err}`,
+        );
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
+    if (
+      method === "POST" &&
+      pathOnly === "/internal/ask-agent/mcp-config/open-raw"
+    ) {
+      void this.handleMcpConfigOpenRaw(req, res).catch((err) => {
+        this.log(
+          `[browser-gateway] ask-agent mcp config raw open failed: ${err}`,
+        );
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
+    if (method === "POST" && pathOnly === "/internal/ask-agent/mcp-refresh") {
+      void this.handleAskAgentMcpRefresh(req, res).catch((err) => {
+        this.log(`[browser-gateway] ask-agent mcp refresh failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(res, 500, { error: "internal_error" });
+        }
+      });
+      return;
+    }
+
+    if (method === "POST" && pathOnly === "/internal/ask-agent/mcp-tool") {
+      void this.handleAskAgentMcpTool(req, res).catch((err) => {
+        this.log(`[browser-gateway] ask-agent mcp tool failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
+    if (method === "GET" && pathOnly === "/api/mcp/config") {
+      void this.handleMcpConfigSnapshot(req, url, res).catch((err) => {
+        this.log(`[browser-gateway] mcp config snapshot failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(res, 500, { error: "internal_error" });
+        }
+      });
+      return;
+    }
+
+    if (method === "POST" && pathOnly === "/api/mcp/config/server") {
+      void this.handleMcpConfigServer(req, res).catch((err) => {
+        this.log(`[browser-gateway] mcp config save failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
+    if (method === "DELETE" && pathOnly === "/api/mcp/config/server") {
+      void this.handleMcpConfigRemove(req, res).catch((err) => {
+        this.log(`[browser-gateway] mcp config remove failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
+    if (method === "POST" && pathOnly === "/api/mcp/config/open-raw") {
+      void this.handleMcpConfigOpenRaw(req, res).catch((err) => {
+        this.log(`[browser-gateway] mcp config raw open failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
+    if (method === "POST" && pathOnly === "/api/mcp/action") {
       void this.handleMcpAction(req, res).catch((err) => {
         this.log(`[browser-gateway] mcp action failed: ${err}`);
         if (!res.headersSent) {
@@ -1402,6 +1608,209 @@ export class BrowserGatewayServer implements vscode.Disposable {
     }
     const result = await this.chatViewProvider.submitBrowserRefreshDebugInfo();
     this.writeJson(res, result.ok ? 200 : 500, result);
+  }
+
+  private async handleAskAgentMcpTools(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    this.writeJson(
+      res,
+      200,
+      this.chatViewProvider.submitBrowserAskAgentMcpTools(),
+    );
+  }
+
+  private async handleAskAgentMcpStatus(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    this.writeJson(
+      res,
+      200,
+      this.chatViewProvider.submitBrowserAskAgentMcpStatus(),
+    );
+  }
+
+  private async handleAskAgentMcpRefresh(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const result =
+      await this.chatViewProvider.submitBrowserAskAgentMcpRefresh();
+    this.writeJson(res, result.ok ? 200 : 500, result);
+  }
+
+  private async handleAskAgentMcpTool(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await this.readJsonBody(req)) as {
+      name?: string;
+      input?: Record<string, unknown>;
+      sessionId?: string;
+    };
+    if (typeof body?.name !== "string" || !body.name.trim()) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const controller = new AbortController();
+    req.on("aborted", () => controller.abort());
+    res.on("close", () => controller.abort());
+    const result = await this.chatViewProvider.submitBrowserAskAgentMcpTool({
+      name: body.name,
+      input:
+        body.input &&
+        typeof body.input === "object" &&
+        !Array.isArray(body.input)
+          ? body.input
+          : {},
+      sessionId: body.sessionId,
+      signal: controller.signal,
+    });
+    this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private parseMcpProfile(value: unknown): McpManagerProfile | null {
+    return value === "main" || value === "ask-agent" ? value : null;
+  }
+
+  private parseMcpScope(value: unknown): McpManagerScope | null {
+    return value === "global" ||
+      value === "project" ||
+      value === "ask-agent-global"
+      ? value
+      : null;
+  }
+
+  private async handleMcpConfigSnapshot(
+    req: http.IncomingMessage,
+    url: string,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const requestUrl = new URL(url, "http://agentlink.local");
+    const profile = this.parseMcpProfile(
+      requestUrl.searchParams.get("profile") ?? "main",
+    );
+    if (!profile) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result =
+      await this.chatViewProvider.submitBrowserMcpConfigSnapshot(profile);
+    this.writeJson(res, 200, result);
+  }
+
+  private async handleMcpConfigServer(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await this.readJsonBody(req)) as {
+      profile?: unknown;
+      scope?: unknown;
+      server?: unknown;
+    } | null;
+    const profile = this.parseMcpProfile(body?.profile);
+    const scope = this.parseMcpScope(body?.scope);
+    if (
+      !profile ||
+      !scope ||
+      !body?.server ||
+      typeof body.server !== "object"
+    ) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    if (profile !== "ask-agent") {
+      this.writeJson(res, 403, { error: "main_profile_read_only_in_browser" });
+      return;
+    }
+    const result = await this.chatViewProvider.submitBrowserMcpConfigServer({
+      profile,
+      scope,
+      server: body.server as McpManagerServerDraft,
+    });
+    this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private async handleMcpConfigRemove(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await this.readJsonBody(req)) as {
+      profile?: unknown;
+      scope?: unknown;
+      serverName?: unknown;
+    } | null;
+    const profile = this.parseMcpProfile(body?.profile);
+    const scope = this.parseMcpScope(body?.scope);
+    if (!profile || !scope || typeof body?.serverName !== "string") {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    if (profile !== "ask-agent") {
+      this.writeJson(res, 403, { error: "main_profile_read_only_in_browser" });
+      return;
+    }
+    const result = await this.chatViewProvider.submitBrowserMcpConfigRemove({
+      profile,
+      scope,
+      serverName: body.serverName,
+    });
+    this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private async handleMcpConfigOpenRaw(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await this.readJsonBody(req)) as {
+      profile?: unknown;
+      scope?: unknown;
+    } | null;
+    const profile = this.parseMcpProfile(body?.profile);
+    const scope = this.parseMcpScope(body?.scope);
+    if (!profile || !scope) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result = await this.chatViewProvider.submitBrowserMcpConfigOpenRaw({
+      profile,
+      scope,
+    });
+    this.writeJson(res, result.ok ? 200 : 400, result);
   }
 
   private async handleMcpAction(

@@ -726,6 +726,198 @@ describe("AgentEngine", () => {
       });
     });
 
+    it("does not emit completed tool events after abort", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_read",
+              name: "read_file",
+              input: { path: "src/a.ts" },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("read then stop");
+      const engine = new AgentEngine(makeRegistry(provider));
+      let releaseRead!: () => void;
+      const executeTool = vi.fn(
+        () =>
+          new Promise<{ content: Array<{ type: "text"; text: string }> }>(
+            (resolve) => {
+              releaseRead = () => {
+                session.abort();
+                resolve({
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({ ok: true, read: true }),
+                    },
+                  ],
+                });
+              };
+            },
+          ),
+      );
+      setEngineToolContext(
+        engine,
+        {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: "seed-session",
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        },
+        executeTool,
+      );
+
+      const runPromise = collectEvents(engine.run(session));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      releaseRead();
+      const events = await runPromise;
+
+      expect(executeTool).toHaveBeenCalledTimes(1);
+      expect(events.map((event) => event.type)).not.toContain("tool_result");
+      expect(events.map((event) => event.type)).not.toContain("done");
+    });
+
+    it("unblocks in-flight tracked tools when a run is aborted", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_read",
+              name: "read_file",
+              input: { path: "src/a.ts" },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("read then stop");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const tracker = new ToolCallTracker();
+      let toolSignal: AbortSignal | undefined;
+      let toolStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        toolStarted = resolve;
+      });
+      const executeTool = vi.fn(
+        (request: AgentToolExecutionRequest) =>
+          new Promise<{ content: Array<{ type: "text"; text: string }> }>(
+            () => {
+              toolSignal = request.context.toolAbortSignal;
+              toolStarted();
+            },
+          ),
+      );
+      setEngineToolContext(
+        engine,
+        {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: "seed-session",
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+          toolCallTracker: tracker,
+        },
+        executeTool,
+      );
+
+      const runPromise = collectEvents(engine.run(session));
+      await started;
+      session.abort();
+
+      const events = await Promise.race([
+        runPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("run did not abort")), 500),
+        ),
+      ]);
+
+      expect(executeTool).toHaveBeenCalledTimes(1);
+      expect(toolSignal?.aborted).toBe(true);
+      expect(events.map((event) => event.type)).not.toContain("tool_result");
+      expect(events.map((event) => event.type)).not.toContain("done");
+      expect(
+        tracker.getActiveCalls().filter((call) => call.status === "active"),
+      ).toHaveLength(0);
+    });
+
+    it("unblocks in-flight tools on abort without a tracker", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "tool_use",
+              id: "call_read",
+              name: "read_file",
+              input: { path: "src/a.ts" },
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("read then stop");
+      const engine = new AgentEngine(makeRegistry(provider));
+      let toolSignal: AbortSignal | undefined;
+      let toolStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        toolStarted = resolve;
+      });
+      const executeTool = vi.fn(
+        (request: AgentToolExecutionRequest) =>
+          new Promise<{ content: Array<{ type: "text"; text: string }> }>(
+            () => {
+              toolSignal = request.context.toolAbortSignal;
+              toolStarted();
+            },
+          ),
+      );
+      setEngineToolContext(
+        engine,
+        {
+          approvalManager: {} as ToolDispatchContext["approvalManager"],
+          approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+          sessionId: "seed-session",
+          extensionUri: {} as ToolDispatchContext["extensionUri"],
+        },
+        executeTool,
+      );
+
+      const runPromise = collectEvents(engine.run(session));
+      await started;
+      session.abort();
+
+      const events = await Promise.race([
+        runPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("run did not abort")), 500),
+        ),
+      ]);
+
+      expect(executeTool).toHaveBeenCalledTimes(1);
+      expect(toolSignal?.aborted).toBe(true);
+      expect(events.map((event) => event.type)).not.toContain("tool_result");
+      expect(events.map((event) => event.type)).not.toContain("done");
+    });
+
     it("clears pre-registered tracker calls when a run is aborted", async () => {
       const provider = makeMockProvider();
       provider.stream = async function* () {

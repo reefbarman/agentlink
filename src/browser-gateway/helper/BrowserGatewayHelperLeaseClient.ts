@@ -1,10 +1,13 @@
 import type * as vscode from "vscode";
 
+import type { BrowserGatewayCoreOwnerLeaseRegistration } from "../protocol.js";
+
 interface BrowserGatewayHelperLeaseClientOptions {
   helperUrl: string;
   clientId: string;
   clientSharedSecret: string;
   log: (message: string) => void;
+  coreOwner?: BrowserGatewayCoreOwnerLeaseRegistration;
   renewIntervalMs?: number;
   leaseTtlMs?: number;
 }
@@ -44,6 +47,8 @@ export class BrowserGatewayHelperLeaseClient implements vscode.Disposable {
         },
         body: JSON.stringify({
           clientId: this.options.clientId,
+          ownerId: this.options.coreOwner?.ownerId,
+          ownerGenerationId: this.options.coreOwner?.ownerGenerationId,
         }),
       });
     } catch (error) {
@@ -79,10 +84,67 @@ export class BrowserGatewayHelperLeaseClient implements vscode.Disposable {
         this.options.log(
           `[browser-gateway-helper] lease refresh failed: ${response.status}`,
         );
+        return;
       }
+      await this.renewCoreOwnerRegistration();
     } catch (error) {
       this.options.log(
         `[browser-gateway-helper] lease refresh error: ${String(error)}`,
+      );
+    }
+  }
+
+  private async renewCoreOwnerRegistration(): Promise<void> {
+    const owner = this.options.coreOwner;
+    if (!owner) return;
+    const currentOwner = await this.postCoreOwnerHeartbeat(owner);
+    if (currentOwner) return;
+    await this.postCoreOwnerRegistration(owner);
+  }
+
+  private async postCoreOwnerHeartbeat(
+    owner: BrowserGatewayCoreOwnerLeaseRegistration,
+  ): Promise<boolean> {
+    const response = await fetch(
+      `${this.options.helperUrl}/internal/core-owners/heartbeat`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.options.clientSharedSecret}`,
+        },
+        body: JSON.stringify({
+          ownerId: owner.ownerId,
+          ownerGenerationId: owner.ownerGenerationId,
+        }),
+      },
+    );
+    if (response.status === 404) return false;
+    if (!response.ok) {
+      this.options.log(
+        `[browser-gateway-helper] core owner heartbeat failed: ${response.status}`,
+      );
+    }
+    return response.ok;
+  }
+
+  private async postCoreOwnerRegistration(
+    owner: BrowserGatewayCoreOwnerLeaseRegistration,
+  ): Promise<void> {
+    const response = await fetch(
+      `${this.options.helperUrl}/internal/core-owners/register`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.options.clientSharedSecret}`,
+        },
+        body: JSON.stringify(owner),
+      },
+    );
+    if (!response.ok) {
+      this.options.log(
+        `[browser-gateway-helper] core owner registration failed: ${response.status}`,
       );
     }
   }

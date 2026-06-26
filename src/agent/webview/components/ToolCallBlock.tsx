@@ -8,6 +8,8 @@ export type ToolCallData = ContentBlock & { type: "tool_call" };
 interface ToolCallBlockProps {
   toolCall: ToolCallData;
   onOpenFile?: (path: string, line?: number) => void;
+  onCompleteToolCall?: (id: string) => void;
+  onCancelToolCall?: (id: string) => void;
   onPromoteMcpToolApproval?: (promotion: {
     serverName: string;
     bareToolName: string;
@@ -525,6 +527,8 @@ export function getToolCallVisualState(toolCall: {
 export function ToolCallBlock({
   toolCall,
   onOpenFile,
+  onCompleteToolCall,
+  onCancelToolCall,
   onPromoteMcpToolApproval,
 }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
@@ -567,60 +571,95 @@ export function ToolCallBlock({
     mcpApprovalPromotion?.scopes.filter(
       (scope) => !promotedScopes.has(scope),
     ) ?? [];
+  const showRunningActions =
+    !complete && (onCompleteToolCall || onCancelToolCall);
 
   return (
     <div class={`tool-call-block ${statusClass}`}>
-      <button
-        class="tool-call-header"
-        onClick={() => setExpanded(!expanded)}
-        type="button"
+      <div
+        class={`tool-call-row${showRunningActions ? " tool-call-row-with-actions" : ""}`}
       >
-        <i
-          class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
-        />
-        <i class={`codicon tool-call-status-icon ${statusIconClass}`} />
-        <span class="tool-call-name">{toolCall.name}</span>
-        {cmdExitBadge !== null && (
-          <span class="tool-exit-badge">exit {cmdExitBadge}</span>
+        <button
+          class="tool-call-header"
+          onClick={() => setExpanded(!expanded)}
+          type="button"
+        >
+          <i
+            class={`codicon codicon-chevron-${expanded ? "down" : "right"} tool-call-chevron`}
+          />
+          <i class={`codicon tool-call-status-icon ${statusIconClass}`} />
+          <span class="tool-call-name">{toolCall.name}</span>
+          {cmdExitBadge !== null && (
+            <span class="tool-exit-badge">exit {cmdExitBadge}</span>
+          )}
+          {hasSummary && (
+            <span class="tool-call-summary">
+              {summaryParts
+                .filter(
+                  (p) => !(p.type === "text" && p.text.startsWith("\x00exit:")),
+                )
+                .map((part, i) =>
+                  part.type === "file" ? (
+                    <a
+                      key={i}
+                      class="tool-file-link"
+                      title={part.path + (part.line ? `:${part.line}` : "")}
+                      onClick={(e: MouseEvent) =>
+                        handleFileClick(e, part.path, part.line)
+                      }
+                    >
+                      {part.display}
+                    </a>
+                  ) : part.type === "badge" ? (
+                    <span
+                      key={i}
+                      class="tool-auto-approval-badge"
+                      title={part.title}
+                    >
+                      {part.text}
+                    </span>
+                  ) : (
+                    <span key={i}>{part.text}</span>
+                  ),
+                )}
+            </span>
+          )}
+          {complete && toolCall.durationMs != null && (
+            <span class="tool-call-duration">
+              {fmtDuration(toolCall.durationMs)}
+            </span>
+          )}
+        </button>
+        {showRunningActions && (
+          <div
+            class="tool-call-inline-actions"
+            aria-label={`Actions for ${toolCall.name}`}
+          >
+            {onCompleteToolCall && (
+              <button
+                type="button"
+                class="tool-call-inline-action tool-call-inline-complete"
+                aria-label={`Complete ${toolCall.name}`}
+                title={`Complete ${toolCall.name}`}
+                onClick={() => onCompleteToolCall(toolCall.id)}
+              >
+                <i class="codicon codicon-check" aria-hidden="true" />
+              </button>
+            )}
+            {onCancelToolCall && (
+              <button
+                type="button"
+                class="tool-call-inline-action tool-call-inline-cancel"
+                aria-label={`Cancel ${toolCall.name}`}
+                title={`Cancel ${toolCall.name}`}
+                onClick={() => onCancelToolCall(toolCall.id)}
+              >
+                <i class="codicon codicon-close" aria-hidden="true" />
+              </button>
+            )}
+          </div>
         )}
-        {hasSummary && (
-          <span class="tool-call-summary">
-            {summaryParts
-              .filter(
-                (p) => !(p.type === "text" && p.text.startsWith("\x00exit:")),
-              )
-              .map((part, i) =>
-                part.type === "file" ? (
-                  <a
-                    key={i}
-                    class="tool-file-link"
-                    title={part.path + (part.line ? `:${part.line}` : "")}
-                    onClick={(e: MouseEvent) =>
-                      handleFileClick(e, part.path, part.line)
-                    }
-                  >
-                    {part.display}
-                  </a>
-                ) : part.type === "badge" ? (
-                  <span
-                    key={i}
-                    class="tool-auto-approval-badge"
-                    title={part.title}
-                  >
-                    {part.text}
-                  </span>
-                ) : (
-                  <span key={i}>{part.text}</span>
-                ),
-              )}
-          </span>
-        )}
-        {complete && toolCall.durationMs != null && (
-          <span class="tool-call-duration">
-            {fmtDuration(toolCall.durationMs)}
-          </span>
-        )}
-      </button>
+      </div>
 
       {expanded && (
         <div class="tool-call-details">

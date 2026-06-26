@@ -106,6 +106,16 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("/my/project");
   });
 
+  it("asks agents to attach continuation actions for concrete follow-up work", async () => {
+    const result = await buildSystemPrompt("code", tmpDir);
+    expect(result).toContain(
+      "If your final summary names a concrete follow-up, next MVP slice, next phase, unfinished plan item, remaining subtask, or validation step",
+    );
+    expect(result).toContain(
+      "wire that exact continuation into `continueLabel` and `continuePrompt`",
+    );
+  });
+
   it("includes code mode section for 'code' mode", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain("Code mode");
@@ -124,6 +134,8 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt("ask", tmpDir);
     expect(result).toContain("Ask mode");
     expect(result).toContain("Do not assume the user is correct");
+    expect(result).toContain("Use web search very proactively");
+    expect(result).toContain("freshness-sensitive answers");
   });
 
   it("scopes pre-task alignment checklist to mutating modes", async () => {

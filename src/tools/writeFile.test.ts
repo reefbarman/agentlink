@@ -205,6 +205,41 @@ describe("handleWriteFile", () => {
     expect(policy.recordDecision).not.toHaveBeenCalled();
   });
 
+  it("does not add write-risk warnings when rejected", async () => {
+    const editReviewProvider: EditReviewProvider = {
+      reviewAndApply: vi.fn(async () => ({
+        status: "rejected_by_user" as const,
+        path: "src/rejected.test.ts",
+        reason: "Use apply_diff instead",
+        decision: "reject" as const,
+      })),
+    };
+
+    const { handleWriteFile } = await import("./writeFile.js");
+    const result = await handleWriteFile(
+      {
+        path: "src/rejected.test.ts",
+        content: "vi.mock('x', () => ({ value }));\nconst value = 1;\n",
+      },
+      {} as never,
+      {} as never,
+      "session-1",
+      undefined,
+      "code",
+      {
+        editReviewProvider,
+        writeApprovalPolicyProvider: createApprovalPolicy(false),
+      },
+    );
+
+    expect(toolJson(result)).toMatchObject({
+      status: "rejected_by_user",
+      path: "src/rejected.test.ts",
+      reason: "Use apply_diff instead",
+    });
+    expect(toolJson(result)).not.toHaveProperty("warnings");
+  });
+
   it("adds write-risk warnings to provider results", async () => {
     const editReviewProvider: EditReviewProvider = {
       reviewAndApply: vi.fn(async () => ({

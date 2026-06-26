@@ -6,7 +6,6 @@ import { ApiRequestBlock } from "./ApiRequestBlock";
 import { BgAgentBlock } from "./BgAgentBlock";
 import { BgAgentResultBlock } from "./BgAgentResultBlock";
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
-import type { ComponentChild } from "preact";
 import type { DetectedQuestion } from "../questionDetection";
 import { ErrorBlock } from "./ErrorBlock";
 import type { FinalMarkerToolCall } from "../../../shared/finalStatus";
@@ -17,7 +16,6 @@ import { StreamingText } from "./StreamingText";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { getFinalMessageContinueAction } from "../../../shared/finalStatus";
-import { matchFilePaths } from "./filePathLinks";
 
 const TOOL_GROUP_SETTLE_MS = 350;
 
@@ -56,6 +54,8 @@ interface MessageBubbleProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onCompleteToolCall?: (id: string) => void;
+  onCancelToolCall?: (id: string) => void;
   onPromoteMcpToolApproval?: (promotion: {
     serverName: string;
     bareToolName: string;
@@ -82,6 +82,8 @@ export function MessageBubble({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onCompleteToolCall,
+  onCancelToolCall,
   onPromoteMcpToolApproval,
   onOpenSpecialBlockPanel,
   onRetry,
@@ -288,6 +290,8 @@ export function MessageBubble({
                 key={`group-${segment.blocks[0].id}`}
                 blocks={segment.blocks}
                 onOpenFile={onOpenFile}
+                onCompleteToolCall={onCompleteToolCall}
+                onCancelToolCall={onCancelToolCall}
                 onPromoteMcpToolApproval={onPromoteMcpToolApproval}
               />
             );
@@ -304,6 +308,8 @@ export function MessageBubble({
                   key={block.id}
                   toolCall={block}
                   onOpenFile={onOpenFile}
+                  onCompleteToolCall={onCompleteToolCall}
+                  onCancelToolCall={onCancelToolCall}
                   onPromoteMcpToolApproval={onPromoteMcpToolApproval}
                 />
               );
@@ -460,6 +466,10 @@ export function MessageBubble({
           );
         })()}
 
+      {message.memoryDisclosure && (
+        <MemoryDisclosure disclosure={message.memoryDisclosure} />
+      )}
+
       {/* API request inspector */}
       {message.apiRequest && (
         <ApiRequestBlock
@@ -490,6 +500,60 @@ export function MessageBubble({
         />
       )}
     </div>
+  );
+}
+
+function MemoryDisclosure({
+  disclosure,
+}: {
+  disclosure: NonNullable<ChatMessage["memoryDisclosure"]>;
+}) {
+  const summaryLabel =
+    disclosure.summaryCount === 1
+      ? "1 memory summary"
+      : `${disclosure.summaryCount} memory summaries`;
+  const excerptLabel =
+    disclosure.transcriptExcerptCount === 0
+      ? null
+      : disclosure.transcriptExcerptCount === 1
+        ? "1 transcript excerpt"
+        : `${disclosure.transcriptExcerptCount} transcript excerpts`;
+  const label = excerptLabel
+    ? `Memory used · ${summaryLabel}, ${excerptLabel}`
+    : `Memory used · ${summaryLabel}`;
+
+  return (
+    <details class="memory-disclosure-block">
+      <summary class="memory-disclosure-header">
+        <i class="codicon codicon-history" />
+        <span>{label}</span>
+      </summary>
+      <div class="memory-disclosure-content">
+        <div class="memory-disclosure-note">
+          Local conversation memory was injected as background recall, not as
+          durable instructions.
+        </div>
+        {disclosure.sources.length > 0 && (
+          <ul class="memory-disclosure-sources">
+            {disclosure.sources.map((source) => (
+              <li key={`${source.kind}:${source.label}`}>
+                <span class="memory-disclosure-source-kind">
+                  {source.kind === "transcript" ? "Transcript" : "Summary"}
+                </span>
+                <span class="memory-disclosure-source-title">
+                  {source.title || source.label}
+                </span>
+                {typeof source.score === "number" && (
+                  <span class="memory-disclosure-source-score">
+                    {Math.round(source.score * 100)}%
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -546,6 +610,7 @@ function FinalMarkerActions({
             onOpenFile={onOpenFile}
             onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
           />
+          <CopyButton text={marker.summary} />
         </div>
       )}
       {marker.autoContinueStopReason && (
@@ -799,35 +864,9 @@ function UserText({
   text: string;
   onOpenFile?: (path: string, line?: number) => void;
 }) {
-  if (!onOpenFile) return <>{text}</>;
-
-  const parts: ComponentChild[] = [];
-  let lastIndex = 0;
-
-  for (const match of matchFilePaths(text)) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
-    parts.push(
-      <a
-        key={match.index}
-        class="file-path-link"
-        href="#"
-        title={`Open ${match.filePath}${match.line !== undefined ? `:${match.line}` : ""}`}
-        onClick={(e: MouseEvent) => {
-          e.preventDefault();
-          onOpenFile(match.filePath, match.line);
-        }}
-      >
-        {match.fullMatch}
-      </a>,
-    );
-    lastIndex = match.index + match.fullMatch.length;
-  }
-
-  if (parts.length === 0) return <>{text}</>;
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return <>{parts}</>;
+  return (
+    <StreamingText text={text} streaming={false} onOpenFile={onOpenFile} />
+  );
 }
 
 function TextBlock({

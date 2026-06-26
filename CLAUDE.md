@@ -43,6 +43,24 @@ When adding a new tool or changing tool parameters:
 3. Update `README.md` — add a full tool section with parameter table and response details
 4. Run `npm run release -- --install` to rebuild, reinstall, and re-inject the CLAUDE.md instructions. (Not when developing the agent, though)
 
+## Project Structure Boundaries
+
+- `src/core/**` is for portable, surface-neutral runtime contracts and logic only. Do not put VS Code, browser gateway, webview, CLI, or product-surface-specific names/behavior there.
+- Surface-specific composition belongs in the owning surface package: VS Code in `src/agent`/`src/integrations`/extension composition, browser gateway in `src/browser-gateway`, webview UI in the relevant `webview` package.
+- If a concept may later be packaged as reusable core, name it generically (`sessionProtocol`, `modelAuth`, `capabilityPolicy`) and keep host-specific labels such as “Ask Agent tab” or browser routing in the surface layer.
+
+## File Naming Conventions
+
+- Match existing local conventions before creating new files.
+- Use `PascalCase.ts` / `PascalCase.tsx` for modules whose primary export is a class, React component, provider, manager, or named UI/type object.
+  - Examples: `AgentSession.ts`, `BrowserGatewayService.ts`, `Composer.tsx`.
+- Use `camelCase.ts` for utility modules, functions, registries, policies, feature logic, and non-component shared code.
+  - Examples: `randomId.ts`, `applyDiff.ts`, `questionDetection.ts`.
+- Test files should mirror the subject file exactly and append `.test`, e.g. `AgentSession.test.ts`, `randomId.test.ts`.
+- Use lowercase/kebab-case for docs, plans, scripts, CSS/assets, generated/conventional files, and externally named directories.
+- Avoid case-only renames. On macOS/default Git settings, perform renames through an intermediate filename if casing must change.
+- Import paths must match the on-disk casing exactly.
+
 ## Browser Remote Gateway
 
 AgentLink ships a browser-based remote control surface for the built-in agent. A shared helper process serves the browser UI on a stable port (`agentlink.browserGatewayPort`) and routes to per-VS-Code-window API/SSE bridge servers by instance ID, so one URL can switch between all open windows. Full architecture snapshot: [plans/browser-remote-session-status-handoff.md](plans/browser-remote-session-status-handoff.md).
@@ -61,3 +79,7 @@ When touching these areas, keep the browser in sync:
 The browser webview (`src/browser-gateway/webview/`) has its own tsconfig and is **excluded from the root `tsc` program** — lint type-checks each webview tsconfig separately. Don't re-add it to root `tsconfig.json`.
 
 If a new feature genuinely cannot work over the browser gateway (e.g. requires a VS Code-only API with no snapshot equivalent), gate it explicitly rather than silently regressing the browser surface.
+
+## Browser/Webview ID Generation
+
+Browser gateway pages may run over LAN HTTP, where `crypto.randomUUID()` is unavailable because the page is an insecure browser context. In browser/webview code, use `randomId()` from `src/shared/randomId.ts` instead of calling `crypto.randomUUID()` directly. This matters for Ask Agent/browser gateway flows because failures can happen before request/logging paths and look like the UI silently does nothing.

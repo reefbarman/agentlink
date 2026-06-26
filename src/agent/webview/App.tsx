@@ -12,6 +12,10 @@ import type {
   ReasoningEffort,
   SessionSummary,
 } from "./types";
+import type {
+  McpConfigSnapshot,
+  McpManagerScope,
+} from "../../shared/mcpManagerTypes";
 import {
   agentMessagesToChatMessages,
   initialState,
@@ -43,6 +47,7 @@ import { DebugInfo } from "./components/DebugInfo";
 import { ElicitationModal } from "./components/ElicitationModal";
 import { InputArea } from "./components/InputArea";
 import { McpCard } from "../../approvals/webview/components/McpCard";
+import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import { MemoryCard } from "../../approvals/webview/components/MemoryCard";
 import { ModeSwitchCard } from "../../approvals/webview/components/ModeSwitchCard";
@@ -182,18 +187,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   );
   const [shiftDragOver, setShiftDragOver] = useState(false);
   const dragCounterRef = useRef(0);
-  const [mcpStatusInfos, setMcpStatusInfos] = useState<Array<{
-    name: string;
-    status: string;
-    error?: string;
-    toolCount: number;
-    resourceCount: number;
-    promptCount: number;
-    tools: Array<{ name: string; description?: string }>;
-  }> | null>(null);
-  const [expandedMcpServers, setExpandedMcpServers] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const [mcpManagerSnapshot, setMcpManagerSnapshot] =
+    useState<McpConfigSnapshot | null>(null);
+  const [mcpManagerView, setMcpManagerView] = useState<
+    "status" | "config" | "add" | "edit"
+  >("status");
   const [elicitation, setElicitation] = useState<{
     id: string;
     serverName: string;
@@ -523,53 +521,41 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             (q) => q.source !== "browser",
           );
           if (queue.length > 0) {
-            // Display text for the chat UI (shows slash command names and media indicators)
-            const displayCombined = queue.map((q) => q.text).join("\n\n");
-            // Full text for the agent (expanded slash command bodies)
-            const sendCombined = queue
-              .map((q) => q.fullText ?? q.text)
-              .join("\n\n");
-            const attachmentsCombined = queue.flatMap(
-              (q) => q.attachments ?? [],
-            );
-            const imagesCombined = queue.flatMap((q) => q.images ?? []);
-            const documentsCombined = queue.flatMap((q) => q.documents ?? []);
-            const displayMediaCombined = mediaToDisplayMedia(
-              imagesCombined,
-              documentsCombined,
-            );
             messageQueueRef.current = messageQueueRef.current.filter(
               (q) => q.source === "browser",
             );
             for (const item of queue) {
               dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
             }
-            const isSlashCombined =
-              queue.length === 1 ? queue[0]?.isSlashCommand === true : false;
-            const slashCommandLabelCombined =
-              queue.length === 1 ? queue[0]?.slashCommandLabel : undefined;
             setTimeout(() => {
               streamingRef.current = true;
-              dispatch({
-                type: "ADD_USER_MESSAGE",
-                text: displayCombined,
-                isSlashCommand: isSlashCombined,
-                slashCommandLabel: slashCommandLabelCombined,
-                displayMedia: displayMediaCombined,
-              });
+              for (const item of queue) {
+                dispatch({
+                  type: "ADD_USER_MESSAGE",
+                  text: item.text,
+                  isSlashCommand: item.isSlashCommand === true,
+                  slashCommandLabel: item.slashCommandLabel,
+                  displayMedia: item.displayMedia,
+                });
+              }
               vscodeApi.postMessage({
                 command: "agentSend",
-                text: sendCombined,
-                displayText: displayCombined,
-                isSlashCommand: isSlashCombined,
-                slashCommandLabel: slashCommandLabelCombined,
-                attachments:
-                  attachmentsCombined.length > 0
-                    ? attachmentsCombined
-                    : undefined,
-                images: imagesCombined.length > 0 ? imagesCombined : undefined,
-                documents:
-                  documentsCombined.length > 0 ? documentsCombined : undefined,
+                text: queue[0]?.fullText ?? queue[0]?.text ?? "",
+                displayText: queue[0]?.text,
+                isSlashCommand: queue[0]?.isSlashCommand === true,
+                slashCommandLabel: queue[0]?.slashCommandLabel,
+                attachments: queue[0]?.attachments,
+                images: queue[0]?.images,
+                documents: queue[0]?.documents,
+                messages: queue.map((item) => ({
+                  text: item.fullText ?? item.text,
+                  displayText: item.text,
+                  isSlashCommand: item.isSlashCommand === true,
+                  slashCommandLabel: item.slashCommandLabel,
+                  attachments: item.attachments,
+                  images: item.images,
+                  documents: item.documents,
+                })),
                 sessionId: stateRef.current.sessionId,
                 mode: stateRef.current.mode,
                 reasoningEffort: reasoningEffortRef.current,
@@ -634,12 +620,15 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           );
           break;
         case "agentMcpStatus":
-          if (msg.open) {
-            // /mcp command — always open the panel
-            setMcpStatusInfos(msg.infos);
-          } else {
-            // live update from onStatusChange — only refresh if already open
-            setMcpStatusInfos((prev) => (prev !== null ? msg.infos : prev));
+          if (msg.configSnapshot) {
+            if (msg.open) {
+              setMcpManagerSnapshot(msg.configSnapshot);
+              setMcpManagerView(msg.view ?? "status");
+            } else {
+              setMcpManagerSnapshot((prev) =>
+                prev !== null ? msg.configSnapshot! : prev,
+              );
+            }
           }
           break;
         case "showApproval":
@@ -1330,20 +1319,6 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           displayMedia,
           source: "vscode",
         });
-        // Notify extension about this queued item so it can inject it ASAP
-        // between tool batches. Only the first pending item will be used.
-        vscodeApi.postMessage({
-          command: "agentQueueMessage",
-          text: fullText,
-          displayText: displayWithMedia,
-          isSlashCommand,
-          slashCommandLabel,
-          queueId,
-          sessionId: stateRef.current.sessionId,
-          attachments: attachments.length > 0 ? attachments : undefined,
-          images: images.length > 0 ? images : undefined,
-          documents: documents.length > 0 ? documents : undefined,
-        });
         return;
       }
 
@@ -1924,6 +1899,20 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
+  const handleCompleteToolCall = useCallback(
+    (id: string) => {
+      vscodeApi.postMessage({ command: "completeToolCall", id });
+    },
+    [vscodeApi],
+  );
+
+  const handleCancelToolCall = useCallback(
+    (id: string) => {
+      vscodeApi.postMessage({ command: "cancelToolCall", id });
+    },
+    [vscodeApi],
+  );
+
   const handlePromoteMcpToolApproval = useCallback(
     (promotion: {
       serverName: string;
@@ -2258,6 +2247,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
           onDismissDetectedQuestion={handleDismissDetectedQuestion}
           onOpenFile={handleOpenFile}
+          onCompleteToolCall={handleCompleteToolCall}
+          onCancelToolCall={handleCancelToolCall}
           onPromoteMcpToolApproval={handlePromoteMcpToolApproval}
           onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
           onRevertCheckpoint={handleRevertCheckpoint}
@@ -2334,6 +2325,32 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                   </span>
                 )}
                 <div class="queue-item-actions">
+                  <button
+                    class="icon-button queue-item-steer"
+                    title="Steer now"
+                    onClick={() => {
+                      const nextQueue = messageQueueRef.current.filter(
+                        (q) => q.id !== item.id,
+                      );
+                      messageQueueRef.current = nextQueue;
+                      dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
+                      vscodeApi.postMessage({
+                        command: "agentSteerQueuedMessage",
+                        sessionId: stateRef.current.sessionId,
+                        queueId: item.id,
+                        text: item.fullText ?? item.text,
+                        displayText: item.text,
+                        isSlashCommand: item.isSlashCommand === true,
+                        slashCommandLabel: item.slashCommandLabel,
+                        attachments: item.attachments,
+                        images: item.images,
+                        documents: item.documents,
+                        source: item.source,
+                      });
+                    }}
+                  >
+                    <i class="codicon codicon-compass-active" />
+                  </button>
                   {editingQueueId !== item.id && (
                     <button
                       class="icon-button queue-item-edit"
@@ -2350,33 +2367,17 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                     class="icon-button queue-item-remove"
                     title="Remove"
                     onClick={() => {
-                      dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-                      const wasHead =
-                        messageQueueRef.current[0]?.id === item.id;
                       const nextQueue = messageQueueRef.current.filter(
                         (q) => q.id !== item.id,
                       );
                       messageQueueRef.current = nextQueue;
-                      if (wasHead) {
+                      dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
+                      if (item.source === "browser") {
                         vscodeApi.postMessage({
                           command: "agentRemoveQueuedMessage",
                           sessionId: stateRef.current.sessionId,
                           queueId: item.id,
                         });
-                        const nextHead = nextQueue[0];
-                        if (nextHead) {
-                          vscodeApi.postMessage({
-                            command: "agentQueueMessage",
-                            text: nextHead.fullText ?? nextHead.text,
-                            displayText: nextHead.text,
-                            isSlashCommand: nextHead.isSlashCommand === true,
-                            queueId: nextHead.id,
-                            sessionId: stateRef.current.sessionId,
-                            attachments: nextHead.attachments,
-                            images: nextHead.images,
-                            documents: nextHead.documents,
-                          });
-                        }
                       }
                     }}
                   >
@@ -2422,153 +2423,48 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               />
             );
           })()}
-        {mcpStatusInfos && (
-          <div class="mcp-status-panel">
-            <div class="mcp-status-header">
-              <i class="codicon codicon-server" />
-              <span>MCP Servers</span>
-              <button
-                class="mcp-status-close icon-button"
-                onClick={() => setMcpStatusInfos(null)}
-                title="Dismiss"
-              >
-                <i class="codicon codicon-close" />
-              </button>
-            </div>
-            {mcpStatusInfos.length === 0 ? (
-              <p class="mcp-status-empty">No MCP servers configured.</p>
-            ) : (
-              <ul class="mcp-status-list">
-                {mcpStatusInfos.map((info) => (
-                  <li
-                    key={info.name}
-                    class={`mcp-status-item mcp-status-${info.status}`}
-                  >
-                    <div class="mcp-status-row">
-                      <button
-                        class="mcp-status-expand icon-button"
-                        disabled={
-                          info.tools.length === 0 &&
-                          !expandedMcpServers.has(info.name)
-                        }
-                        aria-expanded={expandedMcpServers.has(info.name)}
-                        title={
-                          info.tools.length === 0 &&
-                          !expandedMcpServers.has(info.name)
-                            ? "No tools available"
-                            : expandedMcpServers.has(info.name)
-                              ? "Hide tools"
-                              : "Show tools"
-                        }
-                        onClick={() => {
-                          setExpandedMcpServers((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(info.name)) {
-                              next.delete(info.name);
-                            } else {
-                              next.add(info.name);
-                            }
-                            return next;
-                          });
-                        }}
-                      >
-                        <i
-                          class={`codicon codicon-chevron-${expandedMcpServers.has(info.name) ? "down" : "right"}`}
-                        />
-                      </button>
-                      <i
-                        class={`codicon ${
-                          info.status === "connected"
-                            ? "codicon-check"
-                            : info.status === "connecting"
-                              ? "codicon-loading codicon-modifier-spin"
-                              : "codicon-error"
-                        }`}
-                      />
-                      <span class="mcp-status-name">{info.name}</span>
-                      <span class="mcp-status-detail">
-                        {info.status === "connected"
-                          ? [
-                              `${info.toolCount} tool${info.toolCount !== 1 ? "s" : ""}`,
-                              info.resourceCount > 0 &&
-                                `${info.resourceCount} resource${info.resourceCount !== 1 ? "s" : ""}`,
-                              info.promptCount > 0 &&
-                                `${info.promptCount} prompt${info.promptCount !== 1 ? "s" : ""}`,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ")
-                          : (info.error ?? info.status)}
-                      </span>
-                      <span class="mcp-status-actions">
-                        {info.status !== "connecting" && (
-                          <button
-                            class="icon-button"
-                            title="Reconnect"
-                            onClick={() =>
-                              vscodeApi.postMessage({
-                                command: "agentMcpAction",
-                                serverName: info.name,
-                                action: "reconnect",
-                              })
-                            }
-                          >
-                            <i class="codicon codicon-refresh" />
-                          </button>
-                        )}
-                        <button
-                          class="icon-button"
-                          title="Reauthenticate"
-                          onClick={() =>
-                            vscodeApi.postMessage({
-                              command: "agentMcpAction",
-                              serverName: info.name,
-                              action: "reauthenticate",
-                            })
-                          }
-                        >
-                          <i class="codicon codicon-key" />
-                        </button>
-                        <button
-                          class="icon-button mcp-action-disable"
-                          title="Disable"
-                          onClick={() =>
-                            vscodeApi.postMessage({
-                              command: "agentMcpAction",
-                              serverName: info.name,
-                              action: "disable",
-                            })
-                          }
-                        >
-                          <i class="codicon codicon-circle-slash" />
-                        </button>
-                      </span>
-                    </div>
-                    {expandedMcpServers.has(info.name) && (
-                      <ul class="mcp-tool-list">
-                        {info.tools.length === 0 ? (
-                          <li class="mcp-tool-empty">No tools available.</li>
-                        ) : (
-                          info.tools.map((tool) => (
-                            <li key={tool.name} class="mcp-tool-item">
-                              <span class="mcp-tool-name">{tool.name}</span>
-                              {tool.description && (
-                                <span
-                                  class="mcp-tool-description"
-                                  title={tool.description}
-                                >
-                                  {tool.description}
-                                </span>
-                              )}
-                            </li>
-                          ))
-                        )}
-                      </ul>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+        {mcpManagerSnapshot && (
+          <McpManagerPanel
+            snapshot={mcpManagerSnapshot}
+            initialView={mcpManagerView}
+            onClose={() => setMcpManagerSnapshot(null)}
+            onRefresh={() =>
+              vscodeApi.postMessage({
+                command: "agentSlashCommand",
+                name: "mcp-refresh",
+              })
+            }
+            onServerAction={(serverName, action) =>
+              vscodeApi.postMessage({
+                command: "agentMcpAction",
+                serverName,
+                action,
+              })
+            }
+            onOpenRawConfig={(scope: McpManagerScope) =>
+              vscodeApi.postMessage({
+                command: "agentMcpConfigOpenRaw",
+                profile: mcpManagerSnapshot.profile,
+                scope,
+              })
+            }
+            onSaveServer={(scope, server) =>
+              vscodeApi.postMessage({
+                command: "agentMcpConfigSave",
+                profile: mcpManagerSnapshot.profile,
+                scope,
+                server,
+              })
+            }
+            onRemoveServer={(scope, serverName) =>
+              vscodeApi.postMessage({
+                command: "agentMcpConfigRemove",
+                profile: mcpManagerSnapshot.profile,
+                scope,
+                serverName,
+              })
+            }
+          />
         )}
         {state.todos.length > 0 && <TodoPanel todos={state.todos} />}
         {state.questionRequest && (

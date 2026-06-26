@@ -11,6 +11,12 @@ import type {
 } from "../../agent/webview/types";
 
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
+import type {
+  McpConfigSnapshot,
+  McpManagerScope,
+  McpManagerServerDraft,
+  McpManagerView,
+} from "../../shared/mcpManagerTypes";
 import type { DetectedQuestion } from "../../shared/questionDetection";
 import {
   useCallback,
@@ -56,8 +62,10 @@ import {
   AUTO_CONTINUE_NO_PROGRESS_REASON,
   turnMadeProgress,
 } from "../../shared/autoContinueProgress";
+import { randomId } from "../../shared/randomId";
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
+import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 
 import type {
   BgSessionInfo,
@@ -65,6 +73,10 @@ import type {
   RevertRecoveryNotice,
 } from "../../shared/types";
 import type { BrowserGatewayInstanceStatusSummary } from "../protocol";
+import {
+  BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+  BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE,
+} from "../askAgentTabs";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
@@ -139,6 +151,74 @@ const DEFAULT_BROWSER_MODES: ModeInfo[] = [
   { slug: "review", name: "Review", icon: "symbol-misc" },
 ];
 
+type AskAgentCapabilityStatus = {
+  capabilityId: string;
+  state: string;
+  reason?: string;
+};
+
+type AskAgentModelCatalogStatus = {
+  source: "cached" | "fallback" | "unknown";
+  publishedByOwnerId?: string;
+  publishedAt?: number;
+  modelCount: number;
+};
+
+type AskAgentStatusNotice = {
+  kind: "info" | "warning";
+  title: string;
+  message: string;
+};
+
+type AskAgentDerivedMemoryStatus = {
+  sessionSummaryCount: number;
+  chunkSummaryCount: number;
+  totalSummaryCount: number;
+  lastUpdatedAt: number | null;
+  recentSessions: Array<{
+    sessionId: string;
+    title: string;
+    messageCount: number;
+    updatedAt: number;
+  }>;
+};
+
+type AskAgentMemoryCandidateNudge = {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  kind: "preference" | "correction" | "gotcha" | "workflow";
+  matchedPhrase: string;
+  suggestedScope: "global";
+  suggestedTier: "memory";
+  title: string;
+  rationale: string;
+  content: string;
+};
+
+type AskAgentMemoryClearConfirmation = "idle" | "confirming";
+
+type AskAgentProjectHandoff = {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  targetInstanceId: string;
+  targetWorkspaceName: string;
+  targetWorkspacePath: string;
+  mode: string;
+  instruction: string;
+  status: "pending" | "launching" | "completed" | "cancelled" | "failed";
+  error?: string;
+};
+
+type AskAgentReadGrant = {
+  id: string;
+  createdAt: number;
+  rootPath: string;
+  label: string;
+  kind: "file" | "directory";
+};
+
 type BrowserGatewayInstanceOption = {
   instanceId: string;
   workspaceName: string;
@@ -147,6 +227,22 @@ type BrowserGatewayInstanceOption = {
   status?: BrowserGatewayInstanceStatusSummary;
   lastSeenAt: number;
   disconnectedAt?: number;
+};
+
+type AskAgentSessionResponse = {
+  ok: true;
+  ownerRegistration?: {
+    capabilities?: AskAgentCapabilityStatus[];
+  };
+  session?: {
+    capabilities?: AskAgentCapabilityStatus[];
+  };
+  snapshot: GatewaySnapshot;
+};
+
+type GatewaySnapshotReadResult = {
+  snapshot: GatewaySnapshot;
+  askAgentCapabilities?: AskAgentCapabilityStatus[];
 };
 
 type GatewaySnapshot = {
@@ -167,6 +263,9 @@ type GatewaySnapshot = {
     } | null;
     urlElicitation: McpUrlElicitationRequest | null;
     recentEvents: Array<{ type: string }>;
+    memoryCandidateNudge?: AskAgentMemoryCandidateNudge | null;
+    projectHandoff?: AskAgentProjectHandoff | null;
+    readGrants?: AskAgentReadGrant[];
     mcpStatusInfos: Array<{
       name: string;
       status: string;
@@ -258,6 +357,55 @@ type GatewaySnapshot = {
   theme: BrowserGatewayThemeSnapshot;
   modelsVersion?: number;
 };
+
+async function readGatewaySnapshotResponse(
+  response: Response,
+): Promise<GatewaySnapshotReadResult> {
+  const data = (await response.json()) as
+    | GatewaySnapshot
+    | AskAgentSessionResponse;
+  if (data && typeof data === "object" && "snapshot" in data && data.snapshot) {
+    return {
+      snapshot: data.snapshot,
+      askAgentCapabilities:
+        data.session?.capabilities ?? data.ownerRegistration?.capabilities,
+    };
+  }
+  return { snapshot: data as GatewaySnapshot };
+}
+
+function buildAskAgentStatusNotice(params: {
+  isAskAgentSelected: boolean;
+  foreground: GatewaySnapshot["session"]["foreground"] | null;
+  capabilities: AskAgentCapabilityStatus[];
+  modelCatalog: AskAgentModelCatalogStatus | null;
+}): AskAgentStatusNotice | null {
+  if (!params.isAskAgentSelected || !params.foreground) return null;
+
+  const modelAuth = params.capabilities.find(
+    (capability) => capability.capabilityId === "model-auth",
+  );
+  if (modelAuth && modelAuth.state !== "enabled") {
+    return {
+      kind: "warning",
+      title: "Model credentials needed",
+      message:
+        modelAuth.reason ||
+        "Ask Agent needs cached model credentials before it can answer.",
+    };
+  }
+
+  if (params.modelCatalog?.source === "fallback") {
+    return {
+      kind: "info",
+      title: "Model list may be stale",
+      message:
+        "Ask Agent is using the fallback model list until a VS Code AgentLink window publishes the current catalog.",
+    };
+  }
+
+  return null;
+}
 
 function UrlElicitationPanel({
   request,
@@ -442,10 +590,114 @@ function applyRuntimeTheme(
   return nextKeys;
 }
 
+function formatTranscriptTimestamp(timestamp: number): string {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "unknown time";
+  return new Date(timestamp).toISOString();
+}
+
+function messageTextForExport(message: ChatMessage): string {
+  if (message.content.trim()) return message.content.trim();
+  return message.blocks
+    .map((block) => {
+      if (block.type === "text" || block.type === "thinking") {
+        return block.text;
+      }
+      if (block.type === "tool_call") {
+        return [`[Tool: ${block.name}]`, block.result]
+          .filter(Boolean)
+          .join("\n");
+      }
+      if (block.type === "skill_load") {
+        return [
+          `[Skill: ${block.skillName ?? block.path ?? "unknown"}]`,
+          block.result,
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
+      if (block.type === "question_answer") {
+        return block.items
+          .map((item) => `Q: ${item.question}\nA: ${String(item.answer ?? "")}`)
+          .join("\n\n");
+      }
+      if (block.type === "bg_agent_result") {
+        return block.resultText ?? block.summary ?? "";
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+function buildAskAgentTranscriptMarkdown(params: {
+  title: string;
+  model: string;
+  messages: ChatMessage[];
+}): string {
+  const lines = [
+    `# ${params.title || "Ask Agent"}`,
+    "",
+    `- Exported: ${new Date().toISOString()}`,
+    `- Model: ${params.model || "unknown"}`,
+    "",
+  ];
+
+  for (const message of params.messages) {
+    if (message.role === "condense") continue;
+    const role =
+      message.role === "user"
+        ? "User"
+        : message.role === "assistant"
+          ? "Ask Agent"
+          : "Notice";
+    const text = messageTextForExport(message);
+    const errorText = message.error?.message.trim() ?? "";
+    if (!text && !errorText) continue;
+    lines.push(`## ${role} — ${formatTranscriptTimestamp(message.timestamp)}`);
+    if (message.slashCommandLabel) {
+      lines.push("", `> ${message.slashCommandLabel}`);
+    }
+    if (errorText) {
+      lines.push("", `> Error: ${errorText}`);
+    }
+    if (text && text !== errorText) {
+      lines.push("", text, "");
+    } else {
+      lines.push("");
+    }
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function downloadTextFile(filename: string, text: string): void {
+  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function safeTranscriptFilename(title: string): string {
+  const base = (title || "ask-agent")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  const stamp = new Date().toISOString().slice(0, 10);
+  return `${base || "ask-agent"}-${stamp}.md`;
+}
+
 export function BrowserGatewayApp({
   authToken,
   currentInstanceId,
-  workspaceName,
+  workspaceName: _workspaceName,
   routeByInstance = false,
   initialTheme,
 }: BrowserGatewayAppProps) {
@@ -454,9 +706,12 @@ export function BrowserGatewayApp({
     BrowserGatewayInstanceOption[]
   >([]);
   const instanceOptionsRef = useRef<BrowserGatewayInstanceOption[]>([]);
-  const [selectedInstanceId, setSelectedInstanceId] =
-    useState(currentInstanceId);
-  const selectedInstanceIdRef = useRef(currentInstanceId);
+  const initialSelectedTabId = routeByInstance
+    ? currentInstanceId || BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+    : BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
+  const [selectedTabId, setSelectedTabId] =
+    useState<string>(initialSelectedTabId);
+  const selectedTabIdRef = useRef(initialSelectedTabId);
   const touchTabPointerRef = useRef<{
     instanceId: string;
     pointerId: number;
@@ -464,20 +719,66 @@ export function BrowserGatewayApp({
     y: number;
   } | null>(null);
 
-  function selectInstance(instanceId: string): void {
-    selectedInstanceIdRef.current = instanceId;
-    setSelectedInstanceId(instanceId);
+  const isAskAgentSelected = selectedTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
+  const selectedInstanceId = isAskAgentSelected ? "" : selectedTabId;
+
+  function logAskAgentBrowserEvent(
+    event: string,
+    fields: Record<string, string | number | boolean | null | undefined> = {},
+  ): void {
+    void fetch("/api/ask-agent/log", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ event, fields }),
+    }).catch(() => undefined);
   }
 
-  const buildApiPath = useCallback(
-    (pathname: string): string => {
-      if (!routeByInstance || !selectedInstanceId.trim()) {
+  function selectTab(tabId: string): void {
+    const previousTabId = selectedTabIdRef.current;
+    selectedTabIdRef.current = tabId;
+    setSelectedTabId(tabId);
+    logAskAgentBrowserEvent("tab.select", {
+      previousTabId,
+      nextTabId: tabId,
+      askAgentSelected: tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
+    });
+  }
+
+  const buildApiPathForInstance = useCallback(
+    (pathname: string, instanceId: string): string => {
+      if (!routeByInstance || !instanceId.trim()) {
         return pathname;
       }
       const separator = pathname.includes("?") ? "&" : "?";
-      return `${pathname}${separator}instanceId=${encodeURIComponent(selectedInstanceId)}`;
+      return `${pathname}${separator}instanceId=${encodeURIComponent(instanceId)}`;
     },
-    [routeByInstance, selectedInstanceId],
+    [routeByInstance],
+  );
+  const buildApiPath = useCallback(
+    (pathname: string, instanceId = selectedInstanceId): string =>
+      buildApiPathForInstance(pathname, instanceId),
+    [buildApiPathForInstance, selectedInstanceId],
+  );
+  const buildSnapshotApiPath = useCallback(
+    (
+      instanceId = selectedInstanceId,
+      askAgentSelected = isAskAgentSelected,
+    ): string =>
+      askAgentSelected
+        ? "/api/ask-agent/session"
+        : buildApiPathForInstance("/api/ui-state", instanceId),
+    [buildApiPathForInstance, isAskAgentSelected, selectedInstanceId],
+  );
+  const buildEventsApiPath = useCallback(
+    (instanceId: string): string =>
+      isAskAgentSelected
+        ? "/api/ask-agent/events"
+        : buildApiPathForInstance("/events", instanceId),
+    [buildApiPathForInstance, isAskAgentSelected],
   );
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
   const [sendStatus, setSendStatus] = useState<string>("");
@@ -489,6 +790,11 @@ export function BrowserGatewayApp({
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
   const [modes, setModes] = useState<ModeInfo[]>([]);
   const [models, setModels] = useState<WebviewModelInfo[]>([]);
+  const [askAgentCapabilities, setAskAgentCapabilities] = useState<
+    AskAgentCapabilityStatus[]
+  >([]);
+  const [askAgentModelCatalog, setAskAgentModelCatalog] =
+    useState<AskAgentModelCatalogStatus | null>(null);
   const [mobileLayout, setMobileLayout] = useState(false);
   const [touchInput, setTouchInput] = useState(false);
   const [mobilePane, setMobilePane] = useState<"review" | null>(null);
@@ -497,10 +803,33 @@ export function BrowserGatewayApp({
   const [sessionHistoryError, setSessionHistoryError] = useState<string | null>(
     null,
   );
-  const [showMcpStatus, setShowMcpStatus] = useState(false);
-  const [expandedMcpServers, setExpandedMcpServers] = useState<Set<string>>(
-    () => new Set(),
+  const [showAskAgentMemory, setShowAskAgentMemory] = useState(false);
+  const [askAgentMemory, setAskAgentMemory] =
+    useState<AskAgentDerivedMemoryStatus | null>(null);
+  const [askAgentMemoryError, setAskAgentMemoryError] = useState<string | null>(
+    null,
   );
+  const [askAgentMemoryPending, setAskAgentMemoryPending] = useState(false);
+  const [askAgentMemoryClearConfirmation, setAskAgentMemoryClearConfirmation] =
+    useState<AskAgentMemoryClearConfirmation>("idle");
+  const [showAskAgentHandoff, setShowAskAgentHandoff] = useState(false);
+  const [showAskAgentReadGrants, setShowAskAgentReadGrants] = useState(false);
+  const [askAgentReadGrantPath, setAskAgentReadGrantPath] = useState("");
+  const [askAgentReadGrantPending, setAskAgentReadGrantPending] =
+    useState(false);
+  const [askAgentHandoffTargetId, setAskAgentHandoffTargetId] = useState("");
+  const [askAgentHandoffMode, setAskAgentHandoffMode] = useState("code");
+  const [askAgentHandoffInstruction, setAskAgentHandoffInstruction] =
+    useState("");
+  const [askAgentHandoffPending, setAskAgentHandoffPending] = useState(false);
+  const [showMcpStatus, setShowMcpStatus] = useState(false);
+  const [mcpManagerSnapshot, setMcpManagerSnapshot] =
+    useState<McpConfigSnapshot | null>(null);
+  const [mcpManagerView, setMcpManagerView] =
+    useState<McpManagerView>("status");
+  const [askAgentMcpStatusError, setAskAgentMcpStatusError] = useState<
+    string | null
+  >(null);
   const [transcriptView, setTranscriptView] = useState<{
     sessionId: string;
     task: string;
@@ -604,7 +933,12 @@ export function BrowserGatewayApp({
 
     const fetchFallbackSnapshot = async () => {
       try {
-        const response = await fetch(buildApiPath("/api/ui-state"));
+        const response = await fetch(buildSnapshotApiPath(), {
+          credentials: "same-origin",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        });
         if (!response.ok) {
           if (!closed) {
             setStatus(
@@ -613,9 +947,12 @@ export function BrowserGatewayApp({
           }
           return;
         }
-        const data = (await response.json()) as GatewaySnapshot;
+        const data = await readGatewaySnapshotResponse(response);
         if (!closed) {
-          setSnapshot(data);
+          setSnapshot(data.snapshot);
+          if (data.askAgentCapabilities) {
+            setAskAgentCapabilities(data.askAgentCapabilities);
+          }
           setStatus("Connected (fallback polling)");
         }
       } catch (err) {
@@ -635,8 +972,8 @@ export function BrowserGatewayApp({
       }, 2_000);
     };
 
-    const startRealtimeStream = () => {
-      eventSource = new EventSource(buildApiPath("/events"));
+    const startRealtimeStream = (instanceId: string) => {
+      eventSource = new EventSource(buildEventsApiPath(instanceId));
       eventSource.onopen = () => {
         stopFallbackSnapshotPolling();
         setStatus("Connected");
@@ -668,21 +1005,38 @@ export function BrowserGatewayApp({
         void fetchInstances();
       }, 5_000);
 
-      if (routeByInstance && !resolvedInstanceId) {
+      const selectedInstanceForStream =
+        resolvedInstanceId ?? selectedInstanceId;
+      const askAgentForStream =
+        selectedInstanceForStream === BROWSER_GATEWAY_ASK_AGENT_TAB_ID ||
+        isAskAgentSelected;
+      if (
+        routeByInstance &&
+        !askAgentForStream &&
+        !resolvedInstanceId &&
+        selectedInstanceForStream
+      ) {
         setStatus("Waiting for active VS Code session…");
         return;
       }
-      if (routeByInstance && resolvedInstanceId !== selectedInstanceId) {
+      if (
+        routeByInstance &&
+        !askAgentForStream &&
+        selectedInstanceForStream &&
+        resolvedInstanceId !== selectedInstanceForStream
+      ) {
         return;
       }
 
-      void fetchSnapshot();
-      void fetchSlashCommands();
-      void fetchModes();
-      void fetchModels();
-      void fetchSessions();
-      void fetchDebugInfo();
-      startRealtimeStream();
+      void fetchSnapshot(selectedInstanceForStream, askAgentForStream);
+      void fetchModes(selectedInstanceForStream);
+      void fetchModels(selectedInstanceForStream, askAgentForStream);
+      void fetchSlashCommands(selectedInstanceForStream, askAgentForStream);
+      if (!askAgentForStream) {
+        void fetchSessions(selectedInstanceForStream, askAgentForStream);
+        void fetchDebugInfo(selectedInstanceForStream);
+      }
+      startRealtimeStream(selectedInstanceForStream);
     })();
 
     return () => {
@@ -695,7 +1049,13 @@ export function BrowserGatewayApp({
       eventSource?.removeEventListener("update", applySnapshotEvent);
       eventSource?.close();
     };
-  }, [selectedInstanceId, routeByInstance]);
+  }, [
+    buildEventsApiPath,
+    buildSnapshotApiPath,
+    isAskAgentSelected,
+    selectedTabId,
+    routeByInstance,
+  ]);
 
   // Re-fetch the model list when the gateway signals a model-metadata change
   // (e.g. Anthropic dynamic capability refresh). Keeps browser models in parity
@@ -792,6 +1152,27 @@ export function BrowserGatewayApp({
       (instance) => instance.status?.kind === "awaiting_approval",
     ),
   );
+  const askAgentMemoryCandidateNudge =
+    isAskAgentSelected && !visibleApproval
+      ? (snapshot?.ui.memoryCandidateNudge ?? null)
+      : null;
+  const askAgentProjectHandoff =
+    isAskAgentSelected && !visibleApproval
+      ? (snapshot?.ui.projectHandoff ?? null)
+      : null;
+  const askAgentReadGrants =
+    isAskAgentSelected && !visibleApproval
+      ? (snapshot?.ui.readGrants ?? [])
+      : [];
+  const askAgentHandoffTargets = instanceOptions.filter(
+    (instance) => instance.disconnectedAt === undefined,
+  );
+  const askAgentStatusNotice = buildAskAgentStatusNotice({
+    isAskAgentSelected,
+    foreground,
+    capabilities: askAgentCapabilities,
+    modelCatalog: askAgentModelCatalog,
+  });
   const snapshotQuestionProgress = snapshot?.ui.questionProgress ?? null;
   const remoteQuestionProgress =
     snapshotQuestionProgress &&
@@ -1003,28 +1384,59 @@ export function BrowserGatewayApp({
     instances: BrowserGatewayInstanceOption[],
     currentServerInstanceId: string,
   ): string {
-    const currentSelectedInstanceId = selectedInstanceIdRef.current;
-    if (
-      currentSelectedInstanceId.trim() &&
-      instances.some(
-        (instance) => instance.instanceId === currentSelectedInstanceId,
-      )
-    ) {
-      return currentSelectedInstanceId;
+    const currentSelectedTabId = selectedTabIdRef.current;
+    if (currentSelectedTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID) {
+      return BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
     }
-
     const liveInstances = instances.filter(
       (instance) => instance.disconnectedAt === undefined,
     );
+    const liveCurrentServerInstance = liveInstances.find(
+      (instance) => instance.instanceId === currentServerInstanceId,
+    );
+    if (currentSelectedTabId.trim()) {
+      const currentSelectedInstance = instances.find(
+        (instance) => instance.instanceId === currentSelectedTabId,
+      );
+      if (
+        currentSelectedInstance &&
+        liveInstances.some(
+          (instance) =>
+            instance.instanceId === currentSelectedInstance.instanceId,
+        )
+      ) {
+        return currentSelectedTabId;
+      }
+      if (currentSelectedInstance) {
+        const liveReplacement = liveInstances.find(
+          (instance) =>
+            instance.workspacePath === currentSelectedInstance.workspacePath ||
+            instance.workspaceName === currentSelectedInstance.workspaceName,
+        );
+        if (liveReplacement) {
+          return liveReplacement.instanceId;
+        }
+        if (liveCurrentServerInstance) {
+          return liveCurrentServerInstance.instanceId;
+        }
+        return currentSelectedTabId;
+      }
+      if (liveCurrentServerInstance) {
+        return liveCurrentServerInstance.instanceId;
+      }
+    }
+
     return (
-      currentServerInstanceId ||
+      liveCurrentServerInstance?.instanceId ||
       liveInstances[0]?.instanceId ||
       instances[0]?.instanceId ||
-      ""
+      BROWSER_GATEWAY_ASK_AGENT_TAB_ID
     );
   }
 
-  async function fetchInstances(): Promise<string | null> {
+  async function fetchInstances(
+    options: { commitSelection?: boolean } = {},
+  ): Promise<string | null> {
     try {
       const response = await fetch(buildApiPath("/api/instances"));
       if (!response.ok) {
@@ -1073,30 +1485,49 @@ export function BrowserGatewayApp({
           a.workspaceName.localeCompare(b.workspaceName) ||
           a.instanceId.localeCompare(b.instanceId),
       );
+      const nextSelectedTabId = routeByInstance
+        ? selectPreferredInstanceId(instances, data.currentInstanceId)
+        : BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
+      if (
+        options.commitSelection !== false &&
+        nextSelectedTabId !== selectedTabIdRef.current
+      ) {
+        selectTab(nextSelectedTabId);
+      }
       instanceOptionsRef.current = instances;
       setInstanceOptions(instances);
-      const nextSelectedInstanceId = routeByInstance
-        ? selectPreferredInstanceId(instances, data.currentInstanceId)
-        : data.currentInstanceId || instances[0]?.instanceId || "";
-      if (nextSelectedInstanceId !== selectedInstanceIdRef.current) {
-        selectInstance(nextSelectedInstanceId);
-      }
-      return nextSelectedInstanceId;
+      return nextSelectedTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+        ? null
+        : nextSelectedTabId;
     } catch (err) {
       setStatus(`Instance list error: ${String(err)}`);
       return null;
     }
   }
 
-  async function fetchSnapshot(): Promise<void> {
+  async function fetchSnapshot(
+    instanceId = selectedInstanceId,
+    askAgentSelected = isAskAgentSelected,
+  ): Promise<void> {
     try {
-      const response = await fetch(buildApiPath("/api/ui-state"));
+      const response = await fetch(
+        buildSnapshotApiPath(instanceId, askAgentSelected),
+        {
+          credentials: "same-origin",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        },
+      );
       if (!response.ok) {
         setStatus(`Snapshot failed: ${response.status}`);
         return;
       }
-      const data = (await response.json()) as GatewaySnapshot;
-      setSnapshot(data);
+      const data = await readGatewaySnapshotResponse(response);
+      setSnapshot(data.snapshot);
+      if (data.askAgentCapabilities) {
+        setAskAgentCapabilities(data.askAgentCapabilities);
+      }
     } catch (err) {
       setStatus(`Snapshot error: ${String(err)}`);
     }
@@ -1111,13 +1542,22 @@ export function BrowserGatewayApp({
     setSendStatus(`${prefix}: ${message}`);
   }
 
-  async function fetchSlashCommands(): Promise<void> {
+  async function fetchSlashCommands(
+    instanceId = selectedInstanceId,
+    askAgentSelected = isAskAgentSelected,
+  ): Promise<void> {
     try {
-      const response = await fetch(buildApiPath("/api/slash-commands"), {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
+      const response = await fetch(
+        askAgentSelected
+          ? "/api/ask-agent/slash-commands"
+          : buildApiPathForInstance("/api/slash-commands", instanceId),
+        {
+          credentials: "same-origin",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
         },
-      });
+      );
       if (!response.ok) {
         return;
       }
@@ -1130,9 +1570,9 @@ export function BrowserGatewayApp({
     }
   }
 
-  async function fetchModes(): Promise<void> {
+  async function fetchModes(instanceId = selectedInstanceId): Promise<void> {
     try {
-      const response = await fetch(buildApiPath("/api/modes"), {
+      const response = await fetch(buildApiPath("/api/modes", instanceId), {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
@@ -1150,33 +1590,72 @@ export function BrowserGatewayApp({
     }
   }
 
-  async function fetchModels(): Promise<void> {
+  async function fetchModels(
+    instanceId = selectedInstanceId,
+    askAgentSelected = isAskAgentSelected,
+  ): Promise<void> {
     try {
-      const response = await fetch(buildApiPath("/api/models"), {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
+      const response = await fetch(
+        askAgentSelected
+          ? "/api/ask-agent/models"
+          : buildApiPathForInstance("/api/models", instanceId),
+        {
+          credentials: "same-origin",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
         },
-      });
+      );
       if (!response.ok) {
         setModeStatus(`Model list unavailable (${response.status})`);
         return;
       }
-      const body = (await response.json()) as { models?: WebviewModelInfo[] };
+      const body = (await response.json()) as {
+        models?: WebviewModelInfo[];
+        publishedByOwnerId?: string;
+        publishedAt?: number;
+        source?: "cached" | "fallback";
+      };
+      if (!askAgentSelected) {
+        setAskAgentCapabilities([]);
+        setAskAgentModelCatalog(null);
+      }
       if (Array.isArray(body.models) && body.models.length > 0) {
         setModels(body.models);
+        if (askAgentSelected) {
+          const source =
+            body.source === "cached" || body.source === "fallback"
+              ? body.source
+              : "unknown";
+          setAskAgentModelCatalog({
+            source,
+            publishedByOwnerId: body.publishedByOwnerId,
+            publishedAt: body.publishedAt,
+            modelCount: body.models.length,
+          });
+        }
       }
     } catch {
       setModeStatus("Model list unavailable");
     }
   }
 
-  async function fetchSessions(): Promise<void> {
+  async function fetchSessions(
+    instanceId = selectedInstanceId,
+    askAgentSelected = isAskAgentSelected,
+  ): Promise<void> {
     try {
-      const response = await fetch(buildApiPath("/api/sessions"), {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
+      const response = await fetch(
+        askAgentSelected
+          ? "/api/ask-agent/sessions"
+          : buildApiPathForInstance("/api/sessions", instanceId),
+        {
+          credentials: "same-origin",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
         },
-      });
+      );
       if (!response.ok) {
         return;
       }
@@ -1189,9 +1668,383 @@ export function BrowserGatewayApp({
     }
   }
 
-  async function fetchDebugInfo(): Promise<void> {
+  async function fetchAskAgentMemory(): Promise<void> {
+    if (!isAskAgentSelected) return;
+    setAskAgentMemoryPending(true);
+    setAskAgentMemoryError(null);
     try {
-      await fetch(buildApiPath("/api/debug/refresh"), {
+      const response = await fetch("/api/ask-agent/memory", {
+        credentials: "same-origin",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        memory?: AskAgentDerivedMemoryStatus;
+      };
+      if (!response.ok || !body.ok || !body.memory) {
+        setAskAgentMemoryError(
+          `Memory status unavailable (${body.error ?? response.status}).`,
+        );
+        return;
+      }
+      setAskAgentMemory(body.memory);
+      setAskAgentMemoryClearConfirmation("idle");
+    } catch (err) {
+      setAskAgentMemoryError(`Memory status error: ${String(err)}`);
+    } finally {
+      setAskAgentMemoryPending(false);
+    }
+  }
+
+  async function proposeAskAgentMemoryCandidate(
+    nudge: AskAgentMemoryCandidateNudge,
+  ): Promise<void> {
+    setSendStatus("Preparing memory proposal…");
+    try {
+      const response = await fetch("/api/ask-agent/memory/proposal", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          nudgeId: nudge.id,
+          tier: nudge.suggestedTier,
+          scope: nudge.suggestedScope,
+          operation: "add",
+          title: nudge.title,
+          rationale: nudge.rationale,
+          content: nudge.content,
+        }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok || !body.snapshot) {
+        setSendStatus(
+          `Memory proposal failed: ${body.error ?? response.status}`,
+        );
+        return;
+      }
+      setSnapshot(body.snapshot);
+      setSendStatus("Review the memory proposal before it is saved.");
+      logAskAgentBrowserEvent("memory.nudge.propose", {
+        ok: true,
+        kind: nudge.kind,
+      });
+    } catch (err) {
+      setSendStatus(`Memory proposal error: ${String(err)}`);
+      logAskAgentBrowserEvent("memory.nudge.propose", {
+        ok: false,
+        error: String(err),
+      });
+    }
+  }
+
+  async function dismissAskAgentMemoryCandidate(
+    nudge: AskAgentMemoryCandidateNudge,
+  ): Promise<void> {
+    try {
+      const response = await fetch("/api/ask-agent/memory/nudge/dismiss", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ id: nudge.id }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok || !body.snapshot) {
+        setSendStatus(`Dismiss failed: ${body.error ?? response.status}`);
+        return;
+      }
+      setSnapshot(body.snapshot);
+      logAskAgentBrowserEvent("memory.nudge.dismiss", {
+        ok: true,
+        kind: nudge.kind,
+      });
+    } catch (err) {
+      setSendStatus(`Dismiss error: ${String(err)}`);
+      logAskAgentBrowserEvent("memory.nudge.dismiss", {
+        ok: false,
+        error: String(err),
+      });
+    }
+  }
+
+  async function clearAskAgentMemory(): Promise<void> {
+    setAskAgentMemoryPending(true);
+    setAskAgentMemoryError(null);
+    try {
+      const response = await fetch("/api/ask-agent/memory/clear", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ confirm: true }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        memory?: AskAgentDerivedMemoryStatus;
+      };
+      if (!response.ok || !body.ok || !body.memory) {
+        setAskAgentMemoryError(
+          `Clear memory failed: ${body.error ?? response.status}`,
+        );
+        return;
+      }
+      setAskAgentMemory(body.memory);
+      setAskAgentMemoryClearConfirmation("idle");
+      setSendStatus("Cleared derived Ask Agent memory summaries.");
+      logAskAgentBrowserEvent("memory.clear", {
+        ok: true,
+      });
+    } catch (err) {
+      setAskAgentMemoryError(`Clear memory error: ${String(err)}`);
+      logAskAgentBrowserEvent("memory.clear", {
+        ok: false,
+        error: String(err),
+      });
+    } finally {
+      setAskAgentMemoryPending(false);
+    }
+  }
+
+  async function addAskAgentReadGrant(): Promise<void> {
+    const requestedPath = askAgentReadGrantPath.trim();
+    if (!requestedPath) {
+      setSendStatus(
+        "Enter a local file or directory path before granting read access.",
+      );
+      return;
+    }
+    setAskAgentReadGrantPending(true);
+    setSendStatus("Granting read-only access…");
+    try {
+      const response = await fetch("/api/ask-agent/read-grants", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ path: requestedPath, confirm: true }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok || !body.snapshot) {
+        setSendStatus(`Read grant failed: ${body.error ?? response.status}`);
+        return;
+      }
+      setSnapshot(body.snapshot);
+      setAskAgentReadGrantPath("");
+      setSendStatus("Read-only access granted for Ask Agent.");
+      logAskAgentBrowserEvent("read_grant.add", { ok: true });
+    } catch (err) {
+      setSendStatus(`Read grant error: ${String(err)}`);
+      logAskAgentBrowserEvent("read_grant.add", {
+        ok: false,
+        error: String(err),
+      });
+    } finally {
+      setAskAgentReadGrantPending(false);
+    }
+  }
+
+  async function revokeAskAgentReadGrant(id: string): Promise<void> {
+    setAskAgentReadGrantPending(true);
+    try {
+      const response = await fetch("/api/ask-agent/read-grants/revoke", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ id }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok || !body.snapshot) {
+        setSendStatus(
+          `Read grant revoke failed: ${body.error ?? response.status}`,
+        );
+        return;
+      }
+      setSnapshot(body.snapshot);
+      setSendStatus("Read-only access revoked.");
+      logAskAgentBrowserEvent("read_grant.revoke", { ok: true });
+    } catch (err) {
+      setSendStatus(`Read grant revoke error: ${String(err)}`);
+      logAskAgentBrowserEvent("read_grant.revoke", {
+        ok: false,
+        error: String(err),
+      });
+    } finally {
+      setAskAgentReadGrantPending(false);
+    }
+  }
+
+  async function proposeAskAgentProjectHandoff(): Promise<void> {
+    const targetId =
+      askAgentHandoffTargetId || askAgentHandoffTargets[0]?.instanceId;
+    const instruction = askAgentHandoffInstruction.trim();
+    if (!targetId || !instruction) {
+      setSendStatus(
+        "Choose a VS Code project window and enter an instruction before creating a handoff preview.",
+      );
+      return;
+    }
+    setAskAgentHandoffPending(true);
+    setSendStatus("Preparing project handoff preview…");
+    try {
+      const response = await fetch("/api/ask-agent/project-handoff/propose", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          targetInstanceId: targetId,
+          mode: askAgentHandoffMode,
+          instruction,
+        }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok || !body.snapshot) {
+        setSendStatus(
+          `Project handoff preview failed: ${body.error ?? response.status}`,
+        );
+        return;
+      }
+      setSnapshot(body.snapshot);
+      setShowAskAgentHandoff(false);
+      setSendStatus("Review the project handoff before launching it.");
+      logAskAgentBrowserEvent("project_handoff.propose", {
+        ok: true,
+        targetInstanceId: targetId,
+        instructionChars: instruction.length,
+      });
+    } catch (err) {
+      setSendStatus(`Project handoff preview error: ${String(err)}`);
+      logAskAgentBrowserEvent("project_handoff.propose", {
+        ok: false,
+        error: String(err),
+      });
+    } finally {
+      setAskAgentHandoffPending(false);
+    }
+  }
+
+  async function cancelAskAgentProjectHandoff(id: string): Promise<void> {
+    setAskAgentHandoffPending(true);
+    try {
+      const response = await fetch("/api/ask-agent/project-handoff/cancel", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ id }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok || !body.snapshot) {
+        setSendStatus(
+          `Project handoff cancel failed: ${body.error ?? response.status}`,
+        );
+        return;
+      }
+      setSnapshot(body.snapshot);
+      setSendStatus("Project handoff cancelled.");
+      logAskAgentBrowserEvent("project_handoff.cancel", { ok: true });
+    } catch (err) {
+      setSendStatus(`Project handoff cancel error: ${String(err)}`);
+      logAskAgentBrowserEvent("project_handoff.cancel", {
+        ok: false,
+        error: String(err),
+      });
+    } finally {
+      setAskAgentHandoffPending(false);
+    }
+  }
+
+  async function approveAskAgentProjectHandoff(id: string): Promise<void> {
+    setAskAgentHandoffPending(true);
+    setSendStatus("Launching approved project handoff…");
+    try {
+      const response = await fetch("/api/ask-agent/project-handoff/approve", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ id }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (body.snapshot) {
+        setSnapshot(body.snapshot);
+      }
+      if (!response.ok || !body.ok) {
+        setSendStatus(
+          `Project handoff failed: ${body.message ?? body.error ?? response.status}`,
+        );
+        return;
+      }
+      setAskAgentHandoffInstruction("");
+      setSendStatus("Project handoff launched in the selected VS Code window.");
+      logAskAgentBrowserEvent("project_handoff.approve", { ok: true });
+    } catch (err) {
+      setSendStatus(`Project handoff launch error: ${String(err)}`);
+      logAskAgentBrowserEvent("project_handoff.approve", {
+        ok: false,
+        error: String(err),
+      });
+    } finally {
+      setAskAgentHandoffPending(false);
+    }
+  }
+
+  async function fetchDebugInfo(
+    instanceId = selectedInstanceId,
+  ): Promise<void> {
+    try {
+      await fetch(buildApiPath("/api/debug/refresh", instanceId), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -1214,6 +2067,50 @@ export function BrowserGatewayApp({
     pendingAutoContinueUserMessageIdRef.current = null;
   }, []);
 
+  async function ensureAskAgentForeground(): Promise<
+    GatewaySnapshot["session"]["foreground"] | null
+  > {
+    if (foreground) return foreground;
+    if (!isAskAgentSelected) return null;
+
+    try {
+      logAskAgentBrowserEvent("send.ensure_session.start", {
+        snapshotPresent: snapshot !== null,
+      });
+      const response = await fetch("/api/ask-agent/session", {
+        credentials: "same-origin",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
+      if (!response.ok) {
+        logAskAgentBrowserEvent("send.ensure_session.response", {
+          ok: false,
+          status: response.status,
+        });
+        setSendStatus(`Ask Agent session unavailable (${response.status}).`);
+        return null;
+      }
+      const nextSnapshot = await readGatewaySnapshotResponse(response);
+      setSnapshot(nextSnapshot.snapshot);
+      if (nextSnapshot.askAgentCapabilities) {
+        setAskAgentCapabilities(nextSnapshot.askAgentCapabilities);
+      }
+      logAskAgentBrowserEvent("send.ensure_session.response", {
+        ok: true,
+        status: response.status,
+        hasForeground: Boolean(nextSnapshot.snapshot.session.foreground),
+      });
+      return nextSnapshot.snapshot.session.foreground;
+    } catch (err) {
+      logAskAgentBrowserEvent("send.ensure_session.error", {
+        error: String(err),
+      });
+      setSendStatus(`Ask Agent session error: ${String(err)}`);
+      return null;
+    }
+  }
+
   async function handleSend(
     text: string,
     attachments: string[],
@@ -1226,10 +2123,25 @@ export function BrowserGatewayApp({
       kind: "image" | "document";
     }>,
     origin: "user" | "autoContinue" = "user",
+    targetForeground?: GatewaySnapshot["session"]["foreground"],
   ): Promise<void> {
-    if (!foreground) return;
+    const activeForeground =
+      targetForeground ?? (await ensureAskAgentForeground());
+    if (!activeForeground) {
+      logAskAgentBrowserEvent("send.ignored", {
+        reason: "missing_foreground",
+        askAgentSelected: isAskAgentSelected,
+        snapshotPresent: snapshot !== null,
+      });
+      setSendStatus(
+        isAskAgentSelected
+          ? "Ask Agent session is still loading. Try again in a moment."
+          : "No active session is loaded.",
+      );
+      return;
+    }
 
-    const userMessageId = crypto.randomUUID();
+    const userMessageId = randomId();
     if (origin === "autoContinue") {
       pendingAutoContinueUserMessageIdRef.current = userMessageId;
     } else {
@@ -1266,6 +2178,13 @@ export function BrowserGatewayApp({
       images.length === 0 &&
       documents.length === 0
     ) {
+      logAskAgentBrowserEvent("send.ignored", {
+        reason: "empty_message",
+        askAgentSelected: isAskAgentSelected,
+        attachmentCount: attachments.length,
+        imageCount: images.length,
+        documentCount: documents.length,
+      });
       return;
     }
 
@@ -1286,9 +2205,63 @@ export function BrowserGatewayApp({
     }
 
     try {
+      if (isAskAgentSelected && slashCommandLabel?.startsWith("/remember")) {
+        const rememberContent = trimmed.replace(/^\/remember\b/i, "").trim();
+        if (!rememberContent) {
+          setSendStatus("Add what to remember after /remember.");
+          return;
+        }
+        setSendStatus("Preparing memory proposal…");
+        const response = await fetch("/api/ask-agent/memory/proposal", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            tier: "memory",
+            scope: "global",
+            operation: "add",
+            title: "Remember from Ask Agent",
+            rationale: "User invoked /remember in Browser Ask Agent.",
+            content: rememberContent,
+          }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          snapshot?: GatewaySnapshot;
+        };
+        if (body.ok && body.snapshot) {
+          setSnapshot(body.snapshot);
+          setSendStatus("Review the memory proposal before it is saved.");
+        } else {
+          setSendStatus(
+            `Memory proposal failed: ${body.error ?? response.status}`,
+          );
+        }
+        return;
+      }
+
       setSendStatus("Sending…");
-      const response = await fetch(buildApiPath("/api/send"), {
+      logAskAgentBrowserEvent("send.start", {
+        askAgentSelected: isAskAgentSelected,
+        sessionId: activeForeground.sessionId,
+        textChars: trimmed.length,
+        attachmentCount: attachments.length,
+        imageCount: images.length,
+        documentCount: documents.length,
+        model: activeForeground.model,
+        reasoningEffort: effectiveReasoningEffort,
+        origin,
+      });
+      const sendPath = isAskAgentSelected
+        ? "/api/ask-agent/send"
+        : buildApiPath("/api/send");
+      const response = await fetch(sendPath, {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
@@ -1296,8 +2269,8 @@ export function BrowserGatewayApp({
         body: JSON.stringify({
           text: trimmed,
           id: userMessageId,
-          sessionId: foreground.sessionId,
-          mode: foreground.mode,
+          sessionId: activeForeground.sessionId,
+          mode: activeForeground.mode,
           reasoningEffort: effectiveReasoningEffort,
           thinkingEnabled: effectiveReasoningEffort !== "none",
           attachments,
@@ -1312,7 +2285,21 @@ export function BrowserGatewayApp({
         ok?: boolean;
         queued?: boolean;
         error?: string;
+        snapshot?: GatewaySnapshot;
       };
+      if (body.ok && body.snapshot) {
+        setSnapshot(body.snapshot);
+      }
+      logAskAgentBrowserEvent("send.response", {
+        askAgentSelected: isAskAgentSelected,
+        sessionId: activeForeground.sessionId,
+        ok: Boolean(body.ok),
+        queued: Boolean(body.queued),
+        status: response.status,
+        error: body.error ?? null,
+        messageCount:
+          body.snapshot?.session.foreground?.projectedMessages.length ?? null,
+      });
       setSendStatus(
         body.ok
           ? body.queued
@@ -1323,6 +2310,11 @@ export function BrowserGatewayApp({
             : `Send failed: ${body.error ?? response.status}`,
       );
     } catch (err) {
+      logAskAgentBrowserEvent("send.error", {
+        askAgentSelected: isAskAgentSelected,
+        sessionId: activeForeground.sessionId,
+        error: String(err),
+      });
       setSendStatus(`Send error: ${String(err)}`);
     }
   }
@@ -1333,20 +2325,35 @@ export function BrowserGatewayApp({
     setSendStatus("Stopping…");
     void (async () => {
       try {
-        const response = await fetch(buildApiPath("/api/stop"), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
+        const response = await fetch(
+          isAskAgentSelected
+            ? "/api/ask-agent/stop"
+            : buildApiPath("/api/stop"),
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({ sessionId }),
           },
-          body: JSON.stringify({ sessionId }),
-        });
+        );
         const body = (await response.json()) as {
           ok?: boolean;
+          stopped?: boolean;
           error?: string;
+          snapshot?: GatewaySnapshot;
         };
+        if (body.ok && body.snapshot) {
+          setSnapshot(body.snapshot);
+        }
         setSendStatus(
-          body.ok ? "Stopped" : `Stop failed: ${body.error ?? response.status}`,
+          body.ok
+            ? body.stopped === false
+              ? "Nothing to stop."
+              : "Stopped"
+            : `Stop failed: ${body.error ?? response.status}`,
         );
       } catch (err) {
         setSendStatus(`Stop error: ${String(err)}`);
@@ -1389,7 +2396,7 @@ export function BrowserGatewayApp({
       e.clientY - touchStart.y,
     );
     if (moved <= 8) {
-      selectInstance(instanceId);
+      selectTab(instanceId);
     }
   };
 
@@ -1400,7 +2407,14 @@ export function BrowserGatewayApp({
   };
 
   const handleSetReasoningEffort = (effort: ReasoningEffort): void => {
-    if (!foreground || thinkingPending) return;
+    if (!foreground || thinkingPending) {
+      logAskAgentBrowserEvent("thinking.ignored", {
+        askAgentSelected: isAskAgentSelected,
+        reason: !foreground ? "missing_foreground" : "pending",
+        effort,
+      });
+      return;
+    }
     void (async () => {
       setPendingReasoningEffort(effort);
       setThinkingPending(true);
@@ -1409,18 +2423,41 @@ export function BrowserGatewayApp({
         setPendingReasoningEffort(null);
       }, 6000);
       try {
-        const response = await fetch(buildApiPath("/api/thinking"), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({ effort }),
+        logAskAgentBrowserEvent("thinking.start", {
+          askAgentSelected: isAskAgentSelected,
+          sessionId: foreground.sessionId,
+          effort,
         });
+        const response = await fetch(
+          isAskAgentSelected
+            ? "/api/ask-agent/thinking"
+            : buildApiPath("/api/thinking"),
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({ effort }),
+          },
+        );
         const body = (await response.json()) as {
           ok?: boolean;
           error?: string;
+          snapshot?: GatewaySnapshot;
         };
+        if (body.ok && body.snapshot) {
+          setSnapshot(body.snapshot);
+        }
+        logAskAgentBrowserEvent("thinking.response", {
+          askAgentSelected: isAskAgentSelected,
+          sessionId: foreground.sessionId,
+          effort,
+          ok: Boolean(body.ok),
+          status: response.status,
+          error: body.error ?? null,
+        });
         if (!body.ok) {
           setModeStatus(
             `Reasoning update failed: ${body.error ?? response.status}`,
@@ -1432,6 +2469,12 @@ export function BrowserGatewayApp({
           window.clearTimeout(pendingTimeout);
         }
       } catch (err) {
+        logAskAgentBrowserEvent("thinking.error", {
+          askAgentSelected: isAskAgentSelected,
+          sessionId: foreground.sessionId,
+          effort,
+          error: String(err),
+        });
         setModeStatus(`Reasoning update error: ${String(err)}`);
         window.clearTimeout(pendingTimeout);
         setThinkingPending(false);
@@ -1441,54 +2484,111 @@ export function BrowserGatewayApp({
   };
 
   const handleExportTranscript = (): void => {
-    // Export stays VS Code-only for now.
+    if (!isAskAgentSelected) {
+      setModeStatus(
+        "Transcript export is only available in VS Code for remote sessions.",
+      );
+      return;
+    }
+    if (!foreground || messages.length === 0) {
+      setModeStatus("No Ask Agent transcript to export yet.");
+      return;
+    }
+
+    const markdown = buildAskAgentTranscriptMarkdown({
+      title: foreground.title || "Ask Agent",
+      model: foreground.model,
+      messages,
+    });
+    downloadTextFile(safeTranscriptFilename(foreground.title), markdown);
+    setModeStatus("Exported Ask Agent transcript.");
+    logAskAgentBrowserEvent("transcript.export", {
+      sessionId: foreground.sessionId,
+      messageCount: messages.length,
+      chars: markdown.length,
+    });
   };
 
-  const handleNewSession = (): void => {
-    void (async () => {
-      try {
-        const response = await fetch(buildApiPath("/api/session/new"), {
+  async function createNewSession(): Promise<GatewaySnapshot | null> {
+    try {
+      const response = await fetch(
+        isAskAgentSelected
+          ? "/api/ask-agent/session/new"
+          : buildApiPath("/api/session/new"),
+        {
           method: "POST",
+          credentials: "same-origin",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify({ mode: foreground?.mode ?? "code" }),
-        });
-        const body = (await response.json()) as {
-          ok?: boolean;
-          snapshot?: GatewaySnapshot;
-        };
-        if (body.ok) {
-          if (body.snapshot) {
-            setSnapshot(body.snapshot);
-          }
-          setShowHistory(false);
-          setShowMcpStatus(false);
-          void fetchSessions();
-        }
-      } catch {
-        // best effort
+          body: JSON.stringify({
+            mode: isAskAgentSelected ? "ask" : (foreground?.mode ?? "code"),
+          }),
+        },
+      );
+      const body = (await response.json()) as {
+        ok?: boolean;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!body.ok) return null;
+      if (body.snapshot) {
+        setSnapshot(body.snapshot);
       }
-    })();
+      setShowHistory(false);
+      setShowMcpStatus(false);
+      void fetchSessions();
+      return body.snapshot ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  const handleNewSession = (): void => {
+    void createNewSession();
   };
 
   const handleShowHistory = (): void => {
     setShowHistory((prev) => !prev);
+    setShowAskAgentMemory(false);
     setSessionHistoryError(null);
     void fetchSessions();
   };
 
+  const handleShowAskAgentMemory = (): void => {
+    const next = !showAskAgentMemory;
+    setShowAskAgentMemory(next);
+    if (next) {
+      setShowHistory(false);
+      void fetchAskAgentMemory();
+    } else {
+      setAskAgentMemoryClearConfirmation("idle");
+    }
+  };
+
   const handleLoadSession = (sessionId: string): void => {
     void (async () => {
-      await fetch(buildApiPath("/api/session/load"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
+      const response = await fetch(
+        isAskAgentSelected
+          ? "/api/ask-agent/session/load"
+          : buildApiPath("/api/session/load"),
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ sessionId }),
         },
-        body: JSON.stringify({ sessionId }),
-      });
+      );
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        snapshot?: GatewaySnapshot;
+      };
+      if (body.ok && body.snapshot) {
+        setSnapshot(body.snapshot);
+      }
       setShowHistory(false);
       setShowMcpStatus(false);
     })();
@@ -1496,14 +2596,20 @@ export function BrowserGatewayApp({
 
   const handleDeleteSession = (sessionId: string): void => {
     void (async () => {
-      const response = await fetch(buildApiPath("/api/session/delete"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
+      const response = await fetch(
+        isAskAgentSelected
+          ? "/api/ask-agent/session/delete"
+          : buildApiPath("/api/session/delete"),
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ sessionId }),
         },
-        body: JSON.stringify({ sessionId }),
-      });
+      );
       const body = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         message?: string;
@@ -1521,14 +2627,20 @@ export function BrowserGatewayApp({
 
   const handleRenameSession = (sessionId: string, title: string): void => {
     void (async () => {
-      const response = await fetch(buildApiPath("/api/session/rename"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
+      const response = await fetch(
+        isAskAgentSelected
+          ? "/api/ask-agent/session/rename"
+          : buildApiPath("/api/session/rename"),
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ sessionId, title }),
         },
-        body: JSON.stringify({ sessionId, title }),
-      });
+      );
       const body = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         message?: string;
@@ -1547,9 +2659,12 @@ export function BrowserGatewayApp({
   const handleCopyFirstPrompt = (sessionId: string): void => {
     void (async () => {
       const response = await fetch(
-        buildApiPath("/api/session/copy-first-prompt"),
+        isAskAgentSelected
+          ? "/api/ask-agent/session/copy-first-prompt"
+          : buildApiPath("/api/session/copy-first-prompt"),
         {
           method: "POST",
+          credentials: "same-origin",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
@@ -1558,9 +2673,27 @@ export function BrowserGatewayApp({
         },
       );
       const body = (await response.json()) as { ok?: boolean; prompt?: string };
-      if (body.ok && body.prompt) {
-        void handleSend(body.prompt, []);
+      if (!body.ok || !body.prompt) {
+        setSendStatus("Unable to copy the first prompt for this session.");
+        return;
       }
+
+      const nextSnapshot = await createNewSession();
+      const nextForeground = nextSnapshot?.session.foreground;
+      if (!nextForeground) {
+        setSendStatus("Unable to start a new session for the copied prompt.");
+        return;
+      }
+
+      void handleSend(
+        body.prompt,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        "user",
+        nextForeground,
+      );
     })();
   };
 
@@ -1591,18 +2724,35 @@ export function BrowserGatewayApp({
   };
 
   const handleSelectModel = (modelId: string): void => {
-    if (!modelId) return;
+    if (!modelId) {
+      logAskAgentBrowserEvent("model.ignored", {
+        askAgentSelected: isAskAgentSelected,
+        reason: "missing_model",
+      });
+      return;
+    }
     void (async () => {
       try {
         setModeStatus("Switching model…");
-        const response = await fetch(buildApiPath("/api/model"), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: JSON.stringify({ model: modelId }),
+        logAskAgentBrowserEvent("model.start", {
+          askAgentSelected: isAskAgentSelected,
+          currentModel: foreground?.model ?? null,
+          nextModel: modelId,
         });
+        const response = await fetch(
+          isAskAgentSelected
+            ? "/api/ask-agent/model"
+            : buildApiPath("/api/model"),
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({ model: modelId }),
+          },
+        );
         const body = (await response.json()) as {
           ok?: boolean;
           error?: string;
@@ -1611,12 +2761,26 @@ export function BrowserGatewayApp({
         if (body.ok && body.snapshot) {
           setSnapshot(body.snapshot);
         }
+        logAskAgentBrowserEvent("model.response", {
+          askAgentSelected: isAskAgentSelected,
+          currentModel: foreground?.model ?? null,
+          nextModel: modelId,
+          ok: Boolean(body.ok),
+          status: response.status,
+          error: body.error ?? null,
+        });
         setModeStatus(
           body.ok
             ? "Model updated"
             : `Model switch failed: ${body.error ?? response.status}`,
         );
       } catch (err) {
+        logAskAgentBrowserEvent("model.error", {
+          askAgentSelected: isAskAgentSelected,
+          currentModel: foreground?.model ?? null,
+          nextModel: modelId,
+          error: String(err),
+        });
         setModeStatus(`Model switch error: ${String(err)}`);
       }
     })();
@@ -1653,6 +2817,122 @@ export function BrowserGatewayApp({
     // Keep control visible for parity, but browser does not persist this yet.
   };
 
+  const refreshAskAgentMcpStatus = async (options?: {
+    reconnect?: boolean;
+    view?: McpManagerView;
+  }): Promise<void> => {
+    try {
+      const response = await fetch(
+        options?.reconnect
+          ? "/api/ask-agent/mcp-refresh"
+          : "/api/ask-agent/mcp-config",
+        {
+          method: options?.reconnect ? "POST" : "GET",
+          credentials: "same-origin",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        },
+      );
+      const body = (await response.json()) as {
+        ok?: boolean;
+        infos?: GatewaySnapshot["ui"]["mcpStatusInfos"];
+        configSnapshot?: McpConfigSnapshot;
+        error?: string;
+      };
+      if (body.configSnapshot) {
+        setMcpManagerSnapshot(body.configSnapshot);
+      } else {
+        setMcpManagerSnapshot(null);
+      }
+      setMcpManagerView(options?.view ?? "status");
+      setAskAgentMcpStatusError(body.ok ? null : (body.error ?? null));
+      setModeStatus(
+        body.ok
+          ? options?.reconnect
+            ? "Ask Agent MCP servers refreshed."
+            : "Ask Agent MCP manager loaded."
+          : `Ask Agent MCP unavailable: ${body.error ?? response.status}`,
+      );
+    } catch (err) {
+      setAskAgentMcpStatusError(String(err));
+      setMcpManagerSnapshot(null);
+      setModeStatus(`Ask Agent MCP status error: ${String(err)}`);
+    }
+  };
+
+  const saveAskAgentMcpServer = async (
+    scope: McpManagerScope,
+    server: McpManagerServerDraft,
+  ): Promise<void> => {
+    const response = await fetch("/api/ask-agent/mcp-config/server", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ profile: "ask-agent", scope, server }),
+    });
+    const body = (await response.json()) as {
+      ok?: boolean;
+      configSnapshot?: McpConfigSnapshot;
+      error?: string;
+    };
+    if (body.configSnapshot) setMcpManagerSnapshot(body.configSnapshot);
+    setModeStatus(
+      body.ok
+        ? "Ask Agent MCP server saved."
+        : `MCP save failed: ${body.error ?? response.status}`,
+    );
+  };
+
+  const removeAskAgentMcpServer = async (
+    scope: McpManagerScope,
+    serverName: string,
+  ): Promise<void> => {
+    const response = await fetch("/api/ask-agent/mcp-config/server", {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ profile: "ask-agent", scope, serverName }),
+    });
+    const body = (await response.json()) as {
+      ok?: boolean;
+      configSnapshot?: McpConfigSnapshot;
+      error?: string;
+    };
+    if (body.configSnapshot) setMcpManagerSnapshot(body.configSnapshot);
+    setModeStatus(
+      body.ok
+        ? "Ask Agent MCP server removed."
+        : `MCP remove failed: ${body.error ?? response.status}`,
+    );
+  };
+
+  const openAskAgentRawMcpConfig = async (
+    scope: McpManagerScope,
+  ): Promise<void> => {
+    const response = await fetch("/api/ask-agent/mcp-config/open-raw", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ profile: "ask-agent", scope }),
+    });
+    const body = (await response.json()) as { ok?: boolean; error?: string };
+    setModeStatus(
+      body.ok
+        ? "Requested VS Code to open the raw Ask Agent MCP config."
+        : `Raw config open failed: ${body.error ?? response.status}`,
+    );
+  };
+
   const handleMcpAction = (
     serverName: string,
     action: "disable" | "reconnect" | "reauthenticate",
@@ -1678,8 +2958,12 @@ export function BrowserGatewayApp({
     forwardedFollowUpRef.current = "";
     setLocalDismissedApprovalId(submittedApprovalId);
     void (async () => {
-      const response = await fetch(buildApiPath("/api/approval"), {
+      const approvalPath = isAskAgentSelected
+        ? "/api/ask-agent/memory/approval"
+        : buildApiPath("/api/approval");
+      const response = await fetch(approvalPath, {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
@@ -1689,7 +2973,14 @@ export function BrowserGatewayApp({
           ...(followUp ? { followUp } : { followUp: undefined }),
         }),
       });
-      const body = (await response.json()) as { ok?: boolean; error?: string };
+      const body = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        snapshot?: GatewaySnapshot;
+      };
+      if (body.ok && body.snapshot) {
+        setSnapshot(body.snapshot);
+      }
       if (!body.ok) {
         setLocalDismissedApprovalId(null);
         setModeStatus(
@@ -1832,7 +3123,41 @@ export function BrowserGatewayApp({
   };
 
   const handleRetry = (): void => {
-    void handleSend("Retry the last step.", []);
+    if (!isAskAgentSelected) {
+      void handleSend("Retry the last step.", []);
+      return;
+    }
+    void (async () => {
+      if (!foreground) {
+        setSendStatus("No Ask Agent session is loaded to retry.");
+        return;
+      }
+      try {
+        setSendStatus("Retrying…");
+        const response = await fetch("/api/ask-agent/retry", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ sessionId: foreground.sessionId }),
+        });
+        const body = (await response.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+          snapshot?: GatewaySnapshot;
+        };
+        if (body.ok && body.snapshot) {
+          setSnapshot(body.snapshot);
+          setSendStatus("Retried");
+          return;
+        }
+        setSendStatus(`Retry failed: ${body.error ?? response.status}`);
+      } catch (err) {
+        setSendStatus(`Retry error: ${String(err)}`);
+      }
+    })();
   };
 
   const handleCondense = (): void => {
@@ -1930,6 +3255,30 @@ export function BrowserGatewayApp({
         setModeStatus(`Open transcript error: ${String(err)}`);
       }
     })();
+  };
+
+  const handleAskAgentExecuteBuiltinCommand = (
+    name: string,
+    _args: string,
+  ): void => {
+    switch (name) {
+      case "mcp":
+        setShowMcpStatus(true);
+        void refreshAskAgentMcpStatus({ view: "status" });
+        break;
+      case "mcp-config": {
+        setShowMcpStatus(true);
+        void refreshAskAgentMcpStatus({ view: "config" });
+        break;
+      }
+      case "mcp-refresh":
+        setShowMcpStatus(true);
+        void refreshAskAgentMcpStatus({ reconnect: true });
+        break;
+      default:
+        setModeStatus(`Unsupported Ask Agent slash command: /${name}`);
+        break;
+    }
   };
 
   const handleExecuteBuiltinCommand = (name: string, args: string): void => {
@@ -2132,7 +3481,7 @@ export function BrowserGatewayApp({
             {
               id: foreground.model,
               displayName: foreground.model,
-              provider: "local",
+              provider: isAskAgentSelected ? "browser-gateway" : "local",
               contextWindow: 0,
               authenticated: true,
             } satisfies WebviewModelInfo,
@@ -2310,14 +3659,19 @@ export function BrowserGatewayApp({
             ? (data.notes as Record<string, string>)
             : {};
         if (id) {
-          void fetch(buildApiPath("/api/question"), {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
+          void fetch(
+            buildApiPath(
+              isAskAgentSelected ? "/api/ask-agent/question" : "/api/question",
+            ),
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
+              },
+              body: JSON.stringify({ id, answers, notes }),
             },
-            body: JSON.stringify({ id, answers, notes }),
-          });
+          );
         }
         return;
       }
@@ -2357,14 +3711,21 @@ export function BrowserGatewayApp({
             : {};
         const origin = String(data.origin ?? questionProgressOriginRef.current);
         if (id) {
-          void fetch(buildApiPath("/api/question-progress"), {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
+          void fetch(
+            buildApiPath(
+              isAskAgentSelected
+                ? "/api/ask-agent/question-progress"
+                : "/api/question-progress",
+            ),
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
+              },
+              body: JSON.stringify({ id, step, answers, notes, origin }),
             },
-            body: JSON.stringify({ id, step, answers, notes, origin }),
-          });
+          );
         }
         return;
       }
@@ -2423,18 +3784,29 @@ export function BrowserGatewayApp({
       </header>
 
       <div class="browser-instance-tabs" role="tablist" aria-label="Instances">
-        {(instanceOptions.length > 0
-          ? instanceOptions
-          : [
-              {
-                instanceId: selectedInstanceId,
-                workspaceName,
-                workspacePath: "",
-                url: "",
-                lastSeenAt: Date.now(),
-              },
-            ]
-        ).map((instance) => {
+        <button
+          key={BROWSER_GATEWAY_ASK_AGENT_TAB_ID}
+          aria-controls="browser-instance-panel"
+          aria-selected={isAskAgentSelected}
+          class={`instance-tab instance-tab-idle instance-tab-pinned${isAskAgentSelected ? " active" : ""}`}
+          id={`instance-tab-${BROWSER_GATEWAY_ASK_AGENT_TAB_ID}`}
+          onClick={() => selectTab(BROWSER_GATEWAY_ASK_AGENT_TAB_ID)}
+          role="tab"
+          title="Projectless browser Ask Agent"
+          type="button"
+        >
+          <span class="instance-tab-main">
+            <i class="codicon codicon-comment-discussion" />
+            <span class="instance-tab-name">
+              {BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE}
+            </span>
+          </span>
+          <span class="instance-tab-status">
+            <i class="codicon codicon-circle-filled" />
+            <span>Ask</span>
+          </span>
+        </button>
+        {instanceOptions.map((instance) => {
           const instanceStatus = getInstanceStatus(instance);
           const active = instance.instanceId === selectedInstanceId;
           return (
@@ -2444,7 +3816,7 @@ export function BrowserGatewayApp({
               aria-selected={active}
               class={`instance-tab instance-tab-${instanceStatus.kind}${active ? " active" : ""}`}
               id={`instance-tab-${instance.instanceId}`}
-              onClick={() => selectInstance(instance.instanceId)}
+              onClick={() => selectTab(instance.instanceId)}
               onPointerCancel={(e) =>
                 handleInstancePointerCancel(e as unknown as PointerEvent)
               }
@@ -2483,8 +3855,8 @@ export function BrowserGatewayApp({
 
       <main
         ref={browserLayoutRef}
-        aria-labelledby={`instance-tab-${selectedInstanceId}`}
-        class={`browser-layout${sidePaneResizing ? " browser-layout-resizing" : ""}`}
+        aria-labelledby={`instance-tab-${selectedTabId}`}
+        class={`browser-layout${sidePaneResizing ? " browser-layout-resizing" : ""}${isAskAgentSelected ? " browser-layout-chat-only" : ""}`}
         id="browser-instance-panel"
         role="tabpanel"
         style={
@@ -2493,31 +3865,35 @@ export function BrowserGatewayApp({
           } as unknown as JSX.CSSProperties
         }
       >
-        <section class="browser-side browser-side-top">
-          <PaneCard fill className="review-pane-card">
-            <div class="pane-body review-pane-body">
-              {mobileLayout ? null : reviewPaneContent}
-            </div>
-          </PaneCard>
-        </section>
+        {!isAskAgentSelected && (
+          <>
+            <section class="browser-side browser-side-top">
+              <PaneCard fill className="review-pane-card">
+                <div class="pane-body review-pane-body">
+                  {mobileLayout ? null : reviewPaneContent}
+                </div>
+              </PaneCard>
+            </section>
 
-        <div
-          aria-label="Resize chat and review panes"
-          aria-orientation="vertical"
-          aria-valuemax={MAX_SIDE_PANE_PERCENT}
-          aria-valuemin={MIN_SIDE_PANE_PERCENT}
-          aria-valuenow={Math.round(sidePanePercent)}
-          class="browser-column-resize-handle"
-          onKeyDown={(e) =>
-            handleSidePaneResizeKeyDown(e as unknown as KeyboardEvent)
-          }
-          onMouseDown={(e) =>
-            handleSidePaneResizeStart(e as unknown as MouseEvent)
-          }
-          role="separator"
-          tabIndex={0}
-          title="Drag to resize chat and review panes"
-        />
+            <div
+              aria-label="Resize chat and review panes"
+              aria-orientation="vertical"
+              aria-valuemax={MAX_SIDE_PANE_PERCENT}
+              aria-valuemin={MIN_SIDE_PANE_PERCENT}
+              aria-valuenow={Math.round(sidePanePercent)}
+              class="browser-column-resize-handle"
+              onKeyDown={(e) =>
+                handleSidePaneResizeKeyDown(e as unknown as KeyboardEvent)
+              }
+              onMouseDown={(e) =>
+                handleSidePaneResizeStart(e as unknown as MouseEvent)
+              }
+              role="separator"
+              tabIndex={0}
+              title="Drag to resize chat and review panes"
+            />
+          </>
+        )}
 
         <section class="browser-main">
           <PaneCard fill className="chat-pane-card">
@@ -2551,6 +3927,54 @@ export function BrowserGatewayApp({
                     <span>Loading last session…</span>
                   </div>
                 )}
+                {isAskAgentSelected && (
+                  <>
+                    <button
+                      class={`icon-button${showAskAgentMemory ? " active" : ""}`}
+                      onClick={handleShowAskAgentMemory}
+                      title="Ask Agent Memory"
+                      type="button"
+                    >
+                      <i class="codicon codicon-archive" />
+                      {askAgentMemory &&
+                        askAgentMemory.totalSummaryCount > 0 && (
+                          <span class="memory-count-badge">
+                            {askAgentMemory.totalSummaryCount}
+                          </span>
+                        )}
+                    </button>
+                    <button
+                      class={`icon-button${showAskAgentReadGrants ? " active" : ""}`}
+                      onClick={() =>
+                        setShowAskAgentReadGrants((value) => !value)
+                      }
+                      title="Read-only local file grants"
+                      type="button"
+                    >
+                      <i class="codicon codicon-folder-opened" />
+                      {askAgentReadGrants.length > 0 && (
+                        <span class="memory-count-badge">
+                          {askAgentReadGrants.length}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      class={`icon-button${showAskAgentHandoff ? " active" : ""}`}
+                      onClick={() => {
+                        setShowAskAgentHandoff((value) => !value);
+                        if (!askAgentHandoffTargetId) {
+                          setAskAgentHandoffTargetId(
+                            askAgentHandoffTargets[0]?.instanceId ?? "",
+                          );
+                        }
+                      }}
+                      title="Handoff to VS Code project session"
+                      type="button"
+                    >
+                      <i class="codicon codicon-git-pull-request-go-to-changes" />
+                    </button>
+                  </>
+                )}
                 <button
                   class={`icon-button${showHistory ? " active" : ""}`}
                   onClick={handleShowHistory}
@@ -2559,6 +3983,309 @@ export function BrowserGatewayApp({
                   <i class="codicon codicon-history" />
                 </button>
               </div>
+              {showAskAgentMemory && (
+                <section
+                  aria-label="Ask Agent derived memory"
+                  class="ask-agent-memory-panel"
+                >
+                  <div class="ask-agent-memory-panel-header">
+                    <div>
+                      <strong>Derived Ask Agent memory</strong>
+                      <span>
+                        Local summaries used for recall. Raw transcripts and
+                        durable memory are separate.
+                      </span>
+                    </div>
+                    <button
+                      class="icon-button"
+                      onClick={() => {
+                        setShowAskAgentMemory(false);
+                        setAskAgentMemoryClearConfirmation("idle");
+                      }}
+                      title="Close Ask Agent memory"
+                      type="button"
+                    >
+                      <i class="codicon codicon-close" />
+                    </button>
+                  </div>
+                  {askAgentMemoryError && (
+                    <div class="session-history-error" role="alert">
+                      <i class="codicon codicon-warning" />
+                      <span>{askAgentMemoryError}</span>
+                    </div>
+                  )}
+                  <div class="ask-agent-memory-stats" role="status">
+                    <div>
+                      <span>Session summaries</span>
+                      <strong>
+                        {askAgentMemory?.sessionSummaryCount ?? "—"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Turn summaries</span>
+                      <strong>
+                        {askAgentMemory?.chunkSummaryCount ?? "—"}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Last updated</span>
+                      <strong>
+                        {askAgentMemory?.lastUpdatedAt
+                          ? formatTimestamp(askAgentMemory.lastUpdatedAt)
+                          : "Never"}
+                      </strong>
+                    </div>
+                  </div>
+                  {askAgentMemory?.recentSessions.length ? (
+                    <div class="ask-agent-memory-recent">
+                      <span class="review-section-label">Recent summaries</span>
+                      <ul>
+                        {askAgentMemory.recentSessions.map((session) => (
+                          <li key={session.sessionId}>
+                            <span>{session.title}</span>
+                            <small>
+                              {session.messageCount} messages ·{" "}
+                              {formatTimestamp(session.updatedAt)}
+                            </small>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <p class="ask-agent-memory-empty">
+                      No derived memory summaries yet.
+                    </p>
+                  )}
+                  <div class="ask-agent-memory-actions">
+                    <button
+                      class="secondary"
+                      disabled={askAgentMemoryPending}
+                      onClick={() => void fetchAskAgentMemory()}
+                      type="button"
+                    >
+                      Refresh
+                    </button>
+                    {askAgentMemoryClearConfirmation === "confirming" ? (
+                      <>
+                        <span role="status">
+                          Clear derived summaries only? Raw transcripts and
+                          durable memory will remain.
+                        </span>
+                        <button
+                          disabled={askAgentMemoryPending}
+                          onClick={() => void clearAskAgentMemory()}
+                          type="button"
+                        >
+                          Confirm clear
+                        </button>
+                        <button
+                          class="secondary"
+                          disabled={askAgentMemoryPending}
+                          onClick={() =>
+                            setAskAgentMemoryClearConfirmation("idle")
+                          }
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        class="secondary"
+                        disabled={
+                          askAgentMemoryPending ||
+                          (askAgentMemory?.totalSummaryCount ?? 0) === 0
+                        }
+                        onClick={() =>
+                          setAskAgentMemoryClearConfirmation("confirming")
+                        }
+                        type="button"
+                      >
+                        Clear summaries…
+                      </button>
+                    )}
+                  </div>
+                </section>
+              )}
+              {showAskAgentReadGrants && isAskAgentSelected && (
+                <section
+                  aria-label="Ask Agent read-only local grants"
+                  class="ask-agent-memory-panel ask-agent-read-grants-panel"
+                >
+                  <div class="ask-agent-memory-panel-header">
+                    <div>
+                      <strong>Read-only local file access</strong>
+                      <span>
+                        Grant exact local files or directories for Ask Agent
+                        read/list/search tools. No write, shell, editor, or MCP
+                        access is enabled.
+                      </span>
+                    </div>
+                    <button
+                      class="icon-button"
+                      onClick={() => setShowAskAgentReadGrants(false)}
+                      title="Close read grants"
+                      type="button"
+                    >
+                      <i class="codicon codicon-close" />
+                    </button>
+                  </div>
+                  <label class="ask-agent-handoff-field">
+                    <span>Local path to grant</span>
+                    <input
+                      type="text"
+                      value={askAgentReadGrantPath}
+                      onInput={(event) =>
+                        setAskAgentReadGrantPath(
+                          (event.target as HTMLInputElement).value,
+                        )
+                      }
+                      placeholder="/Users/name/project or /Users/name/file.md"
+                    />
+                  </label>
+                  <div class="ask-agent-memory-actions">
+                    <button
+                      disabled={askAgentReadGrantPending}
+                      onClick={() => void addAskAgentReadGrant()}
+                      type="button"
+                    >
+                      Confirm read grant
+                    </button>
+                  </div>
+                  {askAgentReadGrants.length > 0 ? (
+                    <ul class="ask-agent-read-grants-list">
+                      {askAgentReadGrants.map((grant) => (
+                        <li key={grant.id}>
+                          <div>
+                            <strong>{grant.label}</strong>
+                            <span>
+                              {grant.kind} · {grant.rootPath}
+                            </span>
+                          </div>
+                          <button
+                            class="secondary"
+                            disabled={askAgentReadGrantPending}
+                            onClick={() =>
+                              void revokeAskAgentReadGrant(grant.id)
+                            }
+                            type="button"
+                          >
+                            Revoke
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p class="ask-agent-memory-empty">
+                      No local paths have been granted to Ask Agent.
+                    </p>
+                  )}
+                </section>
+              )}
+              {showAskAgentHandoff && isAskAgentSelected && (
+                <section
+                  aria-label="Project session handoff"
+                  class="ask-agent-memory-panel ask-agent-handoff-panel"
+                >
+                  <div class="ask-agent-memory-panel-header">
+                    <div>
+                      <strong>Handoff to a VS Code project session</strong>
+                      <span>
+                        Preview an instruction, then explicitly approve
+                        launching it in a selected VS Code window.
+                      </span>
+                    </div>
+                    <button
+                      class="icon-button"
+                      onClick={() => setShowAskAgentHandoff(false)}
+                      title="Close project handoff"
+                      type="button"
+                    >
+                      <i class="codicon codicon-close" />
+                    </button>
+                  </div>
+                  {askAgentHandoffTargets.length === 0 ? (
+                    <p class="ask-agent-memory-empty">
+                      Open an AgentLink VS Code window to hand off into a
+                      project session.
+                    </p>
+                  ) : (
+                    <>
+                      <label class="ask-agent-handoff-field">
+                        <span>Target window</span>
+                        <select
+                          value={
+                            askAgentHandoffTargetId ||
+                            askAgentHandoffTargets[0]?.instanceId ||
+                            ""
+                          }
+                          onChange={(event) =>
+                            setAskAgentHandoffTargetId(
+                              (event.target as HTMLSelectElement).value,
+                            )
+                          }
+                        >
+                          {askAgentHandoffTargets.map((instance) => (
+                            <option
+                              key={instance.instanceId}
+                              value={instance.instanceId}
+                            >
+                              {instance.workspaceName || "No Workspace"} —{" "}
+                              {instance.workspacePath}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label class="ask-agent-handoff-field">
+                        <span>Mode</span>
+                        <select
+                          value={askAgentHandoffMode}
+                          onChange={(event) =>
+                            setAskAgentHandoffMode(
+                              (event.target as HTMLSelectElement).value,
+                            )
+                          }
+                        >
+                          <option value="code">Code</option>
+                          <option value="architect">Architect</option>
+                          <option value="ask">Ask</option>
+                          <option value="debug">Debug</option>
+                        </select>
+                      </label>
+                      <label class="ask-agent-handoff-field">
+                        <span>Initial instruction</span>
+                        <textarea
+                          rows={4}
+                          value={askAgentHandoffInstruction}
+                          onInput={(event) =>
+                            setAskAgentHandoffInstruction(
+                              (event.target as HTMLTextAreaElement).value,
+                            )
+                          }
+                          placeholder="Describe what the project session should do…"
+                        />
+                      </label>
+                      <div class="ask-agent-memory-actions">
+                        <button
+                          disabled={askAgentHandoffPending}
+                          onClick={() => void proposeAskAgentProjectHandoff()}
+                          type="button"
+                        >
+                          Create handoff preview
+                        </button>
+                        <button
+                          class="secondary"
+                          disabled={askAgentHandoffPending}
+                          onClick={() => setShowAskAgentHandoff(false)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </section>
+              )}
               {showHistory && (
                 <>
                   {sessionHistoryError && (
@@ -2596,6 +4323,131 @@ export function BrowserGatewayApp({
                   }
                 />
               )}
+              {askAgentMemoryCandidateNudge && (
+                <div
+                  class="ask-agent-memory-candidate-nudge"
+                  role="status"
+                  aria-label="Durable memory suggestion"
+                >
+                  <i class="codicon codicon-lightbulb" />
+                  <div>
+                    <strong>Possible durable memory</strong>
+                    <span>
+                      Ask Agent noticed a possible{" "}
+                      {askAgentMemoryCandidateNudge.kind}. Review creates an
+                      approval card; nothing is saved unless you accept it.
+                    </span>
+                    <code>{askAgentMemoryCandidateNudge.matchedPhrase}</code>
+                    <div class="ask-agent-memory-candidate-actions">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void proposeAskAgentMemoryCandidate(
+                            askAgentMemoryCandidateNudge,
+                          )
+                        }
+                      >
+                        Review memory proposal
+                      </button>
+                      <button
+                        class="secondary"
+                        type="button"
+                        onClick={() =>
+                          void dismissAskAgentMemoryCandidate(
+                            askAgentMemoryCandidateNudge,
+                          )
+                        }
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {askAgentProjectHandoff &&
+                askAgentProjectHandoff.status !== "cancelled" && (
+                  <div
+                    class={`ask-agent-memory-candidate-nudge ask-agent-handoff-card ask-agent-handoff-card-${askAgentProjectHandoff.status}`}
+                    role="status"
+                    aria-label="Project session handoff preview"
+                  >
+                    <i class="codicon codicon-git-pull-request-go-to-changes" />
+                    <div>
+                      <strong>Project session handoff</strong>
+                      <span>
+                        {askAgentProjectHandoff.status === "completed"
+                          ? "Launched in the selected VS Code project window."
+                          : askAgentProjectHandoff.status === "failed"
+                            ? "Launch failed. Review the error before retrying."
+                            : "Review this handoff before launching it in VS Code."}
+                      </span>
+                      <dl class="ask-agent-handoff-details">
+                        <dt>Target</dt>
+                        <dd>
+                          {askAgentProjectHandoff.targetWorkspaceName ||
+                            "No Workspace"}
+                        </dd>
+                        <dt>Path</dt>
+                        <dd>{askAgentProjectHandoff.targetWorkspacePath}</dd>
+                        <dt>Mode</dt>
+                        <dd>{askAgentProjectHandoff.mode}</dd>
+                      </dl>
+                      <pre>{askAgentProjectHandoff.instruction}</pre>
+                      {askAgentProjectHandoff.error && (
+                        <div class="session-history-error" role="alert">
+                          <i class="codicon codicon-warning" />
+                          <span>{askAgentProjectHandoff.error}</span>
+                        </div>
+                      )}
+                      {askAgentProjectHandoff.status === "pending" && (
+                        <div class="ask-agent-memory-candidate-actions">
+                          <button
+                            disabled={askAgentHandoffPending}
+                            type="button"
+                            onClick={() =>
+                              void approveAskAgentProjectHandoff(
+                                askAgentProjectHandoff.id,
+                              )
+                            }
+                          >
+                            Approve and launch
+                          </button>
+                          <button
+                            class="secondary"
+                            disabled={askAgentHandoffPending}
+                            type="button"
+                            onClick={() =>
+                              void cancelAskAgentProjectHandoff(
+                                askAgentProjectHandoff.id,
+                              )
+                            }
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                      {askAgentProjectHandoff.status === "launching" && (
+                        <span role="status">Launching…</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              {askAgentStatusNotice && (
+                <div
+                  class={`ask-agent-status-notice ask-agent-status-notice-${askAgentStatusNotice.kind}`}
+                  role={
+                    askAgentStatusNotice.kind === "warning" ? "alert" : "status"
+                  }
+                >
+                  <i
+                    class={`codicon codicon-${askAgentStatusNotice.kind === "warning" ? "warning" : "info"}`}
+                  />
+                  <div>
+                    <strong>{askAgentStatusNotice.title}</strong>
+                    <span>{askAgentStatusNotice.message}</span>
+                  </div>
+                </div>
+              )}
               {mobileReviewOpen && (
                 <div class="mobile-secondary-pane">
                   <PaneCard fill className="mobile-secondary-card">
@@ -2621,52 +4473,61 @@ export function BrowserGatewayApp({
               <div
                 class={`browser-transcript${mobileReviewOpen ? " mobile-hidden-while-review" : ""}`}
               >
-                <ChatView
-                  messages={messages}
-                  streaming={Boolean(streaming)}
-                  sessionId={foreground?.sessionId ?? null}
-                  detectedQuestion={foreground?.detectedQuestion ?? null}
-                  onDetectedQuestionAnswer={(payload) => {
-                    void handleSend(payload, []);
-                  }}
-                  onDismissDetectedQuestion={() => undefined}
-                  onRetry={handleRetry}
-                  onSignIn={() => handleSignIn("codex")}
-                  onSignInAnotherAccount={() =>
-                    setModeStatus(
-                      "Use VS Code account controls to sign in with another account.",
-                    )
-                  }
-                  onCondense={handleCondense}
-                  bgSessions={background}
-                  onStopBackground={handleStopBackground}
-                  onOpenTranscript={handleOpenBgTranscript}
-                  onFinalMarkerContinue={(prompt) => {
-                    setHiddenFinalContinueMessageIds((prev) => {
-                      const next = new Set(prev);
-                      for (const message of messages) {
-                        if (
-                          message.role !== "assistant" ||
-                          !message.finalMarker
-                        ) {
-                          continue;
+                {snapshot === null ? (
+                  <EmptyState>
+                    {isAskAgentSelected
+                      ? "Loading Ask Agent session…"
+                      : "Loading session…"}
+                  </EmptyState>
+                ) : (
+                  <ChatView
+                    messages={messages}
+                    streaming={Boolean(streaming)}
+                    sessionId={foreground?.sessionId ?? null}
+                    detectedQuestion={foreground?.detectedQuestion ?? null}
+                    onDetectedQuestionAnswer={(payload) => {
+                      void handleSend(payload, []);
+                    }}
+                    onDismissDetectedQuestion={() => undefined}
+                    onRetry={handleRetry}
+                    onSignIn={() => handleSignIn("codex")}
+                    onSignInAnotherAccount={() =>
+                      setModeStatus(
+                        "Use VS Code account controls to sign in with another account.",
+                      )
+                    }
+                    onCondense={handleCondense}
+                    bgSessions={background}
+                    onStopBackground={handleStopBackground}
+                    onOpenTranscript={handleOpenBgTranscript}
+                    onFinalMarkerContinue={(prompt) => {
+                      setHiddenFinalContinueMessageIds((prev) => {
+                        const next = new Set(prev);
+                        for (const message of messages) {
+                          if (
+                            message.role !== "assistant" ||
+                            !message.finalMarker
+                          ) {
+                            continue;
+                          }
+                          if (
+                            getFinalMessageContinueAction(message.finalMarker)
+                              ?.prompt === prompt
+                          ) {
+                            next.add(message.id);
+                          }
                         }
-                        if (
-                          getFinalMessageContinueAction(message.finalMarker)
-                            ?.prompt === prompt
-                        ) {
-                          next.add(message.id);
-                        }
-                      }
-                      return next;
-                    });
-                    void handleSend(prompt, []);
-                  }}
-                  onRevertCheckpoint={handleRevertCheckpoint}
-                  onViewCheckpointDiff={handleViewCheckpointDiff}
-                />
+                        return next;
+                      });
+                      void handleSend(prompt, []);
+                    }}
+                    onRevertCheckpoint={handleRevertCheckpoint}
+                    onViewCheckpointDiff={handleViewCheckpointDiff}
+                  />
+                )}
               </div>
-              {foreground &&
+              {!isAskAgentSelected &&
+                foreground &&
                 foreground.messageQueue.length > 0 &&
                 !mobileReviewOpen && (
                   <div class="queue-panel">
@@ -2681,7 +4542,8 @@ export function BrowserGatewayApp({
                     ))}
                   </div>
                 )}
-              {!mobileReviewOpen &&
+              {!isAskAgentSelected &&
+              !mobileReviewOpen &&
               ((foreground?.lastInputTokens ?? 0) > 0 ||
                 (foreground?.lastOutputTokens ?? 0) > 0 ||
                 (foreground?.estimatedTotalUsed ?? 0) > 0) ? (
@@ -2724,178 +4586,120 @@ export function BrowserGatewayApp({
               ) : null}
               {!mobileReviewOpen &&
                 showMcpStatus &&
-                snapshot?.ui.mcpStatusInfos && (
-                  <div class="mcp-status-panel">
-                    <div class="mcp-status-header">
-                      <i class="codicon codicon-server" />
-                      <span>MCP Servers</span>
-                      <button
-                        class="mcp-status-close icon-button"
-                        onClick={() => setShowMcpStatus(false)}
-                        title="Dismiss"
-                      >
-                        <i class="codicon codicon-close" />
-                      </button>
-                    </div>
-                    {snapshot.ui.mcpStatusInfos.length === 0 ? (
-                      <p class="mcp-status-empty">No MCP servers configured.</p>
-                    ) : (
-                      <ul class="mcp-status-list">
-                        {snapshot.ui.mcpStatusInfos.map((info) => (
-                          <li
-                            key={info.name}
-                            class={`mcp-status-item mcp-status-${info.status}`}
-                          >
-                            <div class="mcp-status-row">
-                              <button
-                                class="mcp-status-expand icon-button"
-                                disabled={
-                                  info.tools.length === 0 &&
-                                  !expandedMcpServers.has(info.name)
-                                }
-                                aria-expanded={expandedMcpServers.has(
-                                  info.name,
-                                )}
-                                title={
-                                  info.tools.length === 0 &&
-                                  !expandedMcpServers.has(info.name)
-                                    ? "No tools available"
-                                    : expandedMcpServers.has(info.name)
-                                      ? "Hide tools"
-                                      : "Show tools"
-                                }
-                                onClick={() => {
-                                  setExpandedMcpServers((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(info.name)) {
-                                      next.delete(info.name);
-                                    } else {
-                                      next.add(info.name);
-                                    }
-                                    return next;
-                                  });
-                                }}
-                              >
-                                <i
-                                  class={`codicon codicon-chevron-${expandedMcpServers.has(info.name) ? "down" : "right"}`}
-                                />
-                              </button>
-                              <i
-                                class={`codicon ${
-                                  info.status === "connected"
-                                    ? "codicon-check"
-                                    : info.status === "connecting"
-                                      ? "codicon-loading codicon-modifier-spin"
-                                      : "codicon-error"
-                                }`}
-                              />
-                              <span class="mcp-status-name">{info.name}</span>
-                              <span class="mcp-status-detail">
-                                {info.status === "connected"
-                                  ? [
-                                      `${info.toolCount} tool${info.toolCount !== 1 ? "s" : ""}`,
-                                      info.resourceCount > 0 &&
-                                        `${info.resourceCount} resource${info.resourceCount !== 1 ? "s" : ""}`,
-                                      info.promptCount > 0 &&
-                                        `${info.promptCount} prompt${info.promptCount !== 1 ? "s" : ""}`,
-                                    ]
-                                      .filter(Boolean)
-                                      .join(" · ")
-                                  : (info.error ?? info.status)}
-                              </span>
-                              <span class="mcp-status-actions">
-                                {info.status !== "connecting" && (
-                                  <button
-                                    class="icon-button"
-                                    title="Reconnect"
-                                    onClick={() =>
-                                      handleMcpAction(info.name, "reconnect")
-                                    }
-                                  >
-                                    <i class="codicon codicon-refresh" />
-                                  </button>
-                                )}
-                                <button
-                                  class="icon-button"
-                                  title="Reauthenticate"
-                                  onClick={() =>
-                                    handleMcpAction(info.name, "reauthenticate")
-                                  }
-                                >
-                                  <i class="codicon codicon-key" />
-                                </button>
-                                <button
-                                  class="icon-button mcp-action-disable"
-                                  title="Disable"
-                                  onClick={() =>
-                                    handleMcpAction(info.name, "disable")
-                                  }
-                                >
-                                  <i class="codicon codicon-circle-slash" />
-                                </button>
-                              </span>
-                            </div>
-                            {expandedMcpServers.has(info.name) && (
-                              <ul class="mcp-tool-list">
-                                {info.tools.length === 0 ? (
-                                  <li class="mcp-tool-empty">
-                                    No tools available.
-                                  </li>
-                                ) : (
-                                  info.tools.map((tool) => (
-                                    <li key={tool.name} class="mcp-tool-item">
-                                      <span class="mcp-tool-name">
-                                        {tool.name}
-                                      </span>
-                                      {tool.description && (
-                                        <span
-                                          class="mcp-tool-description"
-                                          title={tool.description}
-                                        >
-                                          {tool.description}
-                                        </span>
-                                      )}
-                                    </li>
-                                  ))
-                                )}
-                              </ul>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
+                (mcpManagerSnapshot ||
+                  (!isAskAgentSelected && snapshot?.ui.mcpStatusInfos)) &&
+                (() => {
+                  const renderedMcpSnapshot =
+                    mcpManagerSnapshot ??
+                    ({
+                      profile: "main",
+                      version: 0,
+                      sources: [],
+                      entries: [],
+                      statusInfos: snapshot?.ui.mcpStatusInfos ?? [],
+                      capabilities: {
+                        canEditConfig: false,
+                        canOpenRawConfig: false,
+                        canReconnect: true,
+                        canReauthenticate: true,
+                        canDisable: true,
+                        canUseProjectConfig: true,
+                      },
+                    } satisfies McpConfigSnapshot);
+                  const panelSnapshot = isAskAgentSelected
+                    ? ({
+                        ...renderedMcpSnapshot,
+                        capabilities: {
+                          ...renderedMcpSnapshot.capabilities,
+                          canOpenRawConfig: false,
+                        },
+                      } satisfies McpConfigSnapshot)
+                    : renderedMcpSnapshot;
+                  return (
+                    <McpManagerPanel
+                      snapshot={panelSnapshot}
+                      initialView={mcpManagerView}
+                      error={
+                        askAgentMcpStatusError === "mcp_host_unavailable"
+                          ? "No VS Code MCP host is available for Ask Agent."
+                          : askAgentMcpStatusError
+                      }
+                      onClose={() => setShowMcpStatus(false)}
+                      onRefresh={() => {
+                        if (isAskAgentSelected) {
+                          void refreshAskAgentMcpStatus({ reconnect: true });
+                        } else {
+                          setModeStatus(
+                            "Use the VS Code window to refresh workspace MCP servers.",
+                          );
+                        }
+                      }}
+                      onServerAction={(serverName, action) => {
+                        if (isAskAgentSelected) {
+                          if (
+                            action === "reconnect" ||
+                            action === "reauthenticate"
+                          ) {
+                            void refreshAskAgentMcpStatus({ reconnect: true });
+                          } else {
+                            setModeStatus(
+                              "Ask Agent MCP disable is not available in the browser yet.",
+                            );
+                          }
+                        } else {
+                          handleMcpAction(serverName, action);
+                        }
+                      }}
+                      onOpenRawConfig={(scope) => {
+                        if (isAskAgentSelected) {
+                          void openAskAgentRawMcpConfig(scope);
+                        }
+                      }}
+                      onSaveServer={(scope, server) => {
+                        if (isAskAgentSelected) {
+                          void saveAskAgentMcpServer(scope, server);
+                        }
+                      }}
+                      onRemoveServer={(scope, serverName) => {
+                        if (isAskAgentSelected) {
+                          void removeAskAgentMcpServer(scope, serverName);
+                        }
+                      }}
+                    />
+                  );
+                })()}
               {!mobileReviewOpen && (foreground?.todos?.length ?? 0) > 0 && (
                 <TodoPanel todos={foreground?.todos ?? []} />
               )}
-              {pendingUrlElicitation && !mobileReviewOpen && (
-                <UrlElicitationPanel
-                  request={pendingUrlElicitation}
-                  onAccept={(id, url) => {
-                    window.open(url, "_blank", "noopener,noreferrer");
-                    browserVscodeApi.postMessage({
-                      command: "agentUrlElicitationResponse",
-                      id,
-                      action: "accept",
-                    });
-                  }}
-                  onDecline={(id) => {
-                    browserVscodeApi.postMessage({
-                      command: "agentUrlElicitationResponse",
-                      id,
-                      action: "decline",
-                    });
-                  }}
-                  onCancel={(id) => {
-                    browserVscodeApi.postMessage({
-                      command: "agentUrlElicitationResponse",
-                      id,
-                      action: "cancel",
-                    });
-                  }}
-                />
-              )}
+              {!isAskAgentSelected &&
+                pendingUrlElicitation &&
+                !mobileReviewOpen && (
+                  <UrlElicitationPanel
+                    request={pendingUrlElicitation}
+                    onAccept={(id, url) => {
+                      window.open(url, "_blank", "noopener,noreferrer");
+                      browserVscodeApi.postMessage({
+                        command: "agentUrlElicitationResponse",
+                        id,
+                        action: "accept",
+                      });
+                    }}
+                    onDecline={(id) => {
+                      browserVscodeApi.postMessage({
+                        command: "agentUrlElicitationResponse",
+                        id,
+                        action: "decline",
+                      });
+                    }}
+                    onCancel={(id) => {
+                      browserVscodeApi.postMessage({
+                        command: "agentUrlElicitationResponse",
+                        id,
+                        action: "cancel",
+                      });
+                    }}
+                  />
+                )}
               {visibleQuestion && !mobileReviewOpen && (
                 <QuestionCard
                   key={visibleQuestion.id}
@@ -2935,7 +4739,7 @@ export function BrowserGatewayApp({
                   }}
                 />
               )}
-              {visibleApproval && (
+              {!isAskAgentSelected && visibleApproval && (
                 <div
                   class={`approval-panel-embed${approvalResizing ? " approval-panel-embed-resizing" : ""}`}
                   style={{ height: `${approvalPanelHeight}px` }}
@@ -3029,7 +4833,7 @@ export function BrowserGatewayApp({
                   </span>
                 </div>
               ) : null}
-              {!mobileReviewOpen && (
+              {!isAskAgentSelected && !mobileReviewOpen && (
                 <BackgroundSessionStrip
                   sessions={background}
                   onStop={handleStopBackground}
@@ -3040,6 +4844,12 @@ export function BrowserGatewayApp({
                 <div class="browser-chat-composer">
                   <InputArea
                     onSend={handleSend}
+                    onComposerEvent={
+                      isAskAgentSelected
+                        ? (event, fields) =>
+                            logAskAgentBrowserEvent(`composer.${event}`, fields)
+                        : undefined
+                    }
                     onStop={handleStop}
                     streaming={Boolean(streaming)}
                     submitOnEnter={!mobileLayout && !touchInput}
@@ -3051,28 +4861,48 @@ export function BrowserGatewayApp({
                     injection={null}
                     onInjectionConsumed={() => undefined}
                     slashCommands={slashCommands}
-                    onExecuteBuiltinCommand={handleExecuteBuiltinCommand}
-                    modes={composerModes}
-                    currentMode={foreground?.mode ?? "code"}
-                    currentModel={foreground?.model ?? "claude-sonnet-4-6"}
+                    onExecuteBuiltinCommand={
+                      isAskAgentSelected
+                        ? handleAskAgentExecuteBuiltinCommand
+                        : handleExecuteBuiltinCommand
+                    }
+                    modes={isAskAgentSelected ? [] : composerModes}
+                    currentMode={foreground?.mode ?? "ask"}
+                    currentModel={foreground?.model ?? "ask-agent-unavailable"}
                     currentCondenseThreshold={foreground?.condenseThreshold}
                     availableModels={composerModels}
-                    onSwitchMode={handleSwitchMode}
-                    onSelectModel={handleSelectModel}
-                    onSetCondenseThreshold={handleSetCondenseThreshold}
-                    onSignIn={handleSignIn}
-                    agentWriteApproval={
-                      foreground?.agentWriteApproval ?? "prompt"
+                    onSwitchMode={
+                      isAskAgentSelected ? undefined : handleSwitchMode
                     }
-                    onSetAgentWriteApproval={handleSetWriteApproval}
-                    autoContinueEnabled={autoContinueEnabled}
-                    onToggleAutoContinue={handleToggleAutoContinue}
-                    autoContinueStatus={autoContinueStatus}
-                    allowAttachments={true}
+                    onSelectModel={handleSelectModel}
+                    onSetCondenseThreshold={
+                      isAskAgentSelected
+                        ? undefined
+                        : handleSetCondenseThreshold
+                    }
+                    onSignIn={isAskAgentSelected ? undefined : handleSignIn}
+                    agentWriteApproval={
+                      isAskAgentSelected
+                        ? undefined
+                        : (foreground?.agentWriteApproval ?? "prompt")
+                    }
+                    onSetAgentWriteApproval={
+                      isAskAgentSelected ? undefined : handleSetWriteApproval
+                    }
+                    autoContinueEnabled={
+                      isAskAgentSelected ? false : autoContinueEnabled
+                    }
+                    onToggleAutoContinue={
+                      isAskAgentSelected ? undefined : handleToggleAutoContinue
+                    }
+                    autoContinueStatus={
+                      isAskAgentSelected ? "" : autoContinueStatus
+                    }
+                    allowAttachments={!isAskAgentSelected}
                     allowMediaPaste={true}
                     allowThinkingToggle={true}
-                    allowExportTranscript={false}
-                    allowFileMentions={true}
+                    allowExportTranscript={isAskAgentSelected}
+                    allowFileMentions={!isAskAgentSelected}
                   />
                 </div>
               )}
