@@ -63,6 +63,19 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(userMessage).not.toHaveProperty("origin");
   });
 
+  it("does not accumulate empty sessions when creating new sessions repeatedly", () => {
+    const store = createStore();
+
+    store.createSession(100);
+    const firstSessionId = store.getActiveSessionId();
+    store.createSession(200);
+    store.createSession(300);
+
+    expect(store.getActiveSessionId()).toBe(firstSessionId);
+    expect(store.listSessions()).toEqual([]);
+    expect(store.getHistorySnapshot()).toEqual({ sessions: [] });
+  });
+
   it("treats repeated client message ids as idempotent sends", () => {
     const store = createStore();
     const credentialStatus: BrowserGatewayModelCredentialStatus = {
@@ -150,6 +163,65 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
         { name: "notes.txt", mimeType: "text/plain", base64: "bm90ZXM=" },
       ],
     });
+  });
+
+  it("promotes generated image tool results to assistant display media", () => {
+    const store = createStore();
+    const credentialStatus: BrowserGatewayModelCredentialStatus = {
+      state: "ready",
+      providerId: "openai-codex",
+      method: "oauth",
+      modelScopes: ["chat"],
+      grantedByOwnerId: "vscode-owner",
+      grantedAt: 100,
+    };
+
+    const assistant = store.startAssistantMessage({ now: 100 });
+    store.startAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "generate-image-live",
+      toolName: "generate_image",
+      input: { prompt: "teal icon" },
+    });
+    store.completeAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "generate-image-live",
+      toolName: "generate_image",
+      input: { prompt: "teal icon" },
+      result: JSON.stringify({ status: "accepted", generated_count: 1 }),
+      resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      durationMs: 42,
+    });
+
+    const response = store.getOrCreate({
+      now: 200,
+      theme,
+      modelCredentialStatus: credentialStatus,
+    });
+    const assistantMessage =
+      response.snapshot.session.foreground.projectedMessages.find(
+        (message) => message.id === assistant.id,
+      );
+
+    expect(assistantMessage?.displayMedia).toEqual({
+      images: [
+        {
+          name: "generated-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,YWJjZA==",
+        },
+      ],
+      documents: [],
+    });
+    expect(assistantMessage?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "generate-image-live",
+          resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+        }),
+      ]),
+    );
   });
 
   it("marks assistant model failures with structured error metadata", () => {
@@ -327,7 +399,6 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(second.snapshot.session.foreground.projectedMessages).toEqual([]);
 
     expect(store.listSessions().map((session) => session.id)).toEqual([
-      secondSessionId,
       firstSessionId,
     ]);
 
@@ -347,16 +418,13 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(store.renameSession(firstSessionId, "Renamed chat", 400)).toBe(true);
     expect(store.getFirstPrompt(firstSessionId)).toBe("First durable chat");
     expect(store.deleteSession(firstSessionId, 500)).toBe(true);
-    expect(store.listSessions().map((session) => session.id)).toEqual([
-      secondSessionId,
-    ]);
+    expect(store.getActiveSessionId()).toBe(secondSessionId);
+    expect(store.listSessions()).toEqual([]);
 
     const history = store.getHistorySnapshot();
     const reloaded = createStore();
     reloaded.loadHistory(history);
-    expect(reloaded.listSessions().map((session) => session.id)).toEqual([
-      secondSessionId,
-    ]);
+    expect(reloaded.listSessions()).toEqual([]);
   });
 
   it("records assistant tool calls using shared transcript block shape", () => {
@@ -442,10 +510,12 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       grantedAt: 100,
     };
 
-    store.getOrCreate({
-      now: 99,
-      theme,
-      modelCredentialStatus: credentialStatus,
+    const assistant = store.startAssistantMessage({ now: 99 });
+    store.startAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "ask-question-1",
+      toolName: "ask_user",
+      input: {},
     });
 
     store.setQuestionRequest({
@@ -540,7 +610,9 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       error: "target unavailable",
     });
 
-    expect(store.answerQuestion("ask-question-1")).toBe(true);
+    expect(store.answerQuestion("ask-question-1")).toMatchObject({
+      toolCallId: "ask-question-1",
+    });
     const answered = store.getOrCreate({
       now: 101,
       theme,
@@ -588,11 +660,12 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       retryable: true,
     });
 
-    const userMessage = store.prepareLatestRetryableTurn({
+    const retryableTurn = store.prepareLatestRetryableTurn({
       sessionId,
       now: 200,
     });
-    expect(userMessage?.id).toBe("ask-user-1");
+    expect(retryableTurn?.userMessage.id).toBe("ask-user-1");
+    expect(retryableTurn?.toolResults).toEqual([]);
 
     const response = store.getOrCreate({
       now: 200,
@@ -630,12 +703,13 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     });
     const sessionId = store.getActiveSessionId();
 
-    const userMessage = store.prepareLatestRetryableTurn({
+    const retryableTurn = store.prepareLatestRetryableTurn({
       sessionId,
       now: 300,
     });
 
-    expect(userMessage?.id).toBe("ask-user-2");
+    expect(retryableTurn?.userMessage.id).toBe("ask-user-2");
+    expect(retryableTurn?.toolResults).toEqual([]);
     const messages = store.getOrCreate({
       now: 300,
       theme,
@@ -652,6 +726,54 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
       "ask-user-1",
       firstAssistant.id,
       "ask-user-2",
+    ]);
+  });
+
+  it("captures completed ask_user tool results while preparing a retryable answer-resume failure", () => {
+    const store = createStore();
+    store.appendUserMessage({ id: "ask-user-1", text: "Ask me", now: 100 });
+    const assistant = store.startAssistantMessage({ now: 101 });
+    store.startAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "call_question",
+      toolName: "ask_user",
+      input: { context: "Need input.", questions: [] },
+    });
+    store.completeAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "call_question",
+      toolName: "ask_user",
+      input: { context: "Need input.", questions: [] },
+      result: JSON.stringify({
+        ok: true,
+        responses: [{ question: "Continue?", answer: true }],
+      }),
+      durationMs: 0,
+    });
+    store.finishAssistantErrorMessage({
+      messageId: assistant.id,
+      text: "Retryable failure after answer.",
+      code: "model_error",
+      retryable: true,
+      preserveCompletedAskUserBlocks: true,
+    });
+
+    const retryableTurn = store.prepareLatestRetryableTurn({
+      sessionId: store.getActiveSessionId(),
+      now: 200,
+    });
+
+    expect(retryableTurn?.userMessage.id).toBe("ask-user-1");
+    expect(retryableTurn?.toolResults).toEqual([
+      {
+        toolCallId: "call_question",
+        toolName: "ask_user",
+        input: { context: "Need input.", questions: [] },
+        result: JSON.stringify({
+          ok: true,
+          responses: [{ question: "Continue?", answer: true }],
+        }),
+      },
     ]);
   });
 

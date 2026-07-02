@@ -133,6 +133,7 @@ export type ExtensionMessage =
       toolCallId: string;
       toolName: string;
       result: string;
+      resultImages?: Array<{ mimeType: string; data: string }>;
       durationMs: number;
       input?: unknown;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
@@ -415,6 +416,12 @@ export type ExtensionMessage =
       queueId: string;
     }
   | {
+      type: "agentQueueInterjectionReady";
+      sessionId: string;
+      queueId: string;
+      ready: boolean;
+    }
+  | {
       type: "agentCommittedUserMessage";
       sessionId: string;
       id?: string;
@@ -491,6 +498,7 @@ export type ExtensionMessage =
       toolCallId: string;
       toolName: string;
       result: string;
+      resultImages?: Array<{ mimeType: string; data: string }>;
       durationMs: number;
       input?: unknown;
     }
@@ -574,6 +582,7 @@ export interface ChatState {
   mode: string;
   model: string;
   streaming: boolean;
+  interrupted?: boolean;
   thinkingEnabled?: boolean;
   reasoningEffort?: ReasoningEffort;
   condenseThreshold?: number;
@@ -628,6 +637,7 @@ export type ContentBlock =
       name: string;
       inputJson: string;
       result: string;
+      resultImages?: Array<{ mimeType: string; data: string }>;
       complete: boolean;
       durationMs?: number;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;

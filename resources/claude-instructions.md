@@ -1,9 +1,12 @@
+<!-- markdownlint-disable MD041 -->
+
 ## Workspace handshake — REQUIRED FIRST STEP
 
 Before using any other agentlink tool, you **MUST** call the `handshake` tool to establish a trusted connection. This verifies you are connected to the correct VS Code instance.
 
 **Call it immediately** at the start of every session:
-```
+
+```js
 handshake({ working_directories: ["<your primary working directory>", "<additional dir 1>", ...] })
 ```
 
@@ -165,7 +168,7 @@ agentlink also provides tools that Claude Code doesn't have natively. Use these 
 - **`rename_symbol`** — Rename a symbol across the entire workspace using the language server. Updates all references, imports, and re-exports.
 - **`open_file`** — Open a file in the VS Code editor, optionally scrolling to a specific line. Supports range selection with `end_line`/`end_column` to highlight code.
 - **`show_notification`** — Show a notification in VS Code. Use sparingly for important status updates.
-- **`generate_image`** — Generate PNG images through OpenAI/Codex auth and save them into the workspace after explicit approval. The approval prompt shows the generation prompt, output paths, billing/quota note, and any reference images. Supports workspace-local `reference_image_paths`, prior-session `reference_image_ids`, and `use_recent_images` for user-attached images.
+- **`generate_image`** — Generate PNG images through OpenAI/Codex auth and show them inline in chat after explicit approval. In VS Code, `output_path` optionally also saves PNGs into the workspace; when omitted, no files are written. Browser Ask Agent generation is display-only through a connected VS Code instance. The approval prompt shows the generation prompt, output mode/paths, billing/quota note, and any reference images. Supports workspace-local `reference_image_paths`, prior-session `reference_image_ids`, and `use_recent_images` for user-attached images in the main VS Code agent.
 - **`load_skill`** — Load the full contents of a skill file that was explicitly advertised in the current AgentLink session prompt. This is not a general-purpose reader; only advertised skill paths are accepted.
 - **`load_rule`** — Load the full contents of a deferred local rule file that was explicitly advertised in the current AgentLink Rule Catalog. This is not a general-purpose reader; only advertised deferred rule paths are accepted.
 - **`propose_memory`** — Propose a durable cross-session memory/config update across instructions, skills, commands, or memory.md. Use only for generalizable learnings/preferences/workflows; it always requires explicit user approval, can be retargeted in the approval card, and uses an editable diff view for add/update content review.

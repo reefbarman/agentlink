@@ -1,10 +1,5 @@
 import type * as OpenAIResponses from "openai/resources/responses/responses";
-import * as os from "os";
 
-import {
-  CODEX_API_BASE_URL,
-  OPENAI_API_BASE_URL,
-} from "../../core/model/providers/codex/openaiClient.js";
 import type {
   ChatMessage,
   ReasoningEffort,
@@ -18,6 +13,7 @@ import {
 import type { BrowserGatewayModelCredentialRecord } from "../browserGatewayModelCredentialCache.js";
 import OpenAI from "openai";
 import { agentLinkFetch } from "../../util/httpDispatcher.js";
+import { getCodexEndpointConfig } from "../../core/model/providers/codex/openaiClient.js";
 
 const ASK_AGENT_MEMORY_SUMMARIZER_PROMPT = `You summarize AgentLink Browser Ask Agent conversations for a local derived memory index.
 Return only valid JSON. Do not wrap it in Markdown.
@@ -295,30 +291,20 @@ export class BrowserGatewayAskAgentModelSummarizer implements BrowserGatewayAskA
     existingSessionSummary?: string;
     signal?: AbortSignal;
   }): Promise<BrowserGatewayAskAgentSummaryResult> {
-    const defaultHeaders: Record<string, string> = {
-      "User-Agent": `agentlink/1.0 (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`,
-    };
-    if (params.credential.method === "oauth") {
-      defaultHeaders.originator = "agentlink";
-      defaultHeaders.session_id = this.options.sessionId;
-      if (params.credential.accountId) {
-        defaultHeaders["ChatGPT-Account-Id"] = params.credential.accountId;
-      }
-    }
-    const baseURL =
-      params.credential.method === "oauth"
-        ? CODEX_API_BASE_URL
-        : OPENAI_API_BASE_URL;
+    const endpoint = getCodexEndpointConfig(
+      params.credential,
+      this.options.sessionId,
+    );
     const client = this.options.createClient
       ? this.options.createClient({
           credential: params.credential,
-          baseURL,
-          defaultHeaders,
+          baseURL: endpoint.baseURL,
+          defaultHeaders: endpoint.defaultHeaders,
         })
       : new OpenAI({
           apiKey: params.credential.bearerToken,
-          baseURL,
-          defaultHeaders,
+          baseURL: endpoint.baseURL,
+          defaultHeaders: endpoint.defaultHeaders,
           fetch: agentLinkFetch,
           maxRetries: 0,
         });

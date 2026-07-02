@@ -5,7 +5,7 @@ import * as http from "http";
 import * as os from "os";
 import * as path from "path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "../../agent/webview/types.js";
 import {
@@ -2031,6 +2031,35 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
 
     await askAgentMemoryStore.upsertSessionMemory({
+      sessionId: "bones-session",
+      title: "Getting to Know Bones",
+      createdAt: Date.now() - 11_000,
+      lastActiveAt: Date.now() - 4_000,
+      messageCount: 2,
+      sourceRevision: "bones-revision",
+      summary:
+        "User wants the assistant to learn more about them for personalized future help.",
+      topics: ["personalization", "preferences"],
+      decisions: ["Use user-provided profile details for future conversations"],
+      openQuestions: [],
+      durableCandidateHints: [],
+      updatedAt: Date.now() - 4_000,
+    });
+    await askAgentMemoryStore.upsertChunk({
+      id: "bones-profile-chunk",
+      sessionId: "bones-session",
+      sourceMessageIds: ["bones-user", "bones-assistant"],
+      startMessageIndex: 0,
+      endMessageIndex: 1,
+      sourceRevision: "bones-revision",
+      summary:
+        "Assistant asked follow-up questions to build a better personal profile and shared a tentative recap of known details.",
+      keywords: ["personal profile", "preferences", "hobbies"],
+      entities: ["Bones", "Cairns", "Warhammer 40k"],
+      createdAt: Date.now() - 4_000,
+      updatedAt: Date.now() - 4_000,
+    });
+    await askAgentMemoryStore.upsertSessionMemory({
       sessionId: priorMemorySessionId,
       title: "Prior browser memory discussion",
       createdAt: Date.now() - 10_000,
@@ -2363,6 +2392,57 @@ describe("BrowserGatewayHelper proxy routing", () => {
       });
     });
     const summariesAfterSuccessfulSend = summaryCalls.length;
+
+    const profileRecallSend = await fetch(`${helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({
+        id: "ask-user-profile-recall",
+        sessionId: body.session.sessionId,
+        text: "What do you know about me?",
+      }),
+    });
+    expect(profileRecallSend.ok).toBe(true);
+    const profileRecallBody = (await profileRecallSend.json()) as {
+      snapshot: {
+        session: {
+          foreground: {
+            projectedMessages: AskAgentProjectedMessageForTest[];
+          };
+        };
+      };
+    };
+    expect(completeCalls.at(-1)?.content).toBe("What do you know about me?");
+    expect(completeCalls.at(-1)?.memoryContext).toContain(
+      "<conversation-memory-index>",
+    );
+    expect(completeCalls.at(-1)?.memoryContext).toContain(
+      "Getting to Know Bones",
+    );
+    expect(completeCalls.at(-1)?.memoryContext).toContain(
+      "chunk:bones-profile-chunk",
+    );
+    expect(completeCalls.at(-1)?.memoryContext).toContain(
+      "entities: Bones, Cairns, Warhammer 40k",
+    );
+    const profileRecallAssistant =
+      profileRecallBody.snapshot.session.foreground.projectedMessages
+        .filter(
+          (message) =>
+            message.role === "assistant" &&
+            message.content === "Model says hello from cached credentials.",
+        )
+        .at(-1);
+    expect(profileRecallAssistant?.memoryDisclosure).toMatchObject({
+      status: "used",
+      sources: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "summary",
+          label: "summary:chunk:bones-profile-chunk",
+          title: "Getting to Know Bones",
+        }),
+      ]),
+    });
 
     const explicitPastSend = await fetch(`${helperBase}/api/ask-agent/send`, {
       method: "POST",
@@ -3624,29 +3704,69 @@ describe("BrowserGatewayHelper proxy routing", () => {
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
 
-  it("surfaces safe Ask Agent ask_user tool calls and records submitted answers", async () => {
-    const modelClient = makeAskAgentToolLoopClient(async ({ onDelta }) => {
-      onDelta?.("Need input before continuing.");
-      return {
-        text: "Need input before continuing.",
-        toolCalls: [
-          {
-            id: "call_question",
-            name: "ask_user",
-            input: {
-              context: "Need a read-only choice.",
-              questions: [
-                {
-                  id: "continue",
-                  type: "yes_no",
-                  question: "Continue with the read-only plan?",
-                },
-              ],
-            },
-          },
-        ],
-      };
+  it("surfaces safe Ask Agent ask_user tool calls and resumes after submitted answers", async () => {
+    let callCount = 0;
+    const seenToolMessages: CoreModelMessage[][] = [];
+    const expectedAnswerToolMessage = expect.objectContaining({
+      role: "assistant",
+      content: [
+        expect.objectContaining({
+          type: "tool_use",
+          id: "call_question",
+          name: "ask_user",
+        }),
+        expect.objectContaining({
+          type: "tool_result",
+          tool_use_id: "call_question",
+          content: JSON.stringify({
+            ok: true,
+            responses: [
+              {
+                question: "Continue with the read-only plan?",
+                answer: true,
+                note: "Proceed safely.",
+              },
+            ],
+          }),
+        }),
+      ],
     });
+    const modelClient = makeAskAgentToolLoopClient(
+      async ({ onDelta, toolMessages }) => {
+        callCount++;
+        seenToolMessages.push([...(toolMessages ?? [])]);
+        if (callCount === 1) {
+          onDelta?.("Need input before continuing.");
+          return {
+            text: "Need input before continuing.",
+            toolCalls: [
+              {
+                id: "call_question",
+                name: "ask_user",
+                input: {
+                  context: "Need a read-only choice.",
+                  questions: [
+                    {
+                      id: "continue",
+                      type: "yes_no",
+                      question: "Continue with the read-only plan?",
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+        }
+        if (callCount === 2) {
+          throw Object.assign(new Error("test model overloaded after answer"), {
+            code: "overloaded",
+            retryable: true,
+          });
+        }
+        onDelta?.("Continuing after your answer.");
+        return { text: "Continuing after your answer.", toolCalls: [] };
+      },
+    );
     const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
     helper = harness.helper;
     servers.push(harness.helperServer);
@@ -3686,14 +3806,29 @@ describe("BrowserGatewayHelper proxy routing", () => {
         session: { foreground: { projectedMessages: ChatMessage[] } };
       };
     };
-    const assistant =
+    let assistant =
       answerBody.snapshot.session.foreground.projectedMessages.find(
         (message) => message.role === "assistant",
       );
 
     expect(answer.ok).toBe(true);
+    expect(callCount).toBe(2);
+    expect(seenToolMessages[0]).toEqual([]);
+    expect(seenToolMessages[1]).toEqual([expectedAnswerToolMessage]);
+    expect(assistant?.content).toBe("");
+    expect(assistant?.error).toMatchObject({
+      message: "test model overloaded after answer",
+      retryable: true,
+      code: "overloaded",
+    });
     expect(assistant?.blocks).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "call_question",
+          name: "ask_user",
+          complete: true,
+        }),
         expect.objectContaining({
           type: "question_answer",
           items: [
@@ -3706,6 +3841,31 @@ describe("BrowserGatewayHelper proxy routing", () => {
         }),
       ]),
     );
+
+    const retry = await fetch(`${harness.helperBase}/api/ask-agent/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({
+        sessionId: BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
+      }),
+    });
+    const retryBody = (await retry.json()) as {
+      snapshot: {
+        session: { foreground: { projectedMessages: ChatMessage[] } };
+      };
+    };
+    assistant = retryBody.snapshot.session.foreground.projectedMessages.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.content === "Continuing after your answer.",
+    );
+
+    expect(retry.ok).toBe(true);
+    expect(callCount).toBe(3);
+    expect(seenToolMessages[2]).toEqual([expectedAnswerToolMessage]);
+    expect(assistant?.blocks).toEqual([
+      { type: "text", text: "Continuing after your answer." },
+    ]);
   });
 
   it("applies safe Ask Agent todo_write and set_task_status tool calls", async () => {
@@ -4088,6 +4248,147 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(latestToolResults).not.toContain("sibling content");
 
     await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it("runs Ask Agent image generation in the helper using cached credentials", async () => {
+    const originalFetch = globalThis.fetch;
+    const providerRequests: Array<{ url: string; body: unknown }> = [];
+    const upstreamRequests: string[] = [];
+    const tinyPngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("https://chatgpt.com/backend-api/codex/responses")) {
+          providerRequests.push({
+            url,
+            body: init?.body ? JSON.parse(String(init.body)) : null,
+          });
+          return new Response(
+            `data: ${JSON.stringify({
+              type: "response.image_generation_call.partial_image",
+              partial_image_b64: tinyPngBase64,
+              size: "1024x1024",
+            })}\n\ndata: [DONE]\n\n`,
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          );
+        }
+        return await originalFetch(input, init);
+      },
+    );
+
+    const upstream = http.createServer((req, res) => {
+      const url = req.url ?? "/";
+      if (url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok" }));
+        return;
+      }
+      upstreamRequests.push(url);
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "not_found" }));
+    });
+    servers.push(upstream);
+    const upstreamPort = await waitForListening(upstream, 0);
+    const registryDir = path.join(os.homedir(), ".agentlink");
+    const registryPath = path.join(registryDir, "browser-gateways.json");
+    await fs.mkdir(registryDir, { recursive: true });
+    await fs.writeFile(
+      registryPath,
+      JSON.stringify([
+        {
+          instanceId: "instance-image-should-not-run",
+          workspaceName: "AgentLink",
+          workspacePath: "/workspace/agentlink",
+          pid: process.pid,
+          port: upstreamPort,
+          url: `http://127.0.0.1:${upstreamPort}`,
+          protocolVersion: 1,
+          startedAt: new Date().toISOString(),
+          authToken: "image-token",
+        },
+      ]),
+      "utf-8",
+    );
+
+    const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) => {
+      if (toolMessages?.length) {
+        return { text: "Image generated.", toolCalls: [] };
+      }
+      return {
+        text: "Generating image.",
+        toolCalls: [
+          {
+            id: "image-call-1",
+            name: "generate_image",
+            input: { prompt: "Create a tiny test avatar", count: 1 },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const sendPromise = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Generate an image" }),
+    });
+    await waitForExpectation(async () => {
+      const session = await fetch(
+        `${harness.helperBase}/api/ask-agent/session`,
+        {
+          headers: { Cookie: harness.cookie },
+        },
+      );
+      const body = (await session.json()) as {
+        snapshot: { ui: { approval: { id?: string; detail?: string } | null } };
+      };
+      expect(body.snapshot.ui.approval?.id).toMatch(
+        /^ask-agent-generate-image-/,
+      );
+      expect(body.snapshot.ui.approval?.detail).toContain(
+        "Output: Ask Agent chat display only (no files will be written)",
+      );
+    });
+
+    const session = await fetch(`${harness.helperBase}/api/ask-agent/session`, {
+      headers: { Cookie: harness.cookie },
+    });
+    const sessionBody = (await session.json()) as {
+      snapshot: { ui: { approval: { id: string } | null } };
+    };
+    const approvalId = sessionBody.snapshot.ui.approval?.id;
+    expect(approvalId).toBeTruthy();
+    const approval = await fetch(
+      `${harness.helperBase}/api/ask-agent/approval`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({ id: approvalId, decision: "accept" }),
+      },
+    );
+    expect(approval.ok).toBe(true);
+
+    const send = await sendPromise;
+    const body = (await send.json()) as {
+      snapshot: {
+        session: { foreground: { projectedMessages: ChatMessage[] } };
+      };
+    };
+    const assistant = body.snapshot.session.foreground.projectedMessages.find(
+      (message) => message.role === "assistant",
+    );
+    expect(send.ok).toBe(true);
+    expect(assistant?.content).toContain("Image generated.");
+    expect(providerRequests).toHaveLength(1);
+    expect(providerRequests[0]?.body).toEqual(
+      expect.objectContaining({ tools: [{ type: "image_generation" }] }),
+    );
+    expect(upstreamRequests).not.toContain(
+      "/internal/ask-agent/generate-image",
+    );
   });
 
   it("routes MCP tool calls through a VS Code-owned main-agent MCP bridge", async () => {

@@ -1,5 +1,7 @@
 import type { AgentMessage } from "./types.js";
 import type { Checkpoint } from "./CheckpointManager.js";
+import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
+import type { Question } from "./webview/types.js";
 import type { ReasoningEffort } from "./providers/types.js";
 import type { SessionSummary } from "./SessionStore.js";
 
@@ -41,6 +43,23 @@ export interface RevertRecoveryState {
   reason: "workspace_reverted_session_save_failed";
 }
 
+export interface PendingQuestionRecoveryState extends PendingQuestionRecoveryContext {
+  questionRequestId: string;
+  context: string;
+  questions: Question[];
+}
+
+export type PersistedSessionRunState =
+  | {
+      phase: "running";
+      startedAt: number;
+    }
+  | {
+      phase: "awaiting_question";
+      startedAt: number;
+      question: PendingQuestionRecoveryState;
+    };
+
 export interface PersistedSessionMetadata {
   mode: string;
   model: string;
@@ -54,6 +73,7 @@ export interface PersistedSessionMetadata {
   loadedSkills?: string[];
   checkpointState?: CheckpointState;
   revertPending?: RevertRecoveryState;
+  runState?: PersistedSessionRunState;
 }
 
 export interface PersistedSessionRecord {

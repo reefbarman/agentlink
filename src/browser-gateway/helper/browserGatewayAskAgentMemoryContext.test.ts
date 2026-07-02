@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatAskAgentMemoryContext,
+  formatAskAgentMemoryIndexContext,
   formatAskAgentTranscriptExcerptContext,
 } from "./browserGatewayAskAgentMemoryContext.js";
 
@@ -36,6 +37,19 @@ describe("formatAskAgentMemoryContext", () => {
     expect(context.endsWith("</conversation-memory>")).toBe(true);
   });
 
+  it("includes chunk keywords and entities when present", () => {
+    const context = formatAskAgentMemoryContext([
+      result({
+        summary: "Assistant built a personal profile recap.",
+        keywords: ["personal profile", "preferences"],
+        entities: ["Bones", "Cairns", "Warhammer 40k"],
+      }),
+    ]);
+
+    expect(context).toContain("keywords: personal profile, preferences");
+    expect(context).toContain("entities: Bones, Cairns, Warhammer 40k");
+  });
+
   it("drops whole result lines to stay within the character budget", () => {
     const context = formatAskAgentMemoryContext(
       [
@@ -69,6 +83,33 @@ describe("formatAskAgentMemoryContext", () => {
     expect(context.match(/<\/conversation-memory>/g)).toHaveLength(1);
     expect(context.endsWith("</conversation-memory>")).toBe(true);
     expect(context.length).toBeLessThanOrEqual(320 + 1);
+  });
+});
+
+describe("formatAskAgentMemoryIndexContext", () => {
+  it("formats recent session summaries as a memory index", () => {
+    const context = formatAskAgentMemoryIndexContext([
+      {
+        sessionId: "session-bones",
+        title: "Getting to Know Bones",
+        createdAt: 100,
+        lastActiveAt: 200,
+        messageCount: 2,
+        sourceRevision: "bones",
+        summary: "User said their preferred nickname is Bones.",
+        topics: ["user identity", "nickname"],
+        decisions: ["Use Bones as the user's nickname"],
+        openQuestions: [],
+        durableCandidateHints: [],
+        updatedAt: 200,
+      },
+    ]);
+
+    expect(context).toContain("<conversation-memory-index>");
+    expect(context).toContain("Getting to Know Bones");
+    expect(context).toContain("preferred nickname is Bones");
+    expect(context).toContain("Use Bones as the user's nickname");
+    expect(context?.endsWith("</conversation-memory-index>")).toBe(true);
   });
 });
 

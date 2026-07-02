@@ -21,6 +21,7 @@ import { BUILT_IN_MODES } from "./modes.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { SkillEntry } from "./skillLoader.js";
 import type { McpToolDisclosurePartition } from "./mcpToolDisclosure.js";
+import type { PersistedSessionRunState } from "./persistenceContracts.js";
 import {
   buildPromptArtifacts,
   type AdvertisedRuleEntry,
@@ -55,6 +56,8 @@ export class AgentSession {
   lastActiveAt: number;
   /** Name of the most recently started tool call (updated by AgentEngine). */
   currentTool: string | undefined;
+  /** Durable marker for a foreground run that may need recovery after reload. */
+  runState: PersistedSessionRunState | undefined;
 
   /** Cumulative uncached input tokens across the session.
    * This is intentionally uncached-only for cost/usage accounting; use lastInputTokens
@@ -428,6 +431,7 @@ export class AgentSession {
       type: "tool_result";
       tool_use_id: string;
       content: string | ContentBlock[];
+      mcpApprovalPromotion?: import("../shared/types.js").McpApprovalPromotionMeta;
     }>,
   ): void {
     this.messages.push({ role: "user", content: results } as AgentMessage);
@@ -458,6 +462,7 @@ export class AgentSession {
     lastCacheReadTokens?: number;
     reasoningEffort?: ReasoningEffort;
     loadedSkills?: string[];
+    runState?: PersistedSessionRunState;
     messages: AgentMessage[];
   }): void {
     this.id = data.id;
@@ -471,6 +476,9 @@ export class AgentSession {
     this.lastInputTokens = data.lastInputTokens ?? 0;
     this.lastCacheReadTokens = data.lastCacheReadTokens ?? 0;
     this.reasoningEffort = data.reasoningEffort ?? this.reasoningEffort;
+    // Leave status at its constructed idle value. A restored runState marks the
+    // session resumable without pretending the old in-memory run still exists.
+    this.runState = data.runState;
     this.messages = data.messages;
     this.resetProviderResponseState();
     this.loadedSkills.clear();
@@ -682,14 +690,6 @@ export class AgentSession {
     const interjection = this._pendingInterjection;
     this._pendingInterjection = null;
     return interjection;
-  }
-
-  /**
-   * Check if a specific interjection is still pending (not yet consumed by the engine).
-   * Used to detect the race where the foreground went idle before consuming it.
-   */
-  hasPendingInterjection(queueId: string): boolean {
-    return this._pendingInterjection?.queueId === queueId;
   }
 
   /**

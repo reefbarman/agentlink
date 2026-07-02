@@ -63,6 +63,9 @@ const IDENTITY_CONTEXT_PATTERNS: RegExp[] = [
   /\bhave\s+i\s+told\s+you\s+my\s+(?:name|nickname|preferred\s+name)\b/i,
   /\bwhat\s+(?:name|nickname)\s+(?:did\s+i\s+give\s+you|do\s+you\s+(?:have\s+for\s+me|know\s+me\s+by|remember\s+for\s+me))\b/i,
   /\bwhat\s+(?:should\s+you\s+call\s+me|do\s+you\s+(?:call|know|remember)\s+me(?:\s+as)?)\b/i,
+  /\bwhat\s+do\s+you\s+(?:know|remember)\s+about\s+me\b/i,
+  /\bwhat\s+have\s+(?:i\s+told\s+you|we\s+discussed)\s+about\s+me\b/i,
+  /\bhave\s+we\s+(?:talked|spoken|discussed)\s+(?:about\s+)?me\b/i,
 ];
 
 const PAST_CONTEXT_PATTERNS: RegExp[] = [
@@ -119,6 +122,8 @@ export interface BrowserGatewayAskAgentMemorySearchResult {
   title?: string;
   summary: string;
   score: number;
+  keywords?: string[];
+  entities?: string[];
   sourceMessageIds: string[];
   startMessageIndex?: number;
   endMessageIndex?: number;
@@ -469,15 +474,49 @@ function hasSpecificQueryOverlap(
   );
 }
 
+function identityRecallUncertaintyPenalty(
+  text: string,
+  identityIntent: boolean,
+): number {
+  if (!identityIntent) return 0;
+  return /\b(?:not reliably know|could not determine|does not know|don't know|do not know|may have shared|might have shared|limited context|limited memory|did not have enough|not enough available memory|could not reliably recall|nothing reliable is known)\b/i.test(
+    text,
+  )
+    ? -0.28
+    : 0;
+}
+
 function chunkSpecificityBoost(
   queryTokens: readonly string[],
   chunk: BrowserGatewayAskAgentMemoryChunk,
+  identityIntent: boolean,
 ): number {
   const keywordOverlap = overlapRatio(
     queryTokens,
     tokenizeAskAgentMemoryText(chunk.keywords.join(" ")),
   );
-  return keywordOverlap > 0 ? Math.min(0.08, keywordOverlap * 0.08) : 0;
+  const keywordBoost =
+    keywordOverlap > 0 ? Math.min(0.08, keywordOverlap * 0.08) : 0;
+  if (!identityIntent) return keywordBoost;
+
+  const metadataText = `${chunk.summary} ${chunk.keywords.join(" ")}`;
+  const profileSignal =
+    /\b(?:personal profile|preferred nickname|preferred name|preferred form of address|user identity|name|nickname|location|hobbies|interests|preferences)\b/i.test(
+      metadataText,
+    );
+  const recursiveRecall =
+    /\b(?:what do you know about me|what the assistant knows|assistant knows about (?:the )?user)\b/i.test(
+      metadataText,
+    );
+  const entityBoost =
+    chunk.entities.length > 0 && profileSignal && !recursiveRecall ? 0.42 : 0;
+  const recursiveRecallPenalty = recursiveRecall ? -0.18 : 0;
+  return (
+    keywordBoost +
+    entityBoost +
+    recursiveRecallPenalty +
+    identityRecallUncertaintyPenalty(metadataText, identityIntent)
+  );
 }
 
 export function searchAskAgentMemory(
@@ -488,10 +527,20 @@ export function searchAskAgentMemory(
   const normalized = normalizeAskAgentMemorySnapshot(snapshot);
   const baseQueryTokens = tokenizeAskAgentMemoryText(query);
   const queryTokens = hasAskAgentIdentityMemoryIntent(query)
-    ? [...new Set([...baseQueryTokens, "name", "nickname", "identity"])]
+    ? [
+        ...new Set([
+          ...baseQueryTokens,
+          "name",
+          "nickname",
+          "identity",
+          "profile",
+          "user",
+        ]),
+      ]
     : baseQueryTokens;
   if (queryTokens.length === 0) return [];
   const explicitPastIntent = hasAskAgentMemoryPastIntent(query);
+  const identityIntent = hasAskAgentIdentityMemoryIntent(query);
   const minScore = explicitPastIntent
     ? (options.explicitPastMinScore ?? 0.14)
     : (options.minScore ?? 0.22);
@@ -513,14 +562,19 @@ export function searchAskAgentMemory(
     ) {
       continue;
     }
-    const score = calculateMemoryScore({
-      queryTokens,
-      summary: session.summary,
-      metadata,
-      updatedAt: session.updatedAt,
-      explicitPastIntent,
-      now,
-    });
+    const score =
+      calculateMemoryScore({
+        queryTokens,
+        summary: session.summary,
+        metadata,
+        updatedAt: session.updatedAt,
+        explicitPastIntent,
+        now,
+      }) +
+      identityRecallUncertaintyPenalty(
+        `${session.title} ${session.summary} ${metadata.join(" ")}`,
+        identityIntent,
+      );
     if (score < minScore) continue;
     results.push({
       kind: "session",
@@ -565,7 +619,7 @@ export function searchAskAgentMemory(
         updatedAt: chunk.updatedAt,
         explicitPastIntent,
         now,
-      }) + chunkSpecificityBoost(queryTokens, chunk);
+      }) + chunkSpecificityBoost(queryTokens, chunk, identityIntent);
     if (score < minScore) continue;
     results.push({
       kind: "chunk",
@@ -574,6 +628,8 @@ export function searchAskAgentMemory(
       title: session?.title,
       summary: chunk.summary,
       score,
+      keywords: chunk.keywords,
+      entities: chunk.entities,
       sourceMessageIds: chunk.sourceMessageIds,
       startMessageIndex: chunk.startMessageIndex,
       endMessageIndex: chunk.endMessageIndex,

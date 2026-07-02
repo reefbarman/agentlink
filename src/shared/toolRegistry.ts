@@ -80,7 +80,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   generate_image: {
     label: "Generate image",
     description:
-      "Generate PNG images via OpenAI/Codex auth and save them into the workspace. Uses ChatGPT/Codex OAuth image quota when signed in with OAuth, or OpenAI API-key billing when using an API key. Always requests approval before generation because quota is consumed before files are written.",
+      "Generate PNG images via OpenAI/Codex auth and show them inline in chat. Uses ChatGPT/Codex OAuth image quota when signed in with OAuth, or OpenAI API-key billing when using an API key. Always requests approval before generation because quota is consumed before images are returned; pass output_path in VS Code to also save files into the workspace.",
   },
   propose_memory: {
     label: "Propose durable memory",

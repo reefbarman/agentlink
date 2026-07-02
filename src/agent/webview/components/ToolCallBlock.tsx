@@ -573,6 +573,8 @@ export function ToolCallBlock({
     ) ?? [];
   const showRunningActions =
     !complete && (onCompleteToolCall || onCancelToolCall);
+  const resultImages =
+    complete && toolCall.resultImages ? toolCall.resultImages : [];
 
   return (
     <div class={`tool-call-block ${statusClass}`}>
@@ -678,6 +680,15 @@ export function ToolCallBlock({
               ) : (
                 <pre class="tool-call-code">{toolCall.result}</pre>
               )}
+            </div>
+          )}
+          {resultImages.length > 0 && (
+            <div class="tool-call-section">
+              <div class="tool-call-section-label">Generated images</div>
+              <div class="tool-result-image-count">
+                {resultImages.length} image
+                {resultImages.length === 1 ? "" : "s"} shown above.
+              </div>
             </div>
           )}
           {complete &&

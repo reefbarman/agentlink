@@ -1360,12 +1360,28 @@ export class AgentEngine {
         }
         totalToolCalls += dispatchableToolCount;
 
+        const pendingQuestionRecovery =
+          !opts?.isBackground &&
+          toolUseBlocks.length === 1 &&
+          toolUseBlocks[0]?.name === "ask_user"
+            ? {
+                schemaVersion: 1 as const,
+                assistantContent: structuredClone(contentBlocks),
+                toolUseId: toolUseBlocks[0].id,
+                toolName: "ask_user" as const,
+                toolInput: structuredClone(
+                  toolUseBlocks[0].input as Record<string, unknown>,
+                ),
+              }
+            : undefined;
+
         // Session-scoped tool context: use session.id so that per-session approvals
         // (MCP, command, write) are isolated between foreground chat sessions rather
         // than shared via the static "agent" synthetic ID.
         const sessionToolContext: AgentToolExecutionContext = {
           sessionId: session.id,
           mode: session.agentMode.slug,
+          pendingQuestionRecovery,
           onFinalStatus: (marker) => {
             pendingFinalMarker = marker;
           },
@@ -1572,6 +1588,7 @@ export class AgentEngine {
             type: "tool_result" as const,
             tool_use_id: tr.tool_use_id,
             content: toolResultContents[index]!,
+            mcpApprovalPromotion: tr.mcpApprovalPromotion,
           })),
         );
 

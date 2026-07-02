@@ -30,27 +30,24 @@ import type {
   ApprovalRequest,
   DecisionMessage,
 } from "../../approvals/webview/types";
+import { ApprovalPanelEmbed } from "../../agent/webview/components/ApprovalPanelEmbed";
+import { ChatHeader } from "../../agent/webview/components/ChatHeader";
 import { ChatView } from "../../agent/webview/components/ChatView";
-import { CommandCard } from "../../approvals/webview/components/CommandCard";
-import { ContextBar } from "../../agent/webview/components/ContextBar";
+import { ContextUsageRow } from "../../agent/webview/components/ContextUsageRow";
 import { DebugInfo } from "../../agent/webview/components/DebugInfo";
 import { BackgroundSessionStrip } from "../../agent/webview/components/BackgroundSessionStrip";
 import { BrowserDiffViewer } from "./components/BrowserDiffViewer";
 import { InputArea } from "../../agent/webview/components/InputArea";
-import { McpCard } from "../../approvals/webview/components/McpCard";
-import { MemoryCard } from "../../approvals/webview/components/MemoryCard";
-import { ModeSwitchCard } from "../../approvals/webview/components/ModeSwitchCard";
-import { PathCard } from "../../approvals/webview/components/PathCard";
+import { MessageQueuePanel } from "../../agent/webview/components/MessageQueuePanel";
 import { QuestionCard } from "../../agent/webview/components/QuestionCard";
-import { RenameCard } from "../../approvals/webview/components/RenameCard";
 import { SessionHistory } from "../../agent/webview/components/SessionHistory";
+import { StreamingStatusBar } from "../../agent/webview/components/StreamingStatusBar";
 import { TodoPanel } from "../../agent/webview/components/TodoPanel";
 import { TranscriptView } from "../../agent/webview/components/TranscriptView";
-import { WriteCard } from "../../approvals/webview/components/WriteCard";
-import { getStreamingActivity } from "../../agent/webview/components/MessageBubble";
 
 import {
   agentMessagesToChatMessages,
+  type AppState,
   type LoadedInstructionDebugInfo,
 } from "../../shared/chatProjection";
 import {
@@ -308,16 +305,7 @@ type GatewaySnapshot = {
       lastOutputTokens: number;
       lastCacheReadTokens: number;
       estimatedTotalUsed: number;
-      messageQueue: Array<{
-        id: string;
-        text: string;
-        fullText?: string;
-        isSlashCommand?: boolean;
-        slashCommandLabel?: string;
-        attachments?: string[];
-        images?: Array<{ name: string; mimeType: string; base64: string }>;
-        documents?: Array<{ name: string; mimeType: string; base64: string }>;
-      }>;
+      messageQueue: AppState["messageQueue"];
       questionRequest: {
         id: string;
         context: string;
@@ -358,6 +346,18 @@ type GatewaySnapshot = {
   modelsVersion?: number;
 };
 
+function isGatewaySnapshot(value: unknown): value is GatewaySnapshot {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    "session" in value &&
+    "ui" in value &&
+    "background" in value &&
+    "diffs" in value &&
+    "theme" in value,
+  );
+}
+
 async function readGatewaySnapshotResponse(
   response: Response,
 ): Promise<GatewaySnapshotReadResult> {
@@ -365,11 +365,17 @@ async function readGatewaySnapshotResponse(
     | GatewaySnapshot
     | AskAgentSessionResponse;
   if (data && typeof data === "object" && "snapshot" in data && data.snapshot) {
+    if (!isGatewaySnapshot(data.snapshot)) {
+      throw new Error("invalid_gateway_snapshot");
+    }
     return {
       snapshot: data.snapshot,
       askAgentCapabilities:
         data.session?.capabilities ?? data.ownerRegistration?.capabilities,
     };
+  }
+  if (!isGatewaySnapshot(data)) {
+    throw new Error("invalid_gateway_snapshot");
   }
   return { snapshot: data as GatewaySnapshot };
 }
@@ -696,7 +702,7 @@ function safeTranscriptFilename(title: string): string {
 
 export function BrowserGatewayApp({
   authToken,
-  currentInstanceId,
+  currentInstanceId: _currentInstanceId,
   workspaceName: _workspaceName,
   routeByInstance = false,
   initialTheme,
@@ -706,9 +712,7 @@ export function BrowserGatewayApp({
     BrowserGatewayInstanceOption[]
   >([]);
   const instanceOptionsRef = useRef<BrowserGatewayInstanceOption[]>([]);
-  const initialSelectedTabId = routeByInstance
-    ? currentInstanceId || BROWSER_GATEWAY_ASK_AGENT_TAB_ID
-    : BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
+  const initialSelectedTabId = BROWSER_GATEWAY_ASK_AGENT_TAB_ID;
   const [selectedTabId, setSelectedTabId] =
     useState<string>(initialSelectedTabId);
   const selectedTabIdRef = useRef(initialSelectedTabId);
@@ -1508,7 +1512,7 @@ export function BrowserGatewayApp({
   async function fetchSnapshot(
     instanceId = selectedInstanceId,
     askAgentSelected = isAskAgentSelected,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const response = await fetch(
         buildSnapshotApiPath(instanceId, askAgentSelected),
@@ -1521,15 +1525,17 @@ export function BrowserGatewayApp({
       );
       if (!response.ok) {
         setStatus(`Snapshot failed: ${response.status}`);
-        return;
+        return false;
       }
       const data = await readGatewaySnapshotResponse(response);
       setSnapshot(data.snapshot);
       if (data.askAgentCapabilities) {
         setAskAgentCapabilities(data.askAgentCapabilities);
       }
+      return true;
     } catch (err) {
       setStatus(`Snapshot error: ${String(err)}`);
+      return false;
     }
   }
 
@@ -2124,7 +2130,7 @@ export function BrowserGatewayApp({
     }>,
     origin: "user" | "autoContinue" = "user",
     targetForeground?: GatewaySnapshot["session"]["foreground"],
-  ): Promise<void> {
+  ): Promise<boolean> {
     const activeForeground =
       targetForeground ?? (await ensureAskAgentForeground());
     if (!activeForeground) {
@@ -2138,7 +2144,7 @@ export function BrowserGatewayApp({
           ? "Ask Agent session is still loading. Try again in a moment."
           : "No active session is loaded.",
       );
-      return;
+      return false;
     }
 
     const userMessageId = randomId();
@@ -2185,7 +2191,7 @@ export function BrowserGatewayApp({
         imageCount: images.length,
         documentCount: documents.length,
       });
-      return;
+      return false;
     }
 
     let displayWithMedia = displayText ?? fullText;
@@ -2209,7 +2215,7 @@ export function BrowserGatewayApp({
         const rememberContent = trimmed.replace(/^\/remember\b/i, "").trim();
         if (!rememberContent) {
           setSendStatus("Add what to remember after /remember.");
-          return;
+          return false;
         }
         setSendStatus("Preparing memory proposal…");
         const response = await fetch("/api/ask-agent/memory/proposal", {
@@ -2241,7 +2247,7 @@ export function BrowserGatewayApp({
             `Memory proposal failed: ${body.error ?? response.status}`,
           );
         }
-        return;
+        return Boolean(body.ok);
       }
 
       setSendStatus("Sending…");
@@ -2309,6 +2315,7 @@ export function BrowserGatewayApp({
             ? "A message is already queued. Wait for it to send or remove it first."
             : `Send failed: ${body.error ?? response.status}`,
       );
+      return Boolean(body.ok);
     } catch (err) {
       logAskAgentBrowserEvent("send.error", {
         askAgentSelected: isAskAgentSelected,
@@ -2316,6 +2323,7 @@ export function BrowserGatewayApp({
         error: String(err),
       });
       setSendStatus(`Send error: ${String(err)}`);
+      return false;
     }
   }
 
@@ -2959,7 +2967,9 @@ export function BrowserGatewayApp({
     setLocalDismissedApprovalId(submittedApprovalId);
     void (async () => {
       const approvalPath = isAskAgentSelected
-        ? "/api/ask-agent/memory/approval"
+        ? visibleApproval?.kind === "memory"
+          ? "/api/ask-agent/memory/approval"
+          : "/api/ask-agent/approval"
         : buildApiPath("/api/approval");
       const response = await fetch(approvalPath, {
         method: "POST",
@@ -3759,6 +3769,72 @@ export function BrowserGatewayApp({
         return;
       }
 
+      if (
+        command === "agentSteerQueuedMessage" ||
+        command === "agentInterjectQueuedMessage"
+      ) {
+        const sessionId = String(data.sessionId ?? "").trim();
+        const queueId = String(data.queueId ?? "").trim();
+        if (!sessionId || !queueId) return;
+        const isSteer = command === "agentSteerQueuedMessage";
+        setSendStatus(isSteer ? "Steering…" : "Interjecting…");
+        void fetch(
+          buildApiPath(isSteer ? "/api/queue/steer" : "/api/queue/interject"),
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              sessionId,
+              queueId,
+              text: typeof data.text === "string" ? data.text : "",
+              displayText:
+                typeof data.displayText === "string"
+                  ? data.displayText
+                  : undefined,
+              isSlashCommand: data.isSlashCommand === true,
+              slashCommandLabel:
+                typeof data.slashCommandLabel === "string"
+                  ? data.slashCommandLabel
+                  : undefined,
+              attachments: Array.isArray(data.attachments)
+                ? data.attachments
+                : undefined,
+              images: Array.isArray(data.images) ? data.images : undefined,
+              documents: Array.isArray(data.documents)
+                ? data.documents
+                : undefined,
+            }),
+          },
+        )
+          .then(async (response) => {
+            const body = (await response.json()) as {
+              ok?: boolean;
+              error?: string;
+              snapshot?: GatewaySnapshot;
+            };
+            if (body.ok && body.snapshot) {
+              setSnapshot(body.snapshot);
+            }
+            setSendStatus(
+              body.ok
+                ? isSteer
+                  ? "Steered."
+                  : "Interjection queued."
+                : `${isSteer ? "Steer" : "Interject"} failed: ${body.error ?? response.status}`,
+            );
+          })
+          .catch((err) => {
+            setSendStatus(
+              `${isSteer ? "Steer" : "Interject"} error: ${String(err)}`,
+            );
+          });
+        return;
+      }
+
       if (command === "agentResolveDroppedFiles") {
         window.postMessage({
           type: "agentDroppedFilesResolved",
@@ -3906,83 +3982,62 @@ export function BrowserGatewayApp({
                   onClose={() => setTranscriptView(null)}
                 />
               )}
-              <div class="chat-header">
-                <button
-                  class="icon-button"
-                  onClick={handleNewSession}
-                  title={
-                    foreground?.restoringSession
-                      ? "Start a new session without waiting for restore"
-                      : "New Session"
-                  }
-                >
-                  <i class="codicon codicon-add" />
-                </button>
-                {foreground?.restoringSession && (
-                  <div
-                    class="session-restore-status"
-                    title="Restoring the last session"
-                  >
-                    <i class="codicon codicon-loading codicon-modifier-spin" />
-                    <span>Loading last session…</span>
-                  </div>
-                )}
-                {isAskAgentSelected && (
-                  <>
-                    <button
-                      class={`icon-button${showAskAgentMemory ? " active" : ""}`}
-                      onClick={handleShowAskAgentMemory}
-                      title="Ask Agent Memory"
-                      type="button"
-                    >
-                      <i class="codicon codicon-archive" />
-                      {askAgentMemory &&
-                        askAgentMemory.totalSummaryCount > 0 && (
+              <ChatHeader
+                restoringSession={foreground?.restoringSession}
+                showHistory={showHistory}
+                onNewSession={handleNewSession}
+                onShowHistory={handleShowHistory}
+                extraActions={
+                  isAskAgentSelected && (
+                    <>
+                      <button
+                        class={`icon-button${showAskAgentMemory ? " active" : ""}`}
+                        onClick={handleShowAskAgentMemory}
+                        title="Ask Agent Memory"
+                        type="button"
+                      >
+                        <i class="codicon codicon-archive" />
+                        {askAgentMemory &&
+                          askAgentMemory.totalSummaryCount > 0 && (
+                            <span class="memory-count-badge">
+                              {askAgentMemory.totalSummaryCount}
+                            </span>
+                          )}
+                      </button>
+                      <button
+                        class={`icon-button${showAskAgentReadGrants ? " active" : ""}`}
+                        onClick={() =>
+                          setShowAskAgentReadGrants((value) => !value)
+                        }
+                        title="Read-only local file grants"
+                        type="button"
+                      >
+                        <i class="codicon codicon-folder-opened" />
+                        {askAgentReadGrants.length > 0 && (
                           <span class="memory-count-badge">
-                            {askAgentMemory.totalSummaryCount}
+                            {askAgentReadGrants.length}
                           </span>
                         )}
-                    </button>
-                    <button
-                      class={`icon-button${showAskAgentReadGrants ? " active" : ""}`}
-                      onClick={() =>
-                        setShowAskAgentReadGrants((value) => !value)
-                      }
-                      title="Read-only local file grants"
-                      type="button"
-                    >
-                      <i class="codicon codicon-folder-opened" />
-                      {askAgentReadGrants.length > 0 && (
-                        <span class="memory-count-badge">
-                          {askAgentReadGrants.length}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      class={`icon-button${showAskAgentHandoff ? " active" : ""}`}
-                      onClick={() => {
-                        setShowAskAgentHandoff((value) => !value);
-                        if (!askAgentHandoffTargetId) {
-                          setAskAgentHandoffTargetId(
-                            askAgentHandoffTargets[0]?.instanceId ?? "",
-                          );
-                        }
-                      }}
-                      title="Handoff to VS Code project session"
-                      type="button"
-                    >
-                      <i class="codicon codicon-git-pull-request-go-to-changes" />
-                    </button>
-                  </>
-                )}
-                <button
-                  class={`icon-button${showHistory ? " active" : ""}`}
-                  onClick={handleShowHistory}
-                  title="Session History"
-                >
-                  <i class="codicon codicon-history" />
-                </button>
-              </div>
+                      </button>
+                      <button
+                        class={`icon-button${showAskAgentHandoff ? " active" : ""}`}
+                        onClick={() => {
+                          setShowAskAgentHandoff((value) => !value);
+                          if (!askAgentHandoffTargetId) {
+                            setAskAgentHandoffTargetId(
+                              askAgentHandoffTargets[0]?.instanceId ?? "",
+                            );
+                          }
+                        }}
+                        title="Handoff to VS Code project session"
+                        type="button"
+                      >
+                        <i class="codicon codicon-git-pull-request-go-to-changes" />
+                      </button>
+                    </>
+                  )
+                }
+              />
               {showAskAgentMemory && (
                 <section
                   aria-label="Ask Agent derived memory"
@@ -4501,25 +4556,39 @@ export function BrowserGatewayApp({
                     onStopBackground={handleStopBackground}
                     onOpenTranscript={handleOpenBgTranscript}
                     onFinalMarkerContinue={(prompt) => {
-                      setHiddenFinalContinueMessageIds((prev) => {
-                        const next = new Set(prev);
-                        for (const message of messages) {
+                      const continuedMessageIds = messages.flatMap(
+                        (message) => {
                           if (
                             message.role !== "assistant" ||
                             !message.finalMarker
                           ) {
-                            continue;
+                            return [];
                           }
-                          if (
-                            getFinalMessageContinueAction(message.finalMarker)
-                              ?.prompt === prompt
-                          ) {
-                            next.add(message.id);
+                          return getFinalMessageContinueAction(
+                            message.finalMarker,
+                          )?.prompt === prompt
+                            ? [message.id]
+                            : [];
+                        },
+                      );
+                      void handleSend(
+                        prompt,
+                        [],
+                        undefined,
+                        undefined,
+                        undefined,
+                        "user",
+                        foreground ?? undefined,
+                      ).then((sent) => {
+                        if (!sent) return;
+                        setHiddenFinalContinueMessageIds((prev) => {
+                          const next = new Set(prev);
+                          for (const id of continuedMessageIds) {
+                            next.add(id);
                           }
-                        }
-                        return next;
+                          return next;
+                        });
                       });
-                      void handleSend(prompt, []);
                     }}
                     onRevertCheckpoint={handleRevertCheckpoint}
                     onViewCheckpointDiff={handleViewCheckpointDiff}
@@ -4530,60 +4599,52 @@ export function BrowserGatewayApp({
                 foreground &&
                 foreground.messageQueue.length > 0 &&
                 !mobileReviewOpen && (
-                  <div class="queue-panel">
-                    <div class="queue-header">
-                      <i class="codicon codicon-list-ordered" />
-                      <span>Queued ({foreground.messageQueue.length})</span>
-                    </div>
-                    {foreground.messageQueue.map((item) => (
-                      <div key={item.id} class="queue-item">
-                        <span class="queue-item-text">{item.text}</span>
-                      </div>
-                    ))}
-                  </div>
+                  <MessageQueuePanel
+                    queue={foreground.messageQueue}
+                    onSteer={(item) => {
+                      browserVscodeApi.postMessage({
+                        command: "agentSteerQueuedMessage",
+                        sessionId: foreground.sessionId,
+                        queueId: item.id,
+                        text: item.fullText ?? item.text,
+                        displayText: item.text,
+                        isSlashCommand: item.isSlashCommand === true,
+                        slashCommandLabel: item.slashCommandLabel,
+                        attachments: item.attachments,
+                        images: item.images,
+                        documents: item.documents,
+                      });
+                    }}
+                    onInterject={(item) => {
+                      browserVscodeApi.postMessage({
+                        command: "agentInterjectQueuedMessage",
+                        sessionId: foreground.sessionId,
+                        queueId: item.id,
+                        text: item.fullText ?? item.text,
+                        displayText: item.text,
+                        isSlashCommand: item.isSlashCommand === true,
+                        slashCommandLabel: item.slashCommandLabel,
+                        attachments: item.attachments,
+                        images: item.images,
+                        documents: item.documents,
+                      });
+                    }}
+                  />
                 )}
-              {!isAskAgentSelected &&
-              !mobileReviewOpen &&
-              ((foreground?.lastInputTokens ?? 0) > 0 ||
-                (foreground?.lastOutputTokens ?? 0) > 0 ||
-                (foreground?.estimatedTotalUsed ?? 0) > 0) ? (
-                <div class="browser-context-row">
-                  {(() => {
-                    const currentModel = composerModels.find(
-                      (model) => model.id === (foreground?.model ?? ""),
-                    );
-                    return (
-                      <ContextBar
-                        inputTokens={foreground?.lastInputTokens ?? 0}
-                        outputTokens={foreground?.lastOutputTokens ?? 0}
-                        cacheReadTokens={foreground?.lastCacheReadTokens ?? 0}
-                        maxContextWindow={
-                          currentModel?.contextWindow ?? DEFAULT_MAX_TOKENS
-                        }
-                        maxInputTokens={
-                          foreground?.contextBudget?.maxInputTokens ??
-                          currentModel?.maxInputTokens
-                        }
-                        usedInputTokens={
-                          foreground?.contextBudget?.usedInputTokens
-                        }
-                        outputReservation={
-                          foreground?.contextBudget?.outputReservation
-                        }
-                        safetyBufferTokens={
-                          foreground?.contextBudget?.safetyBufferTokens
-                        }
-                        softThresholdBudget={
-                          foreground?.contextBudget?.softThresholdBudget
-                        }
-                        hardBudget={foreground?.contextBudget?.hardBudget}
-                        condenseThreshold={foreground?.condenseThreshold}
-                        estimatedTotalUsed={foreground?.estimatedTotalUsed ?? 0}
-                      />
-                    );
-                  })()}
-                </div>
-              ) : null}
+              {!isAskAgentSelected && !mobileReviewOpen && foreground && (
+                <ContextUsageRow
+                  inputTokens={foreground.lastInputTokens}
+                  outputTokens={foreground.lastOutputTokens}
+                  cacheReadTokens={foreground.lastCacheReadTokens}
+                  estimatedTotalUsed={foreground.estimatedTotalUsed}
+                  models={composerModels}
+                  modelId={foreground.model}
+                  contextBudget={foreground.contextBudget}
+                  condenseThreshold={foreground.condenseThreshold}
+                  defaultMaxTokens={DEFAULT_MAX_TOKENS}
+                  className="browser-context-row"
+                />
+              )}
               {!mobileReviewOpen &&
                 showMcpStatus &&
                 (mcpManagerSnapshot ||
@@ -4739,99 +4800,46 @@ export function BrowserGatewayApp({
                   }}
                 />
               )}
-              {!isAskAgentSelected && visibleApproval && (
-                <div
-                  class={`approval-panel-embed${approvalResizing ? " approval-panel-embed-resizing" : ""}`}
-                  style={{ height: `${approvalPanelHeight}px` }}
-                >
-                  <div
-                    class="approval-panel-embed-handle"
-                    onMouseDown={(e) =>
-                      handleApprovalResizeStart(e as unknown as MouseEvent)
-                    }
-                    title="Drag to resize approval card"
-                  />
-                  {canOpenMobileReview && (
-                    <div class="approval-mobile-review-actions">
-                      <button
-                        class={`secondary mobile-review-button${mobileReviewOpen ? " active" : ""}`}
-                        aria-expanded={mobileReviewOpen}
-                        onClick={() =>
-                          setMobilePane((current) =>
-                            current === "review" ? null : "review",
-                          )
-                        }
-                        type="button"
-                      >
-                        <i
-                          class={`codicon ${mobileReviewOpen ? "codicon-comment-discussion" : "codicon-diff"}`}
-                        />
-                        <span>
-                          {mobileReviewOpen ? "Back to chat" : "View diff"}
-                        </span>
-                      </button>
-                    </div>
-                  )}
-                  {visibleApproval.kind === "command" ? (
-                    <CommandCard
-                      request={visibleApproval}
-                      submit={handleForwardedApprovalSubmit}
-                      followUpRef={forwardedFollowUpRef}
-                      onSuggestRegex={handleSuggestRegex}
-                    />
-                  ) : visibleApproval.kind === "write" ? (
-                    <WriteCard
-                      request={visibleApproval}
-                      submit={handleForwardedApprovalSubmit}
-                      followUpRef={forwardedFollowUpRef}
-                    />
-                  ) : visibleApproval.kind === "rename" ? (
-                    <RenameCard
-                      request={visibleApproval}
-                      submit={handleForwardedApprovalSubmit}
-                      followUpRef={forwardedFollowUpRef}
-                    />
-                  ) : visibleApproval.kind === "mcp" ? (
-                    <McpCard
-                      request={visibleApproval}
-                      submit={handleForwardedApprovalSubmit}
-                      followUpRef={forwardedFollowUpRef}
-                    />
-                  ) : visibleApproval.kind === "memory" ? (
-                    <MemoryCard
-                      request={visibleApproval}
-                      submit={handleForwardedApprovalSubmit}
-                      followUpRef={forwardedFollowUpRef}
-                    />
-                  ) : visibleApproval.kind === "mode-switch" ? (
-                    <ModeSwitchCard
-                      request={visibleApproval}
-                      submit={handleForwardedApprovalSubmit}
-                      followUpRef={forwardedFollowUpRef}
-                    />
-                  ) : (
-                    <PathCard
-                      request={visibleApproval}
-                      submit={handleForwardedApprovalSubmit}
-                      followUpRef={forwardedFollowUpRef}
-                    />
-                  )}
-                </div>
+              {visibleApproval && (
+                <ApprovalPanelEmbed
+                  request={visibleApproval}
+                  height={approvalPanelHeight}
+                  resizing={approvalResizing}
+                  followUpRef={forwardedFollowUpRef}
+                  submit={handleForwardedApprovalSubmit}
+                  onResizeStart={handleApprovalResizeStart}
+                  onSuggestRegex={handleSuggestRegex}
+                  actions={
+                    canOpenMobileReview && (
+                      <div class="approval-mobile-review-actions">
+                        <button
+                          class={`secondary mobile-review-button${mobileReviewOpen ? " active" : ""}`}
+                          aria-expanded={mobileReviewOpen}
+                          onClick={() =>
+                            setMobilePane((current) =>
+                              current === "review" ? null : "review",
+                            )
+                          }
+                          type="button"
+                        >
+                          <i
+                            class={`codicon ${mobileReviewOpen ? "codicon-comment-discussion" : "codicon-diff"}`}
+                          />
+                          <span>
+                            {mobileReviewOpen ? "Back to chat" : "View diff"}
+                          </span>
+                        </button>
+                      </div>
+                    )
+                  }
+                />
               )}
               {streaming && !mobileReviewOpen ? (
-                <div class="streaming-status-bar browser-streaming-row">
-                  <i class="codicon codicon-loading codicon-modifier-spin" />
-                  <span>
-                    {statusOverride ??
-                      (() => {
-                        const lastMsg = messages[messages.length - 1];
-                        if (lastMsg?.role === "assistant") {
-                          return getStreamingActivity(lastMsg.blocks);
-                        }
-                        return "Waiting for response…";
-                      })()}
-                  </span>
-                </div>
+                <StreamingStatusBar
+                  messages={messages}
+                  statusOverride={statusOverride}
+                  className="browser-streaming-row"
+                />
               ) : null}
               {!isAskAgentSelected && !mobileReviewOpen && (
                 <BackgroundSessionStrip

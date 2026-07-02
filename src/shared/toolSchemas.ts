@@ -295,7 +295,7 @@ export const generateImageSchema = {
     .string()
     .optional()
     .describe(
-      "Workspace-relative PNG file path or output directory. Defaults to ./generated-images/ with unique filenames. Must resolve inside the workspace.",
+      "Optional workspace-relative PNG file path or output directory. When omitted, generated images are shown in chat only and no files are written. When provided, images are also saved to this workspace path.",
     ),
   size: z
     .string()

@@ -36,31 +36,27 @@ import {
   useState,
 } from "preact/hooks";
 
+import { ApprovalPanelEmbed } from "./components/ApprovalPanelEmbed";
 import { BackgroundSessionStrip } from "./components/BackgroundSessionStrip";
 import type { BgSessionInfoProps } from "./components/BackgroundSessionStrip";
 import { BtwPanel } from "./components/BtwPanel";
 import type { BtwState } from "./components/BtwPanel";
+import { ChatHeader } from "./components/ChatHeader";
 import { ChatView } from "./components/ChatView";
-import { CommandCard } from "../../approvals/webview/components/CommandCard";
-import { ContextBar } from "./components/ContextBar";
+import { ContextUsageRow } from "./components/ContextUsageRow";
 import { DebugInfo } from "./components/DebugInfo";
 import { ElicitationModal } from "./components/ElicitationModal";
 import { InputArea } from "./components/InputArea";
-import { McpCard } from "../../approvals/webview/components/McpCard";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
-import { MemoryCard } from "../../approvals/webview/components/MemoryCard";
-import { ModeSwitchCard } from "../../approvals/webview/components/ModeSwitchCard";
-import { PathCard } from "../../approvals/webview/components/PathCard";
+import { MessageQueuePanel } from "./components/MessageQueuePanel";
 import { QuestionCard } from "./components/QuestionCard";
-import { RenameCard } from "../../approvals/webview/components/RenameCard";
 import { SessionHistory } from "./components/SessionHistory";
+import { StreamingStatusBar } from "./components/StreamingStatusBar";
 import { TodoPanel } from "./components/TodoPanel";
 import { TranscriptView } from "./components/TranscriptView";
 import { UrlElicitationModal } from "./components/UrlElicitationModal";
-import { WriteCard } from "../../approvals/webview/components/WriteCard";
 import { detectQuestionFromAssistantText } from "./questionDetection";
-import { getStreamingActivity } from "./components/MessageBubble";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
@@ -231,14 +227,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const questionProgressOriginRef = useRef<string>(
     `ext-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`,
   );
-  const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
-  const [editingQueueText, setEditingQueueText] = useState("");
   const [bgSessions, setBgSessions] = useState<BgSessionInfoProps[]>([]);
   const bgSessionsRef = useRef<BgSessionInfoProps[]>([]);
   bgSessionsRef.current = bgSessions;
-  const [expandedQueueIds, setExpandedQueueIds] = useState<Set<string>>(
-    new Set(),
-  );
   const [transcriptView, setTranscriptView] = useState<{
     sessionId: string;
     task: string;
@@ -861,6 +852,17 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           );
           break;
 
+        case "agentQueueInterjectionReady":
+          dispatch({
+            type: "MARK_QUEUE_INTERJECTION_READY",
+            id: msg.queueId,
+            ready: msg.ready,
+          });
+          messageQueueRef.current = messageQueueRef.current.map((q) =>
+            q.id === msg.queueId ? { ...q, interjectionReady: msg.ready } : q,
+          );
+          break;
+
         case "agentCommittedUserMessage":
           dispatch({
             type: "ADD_COMMITTED_USER_MESSAGE",
@@ -1018,6 +1020,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                       toolCallId: msg.toolCallId,
                       toolName: msg.toolName,
                       result: msg.result,
+                      resultImages: msg.resultImages,
                       durationMs: msg.durationMs,
                       input: msg.input,
                     },
@@ -1374,6 +1377,22 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         sessionId: stateRef.current.sessionId,
       });
     }
+  }, [vscodeApi]);
+
+  const handleResumeInterruptedSession = useCallback(() => {
+    const sessionId = stateRef.current.sessionId;
+    if (!sessionId) return;
+    streamingRef.current = true;
+    dispatch({
+      type: "ADD_USER_MESSAGE",
+      text: "Resume interrupted session",
+      isSlashCommand: true,
+      slashCommandLabel: "/resume interrupted session",
+    });
+    vscodeApi.postMessage({
+      command: "agentResumeSession",
+      sessionId,
+    });
   }, [vscodeApi]);
 
   const handleToggleAutoContinue = useCallback((enabled: boolean) => {
@@ -2183,35 +2202,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             </div>
           </div>
         )}
-        <div class="chat-header">
-          <button
-            class="icon-button"
-            onClick={handleNewSession}
-            title={
-              state.restoringSession
-                ? "Start a new session without waiting for restore"
-                : "New Session"
-            }
-          >
-            <i class="codicon codicon-add" />
-          </button>
-          {state.restoringSession && (
-            <div
-              class="session-restore-status"
-              title="Restoring the last session"
-            >
-              <i class="codicon codicon-loading codicon-modifier-spin" />
-              <span>Loading last session…</span>
-            </div>
-          )}
-          <button
-            class={`icon-button${showHistory ? " active" : ""}`}
-            onClick={handleShowHistory}
-            title="Session History"
-          >
-            <i class="codicon codicon-history" />
-          </button>
-        </div>
+        <ChatHeader
+          restoringSession={state.restoringSession}
+          showHistory={showHistory}
+          onNewSession={handleNewSession}
+          onShowHistory={handleShowHistory}
+        />
         {showHistory && (
           <SessionHistory
             sessions={sessionHistory}
@@ -2262,167 +2258,85 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onOpenTranscript={handleOpenBgTranscript}
           onFinalMarkerContinue={handleFinalMarkerContinue}
         />
-        {state.messageQueue.length > 0 && (
-          <div class="queue-panel">
-            <div class="queue-header">
-              <i class="codicon codicon-list-ordered" />
-              <span>Queued ({state.messageQueue.length})</span>
-            </div>
-            {state.messageQueue.map((item) => (
-              <div key={item.id} class="queue-item">
-                {editingQueueId === item.id ? (
-                  <textarea
-                    class="queue-item-textarea"
-                    value={editingQueueText}
-                    onInput={(e) =>
-                      setEditingQueueText(
-                        (e.target as HTMLTextAreaElement).value,
-                      )
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        const trimmed = editingQueueText.trim();
-                        if (trimmed) {
-                          dispatch({
-                            type: "EDIT_QUEUE_MESSAGE",
-                            id: item.id,
-                            text: trimmed,
-                          });
-                          vscodeApi.postMessage({
-                            command: "agentUpdateQueuedMessage",
-                            sessionId: stateRef.current.sessionId,
-                            queueId: item.id,
-                            text: trimmed,
-                            displayText: trimmed,
-                            isSlashCommand: false,
-                            attachments: item.attachments,
-                            images: item.images,
-                            documents: item.documents,
-                          });
-                        }
-                        setEditingQueueId(null);
-                      } else if (e.key === "Escape") {
-                        setEditingQueueId(null);
-                      }
-                    }}
-                    autoFocus
-                  />
-                ) : (
-                  <span
-                    class={`queue-item-text${expandedQueueIds.has(item.id) ? " expanded" : ""}`}
-                    title="Click to expand/collapse"
-                    onClick={() =>
-                      setExpandedQueueIds((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(item.id)) next.delete(item.id);
-                        else next.add(item.id);
-                        return next;
-                      })
-                    }
-                  >
-                    {item.text}
-                  </span>
-                )}
-                <div class="queue-item-actions">
-                  <button
-                    class="icon-button queue-item-steer"
-                    title="Steer now"
-                    onClick={() => {
-                      const nextQueue = messageQueueRef.current.filter(
-                        (q) => q.id !== item.id,
-                      );
-                      messageQueueRef.current = nextQueue;
-                      dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-                      vscodeApi.postMessage({
-                        command: "agentSteerQueuedMessage",
-                        sessionId: stateRef.current.sessionId,
-                        queueId: item.id,
-                        text: item.fullText ?? item.text,
-                        displayText: item.text,
-                        isSlashCommand: item.isSlashCommand === true,
-                        slashCommandLabel: item.slashCommandLabel,
-                        attachments: item.attachments,
-                        images: item.images,
-                        documents: item.documents,
-                        source: item.source,
-                      });
-                    }}
-                  >
-                    <i class="codicon codicon-compass-active" />
-                  </button>
-                  {editingQueueId !== item.id && (
-                    <button
-                      class="icon-button queue-item-edit"
-                      title="Edit"
-                      onClick={() => {
-                        setEditingQueueText(item.text);
-                        setEditingQueueId(item.id);
-                      }}
-                    >
-                      <i class="codicon codicon-edit" />
-                    </button>
-                  )}
-                  <button
-                    class="icon-button queue-item-remove"
-                    title="Remove"
-                    onClick={() => {
-                      const nextQueue = messageQueueRef.current.filter(
-                        (q) => q.id !== item.id,
-                      );
-                      messageQueueRef.current = nextQueue;
-                      dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
-                      if (item.source === "browser") {
-                        vscodeApi.postMessage({
-                          command: "agentRemoveQueuedMessage",
-                          sessionId: stateRef.current.sessionId,
-                          queueId: item.id,
-                        });
-                      }
-                    }}
-                  >
-                    <i class="codicon codicon-close" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        {(state.lastInputTokens > 0 ||
-          state.lastOutputTokens > 0 ||
-          state.estimatedTotalUsed > 0) &&
-          (() => {
-            const currentModel = state.availableModels.find(
-              (m) => m.id === state.chatState.model,
+        <MessageQueuePanel
+          queue={state.messageQueue}
+          onSteer={(item) => {
+            const nextQueue = messageQueueRef.current.filter(
+              (q) => q.id !== item.id,
             );
-            return (
-              <ContextBar
-                inputTokens={state.lastInputTokens}
-                outputTokens={state.lastOutputTokens}
-                cacheReadTokens={state.lastCacheReadTokens}
-                maxContextWindow={
-                  currentModel?.contextWindow ?? DEFAULT_MAX_TOKENS
-                }
-                maxInputTokens={
-                  state.chatState.contextBudget?.maxInputTokens ??
-                  currentModel?.maxInputTokens
-                }
-                usedInputTokens={state.chatState.contextBudget?.usedInputTokens}
-                outputReservation={
-                  state.chatState.contextBudget?.outputReservation
-                }
-                safetyBufferTokens={
-                  state.chatState.contextBudget?.safetyBufferTokens
-                }
-                softThresholdBudget={
-                  state.chatState.contextBudget?.softThresholdBudget
-                }
-                hardBudget={state.chatState.contextBudget?.hardBudget}
-                condenseThreshold={state.chatState.condenseThreshold}
-                estimatedTotalUsed={state.estimatedTotalUsed}
-              />
+            messageQueueRef.current = nextQueue;
+            dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
+            vscodeApi.postMessage({
+              command: "agentSteerQueuedMessage",
+              sessionId: stateRef.current.sessionId,
+              queueId: item.id,
+              text: item.fullText ?? item.text,
+              displayText: item.text,
+              isSlashCommand: item.isSlashCommand === true,
+              slashCommandLabel: item.slashCommandLabel,
+              attachments: item.attachments,
+              images: item.images,
+              documents: item.documents,
+            });
+          }}
+          onInterject={(item) => {
+            vscodeApi.postMessage({
+              command: "agentInterjectQueuedMessage",
+              sessionId: stateRef.current.sessionId,
+              queueId: item.id,
+              text: item.fullText ?? item.text,
+              displayText: item.text,
+              isSlashCommand: item.isSlashCommand === true,
+              slashCommandLabel: item.slashCommandLabel,
+              attachments: item.attachments,
+              images: item.images,
+              documents: item.documents,
+            });
+          }}
+          onEdit={(item, text) => {
+            dispatch({
+              type: "EDIT_QUEUE_MESSAGE",
+              id: item.id,
+              text,
+            });
+            vscodeApi.postMessage({
+              command: "agentUpdateQueuedMessage",
+              sessionId: stateRef.current.sessionId,
+              queueId: item.id,
+              text,
+              displayText: text,
+              isSlashCommand: false,
+              attachments: item.attachments,
+              images: item.images,
+              documents: item.documents,
+            });
+          }}
+          onRemove={(item) => {
+            const nextQueue = messageQueueRef.current.filter(
+              (q) => q.id !== item.id,
             );
-          })()}
+            messageQueueRef.current = nextQueue;
+            dispatch({ type: "REMOVE_FROM_QUEUE", id: item.id });
+            if (item.source === "browser") {
+              vscodeApi.postMessage({
+                command: "agentRemoveQueuedMessage",
+                sessionId: stateRef.current.sessionId,
+                queueId: item.id,
+              });
+            }
+          }}
+        />
+        <ContextUsageRow
+          inputTokens={state.lastInputTokens}
+          outputTokens={state.lastOutputTokens}
+          cacheReadTokens={state.lastCacheReadTokens}
+          estimatedTotalUsed={state.estimatedTotalUsed}
+          models={state.availableModels}
+          modelId={state.chatState.model}
+          contextBudget={state.chatState.contextBudget}
+          condenseThreshold={state.chatState.condenseThreshold}
+          defaultMaxTokens={DEFAULT_MAX_TOKENS}
+        />
         {mcpManagerSnapshot && (
           <McpManagerPanel
             snapshot={mcpManagerSnapshot}
@@ -2515,80 +2429,44 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           />
         )}
         {forwardedApproval && (
-          <div
-            class={`approval-panel-embed${approvalResizing ? " approval-panel-embed-resizing" : ""}`}
-            style={{ height: `${approvalPanelHeight}px` }}
-          >
-            <div
-              class="approval-panel-embed-handle"
-              onMouseDown={(e) =>
-                handleApprovalResizeStart(e as unknown as MouseEvent)
-              }
-              title="Drag to resize approval card"
-            />
-            {forwardedApproval.kind === "command" ? (
-              <CommandCard
-                request={forwardedApproval}
-                submit={handleForwardedApprovalSubmit}
-                followUpRef={forwardedFollowUpRef}
-                onSuggestRegex={handleSuggestRegex}
-              />
-            ) : forwardedApproval.kind === "write" ? (
-              <WriteCard
-                request={forwardedApproval}
-                submit={handleForwardedApprovalSubmit}
-                followUpRef={forwardedFollowUpRef}
-              />
-            ) : forwardedApproval.kind === "rename" ? (
-              <RenameCard
-                request={forwardedApproval}
-                submit={handleForwardedApprovalSubmit}
-                followUpRef={forwardedFollowUpRef}
-              />
-            ) : forwardedApproval.kind === "mcp" ? (
-              <McpCard
-                request={forwardedApproval}
-                submit={handleForwardedApprovalSubmit}
-                followUpRef={forwardedFollowUpRef}
-              />
-            ) : forwardedApproval.kind === "memory" ? (
-              <MemoryCard
-                request={forwardedApproval}
-                submit={handleForwardedApprovalSubmit}
-                followUpRef={forwardedFollowUpRef}
-              />
-            ) : forwardedApproval.kind === "mode-switch" ? (
-              <ModeSwitchCard
-                request={forwardedApproval}
-                submit={handleForwardedApprovalSubmit}
-                followUpRef={forwardedFollowUpRef}
-              />
-            ) : (
-              <PathCard
-                request={forwardedApproval}
-                submit={handleForwardedApprovalSubmit}
-                followUpRef={forwardedFollowUpRef}
-              />
-            )}
-          </div>
+          <ApprovalPanelEmbed
+            request={forwardedApproval}
+            height={approvalPanelHeight}
+            resizing={approvalResizing}
+            followUpRef={forwardedFollowUpRef}
+            submit={handleForwardedApprovalSubmit}
+            onResizeStart={handleApprovalResizeStart}
+            onSuggestRegex={handleSuggestRegex}
+          />
         )}
         {btwState && (
           <BtwPanel state={btwState} onDismiss={() => setBtwState(null)} />
         )}
-        {state.streaming && (
-          <div class="streaming-status-bar">
-            <i class="codicon codicon-loading codicon-modifier-spin" />
-            <span>
-              {state.statusOverride ??
-                (() => {
-                  const lastMsg = state.messages[state.messages.length - 1];
-                  if (lastMsg?.role === "assistant") {
-                    return getStreamingActivity(lastMsg.blocks);
-                  }
-                  return "Waiting for response…";
-                })()}
-            </span>
+        {state.chatState.interrupted && !state.streaming && (
+          <div class="interrupted-session-banner">
+            <i class="codicon codicon-debug-restart" />
+            <div>
+              <strong>Session interrupted</strong>
+              <span>
+                The previous agent turn stopped before it finished. Resume to
+                let the agent inspect current state and continue safely.
+              </span>
+            </div>
+            <button
+              type="button"
+              class="interrupted-session-resume"
+              onClick={handleResumeInterruptedSession}
+              title="Resume interrupted session"
+            >
+              Resume
+            </button>
           </div>
+        )}
+        {state.streaming && (
+          <StreamingStatusBar
+            messages={state.messages}
+            statusOverride={state.statusOverride}
+          />
         )}
         <BackgroundSessionStrip
           sessions={bgSessions}

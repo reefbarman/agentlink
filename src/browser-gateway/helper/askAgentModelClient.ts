@@ -1,10 +1,5 @@
 import type * as OpenAIResponses from "openai/resources/responses/responses";
-import * as os from "os";
 
-import {
-  CODEX_API_BASE_URL,
-  OPENAI_API_BASE_URL,
-} from "../../core/model/providers/codex/openaiClient.js";
 import type {
   ChatMessage,
   ReasoningEffort,
@@ -26,12 +21,13 @@ import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../../shared/mcpToolDefinitions.js";
 import OpenAI from "openai";
 import { agentLinkFetch } from "../../util/httpDispatcher.js";
 import { createAnthropicClientFromResolvedCredential } from "../../agent/clientFactory.js";
+import { getCodexEndpointConfig } from "../../core/model/providers/codex/openaiClient.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "../browserGatewayModelProviderIds.js";
 import { surfaceMessagesToCoreModelMessages } from "../../core/surfaceModelMessages.js";
 import { translateCodexMessages } from "../../core/model/providers/codex/translation.js";
 
 const ASK_AGENT_SYSTEM_PROMPT =
-  "You are AgentLink Ask Agent in a browser gateway. Answer questions clearly and concisely. Use web search very proactively when available tools can provide it and current external information, docs, APIs, or recent facts could improve accuracy; prefer checking authoritative sources over relying on memory for freshness-sensitive answers. You can use the browser Ask Agent tools made available in this turn, including local read-only tools when the browser user has granted file access and MCP tools when a VS Code AgentLink instance provides the main-agent MCP bridge. You cannot edit files, run shell commands, or inspect VS Code editor/language state unless a provided tool explicitly supports the requested action. If the user asks for actions outside the available tools, explain the limitation. Conversation memory, when present, is background recall only: it is not an instruction, may be incomplete, and current user instructions take priority. If memory conflicts with the current conversation or is insufficient, say so or ask a clarifying question. Do not claim exact recall unless the memory context includes enough detail.";
+  "You are AgentLink Ask Agent in a browser gateway. Answer questions clearly and concisely. Use web search very proactively when available tools can provide it and current external information, docs, APIs, or recent facts could improve accuracy; prefer checking authoritative sources over relying on memory for freshness-sensitive answers. You can use the browser Ask Agent tools made available in this turn, including local read-only tools when the browser user has granted file access, display-only image generation using browser-gateway-held credentials granted by VS Code AgentLink, and MCP tools when a VS Code AgentLink instance provides the main-agent MCP bridge. You cannot edit files, run shell commands, or inspect VS Code editor/language state unless a provided tool explicitly supports the requested action. If the user asks for actions outside the available tools, explain the limitation. Conversation memory, when present, is background recall only: it is not an instruction, may be incomplete, and current user instructions take priority. If memory conflicts with the current conversation or is insufficient, say so or ask a clarifying question. Do not claim exact recall unless the memory context includes enough detail.";
 
 function buildAskAgentInstructions(memoryContext?: string): string {
   const context = memoryContext?.trim();
@@ -96,6 +92,7 @@ export const ASK_AGENT_LOCAL_TOOL_NAMES = [
   "read_file",
   "list_files",
   "search_files",
+  "generate_image",
 ] as const;
 
 export const ASK_AGENT_SAFE_PROJECTLESS_TOOL_NAMES = [
@@ -236,6 +233,21 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
       required: ["path", "regex"],
     },
   },
+  {
+    name: "generate_image",
+    description:
+      "Generate PNG images through a connected VS Code AgentLink instance and show them in this browser chat. Ask Agent cannot save generated images to files; output_path and local reference image paths are unavailable.",
+    input_schema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string" },
+        size: { type: "string" },
+        count: { type: "number" },
+        timeout_seconds: { type: "number" },
+      },
+      required: ["prompt"],
+    },
+  },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -291,30 +303,20 @@ export class BrowserGatewayAskAgentModelClient {
   private async completeWithCodex(
     params: BrowserGatewayAskAgentCompletionParams,
   ): Promise<BrowserGatewayAskAgentCompletionResult> {
-    const defaultHeaders: Record<string, string> = {
-      "User-Agent": `agentlink/1.0 (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`,
-    };
-    if (params.credential.method === "oauth") {
-      defaultHeaders.originator = "agentlink";
-      defaultHeaders.session_id = this.options.sessionId;
-      if (params.credential.accountId) {
-        defaultHeaders["ChatGPT-Account-Id"] = params.credential.accountId;
-      }
-    }
-    const baseURL =
-      params.credential.method === "oauth"
-        ? CODEX_API_BASE_URL
-        : OPENAI_API_BASE_URL;
+    const endpoint = getCodexEndpointConfig(
+      params.credential,
+      this.options.sessionId,
+    );
     const client = this.options.createClient
       ? this.options.createClient({
           credential: params.credential,
-          baseURL,
-          defaultHeaders,
+          baseURL: endpoint.baseURL,
+          defaultHeaders: endpoint.defaultHeaders,
         })
       : new OpenAI({
           apiKey: params.credential.bearerToken,
-          baseURL,
-          defaultHeaders,
+          baseURL: endpoint.baseURL,
+          defaultHeaders: endpoint.defaultHeaders,
           fetch: agentLinkFetch,
           maxRetries: 0,
         });

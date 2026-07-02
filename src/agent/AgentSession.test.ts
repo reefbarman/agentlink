@@ -247,11 +247,16 @@ describe("AgentSession", () => {
       session.appendAssistantTurn([
         { type: "tool_use", id: "tu_123", name: "read_file", input: {} },
       ]);
-      const results = [
+      const results: Parameters<typeof session.appendToolResults>[0] = [
         {
           type: "tool_result" as const,
           tool_use_id: "tu_123",
           content: "file contents",
+          mcpApprovalPromotion: {
+            serverName: "linear",
+            bareToolName: "list_issues",
+            scopes: ["session", "project", "global"] as const,
+          },
         },
       ];
       session.appendToolResults(results);

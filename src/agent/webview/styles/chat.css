@@ -421,6 +421,11 @@ body {
   max-width: min(100%, 620px);
 }
 
+.user-image-preview-card {
+  position: relative;
+  min-width: 0;
+}
+
 .user-image-preview-button {
   display: flex;
   align-items: center;
@@ -450,6 +455,67 @@ body {
     color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
+}
+
+.user-image-download {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid
+    color-mix(in srgb, var(--vscode-foreground) 20%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 86%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, #000 28%, transparent);
+  text-decoration: none;
+}
+
+.tool-result-image-previews {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 8px;
+  margin: 6px 0 8px 28px;
+  max-width: min(100%, 620px);
+}
+
+.tool-result-image-preview-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.tool-result-image-preview-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.tool-result-image-preview {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 260px;
+  height: auto;
+  object-fit: contain;
+  border: 1px solid
+    color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
+}
+
+.tool-result-image-count {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
 }
 
 .user-image-lightbox {
@@ -498,8 +564,13 @@ body {
   color: var(--vscode-descriptionForeground);
 }
 
-.user-image-lightbox-close {
+.user-image-lightbox-download {
   margin-left: auto;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.user-image-lightbox-close {
   flex-shrink: 0;
 }
 
@@ -1575,6 +1646,50 @@ body {
   color: var(--vscode-progressBar-background);
 }
 
+.interrupted-session-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder, #cca700);
+  border-radius: 4px;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  background: var(--vscode-inputValidation-warningBackground, transparent);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.interrupted-session-banner > div {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.interrupted-session-banner strong {
+  color: var(--vscode-foreground);
+}
+
+.interrupted-session-banner .codicon {
+  flex: 0 0 auto;
+}
+
+.interrupted-session-resume {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 3px;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  cursor: pointer;
+}
+
+.interrupted-session-resume:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
 .revert-recovery-notice {
   display: flex;
   align-items: flex-start;
@@ -2214,6 +2329,17 @@ body {
     color-mix(in srgb, var(--vscode-panel-border) 50%, transparent);
 }
 
+.queue-item.interjection-ready {
+  margin-left: -6px;
+  padding-left: 4px;
+  border-left: 2px solid var(--vscode-focusBorder);
+  background: color-mix(
+    in srgb,
+    var(--vscode-focusBorder) 8%,
+    transparent
+  );
+}
+
 .queue-item-text {
   flex: 1;
   font-size: 12px;
@@ -2260,9 +2386,18 @@ body {
   opacity: 1;
 }
 
+.queue-item.interjection-ready .queue-item-actions {
+  opacity: 1;
+}
+
 .queue-item-edit,
 .queue-item-remove {
   flex-shrink: 0;
+}
+
+.queue-item-interject.active {
+  color: var(--vscode-focusBorder);
+  opacity: 1;
 }
 
 /* ── Condense Row ── */

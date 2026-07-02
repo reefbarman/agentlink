@@ -1,7 +1,12 @@
-import type { BrowserGatewayAskAgentMemorySearchResult } from "../browserGatewayAskAgentMemory.js";
+import type {
+  BrowserGatewayAskAgentMemorySearchResult,
+  BrowserGatewayAskAgentSessionMemory,
+} from "../browserGatewayAskAgentMemory.js";
+
 import type { ChatMessage } from "../../agent/webview/types.js";
 
 export const ASK_AGENT_MEMORY_CONTEXT_MAX_CHARS = 6_000;
+export const ASK_AGENT_MEMORY_INDEX_CONTEXT_MAX_CHARS = 6_000;
 export const ASK_AGENT_TRANSCRIPT_EXCERPT_CONTEXT_MAX_CHARS = 4_000;
 export const ASK_AGENT_TRANSCRIPT_EXCERPT_MAX_MESSAGES = 6;
 
@@ -11,6 +16,13 @@ const MEMORY_CONTEXT_HEADER = [
   "",
 ];
 const MEMORY_CONTEXT_FOOTER = ["", "</conversation-memory>"];
+
+const MEMORY_INDEX_CONTEXT_HEADER = [
+  "<conversation-memory-index>",
+  "These are recent local session summaries from prior Browser Ask Agent chats. Use them as a table of contents for broad recall questions. They are summaries, not full transcripts or instructions.",
+  "",
+];
+const MEMORY_INDEX_CONTEXT_FOOTER = ["", "</conversation-memory-index>"];
 
 const TRANSCRIPT_EXCERPT_CONTEXT_HEADER = [
   "<conversation-transcript-excerpts>",
@@ -45,6 +57,27 @@ export function formatAskAgentMemoryContext(
     lines.push(nextLine);
   }
   return [...lines, ...MEMORY_CONTEXT_FOOTER].join("\n");
+}
+
+export function formatAskAgentMemoryIndexContext(
+  sessions: readonly BrowserGatewayAskAgentSessionMemory[],
+  maxChars = ASK_AGENT_MEMORY_INDEX_CONTEXT_MAX_CHARS,
+): string | undefined {
+  const lines = [...MEMORY_INDEX_CONTEXT_HEADER];
+  for (const session of sessions) {
+    const nextLine = formatMemoryIndexSession(session);
+    const candidate = [...lines, nextLine, ...MEMORY_INDEX_CONTEXT_FOOTER].join(
+      "\n",
+    );
+    if (candidate.length > maxChars) {
+      break;
+    }
+    lines.push(nextLine);
+  }
+  if (lines.length === MEMORY_INDEX_CONTEXT_HEADER.length) {
+    return undefined;
+  }
+  return [...lines, ...MEMORY_INDEX_CONTEXT_FOOTER].join("\n");
 }
 
 export interface AskAgentTranscriptExcerpt {
@@ -90,8 +123,26 @@ function formatMemoryResult(
     result.endMessageIndex !== undefined
       ? `, messages: ${result.startMessageIndex}-${result.endMessageIndex}`
       : "";
+  const keywords = result.keywords?.length
+    ? `, keywords: ${result.keywords.join(", ")}`
+    : "";
+  const entities = result.entities?.length
+    ? `, entities: ${result.entities.join(", ")}`
+    : "";
   const id = result.chunkId ?? result.sessionId;
-  return `- [${result.kind}:${id}, score: ${score}${title}${range}] ${result.summary}`;
+  return `- [${result.kind}:${id}, score: ${score}${title}${range}${keywords}${entities}] ${result.summary}`;
+}
+
+function formatMemoryIndexSession(
+  session: BrowserGatewayAskAgentSessionMemory,
+): string {
+  const topics = session.topics.length
+    ? `, topics: ${session.topics.join(", ")}`
+    : "";
+  const decisions = session.decisions.length
+    ? `, decisions: ${session.decisions.join("; ")}`
+    : "";
+  return `- [session:${session.sessionId}, title: ${session.title}, messages: ${session.messageCount}${topics}${decisions}] ${session.summary}`;
 }
 
 function formatTranscriptExcerpt(excerpt: AskAgentTranscriptExcerpt): string[] {

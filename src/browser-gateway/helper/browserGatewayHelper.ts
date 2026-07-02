@@ -74,15 +74,28 @@ import type {
   Question,
   ReasoningEffort,
 } from "../../agent/webview/types.js";
-import type { DecisionMessage } from "../../approvals/webview/types.js";
+import type {
+  ApprovalRequest,
+  DecisionMessage,
+} from "../../approvals/webview/types.js";
 import {
   BrowserGatewayModelCredentialCache,
   type BrowserGatewayModelCredentialRecord,
 } from "../browserGatewayModelCredentialCache.js";
-import type {
-  CoreModelMessage,
-  CoreModelToolDefinition,
+import { BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID } from "../browserGatewayModelProviderIds.js";
+import {
+  CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
+  CODEX_IMAGE_GENERATION_MAX_COUNT,
+  codexGeneratedImageMetadata,
+  generateCodexImages,
+} from "../../core/model/providers/codex/imageGeneration.js";
+import {
+  toCoreModelImageMediaType,
+  type CoreModelContentBlock,
+  type CoreModelMessage,
+  type CoreModelToolDefinition,
 } from "../../core/modelRuntime.js";
+import { runAgentToolLoop } from "../../core/agentToolLoop.js";
 import type {
   FinalMessageMarker,
   FinalMessageStatus,
@@ -106,6 +119,7 @@ import {
 import {
   ASK_AGENT_TRANSCRIPT_EXCERPT_MAX_MESSAGES,
   formatAskAgentMemoryContext,
+  formatAskAgentMemoryIndexContext,
   formatAskAgentTranscriptExcerptContext,
   type AskAgentTranscriptExcerpt,
 } from "./browserGatewayAskAgentMemoryContext.js";
@@ -159,6 +173,7 @@ const ASK_AGENT_MEMORY_SUMMARY_DEBOUNCE_MS = 750;
 const ASK_AGENT_MEMORY_DISCLOSURE_SOURCE_LIMIT = 5;
 const ASK_AGENT_MEMORY_DISCLOSURE_SUMMARY_SOURCE_LIMIT = 3;
 const ASK_AGENT_MEMORY_DISCLOSURE_TRANSCRIPT_SOURCE_LIMIT = 2;
+const ASK_AGENT_MEMORY_INDEX_SESSION_LIMIT = 12;
 const CORE_HOST_KINDS = new Set<CoreHostKind>([
   "vscode",
   "browser-gateway",
@@ -413,6 +428,8 @@ const ASK_AGENT_GENERIC_MODEL_ERROR =
 const ASK_AGENT_AUTH_MODEL_ERROR =
   "I tried to call the model, but the cached browser-gateway credentials were rejected or expired. Open a VS Code AgentLink window to refresh them.";
 const ASK_AGENT_STOPPED_MODEL_ERROR = "Response stopped.";
+const ASK_AGENT_EMPTY_MODEL_ERROR =
+  "The model finished without returning a response. Please try again.";
 
 function getSanitizedModelErrorFields(
   error: unknown,
@@ -544,10 +561,17 @@ type AskAgentToolLoopResult = {
 
 type AskAgentToolExecutionResult = {
   content: string;
+  modelContent?: string | CoreModelContentBlock[];
+  resultImages?: Array<{ mimeType: string; data: string }>;
   stop: boolean;
   outcome?: AskAgentToolLoopOutcome;
   toolMessage?: CoreModelMessage;
   modelResult?: string;
+};
+
+type AskAgentPendingApproval = {
+  request: ApprovalRequest;
+  resolve: (decision: DecisionMessage) => void;
 };
 
 export class BrowserGatewayHelper {
@@ -584,6 +608,7 @@ export class BrowserGatewayHelper {
   private readonly askAgentHistoryStore: BrowserGatewayAskAgentHistoryStore;
   private readonly askAgentMemoryStore: BrowserGatewayAskAgentMemoryStore;
   private readonly askAgentMemoryProposalBridge: BrowserGatewayAskAgentMemoryProposalBridge;
+  private askAgentPendingApproval: AskAgentPendingApproval | null = null;
   private readonly askAgentSummarizer: BrowserGatewayAskAgentSummarizer;
   private readonly askAgentMemorySummaryDebounceMs: number;
   private readonly askAgentMemorySummaryTimers = new Map<
@@ -1144,6 +1169,14 @@ export class BrowserGatewayHelper {
       return;
     }
 
+    if (method === "POST" && pathname === "/api/ask-agent/approval") {
+      void this.authThen(req, res, async (auth) => {
+        await this.handleAskAgentApprovalRequest(req, res);
+        void this.recordDeviceActivity(auth);
+      });
+      return;
+    }
+
     if (method === "GET" && pathname === "/api/ask-agent/read-grants") {
       void this.authThen(req, res, async (auth) => {
         await this.handleAskAgentReadGrantsRequest(res);
@@ -1601,19 +1634,147 @@ export class BrowserGatewayHelper {
           notes[key] = typeof value === "string" ? value : String(value ?? "");
         }
       }
-      if (
-        !id ||
-        !this.askAgentSessionStore.answerQuestion(id, answers, notes)
-      ) {
+      const now = Date.now();
+      const theme = await this.resolveInitialTheme(null);
+      const credential = this.getAskAgentModelCredential(now);
+      if (!credential) {
+        this.logAskAgentEvent("ask-agent.question.response", {
+          id,
+          ok: false,
+          error: "credential_missing",
+        });
+        writeJson(res, 409, { error: "credential_missing" });
+        return;
+      }
+      if (this.askAgentActiveTurn) {
+        this.logAskAgentEvent("ask-agent.question.response", {
+          id,
+          ok: false,
+          error: "ask_agent_turn_in_progress",
+        });
+        writeJson(res, 409, { error: "ask_agent_turn_in_progress" });
+        return;
+      }
+
+      const answerResult = id
+        ? this.askAgentSessionStore.answerQuestion(id, answers, notes)
+        : null;
+      if (!answerResult) {
         writeJson(res, 404, {
           ok: false,
           error: "ask_agent_question_not_found",
         });
         return;
       }
-      const response = await this.buildAskAgentResponse();
+
+      const responseContent = JSON.stringify({
+        ok: true,
+        responses: answerResult.responses,
+      });
+      this.askAgentSessionStore.completeAssistantToolCall({
+        messageId: answerResult.messageId,
+        toolCallId: answerResult.toolCallId,
+        toolName: "ask_user",
+        input: {},
+        result: responseContent,
+        durationMs: 0,
+      });
+      const answerToolMessage = this.buildAskAgentToolResultMessage(
+        { id: answerResult.toolCallId, name: "ask_user", input: {} },
+        responseContent,
+      );
+      this.logAskAgentEvent("ask-agent.question.response", {
+        id,
+        ok: true,
+        phase: "received",
+      });
+
+      let response: ReturnType<typeof this.buildAskAgentSnapshotResponse>;
+      let sendOutcome = "model_success";
+      try {
+        const controller = new AbortController();
+        this.askAgentActiveTurn = {
+          messageId: answerResult.messageId,
+          controller,
+          stopped: false,
+        };
+        const transcriptMessages =
+          this.askAgentSessionStore.getTranscriptMessages();
+        const turnResult = await this.runAskAgentModelTurn({
+          credential,
+          assistantMessageId: answerResult.messageId,
+          transcriptMessages,
+          initialToolMessages: [answerToolMessage],
+          theme,
+          signal: controller.signal,
+        });
+        sendOutcome = turnResult.outcome;
+      } catch (err) {
+        const authFailed =
+          err instanceof Error &&
+          err.message === "browser_gateway_ask_agent_model_auth_failed";
+        const stopped =
+          err instanceof Error &&
+          err.message === "browser_gateway_ask_agent_model_aborted";
+        const alreadyStopped =
+          stopped &&
+          this.askAgentActiveTurn?.messageId === answerResult.messageId &&
+          this.askAgentActiveTurn.stopped;
+        const errorPresentation = buildAskAgentModelErrorPresentation({
+          error: err,
+          authFailed,
+          stopped,
+        });
+        if (authFailed) {
+          this.clearAskAgentModelCredential();
+        }
+        sendOutcome = stopped
+          ? "model_stopped"
+          : authFailed
+            ? "model_auth_failed"
+            : "model_error";
+        this.logAskAgentEvent("ask-agent.question.response.model_error", {
+          id,
+          ...getSanitizedModelErrorFields(err),
+          ok: false,
+          error: sendOutcome,
+        });
+        if (!alreadyStopped) {
+          this.askAgentSessionStore.finishAssistantErrorMessage({
+            messageId: answerResult.messageId,
+            text: errorPresentation.message,
+            code: errorPresentation.code ?? sendOutcome,
+            retryable: errorPresentation.retryable,
+            actions: errorPresentation.actions,
+            preserveCompletedAskUserBlocks: true,
+          });
+        }
+      } finally {
+        if (this.askAgentActiveTurn?.messageId === answerResult.messageId) {
+          this.askAgentActiveTurn = null;
+        }
+      }
+      if (
+        sendOutcome === "model_success" ||
+        sendOutcome === "model_empty" ||
+        sendOutcome === "model_question" ||
+        sendOutcome === "model_final"
+      ) {
+        this.scheduleAskAgentMemorySummary(
+          this.askAgentSessionStore.getActiveSessionId(),
+        );
+      }
+      response = this.buildAskAgentSnapshotResponse(Date.now(), theme);
+      this.logAskAgentEvent("ask-agent.question.response.complete", {
+        id,
+        ok: true,
+        outcome: sendOutcome,
+        messageCount:
+          response.snapshot.session.foreground.projectedMessages.length,
+      });
+
+      await this.persistAskAgentHistory();
       this.broadcastAskAgentSnapshot(response.snapshot);
-      this.logAskAgentEvent("ask-agent.question.response", { id, ok: true });
       writeJson(res, 200, { ok: true, snapshot: response.snapshot });
     } catch (err) {
       const invalidJson =
@@ -1842,7 +2003,10 @@ export class BrowserGatewayHelper {
       now,
       theme,
       modelCredentialStatus: this.getAskAgentModelCredentialStatus(now),
-      approval: this.askAgentMemoryProposalBridge.getPendingApproval(),
+      approval:
+        this.askAgentMemoryProposalBridge.getPendingApproval() ??
+        this.askAgentPendingApproval?.request ??
+        null,
       memoryCandidateNudge: this.askAgentMemoryCandidateNudge,
     });
   }
@@ -2078,20 +2242,29 @@ export class BrowserGatewayHelper {
       const recentMessageIds = params.transcriptMessages
         .map((message) => message.id)
         .filter(Boolean);
+      const pastIntent = hasAskAgentMemoryPastIntent(params.query);
       const results = await this.askAgentMemoryStore.search(params.query, {
         activeSessionId: params.activeSessionId,
         recentMessageIds,
         limit: 5,
       });
-      if (results.length === 0) {
+      if (results.length === 0 && !pastIntent) {
         this.logAskAgentEvent("ask-agent.memory.context.omitted", {
           sessionId: params.activeSessionId,
           reason: "no_relevant_memory",
         });
         return undefined;
       }
-      const memoryContext = formatAskAgentMemoryContext(results);
-      const transcriptExcerpts = hasAskAgentMemoryPastIntent(params.query)
+      const memoryContext = results.length
+        ? formatAskAgentMemoryContext(results)
+        : undefined;
+      const indexSessions = pastIntent
+        ? await this.buildAskAgentMemoryIndexSessions({
+            activeSessionId: params.activeSessionId,
+          })
+        : [];
+      const indexContext = formatAskAgentMemoryIndexContext(indexSessions);
+      const transcriptExcerpts = pastIntent
         ? await this.buildAskAgentTranscriptExcerpts({
             results,
             activeSessionId: params.activeSessionId,
@@ -2100,12 +2273,20 @@ export class BrowserGatewayHelper {
         : [];
       const excerptContext =
         formatAskAgentTranscriptExcerptContext(transcriptExcerpts);
-      const context = [memoryContext, excerptContext]
+      const context = [memoryContext, indexContext, excerptContext]
         .filter(Boolean)
         .join("\n\n");
+      if (!context) {
+        this.logAskAgentEvent("ask-agent.memory.context.omitted", {
+          sessionId: params.activeSessionId,
+          reason: "no_relevant_memory",
+        });
+        return undefined;
+      }
       this.logAskAgentEvent("ask-agent.memory.context", {
         sessionId: params.activeSessionId,
         resultCount: results.length,
+        indexSessionCount: indexSessions.length,
         excerptCount: transcriptExcerpts.length,
         chars: context.length,
       });
@@ -2114,6 +2295,7 @@ export class BrowserGatewayHelper {
         disclosure: this.buildAskAgentMemoryDisclosure(
           results,
           transcriptExcerpts,
+          indexSessions,
         ),
       };
     } catch (err) {
@@ -2128,6 +2310,7 @@ export class BrowserGatewayHelper {
   private buildAskAgentMemoryDisclosure(
     results: readonly BrowserGatewayAskAgentMemorySearchResult[],
     transcriptExcerpts: readonly AskAgentTranscriptExcerpt[],
+    indexSessions: readonly BrowserGatewayAskAgentSessionMemory[] = [],
   ): AskAgentMemoryDisclosure {
     const sources: AskAgentMemoryDisclosure["sources"] = [];
     const seen = new Set<string>();
@@ -2160,12 +2343,17 @@ export class BrowserGatewayHelper {
 
     for (const result of results) {
       pushSource({
-        label:
-          result.kind === "chunk"
-            ? `summary:chunk:${result.chunkId ?? result.sessionId}`
-            : `summary:session:${result.sessionId}`,
+        label: this.getAskAgentMemorySummarySourceLabel(result),
         ...(result.title?.trim() ? { title: result.title.trim() } : {}),
         ...this.buildAskAgentMemoryScoreField(result.score),
+        kind: "summary",
+      });
+    }
+
+    for (const session of indexSessions) {
+      pushSource({
+        label: `summary:session:${session.sessionId}`,
+        ...(session.title.trim() ? { title: session.title.trim() } : {}),
         kind: "summary",
       });
     }
@@ -2181,10 +2369,45 @@ export class BrowserGatewayHelper {
 
     return {
       status: "used",
-      summaryCount: results.length,
+      summaryCount: this.countAskAgentMemorySummarySources(
+        results,
+        indexSessions,
+      ),
       transcriptExcerptCount: transcriptExcerpts.length,
       sources,
     };
+  }
+
+  private countAskAgentMemorySummarySources(
+    results: readonly BrowserGatewayAskAgentMemorySearchResult[],
+    indexSessions: readonly BrowserGatewayAskAgentSessionMemory[],
+  ): number {
+    const labels = new Set<string>();
+    for (const result of results) {
+      labels.add(this.getAskAgentMemorySummarySourceLabel(result));
+    }
+    for (const session of indexSessions) {
+      labels.add(`summary:session:${session.sessionId}`);
+    }
+    return labels.size;
+  }
+
+  private getAskAgentMemorySummarySourceLabel(
+    result: BrowserGatewayAskAgentMemorySearchResult,
+  ): string {
+    return result.kind === "chunk"
+      ? `summary:chunk:${result.chunkId ?? result.sessionId}`
+      : `summary:session:${result.sessionId}`;
+  }
+
+  private async buildAskAgentMemoryIndexSessions(params: {
+    activeSessionId: string;
+  }): Promise<BrowserGatewayAskAgentSessionMemory[]> {
+    const snapshot = await this.askAgentMemoryStore.read();
+    return snapshot.sessions
+      .filter((session) => session.sessionId !== params.activeSessionId)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, ASK_AGENT_MEMORY_INDEX_SESSION_LIMIT);
   }
 
   private buildAskAgentMemoryScoreField(
@@ -2705,6 +2928,49 @@ export class BrowserGatewayHelper {
           : err instanceof Error
             ? err.message
             : "internal_error",
+      });
+    }
+  }
+
+  private async handleAskAgentApprovalRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    try {
+      const body = (await readJsonBody(req)) as Omit<DecisionMessage, "type">;
+      if (
+        !body ||
+        typeof body.id !== "string" ||
+        typeof body.decision !== "string"
+      ) {
+        writeJson(res, 400, { error: "invalid_request" });
+        return;
+      }
+      const pending = this.askAgentPendingApproval;
+      if (!pending || pending.request.id !== body.id) {
+        writeJson(res, 404, { error: "approval_not_found" });
+        return;
+      }
+      this.askAgentPendingApproval = null;
+      pending.resolve({ type: "decision", ...body });
+      const response = await this.buildAskAgentResponse();
+      this.broadcastAskAgentSnapshot(response.snapshot);
+      this.logAskAgentEvent("ask-agent.approval", {
+        ok: true,
+        approvalId: body.id,
+        kind: pending.request.kind,
+        decision: body.decision,
+      });
+      writeJson(res, 200, { ok: true, snapshot: response.snapshot });
+    } catch (err) {
+      const invalidJson =
+        err instanceof Error && err.message === "invalid_json";
+      this.logAskAgentEvent("ask-agent.approval", {
+        ok: false,
+        error: invalidJson ? "invalid_json" : String(err),
+      });
+      writeJson(res, invalidJson ? 400 : 500, {
+        error: invalidJson ? "invalid_json" : "internal_error",
       });
     }
   }
@@ -3241,13 +3507,21 @@ export class BrowserGatewayHelper {
     transcriptMessages: ChatMessage[];
     memoryContext?: string;
     memoryDisclosure?: ChatMessage["memoryDisclosure"];
+    initialToolMessages?: readonly CoreModelMessage[];
     theme: BrowserGatewayThemeSnapshot;
     signal: AbortSignal;
   }): Promise<AskAgentToolLoopResult> {
-    const toolMessages: CoreModelMessage[] = [];
     const completeWithToolCalls =
       this.askAgentModelClient.completeWithToolCalls?.bind(
         this.askAgentModelClient,
+      );
+    const broadcastTurnSnapshot = () =>
+      this.broadcastAskAgentSnapshot(
+        this.askAgentSessionStore.getOrCreate({
+          now: Date.now(),
+          theme: params.theme,
+          modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
+        }).snapshot,
       );
 
     if (!completeWithToolCalls) {
@@ -3263,76 +3537,45 @@ export class BrowserGatewayHelper {
             params.assistantMessageId,
             delta,
           );
-          this.broadcastAskAgentSnapshot(
-            this.askAgentSessionStore.getOrCreate({
-              now: Date.now(),
-              theme: params.theme,
-              modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
-            }).snapshot,
-          );
+          broadcastTurnSnapshot();
         },
       });
-      this.askAgentSessionStore.finishAssistantMessage(
-        params.assistantMessageId,
-        assistantText ||
-          "I called the model, but it returned an empty response.",
-        params.memoryDisclosure,
-      );
-      return {
-        outcome: assistantText ? "model_success" : "model_empty",
-        assistantText,
-      };
+      if (assistantText) {
+        return this.finishAskAgentSuccess(params, assistantText);
+      }
+      this.finishAskAgentEmptyResponse(params.assistantMessageId);
+      return { outcome: "model_empty", assistantText: "" };
     }
 
-    let assistantText = "";
     const mcpBridgeTarget = await this.getAskAgentMcpBridgeTarget();
     const mcpTools = await this.getAskAgentMcpTools(
       mcpBridgeTarget,
       params.signal,
     );
-    for (let iteration = 0; iteration < 4; iteration++) {
-      const result = await completeWithToolCalls({
-        credential: params.credential,
-        model: this.askAgentSessionStore.getModel(),
-        reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
-        messages: params.transcriptMessages,
-        memoryContext: params.memoryContext,
-        toolMessages,
-        tools: [...ASK_AGENT_SAFE_PROJECTLESS_TOOLS, ...mcpTools],
-        signal: params.signal,
-        onDelta: (delta) => {
-          assistantText += delta;
-          this.askAgentSessionStore.appendAssistantDelta(
-            params.assistantMessageId,
-            delta,
-          );
-          this.broadcastAskAgentSnapshot(
-            this.askAgentSessionStore.getOrCreate({
-              now: Date.now(),
-              theme: params.theme,
-              modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
-            }).snapshot,
-          );
-        },
-      });
-      if (!assistantText && result.text) {
-        assistantText = result.text;
-      }
-      if (result.toolCalls.length === 0) {
-        this.askAgentSessionStore.finishAssistantMessage(
-          params.assistantMessageId,
-          result.text ||
-            "I called the model, but it returned an empty response.",
-          params.memoryDisclosure,
-        );
-        return {
-          outcome:
-            result.text || assistantText ? "model_success" : "model_empty",
-          assistantText: result.text || assistantText,
-        };
-      }
-
-      for (const toolCall of result.toolCalls) {
+    return runAgentToolLoop<AskAgentToolLoopResult, AskAgentToolLoopOutcome>({
+      initialToolMessages: params.initialToolMessages,
+      callModel: async ({ toolMessages, onText }) => {
+        const result = await completeWithToolCalls({
+          credential: params.credential,
+          model: this.askAgentSessionStore.getModel(),
+          reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
+          messages: params.transcriptMessages,
+          memoryContext: params.memoryContext,
+          toolMessages,
+          tools: [...ASK_AGENT_SAFE_PROJECTLESS_TOOLS, ...mcpTools],
+          signal: params.signal,
+          onDelta: (delta) => {
+            onText(delta);
+            this.askAgentSessionStore.appendAssistantDelta(
+              params.assistantMessageId,
+              delta,
+            );
+            broadcastTurnSnapshot();
+          },
+        });
+        return { text: result.text, toolCalls: result.toolCalls };
+      },
+      runTool: async (toolCall) => {
         const toolStartedAt = Date.now();
         this.askAgentSessionStore.startAssistantToolCall({
           messageId: params.assistantMessageId,
@@ -3340,62 +3583,61 @@ export class BrowserGatewayHelper {
           toolName: toolCall.name,
           input: toolCall.input,
         });
-        this.broadcastAskAgentSnapshot(
-          this.askAgentSessionStore.getOrCreate({
-            now: Date.now(),
-            theme: params.theme,
-            modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
-          }).snapshot,
-        );
+        broadcastTurnSnapshot();
         const executed = await this.executeAskAgentSafeProjectlessTool(
           toolCall,
           mcpBridgeTarget,
           params.signal,
         );
-        if (executed.toolMessage) {
-          toolMessages.push(executed.toolMessage);
-        }
         this.askAgentSessionStore.completeAssistantToolCall({
           messageId: params.assistantMessageId,
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           input: toolCall.input,
           result: executed.modelResult ?? executed.content,
+          resultImages: executed.resultImages,
           durationMs: Date.now() - toolStartedAt,
         });
-        this.broadcastAskAgentSnapshot(
-          this.askAgentSessionStore.getOrCreate({
-            now: Date.now(),
-            theme: params.theme,
-            modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
-          }).snapshot,
-        );
-        if (executed.stop) {
-          this.askAgentSessionStore.finishAssistantMessage(
-            params.assistantMessageId,
-            assistantText || executed.content,
-            params.memoryDisclosure,
-          );
-          return {
-            outcome: executed.outcome ?? "model_success",
-            assistantText: assistantText || executed.content,
-          };
-        }
-      }
-    }
+        broadcastTurnSnapshot();
+        return {
+          toolMessage: executed.toolMessage,
+          stop: executed.stop,
+          content: executed.content,
+          outcome: executed.outcome,
+        };
+      },
+      finishSuccess: (text, outcome) =>
+        this.finishAskAgentSuccess(params, text, outcome),
+      finishEmpty: () => {
+        this.finishAskAgentEmptyResponse(params.assistantMessageId);
+        return { outcome: "model_empty", assistantText: "" };
+      },
+    });
+  }
 
-    const fallback =
-      assistantText ||
-      "Ask Agent updated session state but reached its safe tool-loop limit before a final response.";
+  private finishAskAgentSuccess(
+    params: {
+      assistantMessageId: string;
+      memoryDisclosure?: ChatMessage["memoryDisclosure"];
+    },
+    assistantText: string,
+    outcome: AskAgentToolLoopOutcome = "model_success",
+  ): AskAgentToolLoopResult {
     this.askAgentSessionStore.finishAssistantMessage(
       params.assistantMessageId,
-      fallback,
+      assistantText,
       params.memoryDisclosure,
     );
-    return {
-      outcome: assistantText ? "model_success" : "model_empty",
-      assistantText,
-    };
+    return { outcome, assistantText };
+  }
+
+  private finishAskAgentEmptyResponse(messageId: string): void {
+    this.askAgentSessionStore.finishAssistantErrorMessage({
+      messageId,
+      text: ASK_AGENT_EMPTY_MODEL_ERROR,
+      code: "model_empty",
+      retryable: true,
+    });
   }
 
   private async getAskAgentMcpBridgeTarget(): Promise<BrowserGatewayInstanceRecord | null> {
@@ -3507,6 +3749,227 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private normalizeAskAgentImageInput(input: Record<string, unknown>): {
+    prompt: string;
+    count: number;
+    size?: string;
+    timeoutMs: number;
+  } {
+    for (const forbidden of [
+      "output_path",
+      "reference_image_paths",
+      "reference_image_ids",
+      "use_recent_images",
+    ]) {
+      if (Object.hasOwn(input, forbidden)) {
+        throw new Error(
+          `Ask Agent generate_image does not support ${forbidden}; browser Ask Agent image generation is display-only and cannot read or write local files.`,
+        );
+      }
+    }
+    const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
+    if (!prompt) throw new Error("prompt is required");
+    const numericCount = Number(input.count ?? 1);
+    const count =
+      Number.isFinite(numericCount) && numericCount >= 1
+        ? Math.min(Math.floor(numericCount), CODEX_IMAGE_GENERATION_MAX_COUNT)
+        : 1;
+    const size =
+      typeof input.size === "string" && input.size.trim()
+        ? input.size.trim()
+        : undefined;
+    const numericTimeoutSeconds = Number(
+      input.timeout_seconds ?? CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS / 1000,
+    );
+    const timeoutMs =
+      Number.isFinite(numericTimeoutSeconds) && numericTimeoutSeconds > 0
+        ? Math.min(
+            Math.floor(numericTimeoutSeconds * 1000),
+            CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
+          )
+        : CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS;
+    return { prompt, count, size, timeoutMs };
+  }
+
+  private async requestAskAgentGenerateImageApproval(params: {
+    prompt: string;
+    count: number;
+    size?: string;
+    billing: string;
+    signal: AbortSignal;
+  }): Promise<DecisionMessage> {
+    if (this.askAgentMemoryProposalBridge.getPendingApproval()) {
+      throw new Error("An Ask Agent memory approval is already pending");
+    }
+    if (this.askAgentPendingApproval) {
+      throw new Error("An Ask Agent image approval is already pending");
+    }
+    const id = `ask-agent-generate-image-${randomUUID()}`;
+    const detail = [
+      `Generation prompt:\n${params.prompt}`,
+      `Images: ${params.count}`,
+      params.size ? `Requested size: ${params.size}` : undefined,
+      `Billing: ${params.billing}`,
+      "Output: Ask Agent chat display only (no files will be written)",
+      "",
+      "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join("\n");
+    const request: ApprovalRequest = {
+      kind: "write",
+      id,
+      filePath: `Generate ${params.count} image${params.count === 1 ? "" : "s"}?`,
+      writeOperation: "modify",
+      detail,
+    };
+    const decisionPromise = new Promise<DecisionMessage>((resolve, reject) => {
+      const abort = () => {
+        if (this.askAgentPendingApproval?.request.id === id) {
+          this.askAgentPendingApproval = null;
+        }
+        reject(new Error("Ask Agent image generation approval was cancelled"));
+      };
+      params.signal.addEventListener("abort", abort, { once: true });
+      this.askAgentPendingApproval = {
+        request,
+        resolve: (decision) => {
+          params.signal.removeEventListener("abort", abort);
+          resolve(decision);
+        },
+      };
+    });
+    const response = await this.buildAskAgentResponse();
+    this.broadcastAskAgentSnapshot(response.snapshot);
+    return await decisionPromise;
+  }
+
+  private async executeAskAgentGenerateImageTool(
+    toolCall: BrowserGatewayAskAgentToolCall,
+    _target: BrowserGatewayInstanceRecord | null,
+    signal: AbortSignal,
+  ): Promise<AskAgentToolExecutionResult> {
+    try {
+      const input = this.normalizeAskAgentImageInput(toolCall.input);
+      const credential = this.modelCredentialCache.getCredential({
+        providerId: BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+        modelScope: BROWSER_GATEWAY_ASK_AGENT_MODEL_SCOPE,
+        now: Date.now(),
+      });
+      if (!credential) {
+        throw new Error(
+          "generate_image requires refreshed Codex/OpenAI credentials from a connected VS Code AgentLink instance",
+        );
+      }
+      const billing =
+        credential.method === "oauth"
+          ? `ChatGPT/Codex OAuth quota (${credential.accountLabel ?? "active account"})`
+          : "OpenAI API key billing";
+      const approval = await this.requestAskAgentGenerateImageApproval({
+        ...input,
+        billing,
+        signal,
+      });
+      const approved =
+        approval.decision === "accept" ||
+        approval.decision.startsWith("accept-");
+      if (!approved) {
+        const content = JSON.stringify({
+          status: "rejected_by_user",
+          ...(approval.rejectionReason
+            ? { reason: approval.rejectionReason }
+            : {}),
+          ...(approval.followUp ? { follow_up: approval.followUp } : {}),
+        });
+        return {
+          content,
+          stop: false,
+          toolMessage: this.buildAskAgentToolResultMessage(
+            toolCall,
+            content,
+            true,
+          ),
+        };
+      }
+      const result = await generateCodexImages({
+        auth: credential,
+        prompt: input.prompt,
+        count: input.count,
+        size: input.size,
+        timeoutMs: input.timeoutMs,
+        sessionId: this.askAgentSessionStore.getActiveSessionId(),
+        signal,
+      });
+      const modelContent: CoreModelContentBlock[] = [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              status: "accepted",
+              model: result.model,
+              billing,
+              requested_count: input.count,
+              generated_count: result.images.length,
+              saved: false,
+              reference_images: [],
+              images: codexGeneratedImageMetadata(result.images),
+              event_types: Array.from(new Set(result.eventTypes)),
+              ...(approval.followUp ? { follow_up: approval.followUp } : {}),
+            },
+            null,
+            2,
+          ),
+        },
+        ...result.images.map((image) => ({
+          type: "image" as const,
+          source: {
+            type: "base64" as const,
+            media_type: "image/png" as const,
+            data: image.base64,
+          },
+        })),
+      ];
+      const resultImages = result.images.map((image) => ({
+        mimeType: image.mimeType,
+        data: image.base64,
+      }));
+      const content = (modelContent[0] as { type: "text"; text: string }).text;
+      this.logAskAgentEvent("ask-agent.tool.generate_image", {
+        ok: true,
+        imageCount: resultImages.length,
+      });
+      return {
+        content,
+        modelContent,
+        resultImages,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          false,
+          modelContent,
+        ),
+      };
+    } catch (err) {
+      const content = JSON.stringify({
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.logAskAgentEvent("ask-agent.tool.generate_image", {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return {
+        content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          true,
+        ),
+      };
+    }
+  }
+
   private async executeAskAgentSafeProjectlessTool(
     toolCall: BrowserGatewayAskAgentToolCall,
     mcpBridgeTarget: BrowserGatewayInstanceRecord | null,
@@ -3545,6 +4008,14 @@ export class BrowserGatewayHelper {
           true,
         ),
       };
+    }
+
+    if (toolCall.name === "generate_image") {
+      return await this.executeAskAgentGenerateImageTool(
+        toolCall,
+        mcpBridgeTarget,
+        signal,
+      );
     }
 
     if (toolCall.name === "todo_write") {
@@ -4065,6 +4536,7 @@ export class BrowserGatewayHelper {
     toolCall: BrowserGatewayAskAgentToolCall,
     content: string,
     isError = false,
+    modelContent: string | CoreModelContentBlock[] = content,
   ): CoreModelMessage {
     return {
       role: "assistant",
@@ -4078,7 +4550,7 @@ export class BrowserGatewayHelper {
         {
           type: "tool_result",
           tool_use_id: toolCall.id,
-          content,
+          content: modelContent,
           ...(isError ? { is_error: true } : {}),
         },
       ],
@@ -4135,11 +4607,12 @@ export class BrowserGatewayHelper {
         return;
       }
 
-      const userMessage = this.askAgentSessionStore.prepareLatestRetryableTurn({
-        sessionId: requestedSessionId,
-        now,
-      });
-      if (!userMessage) {
+      const retryableTurn =
+        this.askAgentSessionStore.prepareLatestRetryableTurn({
+          sessionId: requestedSessionId,
+          now,
+        });
+      if (!retryableTurn) {
         this.logAskAgentEvent("ask-agent.retry", {
           sessionId: requestedSessionId,
           ok: false,
@@ -4149,12 +4622,43 @@ export class BrowserGatewayHelper {
         return;
       }
 
+      const { userMessage } = retryableTurn;
+      const retryToolResults = retryableTurn.toolResults.map((toolResult) => {
+        const imageBlocks: CoreModelContentBlock[] = [];
+        for (const image of toolResult.resultImages ?? []) {
+          const mediaType = toCoreModelImageMediaType(image.mimeType);
+          if (!mediaType) continue;
+          imageBlocks.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: image.data,
+            },
+          });
+        }
+        const modelContent: CoreModelContentBlock[] | undefined =
+          imageBlocks.length
+            ? [{ type: "text", text: toolResult.result }, ...imageBlocks]
+            : undefined;
+        return this.buildAskAgentToolResultMessage(
+          {
+            id: toolResult.toolCallId,
+            name: toolResult.toolName,
+            input: toolResult.input,
+          },
+          toolResult.result,
+          false,
+          modelContent ?? toolResult.result,
+        );
+      });
       const sendLogFields = {
         sessionId: this.askAgentSessionStore.getActiveSessionId(),
         textChars: userMessage.content.trim().length,
         credential: "ready",
         model: this.askAgentSessionStore.getModel(),
         reasoning: this.askAgentSessionStore.getReasoningEffort(),
+        retryToolMessages: retryToolResults.length,
       };
       logHelper(
         `ask-agent retry sessionId=${sendLogFields.sessionId} textChars=${sendLogFields.textChars} credential=ready model=${sendLogFields.model} reasoning=${sendLogFields.reasoning}`,
@@ -4197,6 +4701,7 @@ export class BrowserGatewayHelper {
           transcriptMessages,
           memoryContext: memoryContextResult?.context,
           memoryDisclosure: memoryContextResult?.disclosure,
+          initialToolMessages: retryToolResults,
           theme,
           signal: controller.signal,
         });

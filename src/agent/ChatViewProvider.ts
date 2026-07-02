@@ -19,7 +19,10 @@ import type {
 } from "./AgentSessionManager.js";
 import type { AgentSession } from "./AgentSession.js";
 import type { SessionSummary } from "./SessionStore.js";
-import type { RevertRecoveryState } from "./persistenceContracts.js";
+import type {
+  PendingQuestionRecoveryState,
+  RevertRecoveryState,
+} from "./persistenceContracts.js";
 import type { AgentErrorActions, AgentEvent } from "./types.js";
 import type {
   BrowserGatewayThemeSnapshot,
@@ -247,6 +250,7 @@ export type ExtensionToWebview =
       toolCallId: string;
       toolName: string;
       result: string;
+      resultImages?: Array<{ mimeType: string; data: string }>;
       durationMs: number;
       input?: unknown;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
@@ -322,6 +326,18 @@ export type ExtensionToWebview =
       type: "agentRemoveQueuedMessage";
       sessionId: string;
       queueId: string;
+    }
+  | {
+      type: "agentQueueInterjectionReady";
+      sessionId: string;
+      queueId: string;
+      ready: boolean;
+    }
+  | {
+      type: "agentQueueInterjectionReady";
+      sessionId: string;
+      queueId: string;
+      ready: boolean;
     }
   | {
       type: "agentSessionUpdate";
@@ -572,6 +588,7 @@ export type ExtensionToWebview =
       toolCallId: string;
       toolName: string;
       result: string;
+      resultImages?: Array<{ mimeType: string; data: string }>;
       durationMs: number;
       input?: unknown;
     }
@@ -692,6 +709,7 @@ export interface ChatState {
   mode: string;
   model: string;
   streaming: boolean;
+  interrupted?: boolean;
   thinkingEnabled?: boolean;
   reasoningEffort?: import("./providers/types.js").ReasoningEffort;
   condenseThreshold?: number;
@@ -2030,11 +2048,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Ask the user a set of questions via the chat webview and wait for responses.
    * Called by the ask_user tool handler in toolAdapter.
    */
+  private restorePendingQuestionRecovery(
+    session: AgentSession,
+    question: PendingQuestionRecoveryState,
+  ): void {
+    if (session.id !== this.sessionManager?.getForegroundSession()?.id) return;
+    this.ensureProjectedForegroundSession(session);
+    this.applyProjectedAction({
+      type: "SET_QUESTION",
+      id: question.questionRequestId,
+      context: question.context,
+      questions: question.questions,
+    });
+    this.uiPublisher.publishQuestionRequest(
+      question.questionRequestId,
+      question.context,
+      question.questions,
+    );
+  }
+
   public requestQuestion(
     context: string,
     questions: import("./webview/types.js").Question[],
     sessionId: string,
     backgroundTask?: string,
+    pendingQuestionRecovery?: import("../core/tools/types.js").PendingQuestionRecoveryContext,
   ): Promise<import("./toolAdapter.js").QuestionResponse> {
     const { randomUUID } = require("crypto") as typeof import("crypto");
     const id = randomUUID();
@@ -2045,6 +2083,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return new Promise((resolve) => {
       this.pendingQuestions.set(id, (raw) => {
         this.questionSessionIndex.get(sessionId)?.delete(id);
+        this.sessionManager?.clearPendingQuestionRecovery(sessionId, id);
         resolve({
           answers:
             raw.answers as import("./toolAdapter.js").QuestionResponse["answers"],
@@ -2061,6 +2100,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           questions,
           ...(backgroundTask ? { backgroundTask } : {}),
         });
+        if (!backgroundTask && pendingQuestionRecovery) {
+          void this.sessionManager?.persistPendingQuestionRecovery(
+            sessionId,
+            id,
+            context,
+            questions,
+            pendingQuestionRecovery,
+          );
+        }
       }
       this.uiPublisher.publishQuestionRequest(
         id,
@@ -2129,13 +2177,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return true;
   }
 
-  public submitBrowserQuestionResponse(msg: {
+  public async submitBrowserQuestionResponse(msg: {
     id: string;
     answers: Record<string, string | string[] | number | boolean | undefined>;
     notes?: Record<string, string>;
-  }): boolean {
+  }): Promise<boolean> {
     const resolve = this.pendingQuestions.get(msg.id);
-    if (!resolve) return false;
+    if (!resolve) {
+      const foregroundSession = this.sessionManager?.getForegroundSession();
+      const pendingQuestion = foregroundSession
+        ? this.sessionManager?.getPendingQuestionRecovery(foregroundSession.id)
+        : null;
+      if (foregroundSession && pendingQuestion?.questionRequestId === msg.id) {
+        const accepted =
+          (await this.sessionManager?.answerRecoveredQuestion(
+            foregroundSession.id,
+            msg.id,
+            {
+              answers: msg.answers,
+              notes: msg.notes ?? {},
+            },
+            {
+              switchMode: (request) =>
+                this.handleModeSwitch(
+                  request.mode,
+                  request.reason,
+                  request.silent,
+                ),
+            },
+          )) === true;
+        if (!accepted) return false;
+        this.applyProjectedAction({ type: "CLEAR_QUESTION" });
+        this.uiPublisher.publishQuestionCleared(msg.id);
+        return true;
+      }
+      return false;
+    }
     this.pendingQuestions.delete(msg.id);
     resolve({
       answers: msg.answers,
@@ -2445,7 +2522,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): Promise<{ ok: boolean }> {
     if (!this.sessionManager) return { ok: false };
     const nextMode = mode?.trim() || "code";
-    const session = await this.sessionManager.createSession(nextMode);
+    const session = await this.sessionManager.createForegroundSession(nextMode);
     this.postSessionLoaded(session, {
       checkpoints: this.getSessionCheckpoints(session.id),
       tailTurns: 0,
@@ -3075,6 +3152,124 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private interjectQueuedMessageFromUi(input: {
+    sessionId: string;
+    queueId: string;
+    text: string;
+    displayText?: string;
+    isSlashCommand?: boolean;
+    slashCommandLabel?: string;
+    attachments: string[];
+    images: Array<{ name: string; mimeType: string; base64: string }>;
+    documents: Array<{ name: string; mimeType: string; base64: string }>;
+  }): boolean {
+    if (!input.sessionId || !input.queueId || !this.sessionManager) {
+      return false;
+    }
+    const session = this.sessionManager.getSession(input.sessionId);
+    if (!session) return false;
+
+    const isRunning =
+      session.status === "streaming" ||
+      session.status === "tool_executing" ||
+      session.status === "awaiting_approval";
+    if (!isRunning) return false;
+
+    const accepted = session.setPendingInterjection(
+      input.text,
+      input.queueId,
+      undefined,
+      input.displayText,
+      input.isSlashCommand,
+      input.slashCommandLabel,
+      input.attachments.length > 0 ? input.attachments : undefined,
+      input.images.length > 0 ? input.images : undefined,
+      input.documents.length > 0 ? input.documents : undefined,
+    );
+    if (accepted) {
+      this.applyProjectedAction({
+        type: "MARK_QUEUE_INTERJECTION_READY",
+        id: input.queueId,
+        ready: true,
+      });
+      this.postMessage({
+        type: "agentQueueInterjectionReady",
+        sessionId: input.sessionId,
+        queueId: input.queueId,
+        ready: true,
+      });
+    }
+    return accepted;
+  }
+
+  public async submitBrowserSteerQueuedMessage(input: {
+    sessionId: string;
+    queueId: string;
+    text: string;
+    displayText?: string;
+    isSlashCommand?: boolean;
+    slashCommandLabel?: string;
+    attachments?: string[];
+    images?: Array<{ name: string; mimeType: string; base64: string }>;
+    documents?: Array<{ name: string; mimeType: string; base64: string }>;
+  }): Promise<{ ok: boolean }> {
+    if (!input.sessionId || !input.queueId) return { ok: false };
+    if (!this.sessionManager?.getSession(input.sessionId)) {
+      return { ok: false };
+    }
+    const queued = this.projectedForegroundState.messageQueue.find(
+      (entry) => entry.id === input.queueId && entry.source === "browser",
+    );
+    if (!queued) return { ok: false };
+    await this.steerQueuedMessageFromUi({
+      sessionId: input.sessionId,
+      queueId: input.queueId,
+      text: input.text,
+      displayText: input.displayText,
+      isSlashCommand: input.isSlashCommand,
+      slashCommandLabel: input.slashCommandLabel,
+      attachments: input.attachments ?? [],
+      images: input.images ?? [],
+      documents: input.documents ?? [],
+      source: "browser",
+    });
+    return { ok: true };
+  }
+
+  public submitBrowserInterjectQueuedMessage(input: {
+    sessionId: string;
+    queueId: string;
+    text: string;
+    displayText?: string;
+    isSlashCommand?: boolean;
+    slashCommandLabel?: string;
+    attachments?: string[];
+    images?: Array<{ name: string; mimeType: string; base64: string }>;
+    documents?: Array<{ name: string; mimeType: string; base64: string }>;
+  }): { ok: boolean; error?: string } {
+    if (!input.sessionId || !input.queueId) {
+      return { ok: false, error: "invalid_request" };
+    }
+    const queued = this.projectedForegroundState.messageQueue.find(
+      (entry) => entry.id === input.queueId && entry.source === "browser",
+    );
+    if (!queued) return { ok: false, error: "queued_message_not_found" };
+    const accepted = this.interjectQueuedMessageFromUi({
+      sessionId: input.sessionId,
+      queueId: input.queueId,
+      text: input.text,
+      displayText: input.displayText,
+      isSlashCommand: input.isSlashCommand,
+      slashCommandLabel: input.slashCommandLabel,
+      attachments: input.attachments ?? [],
+      images: input.images ?? [],
+      documents: input.documents ?? [],
+    });
+    return accepted
+      ? { ok: true }
+      : { ok: false, error: "interjection_unavailable" };
+  }
+
   /**
    * Stop the foreground/streaming session from the browser gateway. Mirrors the
    * VS Code webview's "agentStop" handling so the browser stop button works.
@@ -3681,6 +3876,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               mode: fg.mode,
               model: fg.model,
               streaming: true,
+              interrupted: false,
               condenseThreshold,
               contextBudget: this.buildContextBudget(
                 fg,
@@ -3699,6 +3895,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const sessionId = msg.sessionId as string;
         if (sessionId) {
           this.stopSessionFromUi(sessionId);
+        }
+        break;
+      }
+
+      case "agentResumeSession": {
+        const sessionId = msg.sessionId as string;
+        if (sessionId) {
+          void this.sessionManager
+            ?.resumeInterruptedSession(sessionId)
+            .catch((err) => {
+              this.log(`[error] resume failed: ${err}`);
+              this.sendInitialState();
+            });
         }
         break;
       }
@@ -3741,6 +3950,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentInterjectQueuedMessage": {
+        const accepted = this.interjectQueuedMessageFromUi({
+          sessionId: msg.sessionId as string,
+          queueId: msg.queueId as string,
+          text: msg.text as string,
+          displayText: msg.displayText as string | undefined,
+          isSlashCommand: msg.isSlashCommand === true,
+          slashCommandLabel: msg.slashCommandLabel as string | undefined,
+          attachments: (msg.attachments as string[] | undefined) ?? [],
+          images:
+            (msg.images as
+              | Array<{ name: string; mimeType: string; base64: string }>
+              | undefined) ?? [],
+          documents:
+            (msg.documents as
+              | Array<{ name: string; mimeType: string; base64: string }>
+              | undefined) ?? [],
+        });
+        if (!accepted) {
+          vscode.window.showInformationMessage(
+            "A queued message is already waiting to interject.",
+          );
+        }
+        break;
+      }
+
       case "agentRetry": {
         const sessionId = msg.sessionId as string;
         if (sessionId) {
@@ -3779,7 +4014,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentNewSession": {
         const mode = (msg.mode as string) ?? "code";
-        this.sessionManager.createSession(mode).then((session) => {
+        this.sessionManager.createForegroundSession(mode).then((session) => {
           this.postSessionLoaded(session, {
             checkpoints: this.getSessionCheckpoints(session.id),
             tailTurns: 0,
@@ -4122,8 +4357,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentQuestionResponse": {
-        this.applyProjectedAction({ type: "CLEAR_QUESTION" });
-        this.submitBrowserQuestionResponse({
+        void this.submitBrowserQuestionResponse({
           id: msg.id as string,
           answers: msg.answers as Record<
             string,
@@ -4487,58 +4721,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const scope = (msg.scope as "turn" | "all") ?? "turn";
         if (!sessionId || !checkpointId || !this.sessionManager) break;
         await this.openCheckpointDiff(sessionId, checkpointId, scope);
-        break;
-      }
-
-      case "agentQueueMessage": {
-        const sessionId = msg.sessionId as string;
-        const text = msg.text as string;
-        const queueId = msg.queueId as string;
-        const displayText = msg.displayText as string | undefined;
-        const isSlashCommand = msg.isSlashCommand === true;
-        const slashCommandLabel = msg.slashCommandLabel as string | undefined;
-        const attachments = (msg.attachments as string[] | undefined) ?? [];
-        const images =
-          (msg.images as
-            | Array<{ name: string; mimeType: string; base64: string }>
-            | undefined) ?? [];
-        const documents =
-          (msg.documents as
-            | Array<{ name: string; mimeType: string; base64: string }>
-            | undefined) ?? [];
-        this.applyProjectedAction({
-          type: "ENQUEUE_MESSAGE",
-          id: queueId,
-          text: displayText ?? text,
-          fullText: displayText && displayText !== text ? text : undefined,
-          isSlashCommand,
-          slashCommandLabel,
-          attachments: attachments.length > 0 ? attachments : undefined,
-          images: images.length > 0 ? images : undefined,
-          documents: documents.length > 0 ? documents : undefined,
-        });
-        if (
-          sessionId &&
-          queueId &&
-          this.sessionManager &&
-          (text ||
-            attachments.length > 0 ||
-            images.length > 0 ||
-            documents.length > 0)
-        ) {
-          const session = this.sessionManager.getSession(sessionId);
-          session?.setPendingInterjection(
-            text,
-            queueId,
-            undefined,
-            displayText,
-            isSlashCommand,
-            slashCommandLabel,
-            attachments.length > 0 ? attachments : undefined,
-            images.length > 0 ? images : undefined,
-            documents.length > 0 ? documents : undefined,
-          );
-        }
         break;
       }
 
@@ -4961,6 +5143,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           toolCallId: extMsg.toolCallId,
           toolName: extMsg.toolName,
           result: extMsg.result,
+          resultImages: extMsg.resultImages,
           durationMs: extMsg.durationMs,
           input: extMsg.input,
           mcpApprovalPromotion: extMsg.mcpApprovalPromotion,
@@ -5216,6 +5399,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
         break;
 
+      case "agentQueueInterjectionReady":
+        this.applyProjectedAction({
+          type: "MARK_QUEUE_INTERJECTION_READY",
+          id: extMsg.queueId,
+          ready: extMsg.ready,
+        });
+        break;
+
       case "agentInterjection":
         this.applyProjectedAction({
           type: "ADD_INTERJECTION",
@@ -5293,6 +5484,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     mode: string;
     model: string;
     streaming: boolean;
+    interrupted?: boolean;
     statusOverride: string | null;
     projectedMessages: ChatMessage[];
     lastInputTokens: number;
@@ -5323,6 +5515,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       mode: this.projectedForegroundState.chatState.mode,
       model: this.projectedForegroundState.chatState.model,
       streaming: this.projectedForegroundState.streaming,
+      interrupted: this.projectedForegroundState.chatState.interrupted,
       statusOverride: this.projectedForegroundState.statusOverride,
       projectedMessages: [...this.projectedForegroundState.messages],
       lastInputTokens: this.projectedForegroundState.lastInputTokens,
@@ -5534,6 +5727,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const resultText = event.result
           .map((c) => (c.type === "text" ? c.text : `[${c.type}]`))
           .join("\n");
+        const resultImages = event.result
+          .filter(
+            (c): c is { type: "image"; data: string; mimeType: string } =>
+              c.type === "image" &&
+              typeof c.data === "string" &&
+              typeof c.mimeType === "string",
+          )
+          .map((image) => ({ mimeType: image.mimeType, data: image.data }));
         this.log(
           `[agent] tool_result tool=${event.toolName} id=${event.toolCallId} duration=${event.durationMs}ms`,
         );
@@ -5543,6 +5744,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           result: resultText,
+          ...(resultImages.length ? { resultImages } : {}),
           durationMs: event.durationMs,
           input: event.input,
           mcpApprovalPromotion: event.mcpApprovalPromotion,
@@ -6514,6 +6716,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         fg?.status === "streaming" ||
         fg?.status === "tool_executing" ||
         fg?.status === "awaiting_approval",
+      interrupted:
+        Boolean(fg?.runState) &&
+        fg?.status !== "streaming" &&
+        fg?.status !== "tool_executing" &&
+        fg?.status !== "awaiting_approval",
       condenseThreshold,
       contextBudget,
       reasoningEffort: fg?.reasoningEffort ?? "high",
@@ -6796,6 +7003,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       userTurnOffset: tail.userTurnOffset,
       hasMoreBefore: tail.hasMoreBefore,
     });
+
+    if (session.runState?.phase === "awaiting_question") {
+      this.restorePendingQuestionRecovery(session, session.runState.question);
+    }
 
     if (!tail.hasMoreBefore) return;
 

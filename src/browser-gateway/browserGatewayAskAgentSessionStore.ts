@@ -85,6 +85,29 @@ export interface BrowserGatewayAskAgentQuestionProgress {
   origin: string;
 }
 
+export interface BrowserGatewayAskAgentQuestionAnswerResult {
+  messageId: string;
+  toolCallId: string;
+  responses: Array<{
+    question: string;
+    answer: string | string[] | number | boolean | null;
+    note?: string;
+  }>;
+}
+
+export interface BrowserGatewayAskAgentRetryToolResult {
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  result: string;
+  resultImages?: Array<{ mimeType: string; data: string }>;
+}
+
+export interface BrowserGatewayAskAgentRetryableTurn {
+  userMessage: ChatMessage;
+  toolResults: BrowserGatewayAskAgentRetryToolResult[];
+}
+
 export interface BrowserGatewayAskAgentProjectHandoff {
   id: string;
   sessionId: string;
@@ -234,6 +257,28 @@ export function askAgentMediaToDisplayMedia(media?: {
   };
 }
 
+function generatedImageExtensionForMimeType(mimeType: string): string {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/gif") return "gif";
+  return "png";
+}
+
+function generatedResultImagesToDisplayMedia(
+  images: Array<{ mimeType: string; data: string }> | undefined,
+  startIndex = 0,
+): BrowserGatewayAskAgentDisplayMedia | undefined {
+  if (!images?.length) return undefined;
+  return {
+    images: images.map((image, index) => ({
+      name: `generated-image-${startIndex + index + 1}.${generatedImageExtensionForMimeType(image.mimeType)}`,
+      mimeType: image.mimeType,
+      src: `data:${image.mimeType};base64,${image.data}`,
+    })),
+    documents: [],
+  };
+}
+
 function getAskAgentCapabilities(
   modelCredentialStatus: BrowserGatewayModelCredentialStatus,
 ): CoreCapabilityStatusDto[] {
@@ -300,11 +345,17 @@ export class BrowserGatewayAskAgentSessionStore {
   }
 
   getHistorySnapshot(): BrowserGatewayAskAgentHistorySnapshot {
+    const sessions = this.sessions.filter(
+      (session) => session.messages.length > 0,
+    );
+    const activeSessionId = sessions.some(
+      (session) => session.id === this.activeSessionId,
+    )
+      ? this.activeSessionId
+      : undefined;
     return {
-      ...(this.activeSessionId
-        ? { activeSessionId: this.activeSessionId }
-        : {}),
-      sessions: this.sessions.map((session) => ({
+      ...(activeSessionId ? { activeSessionId } : {}),
+      sessions: sessions.map((session) => ({
         ...session,
         messages: [...session.messages],
       })),
@@ -321,11 +372,29 @@ export class BrowserGatewayAskAgentSessionStore {
 
   listSessions(): BrowserGatewayAskAgentSessionSummary[] {
     return this.sessions
+      .filter((session) => session.messages.length > 0)
       .map((session) => this.toSessionSummary(session))
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
   }
 
   createSession(now: number, title = "Ask Agent"): void {
+    const active = this.sessions.find(
+      (session) => session.id === this.activeSessionId,
+    );
+    if (active && active.messages.length === 0) {
+      active.title = title;
+      active.createdAt = now;
+      active.lastActiveAt = now;
+      active.nextMessageSequence = 1;
+      this.sessions = [
+        active,
+        ...this.sessions.filter((session) => session.id !== active.id),
+      ];
+      this.streaming = false;
+      this.clearEphemeralUiState();
+      return;
+    }
+
     const session: BrowserGatewayAskAgentPersistedSession = {
       id: this.nextSessionId(now),
       title,
@@ -392,7 +461,7 @@ export class BrowserGatewayAskAgentSessionStore {
   prepareLatestRetryableTurn(params: {
     sessionId: string;
     now: number;
-  }): ChatMessage | null {
+  }): BrowserGatewayAskAgentRetryableTurn | null {
     const sessionId = params.sessionId.trim();
     if (!sessionId || this.streaming) return null;
     const session = this.sessions.find(
@@ -410,13 +479,50 @@ export class BrowserGatewayAskAgentSessionStore {
     for (let i = session.messages.length - 2; i >= 0; i -= 1) {
       const message = session.messages[i];
       if (message.role === "user" && message.content.trim()) {
+        const toolResults =
+          this.getRetryToolResultsFromAssistantMessage(lastMessage);
         this.activeSessionId = session.id;
         session.messages.pop();
         session.lastActiveAt = params.now;
-        return message;
+        return { userMessage: message, toolResults };
       }
     }
     return null;
+  }
+
+  private getRetryToolResultsFromAssistantMessage(
+    message: ChatMessage,
+  ): BrowserGatewayAskAgentRetryToolResult[] {
+    if (message.role !== "assistant") return [];
+    const results: BrowserGatewayAskAgentRetryToolResult[] = [];
+    for (const block of message.blocks) {
+      if (block.type !== "tool_call" || !block.complete || !block.result) {
+        continue;
+      }
+      if (block.name !== "ask_user" && !block.resultImages?.length) continue;
+      let input: Record<string, unknown> = {};
+      if (block.inputJson.trim()) {
+        try {
+          const parsed = JSON.parse(block.inputJson) as unknown;
+          input =
+            parsed && typeof parsed === "object" && !Array.isArray(parsed)
+              ? (parsed as Record<string, unknown>)
+              : {};
+        } catch {
+          input = {};
+        }
+      }
+      results.push({
+        toolCallId: block.id,
+        toolName: block.name,
+        input,
+        result: block.result,
+        ...(block.resultImages?.length
+          ? { resultImages: block.resultImages }
+          : {}),
+      });
+    }
+    return results;
   }
 
   getPreferencesSnapshot(): BrowserGatewayAskAgentPreferencesSnapshot {
@@ -595,37 +701,39 @@ export class BrowserGatewayAskAgentSessionStore {
       string | string[] | number | boolean | undefined
     > = {},
     notes: Record<string, string> = {},
-  ): boolean {
+  ): BrowserGatewayAskAgentQuestionAnswerResult | null {
     if (!this.questionRequest || this.questionRequest.id !== questionId) {
-      return false;
+      return null;
     }
     const request = this.questionRequest;
     const session = this.getActiveSession();
-    let latestAssistantIndex = -1;
-    for (let i = session.messages.length - 1; i >= 0; i--) {
-      if (session.messages[i]?.role === "assistant") {
-        latestAssistantIndex = i;
-        break;
-      }
+    const messageIndex = session.messages.findIndex(
+      (message) =>
+        message.role === "assistant" &&
+        message.blocks.some(
+          (block) => block.type === "tool_call" && block.id === request.id,
+        ),
+    );
+    if (messageIndex < 0) {
+      return null;
     }
-    if (latestAssistantIndex >= 0) {
-      const message = session.messages[latestAssistantIndex]!;
-      const answeredItems = request.questions.map((question) => ({
-        question: question.question,
-        answer: answers[question.id] ?? null,
-        ...(notes[question.id] ? { note: notes[question.id] } : {}),
-      }));
-      session.messages[latestAssistantIndex] = {
-        ...message,
-        blocks: [
-          ...message.blocks,
-          { type: "question_answer", items: answeredItems },
-        ],
-      };
-    }
+
+    const message = session.messages[messageIndex]!;
+    const responses = request.questions.map((question) => ({
+      question: question.question,
+      answer: answers[question.id] ?? null,
+      ...(notes[question.id] ? { note: notes[question.id] } : {}),
+    }));
+    session.messages[messageIndex] = {
+      ...message,
+      blocks: [
+        ...message.blocks,
+        { type: "question_answer", items: responses },
+      ],
+    };
     this.questionRequest = null;
     this.questionProgress = null;
-    return true;
+    return { messageId: message.id, toolCallId: request.id, responses };
   }
 
   setTodos(todos: TodoItem[]): void {
@@ -855,6 +963,7 @@ export class BrowserGatewayAskAgentSessionStore {
     toolName: string;
     input: unknown;
     result: string;
+    resultImages?: Array<{ mimeType: string; data: string }>;
     durationMs: number;
   }): void {
     const message = this.getAssistantMessage(params.messageId);
@@ -870,6 +979,7 @@ export class BrowserGatewayAskAgentSessionStore {
         name: params.toolName,
         inputJson: block.inputJson || JSON.stringify(params.input),
         result: params.result,
+        ...(params.resultImages ? { resultImages: params.resultImages } : {}),
         complete: true,
         durationMs: params.durationMs,
       };
@@ -881,9 +991,23 @@ export class BrowserGatewayAskAgentSessionStore {
         name: params.toolName,
         inputJson: JSON.stringify(params.input),
         result: params.result,
+        ...(params.resultImages ? { resultImages: params.resultImages } : {}),
         complete: true,
         durationMs: params.durationMs,
       });
+    }
+    const generatedDisplayMedia = generatedResultImagesToDisplayMedia(
+      params.resultImages,
+      message.displayMedia?.images.length ?? 0,
+    );
+    if (generatedDisplayMedia) {
+      message.displayMedia = {
+        images: [
+          ...(message.displayMedia?.images ?? []),
+          ...generatedDisplayMedia.images,
+        ],
+        documents: message.displayMedia?.documents ?? [],
+      };
     }
     if (params.toolName === "ask_user") {
       this.appendQuestionAnswerBlockFromToolResult(message, params.result);
@@ -915,14 +1039,25 @@ export class BrowserGatewayAskAgentSessionStore {
     code: string;
     retryable: boolean;
     actions?: NonNullable<ChatMessage["error"]>["actions"];
+    preserveCompletedAskUserBlocks?: boolean;
   }): void {
     const session = this.getActiveSession();
     const message = session.messages.find(
       (candidate) => candidate.id === params.messageId,
     );
     if (message) {
+      const preservedBlocks = params.preserveCompletedAskUserBlocks
+        ? message.blocks.filter(
+            (block) =>
+              (block.type === "tool_call" &&
+                block.name === "ask_user" &&
+                block.complete &&
+                Boolean(block.result)) ||
+              block.type === "question_answer",
+          )
+        : [];
       message.content = "";
-      message.blocks = [];
+      message.blocks = preservedBlocks;
       message.error = {
         message: params.text,
         retryable: params.retryable,

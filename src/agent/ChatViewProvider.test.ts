@@ -289,6 +289,195 @@ describe("ChatViewProvider session state sync", () => {
     );
   });
 
+  it("restores a pending ask_user question when loading an awaiting-question session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+
+    const session = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      title: "Session 1",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      runState: {
+        phase: "awaiting_question",
+        startedAt: 123,
+        question: {
+          schemaVersion: 1,
+          questionRequestId: "question-1",
+          context: "Pick one.",
+          questions: [
+            {
+              id: "choice",
+              type: "multiple_choice",
+              question: "Which path?",
+              options: ["A", "B"],
+              recommended: "A",
+            },
+          ],
+          assistantContent: [],
+          toolUseId: "toolu-1",
+          toolName: "ask_user",
+          toolInput: {},
+        },
+      },
+      getAllMessages: () => [] as unknown[],
+    };
+
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    (
+      provider as unknown as {
+        postSessionLoaded: (session: unknown) => void;
+      }
+    ).postSessionLoaded(session);
+
+    expect(
+      provider.getBrowserProjectedForegroundState()?.questionRequest,
+    ).toMatchObject({
+      id: "question-1",
+      context: "Pick one.",
+    });
+    expect(
+      mockPostMessage.mock.calls.some(
+        ([message]) =>
+          message.type === "agentQuestionRequest" &&
+          message.id === "question-1",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a restored ask_user question visible when recovery rejects the answer", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = { id: "session-1" };
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getPendingQuestionRecovery: vi.fn(() => ({
+        questionRequestId: "question-1",
+      })),
+      answerRecoveredQuestion: vi.fn(async () => false),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+    (
+      provider as unknown as {
+        projectedForegroundState: Record<string, unknown>;
+      }
+    ).projectedForegroundState = {
+      sessionId: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      streaming: false,
+      thinkingEnabled: true,
+      reasoningEffort: "high",
+      todos: [],
+      questionRequest: {
+        id: "question-1",
+        context: "Pick one.",
+        questions: [],
+      },
+      detectedQuestion: null,
+      dismissedDetectedQuestionIds: [],
+      projectedMessages: [],
+      messageQueue: [],
+      interrupted: null,
+    } as never;
+
+    const accepted = await provider.submitBrowserQuestionResponse({
+      id: "question-1",
+      answers: { choice: "A" },
+      notes: {},
+    });
+
+    expect(accepted).toBe(false);
+    expect(
+      (
+        provider as unknown as {
+          projectedForegroundState: { questionRequest: unknown };
+        }
+      ).projectedForegroundState.questionRequest,
+    ).toMatchObject({
+      id: "question-1",
+    });
+  });
+
+  it("routes answers for restored ask_user questions through recovery", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = { id: "session-1" };
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getPendingQuestionRecovery: vi.fn(() => ({
+        questionRequestId: "question-1",
+      })),
+      answerRecoveredQuestion: vi.fn(async () => true),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    const accepted = await provider.submitBrowserQuestionResponse({
+      id: "question-1",
+      answers: { choice: "A" },
+      notes: { choice: "Looks good" },
+    });
+
+    expect(accepted).toBe(true);
+    expect(manager.answerRecoveredQuestion).toHaveBeenCalledWith(
+      "session-1",
+      "question-1",
+      {
+        answers: { choice: "A" },
+        notes: { choice: "Looks good" },
+      },
+      expect.objectContaining({ switchMode: expect.any(Function) }),
+    );
+  });
+
   it("uses async detect result for projected detected question in browser state", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -756,6 +945,64 @@ describe("ChatViewProvider session state sync", () => {
     ]);
   });
 
+  it("can register a queued message as a pending interjection", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const session = {
+      id: "session-1",
+      status: "tool_executing",
+      setPendingInterjection: vi.fn(() => true),
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+    };
+    provider.setSessionManager(manager as never);
+
+    const accepted = (
+      provider as unknown as {
+        interjectQueuedMessageFromUi(input: {
+          sessionId: string;
+          queueId: string;
+          text: string;
+          displayText?: string;
+          isSlashCommand?: boolean;
+          slashCommandLabel?: string;
+          attachments: string[];
+          images: Array<{ name: string; mimeType: string; base64: string }>;
+          documents: Array<{ name: string; mimeType: string; base64: string }>;
+        }): boolean;
+      }
+    ).interjectQueuedMessageFromUi({
+      sessionId: "session-1",
+      queueId: "queue-1",
+      text: "interject this",
+      displayText: "Interject this",
+      isSlashCommand: false,
+      attachments: ["note.md"],
+      images: [],
+      documents: [],
+    });
+
+    expect(accepted).toBe(true);
+    expect(session.setPendingInterjection).toHaveBeenCalledWith(
+      "interject this",
+      "queue-1",
+      undefined,
+      "Interject this",
+      false,
+      undefined,
+      ["note.md"],
+      undefined,
+      undefined,
+    );
+  });
+
   it("clears the projected transcript when creating a new browser session", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
@@ -808,7 +1055,7 @@ describe("ChatViewProvider session state sync", () => {
       })),
       getSessionInfos: vi.fn(() => []),
       getBgSessionInfos: vi.fn(() => []),
-      createSession: vi.fn(async () => {
+      createForegroundSession: vi.fn(async () => {
         foregroundSession = newSession;
         return newSession;
       }),
@@ -841,7 +1088,7 @@ describe("ChatViewProvider session state sync", () => {
     const result = await provider.submitBrowserNewSession("code");
 
     expect(result.ok).toBe(true);
-    expect(manager.createSession).toHaveBeenCalledWith("code");
+    expect(manager.createForegroundSession).toHaveBeenCalledWith("code");
     expect(provider.getBrowserProjectedForegroundState()?.sessionId).toBe(
       "session-new",
     );
@@ -1221,6 +1468,7 @@ describe("ChatViewProvider session state sync", () => {
         mode: "code",
         model: "claude-sonnet-4-6",
         streaming: true,
+        interrupted: false,
         condenseThreshold: 0.8,
         contextBudget: undefined,
         reasoningEffort: "none",
@@ -1536,7 +1784,7 @@ describe("ChatViewProvider session state sync", () => {
       },
     } as never;
 
-    const ok = provider.submitBrowserQuestionResponse({
+    const ok = await provider.submitBrowserQuestionResponse({
       id: "question-1",
       answers: { q1: "Yes" },
       notes: {},

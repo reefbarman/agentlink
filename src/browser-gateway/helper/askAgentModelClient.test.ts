@@ -293,7 +293,21 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       "read_file",
       "list_files",
       "search_files",
+      "generate_image",
     ]);
+    const generateImageTool = (
+      (body.tools as Array<{ name?: string }> | undefined) ?? []
+    ).find((tool) => tool.name === "generate_image");
+    expect(generateImageTool).toBeDefined();
+    const generateImageParameters = generateImageTool as {
+      parameters?: { properties?: Record<string, unknown> };
+    };
+    expect(generateImageParameters.parameters?.properties).not.toHaveProperty(
+      "output_path",
+    );
+    expect(generateImageParameters.parameters?.properties).not.toHaveProperty(
+      "reference_image_paths",
+    );
     expect(toolNames).not.toContain("execute_command");
     expect(toolNames).not.toContain("write_file");
   });

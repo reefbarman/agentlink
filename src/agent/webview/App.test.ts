@@ -186,6 +186,138 @@ describe("webview App reducer background agent launch blocks", () => {
     expect(assistant?.error?.message).toBe("API request failed");
   });
 
+  it("promotes live generated image tool results to assistant display media", () => {
+    const toolCallId = "tool-generate-image";
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "generate an icon",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId,
+      toolName: "generate_image",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId,
+      toolName: "generate_image",
+      result: JSON.stringify({ status: "accepted", generated_count: 1 }),
+      resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      durationMs: 42,
+      input: { prompt: "teal icon" },
+    });
+
+    const assistant = state.messages[state.messages.length - 1];
+    expect(assistant?.role).toBe("assistant");
+    expect(assistant?.displayMedia).toEqual({
+      images: [
+        {
+          name: "generated-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,YWJjZA==",
+        },
+      ],
+      documents: [],
+    });
+    expect(assistant?.blocks).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        id: toolCallId,
+        resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      }),
+    ]);
+  });
+
+  it("promotes generated images when completing earlier tool messages and multiple image tools", () => {
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "generate two images",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-generate-first",
+      toolName: "generate_image",
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-generate-second",
+      toolName: "generate_image",
+    });
+    state = reducer(state, {
+      type: "ADD_ANNOTATION",
+      text: "continuing while tools complete",
+      badge: "follow-up",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-generate-first",
+      toolName: "generate_image",
+      result: JSON.stringify({ status: "accepted", generated_count: 1 }),
+      resultImages: [{ mimeType: "image/png", data: "Zmlyc3Q=" }],
+      durationMs: 42,
+      input: { prompt: "first" },
+    });
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-generate-second",
+      toolName: "generate_image",
+      result: JSON.stringify({ status: "accepted", generated_count: 1 }),
+      resultImages: [{ mimeType: "image/webp", data: "c2Vjb25k" }],
+      durationMs: 43,
+      input: { prompt: "second" },
+    });
+
+    const assistantIndex = state.messages.findIndex((message) =>
+      message.blocks.some(
+        (block) =>
+          block.type === "tool_call" && block.id === "tool-generate-first",
+      ),
+    );
+    const assistant = state.messages[assistantIndex];
+    const trailingPlaceholder = state.messages[state.messages.length - 1];
+
+    expect(assistantIndex).toBeGreaterThanOrEqual(0);
+    expect(assistantIndex).toBeLessThan(state.messages.length - 1);
+    expect(trailingPlaceholder).toMatchObject({
+      role: "assistant",
+      blocks: [],
+    });
+    expect(trailingPlaceholder?.displayMedia).toBeUndefined();
+    expect(assistant?.displayMedia).toEqual({
+      images: [
+        {
+          name: "generated-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,Zmlyc3Q=",
+        },
+        {
+          name: "generated-image-2.webp",
+          mimeType: "image/webp",
+          src: "data:image/webp;base64,c2Vjb25k",
+        },
+      ],
+      documents: [],
+    });
+    expect(assistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "tool-generate-first",
+          resultImages: [{ mimeType: "image/png", data: "Zmlyc3Q=" }],
+        }),
+        expect.objectContaining({
+          type: "tool_call",
+          id: "tool-generate-second",
+          resultImages: [{ mimeType: "image/webp", data: "c2Vjb25k" }],
+        }),
+      ]),
+    );
+  });
+
   it("backfills tool inputJson from TOOL_COMPLETE when no input deltas arrived", () => {
     const toolCallId = "tool-no-delta";
     const finalInput = {
@@ -360,6 +492,89 @@ describe("webview App reducer background agent launch blocks", () => {
       id: "tool-ask-user",
       name: "ask_user",
     });
+  });
+
+  it("restores ask_user submitted answers from persisted tool results", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "What next?" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-ask-user",
+            name: "ask_user",
+            input: {
+              context: "Need a decision.",
+              questions: [
+                {
+                  id: "scope",
+                  type: "multiple_choice",
+                  question: "Which scope?",
+                  options: ["A", "B"],
+                },
+                {
+                  id: "includeTests",
+                  type: "yes_no",
+                  question: "Include tests?",
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tool-ask-user",
+            content: JSON.stringify({
+              context: "Need a decision.",
+              responses: [
+                {
+                  question: "Which scope?",
+                  answer: "B",
+                  note: "Historical reload should show this note.",
+                },
+                {
+                  question: "Include tests?",
+                  answer: true,
+                },
+              ],
+            }),
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    const assistant = restored[1];
+    expect(assistant?.role).toBe("assistant");
+    expect(assistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "tool-ask-user",
+          name: "ask_user",
+        }),
+        {
+          type: "question_answer",
+          items: [
+            {
+              question: "Which scope?",
+              answer: "B",
+              note: "Historical reload should show this note.",
+            },
+            {
+              question: "Include tests?",
+              answer: true,
+            },
+          ],
+        },
+      ]),
+    );
   });
 
   it("stores MCP approval promotion metadata on completed tool_call blocks", () => {
@@ -547,6 +762,30 @@ describe("webview App reducer background agent launch blocks", () => {
         id: "queue-vscode",
         text: "from VS Code",
         source: "vscode",
+      },
+    ]);
+  });
+
+  it("marks a queued message as ready to interject", () => {
+    let state = reducer(initialState, {
+      type: "ENQUEUE_MESSAGE",
+      id: "queue-1",
+      text: "interject soon",
+      source: "vscode",
+    });
+
+    state = reducer(state, {
+      type: "MARK_QUEUE_INTERJECTION_READY",
+      id: "queue-1",
+      ready: true,
+    });
+
+    expect(state.messageQueue).toEqual([
+      {
+        id: "queue-1",
+        text: "interject soon",
+        source: "vscode",
+        interjectionReady: true,
       },
     ]);
   });
@@ -843,6 +1082,26 @@ describe("webview App reducer background agent launch blocks", () => {
       type: "text",
       text: "## Conversation Summary\n\nSummary body",
     });
+  });
+
+  it("clears interrupted state when a new user message starts streaming", () => {
+    const state = reducer(
+      {
+        ...initialState,
+        chatState: {
+          ...initialState.chatState,
+          sessionId: "session-1",
+          interrupted: true,
+        },
+      },
+      {
+        type: "ADD_USER_MESSAGE",
+        text: "resume",
+      },
+    );
+
+    expect(state.streaming).toBe(true);
+    expect(state.chatState.interrupted).toBe(false);
   });
 
   it("updates top-level thinkingEnabled from SET_STATE", () => {
@@ -1473,6 +1732,116 @@ describe("webview App reducer background agent launch blocks", () => {
         skillName: "push-to-repo",
         path: skillPath,
         content,
+      },
+    ]);
+  });
+
+  it("restores generated image tool result blocks for chat display", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const resultText = JSON.stringify({
+      status: "accepted",
+      generated_count: 1,
+      images: [{ bytes: 4, mimeType: "image/png" }],
+    });
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "generate an icon" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "generate-image-restore",
+            name: "generate_image",
+            input: { prompt: "teal icon" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "generate-image-restore",
+            content: [
+              { type: "text", text: resultText },
+              { type: "image", data: "YWJjZA==", mimeType: "image/png" },
+            ],
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored[1]?.blocks).toEqual([
+      {
+        type: "tool_call",
+        id: "generate-image-restore",
+        name: "generate_image",
+        inputJson: JSON.stringify({ prompt: "teal icon" }),
+        result: resultText,
+        resultImages: [{ data: "YWJjZA==", mimeType: "image/png" }],
+        complete: true,
+      },
+    ]);
+    expect(restored[1]?.displayMedia).toEqual({
+      images: [
+        {
+          name: "generated-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,YWJjZA==",
+        },
+      ],
+      documents: [],
+    });
+  });
+
+  it("restores persisted MCP approval promotion metadata onto tool call blocks", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "list Linear issues" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "mcp-tool-restore",
+            name: "linear__list_issues",
+            input: { query: "status:open" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "mcp-tool-restore",
+            content: JSON.stringify({ ok: true }),
+            mcpApprovalPromotion: {
+              serverName: "linear",
+              bareToolName: "list_issues",
+              scopes: ["session", "project", "global"],
+            },
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored[1]?.blocks).toEqual([
+      {
+        type: "tool_call",
+        id: "mcp-tool-restore",
+        name: "linear__list_issues",
+        inputJson: JSON.stringify({ query: "status:open" }),
+        result: JSON.stringify({ ok: true }),
+        complete: true,
+        mcpApprovalPromotion: {
+          serverName: "linear",
+          bareToolName: "list_issues",
+          scopes: ["session", "project", "global"],
+        },
       },
     ]);
   });

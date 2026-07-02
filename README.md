@@ -322,8 +322,10 @@ AgentLink auto-configures `~/.claude.json` with per-project MCP entries.
 > **macOS/Linux:** Hooks require `jq` — install with `brew install jq`, `apt install jq`, etc.
 > **Windows:** A PowerShell script is installed automatically (no extra dependencies).
 
+<!-- markdownlint-disable MD033 -->
 <details>
 <summary>Manual hook setup</summary>
+<!-- markdownlint-enable MD033 -->
 
 If you prefer to set up hooks manually instead of using the extension command:
 
@@ -592,12 +594,12 @@ Response fields may include `user_edits` (proposed content → reviewer-edited c
 
 ### generate_image
 
-Generate PNG images through OpenAI/Codex auth and save them into the workspace. With ChatGPT/Codex OAuth, usage consumes the active account's image-generation quota; with an OpenAI API key, usage is billed to the API key. The tool always shows an approval prompt before generation because quota/billing is consumed before files are written.
+Generate PNG images through OpenAI/Codex auth and show them inline in chat. With ChatGPT/Codex OAuth, usage consumes the active account's image-generation quota; with an OpenAI API key, usage is billed to the API key. The tool always shows an approval prompt before generation because quota/billing is consumed before images are returned. In VS Code, pass `output_path` to also save generated PNGs into the workspace; browser Ask Agent generation is display-only.
 
 | Parameter               | Type               | Description                                                                                                                                                                                                          |
 | ----------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `prompt`                | string             | Prompt describing the image or images to generate                                                                                                                                                                    |
-| `output_path`           | string?            | Workspace-relative PNG file path or output directory. Defaults to `generated-images/`. Must resolve inside workspace.                                                                                                |
+| `output_path`           | string?            | Optional workspace-relative PNG file path or output directory. When omitted, images are shown in chat only and no files are written. When provided in VS Code, images are also saved to this workspace path.         |
 | `size`                  | string?            | Optional requested size/aspect hint, e.g. `1024x1024`, `1536x1024`, or `1024x1536`                                                                                                                                   |
 | `count`                 | number?            | Number of images to generate. Default: 1. Maximum: 4                                                                                                                                                                 |
 | `reference_image_paths` | string[]?          | Workspace-local PNG/JPEG/GIF/WebP files to use as generation references                                                                                                                                              |
@@ -605,9 +607,9 @@ Generate PNG images through OpenAI/Codex auth and save them into the workspace. 
 | `use_recent_images`     | boolean \| number? | Use recent user-attached images as references. Prefer this when the user asks to use an image they already provided. `true` uses up to 4 recent images; a number uses that many.                                     |
 | `timeout_seconds`       | number?            | Overall timeout in seconds. Default and maximum: 300                                                                                                                                                                 |
 
-**Approval prompt:** shows the generation prompt, requested size/count, reference image labels, output paths, and billing/quota note. Approving uses the standard write-card `accept` decision; rejecting returns `User denied image generation` and the planned output paths.
+**Approval prompt:** shows the generation prompt, requested size/count, reference image labels, billing/quota note, and either chat-only output or workspace output paths. Approving uses the standard `accept` decision; rejecting returns `User denied image generation` and any planned output paths.
 
-**Response includes:** `status`, `model`, `billing`, `requested_count`, `generated_count`, `reference_images` metadata, generated `images` with paths/byte counts, and Codex stream `event_types`. Image bytes are written to workspace files and are not inlined into the chat/tool result.
+**Response includes:** `status`, `model`, `billing`, `requested_count`, `generated_count`, `reference_images` metadata, generated `images` metadata, Codex stream `event_types`, and image blocks rendered inline in chat. `images[].path` is present only when `output_path` saved a file.
 
 ### propose_memory
 

@@ -376,6 +376,44 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
+    if (method === "POST" && url === "/api/queue/steer") {
+      void this.handleQueueSteerAction(req, res).catch((err) => {
+        this.log(`[browser-gateway] queue steer action failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
+    if (method === "POST" && url === "/api/queue/interject") {
+      void this.handleQueueInterjectAction(req, res).catch((err) => {
+        this.log(`[browser-gateway] queue interject action failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(
+            res,
+            String(err) === "Error: invalid_json" ? 400 : 500,
+            {
+              error:
+                String(err) === "Error: invalid_json"
+                  ? "invalid_json"
+                  : "internal_error",
+            },
+          );
+        }
+      });
+      return;
+    }
+
     if (method === "POST" && url === "/api/mode") {
       void this.handleModeAction(req, res).catch((err) => {
         this.log(`[browser-gateway] mode action failed: ${err}`);
@@ -1133,7 +1171,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
-    const ok = this.chatViewProvider.submitBrowserQuestionResponse({
+    const ok = await this.chatViewProvider.submitBrowserQuestionResponse({
       id: body.id,
       answers: body.answers,
       notes: body.notes,
@@ -1289,6 +1327,170 @@ export class BrowserGatewayServer implements vscode.Disposable {
       isSlashCommand: body.isSlashCommand === true,
     });
     this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private normalizeQueueMessageActionBody(
+    body: {
+      sessionId?: unknown;
+      queueId?: unknown;
+      text?: unknown;
+      displayText?: unknown;
+      isSlashCommand?: unknown;
+      slashCommandLabel?: unknown;
+      attachments?: unknown;
+      images?: unknown;
+      documents?: unknown;
+    } | null,
+  ): {
+    sessionId: string;
+    queueId: string;
+    text: string;
+    displayText?: string;
+    isSlashCommand?: boolean;
+    slashCommandLabel?: string;
+    attachments: string[];
+    images: Array<{ name: string; mimeType: string; base64: string }>;
+    documents: Array<{ name: string; mimeType: string; base64: string }>;
+  } | null {
+    const sessionId =
+      typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+    const queueId =
+      typeof body?.queueId === "string" ? body.queueId.trim() : "";
+    const text = typeof body?.text === "string" ? body.text : "";
+    const attachments = Array.isArray(body?.attachments)
+      ? body.attachments
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter((item) => item.length > 0)
+      : [];
+    const images = Array.isArray(body?.images)
+      ? body.images
+          .map((item) => {
+            const record =
+              item && typeof item === "object"
+                ? (item as Record<string, unknown>)
+                : {};
+            return {
+              name: typeof record.name === "string" ? record.name : "",
+              mimeType:
+                typeof record.mimeType === "string" ? record.mimeType : "",
+              base64: typeof record.base64 === "string" ? record.base64 : "",
+            };
+          })
+          .filter((item) => item.name && item.mimeType && item.base64)
+      : [];
+    const documents = Array.isArray(body?.documents)
+      ? body.documents
+          .map((item) => {
+            const record =
+              item && typeof item === "object"
+                ? (item as Record<string, unknown>)
+                : {};
+            return {
+              name: typeof record.name === "string" ? record.name : "",
+              mimeType:
+                typeof record.mimeType === "string" ? record.mimeType : "",
+              base64: typeof record.base64 === "string" ? record.base64 : "",
+            };
+          })
+          .filter((item) => item.name && item.mimeType && item.base64)
+      : [];
+
+    if (
+      !sessionId ||
+      !queueId ||
+      (!text.trim() &&
+        attachments.length === 0 &&
+        images.length === 0 &&
+        documents.length === 0)
+    ) {
+      return null;
+    }
+
+    return {
+      sessionId,
+      queueId,
+      text,
+      displayText:
+        typeof body?.displayText === "string" ? body.displayText : undefined,
+      isSlashCommand: body?.isSlashCommand === true,
+      slashCommandLabel:
+        typeof body?.slashCommandLabel === "string"
+          ? body.slashCommandLabel
+          : undefined,
+      attachments,
+      images,
+      documents,
+    };
+  }
+
+  private async handleQueueSteerAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await this.readJsonBody(req)) as {
+      sessionId?: unknown;
+      queueId?: unknown;
+      text?: unknown;
+      displayText?: unknown;
+      isSlashCommand?: unknown;
+      slashCommandLabel?: unknown;
+      attachments?: unknown;
+      images?: unknown;
+      documents?: unknown;
+    } | null;
+    const input = this.normalizeQueueMessageActionBody(body);
+    if (!input) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+
+    const result =
+      await this.chatViewProvider.submitBrowserSteerQueuedMessage(input);
+    this.writeJson(
+      res,
+      result.ok ? 200 : 404,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
+  }
+
+  private async handleQueueInterjectAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await this.readJsonBody(req)) as {
+      sessionId?: unknown;
+      queueId?: unknown;
+      text?: unknown;
+      displayText?: unknown;
+      isSlashCommand?: unknown;
+      slashCommandLabel?: unknown;
+      attachments?: unknown;
+      images?: unknown;
+      documents?: unknown;
+    } | null;
+    const input = this.normalizeQueueMessageActionBody(body);
+    if (!input) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+
+    const result =
+      this.chatViewProvider.submitBrowserInterjectQueuedMessage(input);
+    this.writeJson(
+      res,
+      result.ok ? 200 : 409,
+      result.ok ? { ...result, snapshot: this.getSnapshot() } : result,
+    );
   }
 
   private async handleModeAction(

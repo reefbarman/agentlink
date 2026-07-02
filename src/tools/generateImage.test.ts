@@ -388,13 +388,15 @@ describe("parseCodexImageSseForTest", () => {
       ]),
       targets,
       maxImages: 1,
-      writtenImages,
+      generatedImages: writtenImages,
     });
 
     expect(result.images).toHaveLength(1);
     expect(result.images[0]).toMatchObject({
       path: "image-1.png",
       bytes: Buffer.byteLength("final"),
+      mimeType: "image/png",
+      base64: Buffer.from("final").toString("base64"),
       size: "1024x1024",
       quality: "medium",
     });
@@ -428,7 +430,7 @@ describe("parseCodexImageSseForTest", () => {
       ]),
       targets,
       maxImages: 2,
-      writtenImages,
+      generatedImages: writtenImages,
     });
 
     expect(result.images.map((image) => image.path)).toEqual([
@@ -441,6 +443,35 @@ describe("parseCodexImageSseForTest", () => {
     await expect(fs.readFile(targets[1].absolutePath, "utf8")).resolves.toBe(
       "two",
     );
+  });
+
+  it("collects image payloads without writing files when no targets are provided", async () => {
+    const generatedImages: GeneratedImage[] = [];
+
+    const result = await parseCodexImageSseForTest({
+      response: sseResponse([
+        {
+          type: "response.image_generation_call.partial_image",
+          item_id: "ig_1",
+          output_index: 0,
+          partial_image_b64: Buffer.from("display-only").toString("base64"),
+          output_format: "png",
+        },
+      ]),
+      maxImages: 1,
+      generatedImages,
+    });
+
+    expect(result.images[0]).toEqual(
+      expect.objectContaining({
+        bytes: Buffer.byteLength("display-only"),
+        mimeType: "image/png",
+        base64: Buffer.from("display-only").toString("base64"),
+        event_type: "response.image_generation_call.partial_image",
+      }),
+    );
+    expect(result.images[0].path).toBeUndefined();
+    expect(generatedImages).toBe(result.images);
   });
 
   it("records partial files in the shared writtenImages array", async () => {
@@ -462,7 +493,7 @@ describe("parseCodexImageSseForTest", () => {
       ]),
       targets,
       maxImages: 1,
-      writtenImages,
+      generatedImages: writtenImages,
     });
 
     expect(writtenImages).toEqual([

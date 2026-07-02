@@ -49,6 +49,28 @@ function mediaToDisplayMedia(
   };
 }
 
+function imageExtensionForMimeType(mimeType: string): string {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/gif") return "gif";
+  return "png";
+}
+
+function generatedImagesToDisplayMedia(
+  images: Array<{ mimeType: string; data: string }> | undefined,
+  startIndex = 0,
+): DisplayMedia | undefined {
+  if (!images?.length) return undefined;
+  return {
+    images: images.map((image, index) => ({
+      name: `generated-image-${startIndex + index + 1}.${imageExtensionForMimeType(image.mimeType)}`,
+      mimeType: image.mimeType,
+      src: `data:${image.mimeType};base64,${image.data}`,
+    })),
+    documents: [],
+  };
+}
+
 function parseLoadSkillResult(result: string): {
   skillName?: string;
   path?: string;
@@ -127,10 +149,52 @@ export function normalizeProjectedToolName(toolName: string): string {
   return BUILTIN_TOOL_NAMES.has(suffix) ? suffix : toolName;
 }
 
+type QuestionAnswerItem = Extract<
+  ContentBlock,
+  { type: "question_answer" }
+>["items"][number];
+
 function getAskUserContextFromInput(input: unknown): string {
   if (!input || typeof input !== "object" || Array.isArray(input)) return "";
   const context = (input as Record<string, unknown>).context;
   return typeof context === "string" ? context.trim() : "";
+}
+
+function normalizeAskUserAnswer(answer: unknown): QuestionAnswerItem["answer"] {
+  if (answer === null || answer === undefined) return null;
+  if (
+    typeof answer === "string" ||
+    typeof answer === "number" ||
+    typeof answer === "boolean"
+  ) {
+    return answer;
+  }
+  if (Array.isArray(answer)) {
+    return answer.filter((value): value is string => typeof value === "string");
+  }
+  return null;
+}
+
+function parseAskUserQuestionAnswerItems(result: string): QuestionAnswerItem[] {
+  const parsed = parseJsonObject(result);
+  const responses = parsed?.responses;
+  if (!Array.isArray(responses)) return [];
+
+  return responses.flatMap((response): QuestionAnswerItem[] => {
+    if (!response || typeof response !== "object") return [];
+    const record = response as Record<string, unknown>;
+    const question =
+      typeof record.question === "string" ? record.question.trim() : "";
+    if (!question) return [];
+    const note = typeof record.note === "string" ? record.note.trim() : "";
+    return [
+      {
+        question,
+        answer: normalizeAskUserAnswer(record.answer),
+        ...(note ? { note } : {}),
+      },
+    ];
+  });
 }
 
 function addQuestionContextMessage(
@@ -249,6 +313,7 @@ export interface AppState {
     documents?: RawDocumentMedia[];
     displayMedia?: DisplayMedia;
     source?: "vscode" | "browser";
+    interjectionReady?: boolean;
   }>;
   questionRequest: {
     id: string;
@@ -327,6 +392,7 @@ export type AppAction =
       toolCallId: string;
       toolName: string;
       result: string;
+      resultImages?: Array<{ mimeType: string; data: string }>;
       durationMs: number;
       input?: unknown;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
@@ -369,6 +435,7 @@ export type AppAction =
       source?: "vscode" | "browser";
     }
   | { type: "EDIT_QUEUE_MESSAGE"; id: string; text: string }
+  | { type: "MARK_QUEUE_INTERJECTION_READY"; id: string; ready: boolean }
   | { type: "REMOVE_FROM_QUEUE"; id: string }
   | { type: "CLEAR_QUEUE" }
   | {
@@ -498,6 +565,14 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
 
   // First pass: collect tool results keyed by tool_use_id
   const toolResults = new Map<string, string>();
+  const toolResultImages = new Map<
+    string,
+    Array<{ mimeType: string; data: string }>
+  >();
+  const toolResultUiMeta = new Map<
+    string,
+    { mcpApprovalPromotion?: McpApprovalPromotionMeta }
+  >();
   for (const msg of raw) {
     const m = msg as { role: string; content: unknown };
     if (m.role === "user" && Array.isArray(m.content)) {
@@ -505,17 +580,45 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         type: string;
         tool_use_id?: string;
         content?: unknown;
+        mcpApprovalPromotion?: McpApprovalPromotionMeta;
       }>) {
         if (block.type === "tool_result" && block.tool_use_id) {
-          const text = Array.isArray(block.content)
-            ? (block.content as Array<{ type: string; text?: string }>)
+          const content = block.content;
+          const text = Array.isArray(content)
+            ? (content as Array<{ type: string; text?: string }>)
                 .filter((c) => c.type === "text")
                 .map((c) => c.text ?? "")
                 .join("\n")
-            : typeof block.content === "string"
-              ? block.content
+            : typeof content === "string"
+              ? content
               : "";
           toolResults.set(block.tool_use_id, text);
+          if (Array.isArray(content)) {
+            const images = (
+              content as Array<{
+                type: string;
+                data?: string;
+                mimeType?: string;
+              }>
+            )
+              .filter(
+                (c): c is { type: "image"; data: string; mimeType: string } =>
+                  c.type === "image" &&
+                  typeof c.data === "string" &&
+                  typeof c.mimeType === "string",
+              )
+              .map((image) => ({
+                mimeType: image.mimeType,
+                data: image.data,
+              }));
+            if (images.length > 0)
+              toolResultImages.set(block.tool_use_id, images);
+          }
+          if (block.mcpApprovalPromotion) {
+            toolResultUiMeta.set(block.tool_use_id, {
+              mcpApprovalPromotion: block.mcpApprovalPromotion,
+            });
+          }
         }
       }
     }
@@ -617,6 +720,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         toolResults,
       );
       const finalMarkerToolId = finalMarker?.toolCall?.id;
+      const messageResultImages: Array<{ mimeType: string; data: string }> = [];
       for (const block of contentArr as Array<{
         type: string;
         text?: string;
@@ -645,6 +749,9 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           const toolId = block.id ?? crypto.randomUUID();
           const toolName = normalizeProjectedToolName(block.name ?? "");
           const toolResult = toolResults.get(toolId) ?? "";
+          const resultImages = toolResultImages.get(toolId);
+          if (resultImages) messageResultImages.push(...resultImages);
+          const resultImageProps = resultImages ? { resultImages } : {};
           const inputJson = JSON.stringify(block.input ?? {});
           if (toolName === "set_task_status" && toolId === finalMarkerToolId) {
             continue;
@@ -657,7 +764,23 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
             blocks.push({ type: "text", text: askUserContext });
           }
 
-          if (toolName === "load_skill") {
+          if (toolName === "ask_user") {
+            blocks.push({
+              type: "tool_call",
+              id: toolId,
+              name: toolName,
+              inputJson,
+              result: toolResult,
+              ...resultImageProps,
+              complete: true,
+              mcpApprovalPromotion:
+                toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
+            });
+            const items = parseAskUserQuestionAnswerItems(toolResult);
+            if (items.length > 0) {
+              blocks.push({ type: "question_answer", items });
+            }
+          } else if (toolName === "load_skill") {
             const parsed = parseLoadSkillResult(toolResult);
             blocks.push({
               type: "skill_load",
@@ -696,7 +819,10 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               name: toolName,
               inputJson,
               result: toolResult,
+              ...resultImageProps,
               complete: true,
+              mcpApprovalPromotion:
+                toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
             });
 
             if (sessionId) {
@@ -745,7 +871,10 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               name: toolName,
               inputJson,
               result: toolResult,
+              ...resultImageProps,
               complete: true,
+              mcpApprovalPromotion:
+                toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
             });
 
             if (sessionId) {
@@ -798,7 +927,10 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               name: toolName,
               inputJson,
               result: toolResult,
+              ...resultImageProps,
               complete: true,
+              mcpApprovalPromotion:
+                toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
             });
           }
         }
@@ -816,12 +948,17 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
             )
           : blocks;
       if (visibleBlocks.length > 0 || hasRuntimeError || finalMarker) {
+        const generatedDisplayMedia =
+          generatedImagesToDisplayMedia(messageResultImages);
         result.push({
           id: crypto.randomUUID(),
           role: "assistant",
           content: "",
           timestamp: Date.now(),
           blocks: visibleBlocks,
+          ...(generatedDisplayMedia
+            ? { displayMedia: generatedDisplayMedia }
+            : {}),
           finalMarker,
           ...(hasRuntimeError
             ? {
@@ -1153,6 +1290,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       );
       return {
         ...state,
+        chatState: { ...state.chatState, streaming: true, interrupted: false },
         streaming: true,
         detectedQuestion: null,
         dismissedDetectedQuestionIds:
@@ -1309,6 +1447,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
                 ? b.inputJson
                 : JSON.stringify(action.input),
             result: action.result,
+            ...(b.type === "tool_call" && action.resultImages?.length
+              ? { resultImages: action.resultImages }
+              : {}),
             complete: true,
             durationMs: action.durationMs,
             ...(b.type === "tool_call"
@@ -1329,29 +1470,30 @@ export function reducer(state: AppState, action: AppAction): AppState {
         return b;
       });
       msgs[targetIdx] = target;
+      const generatedDisplayMedia = generatedImagesToDisplayMedia(
+        action.resultImages,
+        target.displayMedia?.images.length ?? 0,
+      );
+      if (generatedDisplayMedia) {
+        target.displayMedia = {
+          images: [
+            ...(target.displayMedia?.images ?? []),
+            ...generatedDisplayMedia.images,
+          ],
+          documents: target.displayMedia?.documents ?? [],
+        };
+        msgs[targetIdx] = target;
+      }
 
-      // When ask_user completes, add a question_answer summary block
+      // When ask_user completes, add a question_answer summary block.
       if (action.toolName === "ask_user") {
-        try {
-          const parsed = JSON.parse(action.result);
-          if (parsed.responses && Array.isArray(parsed.responses)) {
-            const items = parsed.responses.map(
-              (r: { question: string; answer: unknown; note?: string }) => ({
-                question: r.question ?? "",
-                answer: r.answer ?? null,
-                ...(r.note ? { note: r.note } : {}),
-              }),
-            );
-            if (items.length > 0) {
-              target.blocks = [
-                ...target.blocks,
-                { type: "question_answer" as const, items },
-              ];
-              msgs[targetIdx] = target;
-            }
-          }
-        } catch {
-          // ignore parse error
+        const items = parseAskUserQuestionAnswerItems(action.result);
+        if (items.length > 0) {
+          target.blocks = [
+            ...target.blocks,
+            { type: "question_answer" as const, items },
+          ];
+          msgs[targetIdx] = target;
         }
       }
 
@@ -1756,6 +1898,14 @@ export function reducer(state: AppState, action: AppAction): AppState {
                 slashCommandLabel: undefined,
               }
             : q,
+        ),
+      };
+
+    case "MARK_QUEUE_INTERJECTION_READY":
+      return {
+        ...state,
+        messageQueue: state.messageQueue.map((q) =>
+          q.id === action.id ? { ...q, interjectionReady: action.ready } : q,
         ),
       };
 

@@ -10,6 +10,7 @@ import {
   waitFor,
 } from "@testing-library/preact";
 
+import type { AppState } from "../../shared/chatProjection";
 import type { ApprovalRequest } from "../../approvals/webview/types";
 import { BrowserGatewayApp } from "./BrowserGatewayApp";
 import { h } from "preact";
@@ -282,7 +283,7 @@ type TestSnapshot = {
       lastOutputTokens: number;
       lastCacheReadTokens: number;
       estimatedTotalUsed: number;
-      messageQueue: never[];
+      messageQueue: AppState["messageQueue"];
       questionRequest: null | {
         id: string;
         context: string;
@@ -449,6 +450,15 @@ function getInstanceTabs(): HTMLElement[] {
   return within(
     screen.getByRole("tablist", { name: "Instances" }),
   ).getAllByRole("tab");
+}
+
+async function selectWorkspaceTab(): Promise<HTMLElement> {
+  const workspaceTab = await screen.findByRole("tab", { name: /Workspace/ });
+  fireEvent.click(workspaceTab);
+  await waitFor(() => {
+    expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+  });
+  return workspaceTab;
 }
 
 function installLocalStorageMock(): Map<string, string> {
@@ -707,6 +717,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input]) =>
@@ -718,6 +729,279 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Queued.")).toBeTruthy();
+    });
+  });
+
+  it("renders browser queue steering controls and posts queue actions", async () => {
+    const queuedSnapshot = createSnapshot();
+    queuedSnapshot.session.foreground.status = "streaming";
+    queuedSnapshot.session.foreground.streaming = true;
+    queuedSnapshot.session.foreground.messageQueue = [
+      {
+        id: "queue-1",
+        text: "Please steer this",
+        fullText: "Please steer this",
+        source: "browser",
+      },
+    ];
+    const interjectionSnapshot = createSnapshot();
+    interjectionSnapshot.session.foreground.status = "streaming";
+    interjectionSnapshot.session.foreground.streaming = true;
+    interjectionSnapshot.session.foreground.messageQueue = [
+      {
+        id: "queue-1",
+        text: "Please steer this",
+        fullText: "Please steer this",
+        source: "browser",
+        interjectionReady: true,
+      },
+    ];
+    const drainedSnapshot = createSnapshot();
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(queuedSnapshot);
+      if (url.includes("/api/queue/interject")) {
+        return jsonResponse({ ok: true, snapshot: interjectionSnapshot });
+      }
+      if (url.includes("/api/queue/steer")) {
+        return jsonResponse({ ok: true, snapshot: drainedSnapshot });
+      }
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    expect(await screen.findByText("Queued (1)")).toBeTruthy();
+    expect(screen.getByTitle("Steer now")).toBeTruthy();
+    expect(screen.getByTitle("Interject at next break")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Interject at next break"));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/queue/interject"),
+        ),
+      ).toBe(true);
+    });
+    expect(
+      await screen.findByTitle("Ready to interject at next break"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Steer now"));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/queue/steer"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("sends project final-marker Continue prompts through the selected project instance", async () => {
+    const snapshot = createSnapshot();
+    snapshot.session.foreground.projectedMessages = [
+      {
+        id: "assistant-final",
+        role: "assistant",
+        content: "Ready for the next slice.",
+        timestamp: 100,
+        blocks: [{ type: "text", text: "Ready for the next slice." }],
+        finalMarker: {
+          status: "completed",
+          source: "tool",
+          summary: "Ready for the next slice.",
+          continueAction: {
+            label: "Continue",
+            prompt: "Please continue the next slice.",
+          },
+          toolCall: {
+            id: "call-final",
+            name: "set_task_status",
+            inputJson: JSON.stringify({
+              status: "completed",
+              summary: "Ready for the next slice.",
+              continueLabel: "Continue",
+              continuePrompt: "Please continue the next slice.",
+            }),
+          },
+        },
+      },
+    ];
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/send")) {
+        return jsonResponse({ ok: true, snapshot });
+      }
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          if (!String(input).includes("/api/send")) return false;
+          const body = JSON.parse(String((init as RequestInit).body ?? "{}"));
+          return (
+            body.text === "Please continue the next slice." &&
+            body.sessionId === "session-1"
+          );
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("sends Ask Agent final-marker Continue prompts through Ask Agent", async () => {
+    const askSnapshot = createAskAgentSessionResponse().snapshot;
+    askSnapshot.session.foreground.projectedMessages = [
+      {
+        id: "ask-assistant-final",
+        role: "assistant",
+        content: "Ready for the next Ask Agent step.",
+        timestamp: 100,
+        blocks: [{ type: "text", text: "Ready for the next Ask Agent step." }],
+        finalMarker: {
+          status: "completed",
+          source: "tool",
+          summary: "Ready for the next Ask Agent step.",
+          continueAction: {
+            label: "Continue",
+            prompt: "Please continue in Ask Agent.",
+          },
+          toolCall: {
+            id: "call-final",
+            name: "set_task_status",
+            inputJson: JSON.stringify({
+              status: "completed",
+              summary: "Ready for the next Ask Agent step.",
+              continueLabel: "Continue",
+              continuePrompt: "Please continue in Ask Agent.",
+            }),
+          },
+        },
+      },
+    ];
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const pathname = url.startsWith("http")
+        ? new URL(url).pathname
+        : url.split("?")[0];
+      if (pathname === "/api/ask-agent/session") {
+        return jsonResponse({
+          ok: true,
+          ownerRegistration: { capabilities: [] },
+          session: { capabilities: [] },
+          snapshot: askSnapshot,
+        });
+      }
+      if (pathname === "/api/ask-agent/send") {
+        return jsonResponse({ ok: true, snapshot: askSnapshot });
+      }
+      if (pathname === "/api/instances") {
+        return jsonResponse({ currentInstanceId: "", instances: [] });
+      }
+      if (pathname === "/api/ask-agent/sessions") {
+        return jsonResponse({ sessions: [] });
+      }
+      if (pathname === "/api/ask-agent/models") {
+        return jsonResponse({ models: [], source: "fallback", modelCount: 0 });
+      }
+      if (pathname === "/api/ask-agent/slash-commands") {
+        return jsonResponse({ commands: [] });
+      }
+      if (pathname === "/api/ask-agent/log") {
+        return jsonResponse({ ok: true });
+      }
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          if (String(input) !== "/api/ask-agent/send") return false;
+          const body = JSON.parse(String((init as RequestInit).body ?? "{}"));
+          return (
+            body.text === "Please continue in Ask Agent." &&
+            body.sessionId === "browser-gateway:ask-agent:default"
+          );
+        }),
+      ).toBe(true);
     });
   });
 
@@ -738,6 +1022,27 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("opens routed browser pages on Ask Agent by default", async () => {
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    const askAgentTab = await screen.findByRole("tab", { name: /Ask Agent/ });
+    await screen.findByRole("tab", { name: /Workspace/ });
+
+    expect(askAgentTab.getAttribute("aria-selected")).toBe("true");
+    await waitFor(() => {
+      expect(MockEventSource.instances.at(-1)?.url).toBe(
+        "/api/ask-agent/events",
+      );
+    });
+  });
+
   it("keeps the current instance selected instead of jumping to an active one", async () => {
     render(
       h(BrowserGatewayApp, {
@@ -748,11 +1053,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /Workspace/ })).toBeTruthy();
-    });
-
-    const workspaceTab = screen.getByRole("tab", { name: /Workspace/ });
+    expect(
+      (await screen.findByRole("tab", { name: /Ask Agent/ })).getAttribute(
+        "aria-selected",
+      ),
+    ).toBe("true");
+    const workspaceTab = await selectWorkspaceTab();
     const workerTab = await screen.findByRole("tab", { name: /Worker/ });
 
     // Worker is "working" in the default mock, but selection must stay put.
@@ -2104,7 +2410,13 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
-    const workspaceTab = await screen.findByRole("tab", { name: /Workspace/ });
+    await waitFor(() => {
+      expect(MockEventSource.instances.at(-1)?.url).toBe(
+        "/api/ask-agent/events",
+      );
+    });
+
+    const workspaceTab = await selectWorkspaceTab();
     await waitFor(() => {
       expect(MockEventSource.instances.at(-1)?.url).toContain(
         "/events?instanceId=instance-1",
@@ -2251,6 +2563,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       const oldWorkspaceTab = await screen.findByRole("tab", {
         name: /Workspace/,
       });
+      fireEvent.click(oldWorkspaceTab);
       await waitFor(() => {
         expect(oldWorkspaceTab.getAttribute("aria-selected")).toBe("true");
       });
@@ -2324,6 +2637,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     await waitFor(() => {
       expect(
         screen.getByRole("tablist", { name: "Pending file diffs" }),
@@ -2396,6 +2710,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     const viewDiffButton = await screen.findByRole("button", {
       name: /View diff/,
     });
@@ -2418,6 +2733,91 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /View diff/ })).toBeTruthy();
+    });
+  });
+
+  it("renders Ask Agent image approvals in the Ask Agent tab and submits to the Ask Agent approval endpoint", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const snapshot = createSnapshot();
+    snapshot.ui.approval = {
+      kind: "write",
+      id: "ask-agent-generate-image-1",
+      filePath: "Generate 1 image?",
+      writeOperation: "modify",
+      detail:
+        "Generation prompt:\nCreate an avatar\nImages: 1\nBilling: ChatGPT/Codex OAuth quota (active account)\nOutput: Ask Agent chat display only (no files will be written)",
+    };
+    const askAgentResponse = createAskAgentSessionResponse(snapshot);
+    const approvalRequests: Array<{ url: string; body: unknown }> = [];
+
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ask-agent/session")) {
+          return jsonResponse(askAgentResponse);
+        }
+        if (url.includes("/api/ask-agent/approval")) {
+          approvalRequests.push({
+            url,
+            body: init?.body ? JSON.parse(String(init.body)) : null,
+          });
+          const next = createAskAgentSessionResponse(createSnapshot());
+          return jsonResponse({ ok: true, snapshot: next.snapshot });
+        }
+        if (url.includes("/api/instances")) {
+          return jsonResponse({
+            currentInstanceId: "instance-1",
+            instances: [
+              {
+                instanceId: "instance-1",
+                workspaceName: "Workspace",
+                workspacePath: "/workspace",
+                url: "http://127.0.0.1:3333",
+                status: { kind: "idle", label: "Idle" },
+              },
+            ],
+          });
+        }
+        if (url.includes("/api/slash-commands"))
+          return jsonResponse({ commands: [] });
+        if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+        if (url.includes("/api/models")) return jsonResponse({ models: [] });
+        if (url.includes("/api/sessions"))
+          return jsonResponse({ sessions: [] });
+        if (url.includes("/api/debug/refresh"))
+          return jsonResponse({ ok: true });
+        return jsonResponse({ ok: true });
+      },
+    );
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Create an avatar/)).toBeTruthy();
+      expect(
+        screen.getByText(
+          /Ask Agent chat display only \(no files will be written\)/,
+        ),
+      ).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+
+    await waitFor(() => {
+      expect(approvalRequests).toHaveLength(1);
+    });
+    expect(approvalRequests[0]).toEqual({
+      url: "/api/ask-agent/approval",
+      body: expect.objectContaining({
+        id: "ask-agent-generate-image-1",
+        decision: "accept",
+      }),
     });
   });
 
@@ -2478,6 +2878,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Run" })).toBeTruthy();
     });
@@ -2541,6 +2942,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     await waitFor(() => {
       expect(screen.getByText("Attached temp files")).toBeTruthy();
     });
@@ -2608,6 +3010,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     fireEvent.click(await screen.findByRole("button", { name: /View diff/ }));
 
     await waitFor(() => {
@@ -2675,6 +3078,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     await waitFor(() => {
       expect(screen.getByText("No pending file diffs.")).toBeTruthy();
     });
@@ -2695,12 +3099,8 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
-    const workspaceTab = await screen.findByRole("tab", { name: /Workspace/ });
+    await selectWorkspaceTab();
     const workerTab = await screen.findByRole("tab", { name: /Worker/ });
-
-    await waitFor(() => {
-      expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
-    });
 
     fireEvent.pointerDown(workerTab, {
       pointerType: "touch",
@@ -2730,12 +3130,8 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
-    const workspaceTab = await screen.findByRole("tab", { name: /Workspace/ });
+    const workspaceTab = await selectWorkspaceTab();
     const workerTab = await screen.findByRole("tab", { name: /Worker/ });
-
-    await waitFor(() => {
-      expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
-    });
 
     fireEvent.pointerDown(workerTab, {
       pointerType: "touch",
@@ -2766,9 +3162,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /Workspace/ })).toBeTruthy();
-    });
+    await selectWorkspaceTab();
 
     await waitFor(() => {
       const fetchUrls = fetchMock.mock.calls.map(([input]) => String(input));
@@ -2848,11 +3242,12 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     await waitFor(() => {
       expect(MockEventSource.instances.length).toBeGreaterThan(0);
     });
 
-    MockEventSource.instances[0]?.onerror?.();
+    MockEventSource.instances.at(-1)?.onerror?.();
 
     await waitFor(() => {
       expect(screen.getByText("Recovered via fallback")).toBeTruthy();
@@ -2877,6 +3272,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input]) =>
@@ -3032,6 +3428,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     await waitFor(() => {
       expect(screen.getByTitle("New Session")).toBeTruthy();
     });
@@ -3149,6 +3546,7 @@ describe("BrowserGatewayApp /mcp behavior", () => {
       }),
     );
 
+    await selectWorkspaceTab();
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Accept" })).toBeTruthy();
     });

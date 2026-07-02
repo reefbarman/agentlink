@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
     title: "New Chat",
     background: Boolean(opts.background),
     status: "idle",
+    messageCount: 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
     totalCacheReadTokens: 0,
@@ -84,6 +85,115 @@ describe("AgentSessionManager host injection", () => {
       get: () => undefined,
       inspect: () => undefined,
     });
+  });
+
+  it("replaces empty foreground sessions instead of keeping them in memory", async () => {
+    let nextSessionNumber = 1;
+    const createEmptySession = async (opts: any) => ({
+      id: `session-${nextSessionNumber++}`,
+      mode: opts.mode,
+      model: opts.config.model,
+      providerId: opts.providerId,
+      autoCondenseThreshold: opts.config.autoCondenseThreshold,
+      title: "New Chat",
+      background: Boolean(opts.background),
+      status: "idle",
+      messageCount: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      currentTool: undefined,
+      addUserMessage: vi.fn(),
+      appendRuntimeError: vi.fn(),
+      consumePendingInterjection: vi.fn(() => null),
+      queuePendingModeResume: vi.fn(),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+      getAllMessages: vi.fn(() => []),
+      rebuildSystemPrompt: vi.fn(async () => {}),
+    });
+    mocks.createSession
+      .mockImplementationOnce(createEmptySession)
+      .mockImplementationOnce(createEmptySession)
+      .mockImplementationOnce(createEmptySession);
+
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+
+    const first = await mgr.createForegroundSession("code");
+    const second = await mgr.createForegroundSession("code");
+    const third = await mgr.createForegroundSession("code");
+
+    expect(mgr.getSession(first.id)).toBeUndefined();
+    expect(mgr.getSession(second.id)).toBeUndefined();
+    expect(mgr.getSession(third.id)).toBe(third);
+    expect(mgr.getSessionInfos().map((session) => session.id)).toEqual([
+      third.id,
+    ]);
+  });
+
+  it("filters empty persisted foreground sessions from visible history", () => {
+    const store = {
+      list: vi.fn(() => [
+        {
+          id: "empty-foreground",
+          mode: "code",
+          model: "claude-sonnet-4-6",
+          title: "New Chat",
+          messageCount: 0,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          createdAt: 100,
+          lastActiveAt: 100,
+          schemaVersion: 1,
+        },
+        {
+          id: "real-foreground",
+          mode: "code",
+          model: "claude-sonnet-4-6",
+          title: "Real chat",
+          messageCount: 2,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          createdAt: 200,
+          lastActiveAt: 200,
+          schemaVersion: 1,
+        },
+      ]),
+    };
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store as any,
+    );
+
+    expect(mgr.listPersistedSessions().map((session) => session.id)).toEqual([
+      "real-foreground",
+    ]);
+  });
+
+  it("does not persist empty foreground sessions during shutdown", async () => {
+    const store = {
+      save: vi.fn(),
+      list: vi.fn(() => []),
+    };
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store as any,
+    );
+
+    await mgr.createForegroundSession("code");
+    mgr.saveAllSessions();
+
+    expect(store.save).not.toHaveBeenCalled();
   });
 
   it("uses injected host dependencies when creating foreground sessions", async () => {
@@ -485,6 +595,370 @@ describe("AgentSessionManager in-flight persistence", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("persists runState while a foreground turn is in-flight and clears it on done", async () => {
+    const savedRunStates: Array<string | null> = [];
+    const store = {
+      saveSession: vi.fn(async (args: { session: PersistedSessionRecord }) => {
+        savedRunStates.push(args.session.metadata.runState?.phase ?? null);
+        return { ok: true, revision: String(savedRunStates.length) };
+      }),
+      list: vi.fn(() => []),
+      get: vi.fn(),
+      loadMessages: vi.fn(),
+      loadMetadata: vi.fn(),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+    const messages: AgentMessage[] = [];
+    (session as any).messageCount = 0;
+    (session as any).isAborted = false;
+    (session as any).lastActiveAt = 123;
+    (session as any).getAllMessages = vi.fn(() => messages);
+    (session as any).addUserMessage = vi.fn((text: string) => {
+      messages.push({ role: "user", content: text });
+      (session as any).messageCount = messages.length;
+      session.lastActiveAt += 1;
+    });
+    (session as any).consumePendingInterjection = vi.fn(() => null);
+    (session as any).consumePendingModeResume = vi.fn(() => null);
+    (session as any).autoTitle = vi.fn();
+    (mgr as any).engine = {
+      run: vi.fn(async function* () {
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+
+    await mgr.sendMessage(session.id, "continue", session.mode);
+
+    expect(savedRunStates).toContain("running");
+    expect(savedRunStates.at(-1)).toBeNull();
+    expect(session.runState).toBeUndefined();
+  });
+
+  it("persists a pending ask_user recovery snapshot", async () => {
+    const savedRunStates: Array<unknown> = [];
+    const store = {
+      saveSession: vi.fn(async (args: { session: PersistedSessionRecord }) => {
+        savedRunStates.push(args.session.metadata.runState);
+        return { ok: true, revision: String(savedRunStates.length) };
+      }),
+      list: vi.fn(() => []),
+      get: vi.fn(),
+      loadMessages: vi.fn(),
+      loadMetadata: vi.fn(),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+
+    await mgr.persistPendingQuestionRecovery(
+      session.id,
+      "question-1",
+      "Pick one.",
+      [
+        {
+          id: "choice",
+          type: "multiple_choice",
+          question: "Which path?",
+          options: ["A", "B"],
+          recommended: "A",
+        },
+      ],
+      {
+        schemaVersion: 1,
+        assistantContent: [
+          {
+            type: "tool_use",
+            id: "toolu-1",
+            name: "ask_user",
+            input: {},
+          },
+        ],
+        toolUseId: "toolu-1",
+        toolName: "ask_user",
+        toolInput: {},
+      },
+    );
+
+    expect(session.runState?.phase).toBe("awaiting_question");
+    expect(savedRunStates.at(-1)).toMatchObject({
+      phase: "awaiting_question",
+      question: {
+        questionRequestId: "question-1",
+        context: "Pick one.",
+        toolUseId: "toolu-1",
+      },
+    });
+  });
+
+  it("does not append a recovered answer when the saved tool turn is malformed", async () => {
+    const store = {
+      saveSession: vi.fn(async () => ({ ok: true, revision: "1" })),
+      list: vi.fn(() => []),
+      get: vi.fn(),
+      loadMessages: vi.fn(),
+      loadMetadata: vi.fn(),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+    (session as any).appendAssistantTurn = vi.fn();
+    (session as any).appendToolResults = vi.fn();
+
+    await mgr.persistPendingQuestionRecovery(
+      session.id,
+      "question-1",
+      "Pick one.",
+      [
+        {
+          id: "choice",
+          type: "multiple_choice",
+          question: "Which path?",
+          options: ["A", "B"],
+          recommended: "A",
+        },
+      ],
+      {
+        schemaVersion: 1,
+        assistantContent: [],
+        toolUseId: "toolu-missing",
+        toolName: "ask_user",
+        toolInput: {},
+      },
+    );
+
+    await expect(
+      mgr.answerRecoveredQuestion(session.id, "question-1", {
+        answers: { choice: "A" },
+        notes: {},
+      }),
+    ).resolves.toBe(false);
+
+    expect(session.appendAssistantTurn).not.toHaveBeenCalled();
+    expect(session.appendToolResults).not.toHaveBeenCalled();
+    expect(session.runState?.phase).toBe("running");
+  });
+
+  it("answers a recovered ask_user by appending the saved tool turn and continuing", async () => {
+    const store = {
+      saveSession: vi.fn(async () => ({ ok: true, revision: "1" })),
+      list: vi.fn(() => []),
+      get: vi.fn(),
+      loadMessages: vi.fn(),
+      loadMetadata: vi.fn(),
+    } as any;
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const session = await mgr.createSession("code");
+    const appended: AgentMessage[] = [];
+    (session as any).appendAssistantTurn = vi.fn((content: any) => {
+      appended.push({ role: "assistant", content });
+    });
+    (session as any).appendToolResults = vi.fn((content: any) => {
+      appended.push({ role: "user", content });
+    });
+    const retrySession = vi
+      .spyOn(mgr, "retrySession")
+      .mockResolvedValue(undefined);
+
+    await mgr.persistPendingQuestionRecovery(
+      session.id,
+      "question-1",
+      "Pick one.",
+      [
+        {
+          id: "choice",
+          type: "multiple_choice",
+          question: "Which path?",
+          options: ["A", "B"],
+          recommended: "A",
+        },
+      ],
+      {
+        schemaVersion: 1,
+        assistantContent: [
+          {
+            type: "tool_use",
+            id: "toolu-1",
+            name: "ask_user",
+            input: { context: "Pick one." },
+          },
+        ],
+        toolUseId: "toolu-1",
+        toolName: "ask_user",
+        toolInput: { context: "Pick one." },
+      },
+    );
+
+    await expect(
+      mgr.answerRecoveredQuestion(session.id, "question-1", {
+        answers: { choice: "A" },
+        notes: { choice: "Recommended path" },
+      }),
+    ).resolves.toBe(true);
+
+    expect(appended[0]).toMatchObject({ role: "assistant" });
+    expect(appended[1]).toMatchObject({
+      role: "user",
+      content: [
+        expect.objectContaining({
+          type: "tool_result",
+          tool_use_id: "toolu-1",
+          content: expect.stringContaining("Recommended path"),
+        }),
+      ],
+    });
+    expect(session.runState?.phase).toBe("running");
+    expect(retrySession).toHaveBeenCalledWith(session.id);
+  });
+
+  it("restores persisted runState and resumes with an interruption notice", async () => {
+    const savedMessages: AgentMessage[][] = [];
+    const summary = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Interrupted session",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 100,
+      lastActiveAt: 123,
+      schemaVersion: 1,
+    };
+    const store = {
+      saveSession: vi.fn(async (args: { session: PersistedSessionRecord }) => {
+        savedMessages.push(args.session.messages);
+        return { ok: true, revision: String(savedMessages.length + 2) };
+      }),
+      readSession: vi.fn(async () => ({
+        ok: true,
+        revision: "2",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "original task" }],
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            runState: { phase: "running", startedAt: 123 },
+            checkpointState: { baseCommit: null, checkpoints: [] },
+          },
+        },
+      })),
+      list: vi.fn(() => [summary]),
+      get: vi.fn(() => summary),
+      loadMessages: vi.fn(() => []),
+      loadMetadata: vi.fn(() => null),
+    } as any;
+
+    const restoredMessages: AgentMessage[] = [];
+    const session = {
+      id: "session-temp",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "New Chat",
+      background: false,
+      status: "idle",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      lastCacheReadTokens: 0,
+      lastActiveAt: 123,
+      currentTool: undefined,
+      runState: undefined,
+      messageCount: 0,
+      isAborted: false,
+      abortGeneration: 0,
+      addUserMessage: vi.fn((text: string) => {
+        restoredMessages.push({ role: "user", content: text });
+        session.messageCount = restoredMessages.length;
+        session.lastActiveAt += 1;
+      }),
+      getAllMessages: vi.fn(() => restoredMessages),
+      restoreFromStore: vi.fn((data: any) => {
+        session.id = data.id;
+        session.title = data.title;
+        session.lastActiveAt = data.lastActiveAt;
+        session.runState = data.runState;
+        restoredMessages.splice(0, restoredMessages.length, ...data.messages);
+        session.messageCount = restoredMessages.length;
+      }),
+      rebuildSystemPrompt: vi.fn(async () => {}),
+      consumePendingInterjection: vi.fn(() => null),
+      consumePendingModeResume: vi.fn(() => null),
+      autoTitle: vi.fn(),
+    } as any;
+    mocks.createSession.mockResolvedValueOnce(session);
+
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+    const loaded = await mgr.restoreLastSession();
+    expect(loaded?.runState?.phase).toBe("running");
+
+    (mgr as any).engine = {
+      run: vi.fn(async function* () {
+        yield {
+          type: "done",
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheCreationTokens: 0,
+        };
+      }),
+    };
+
+    await expect(mgr.resumeInterruptedSession("session-1")).resolves.toBe(true);
+
+    const flattened = savedMessages.flat().map((message) => message.content);
+    expect(flattened).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("<interrupted_session_resume>"),
+      ]),
+    );
+    expect(loaded?.runState).toBeUndefined();
   });
 
   it("serializes immediate revision-aware saves so create is followed by update", async () => {

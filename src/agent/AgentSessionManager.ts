@@ -1,7 +1,9 @@
 import * as crypto from "crypto";
 
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
+import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
 import type {
+  PendingQuestionRecoveryState,
   PersistResult,
   PersistedSessionRecord,
   PersistenceRevision,
@@ -13,10 +15,13 @@ import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
 import type { AgentMode } from "./modes.js";
+import type { Question } from "./webview/types.js";
 import {
+  buildAskUserToolResult,
   getAgentTools,
   type ToolDispatchContext,
   type BgStatusResult,
+  type QuestionResponse,
 } from "./toolAdapter.js";
 import type { SessionStore, SessionSummary } from "./SessionStore.js";
 import type { BgSessionInfo } from "../shared/types.js";
@@ -404,6 +409,14 @@ export class AgentSessionManager {
     return this.config;
   }
 
+  async createForegroundSession(
+    mode: string,
+    opts?: { activeFilePath?: string },
+  ): Promise<AgentSession> {
+    await this.discardEmptyForegroundSession();
+    return this.createSession(mode, opts);
+  }
+
   async createSession(
     mode: string,
     opts?: { activeFilePath?: string },
@@ -477,8 +490,36 @@ export class AgentSessionManager {
   }
 
   saveAllSessions(): void {
-    for (const id of this.sessions.keys()) {
+    for (const [id, session] of this.sessions) {
+      if (this.isEmptyForegroundSession(session)) continue;
       this.saveSession(id);
+    }
+  }
+
+  private isEmptyForegroundSession(session: AgentSession): boolean {
+    return (
+      !session.background &&
+      session.status === "idle" &&
+      session.messageCount === 0 &&
+      !this.sessionRevertPending.has(session.id) &&
+      (this.checkpoints.get(session.id)?.length ?? 0) === 0
+    );
+  }
+
+  private async discardEmptyForegroundSession(): Promise<void> {
+    const session = this.getForegroundSession();
+    if (!session || !this.isEmptyForegroundSession(session)) return;
+
+    if (this.persistence?.get(session.id)) {
+      const result = await this.deletePersistedSessionWithResult(session.id);
+      if (!result.ok && result.reason !== "not_found") return;
+    }
+
+    this.sessions.delete(session.id);
+    this.sessionRevisions.delete(session.id);
+    this.sessionSaveQueues.delete(session.id);
+    if (this.foregroundId === session.id) {
+      this.foregroundId = null;
     }
   }
 
@@ -528,12 +569,41 @@ export class AgentSessionManager {
   private async saveSessionRevisionAware(id: string): Promise<void> {
     const session = this.sessions.get(id);
     if (!session || !this.persistence) return;
+    await this.saveSessionRecordRevisionAware(
+      id,
+      this.buildPersistedSessionRecord(session),
+    );
+  }
+
+  private async saveSessionNow(id: string): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session || !this.persistence) return;
+    // Capture an immutable record at call time so runState transitions cannot be
+    // lost if the live session mutates before this queued write executes.
+    const record = this.buildPersistedSessionRecord(session);
+    const run = () => this.saveSessionRecordRevisionAware(id, record);
+    const previous = this.sessionSaveQueues.get(id);
+    const next = previous ? previous.then(run, run) : run();
+    const tracked = next.finally(() => {
+      if (this.sessionSaveQueues.get(id) === tracked) {
+        this.sessionSaveQueues.delete(id);
+      }
+    });
+    this.sessionSaveQueues.set(id, tracked);
+    await tracked;
+  }
+
+  private async saveSessionRecordRevisionAware(
+    id: string,
+    record: PersistedSessionRecord,
+  ): Promise<void> {
+    if (!this.persistence) return;
 
     const expectedRevision = this.sessionRevisions.get(id) ?? null;
     let result;
     try {
       result = await this.persistence.saveSession({
-        session: this.buildPersistedSessionRecord(session),
+        session: record,
         expectedRevision,
       });
     } catch (error) {
@@ -596,6 +666,7 @@ export class AgentSessionManager {
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
         loadedSkills: session.getLoadedSkills?.() ?? [],
+        runState: session.runState ? { ...session.runState } : undefined,
         checkpointState: {
           baseCommit: this.checkpointManager?.baseCommit ?? null,
           checkpoints:
@@ -878,6 +949,9 @@ export class AgentSessionManager {
       }
 
       session.status = "streaming";
+      if (!session.background) {
+        session.runState = { phase: "running", startedAt: Date.now() };
+      }
 
       if (previousMessageCount === 0) {
         session.autoTitle();
@@ -885,7 +959,7 @@ export class AgentSessionManager {
 
       // Persist immediately so the session appears in history even if the
       // API call fails (e.g. network error, auth failure on the first message).
-      this.saveSession(session.id);
+      await this.saveSessionNow(session.id);
       let lastPersistedActiveAt = session.lastActiveAt;
 
       const persistIfHistoryChanged = () => {
@@ -1015,7 +1089,10 @@ export class AgentSessionManager {
               (m) => m.role === "user" && typeof m.content === "string",
             ).length;
           await this.ensureCheckpointForTurn(session, completedTurnIndex);
-          this.saveSession(session.id);
+          if (!session.background) {
+            session.runState = undefined;
+          }
+          await this.saveSessionNow(session.id);
 
           // Emit the deferred done
           this.recordAndEmitEvent(session.id, {
@@ -1042,7 +1119,10 @@ export class AgentSessionManager {
           retryable: false,
         });
         // Persist before emitting done so sendSessionList sees the saved session
-        this.saveSession(session.id);
+        if (!session.background) {
+          session.runState = undefined;
+        }
+        await this.saveSessionNow(session.id);
         this.recordAndEmitEvent(session.id, {
           type: "done",
           totalInputTokens: session.totalInputTokens,
@@ -1111,7 +1191,8 @@ export class AgentSessionManager {
     if (session) {
       session.abort();
       session.status = "idle";
-      this.saveSession(session.id);
+      session.runState = undefined;
+      void this.saveSessionNow(session.id);
       // Mark bg sessions as cancelled so the UI can distinguish stop vs complete
       if (session.background) {
         this.bgCancelled.add(sessionId);
@@ -1119,6 +1200,134 @@ export class AgentSessionManager {
       }
       this.onSessionsChanged?.();
     }
+  }
+
+  async persistPendingQuestionRecovery(
+    sessionId: string,
+    questionRequestId: string,
+    context: string,
+    questions: Question[],
+    pendingQuestionRecovery: PendingQuestionRecoveryContext,
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.background) return;
+    session.runState = {
+      phase: "awaiting_question",
+      startedAt: Date.now(),
+      question: {
+        ...pendingQuestionRecovery,
+        questionRequestId,
+        context,
+        questions: structuredClone(questions),
+      },
+    };
+    await this.saveSessionNow(session.id);
+  }
+
+  clearPendingQuestionRecovery(
+    sessionId: string,
+    questionRequestId: string,
+  ): void {
+    const session = this.sessions.get(sessionId);
+    if (
+      session?.runState?.phase !== "awaiting_question" ||
+      session.runState.question.questionRequestId !== questionRequestId
+    ) {
+      return;
+    }
+    session.runState = { phase: "running", startedAt: Date.now() };
+    void this.saveSessionNow(session.id);
+  }
+
+  getPendingQuestionRecovery(
+    sessionId: string,
+  ): PendingQuestionRecoveryState | null {
+    const session = this.sessions.get(sessionId);
+    if (session?.runState?.phase !== "awaiting_question") return null;
+    return session.runState.question;
+  }
+
+  private isValidPendingQuestionRecovery(
+    question: PendingQuestionRecoveryState,
+  ): boolean {
+    if (question.schemaVersion !== 1 || question.toolName !== "ask_user") {
+      return false;
+    }
+    return question.assistantContent.some(
+      (block) => block.type === "tool_use" && block.id === question.toolUseId,
+    );
+  }
+
+  async answerRecoveredQuestion(
+    sessionId: string,
+    questionRequestId: string,
+    response: QuestionResponse,
+    modeSwitchProvider?: Parameters<
+      typeof buildAskUserToolResult
+    >[0]["modeSwitchProvider"],
+  ): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.background) return false;
+    const runState = session.runState;
+    if (
+      runState?.phase !== "awaiting_question" ||
+      runState.question.questionRequestId !== questionRequestId ||
+      runState.question.toolName !== "ask_user"
+    ) {
+      return false;
+    }
+    if (session.status !== "idle" && session.status !== "error") return false;
+
+    const question = runState.question;
+    if (!this.isValidPendingQuestionRecovery(question)) {
+      session.runState = { phase: "running", startedAt: Date.now() };
+      await this.saveSessionNow(session.id);
+      return false;
+    }
+
+    const toolResult = await buildAskUserToolResult({
+      context: question.context,
+      questions: question.questions,
+      response,
+      modeSwitchProvider,
+    });
+    session.appendAssistantTurn(structuredClone(question.assistantContent));
+    const toolResultText =
+      toolResult.content.find((block) => block.type === "text")?.text ??
+      JSON.stringify(toolResult.content);
+    session.appendToolResults([
+      {
+        type: "tool_result" as const,
+        tool_use_id: question.toolUseId,
+        content: toolResultText,
+      },
+    ]);
+    session.runState = { phase: "running", startedAt: Date.now() };
+    await this.saveSessionNow(session.id);
+    void this.retrySession(session.id);
+    return true;
+  }
+
+  async resumeInterruptedSession(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.background || !session.runState) return false;
+    if (session.runState.phase === "awaiting_question") return false;
+    if (session.status !== "idle" && session.status !== "error") return false;
+
+    const prompt = [
+      "<interrupted_session_resume>",
+      "This session was interrupted before the previous agent turn reached a final status (for example, the VS Code window reloaded or the computer restarted).",
+      "Review the transcript and current workspace state, then continue from the most likely safe point.",
+      "If a write, command, approval, or other tool operation may have been interrupted, inspect the current state before retrying and avoid duplicating completed work.",
+      "</interrupted_session_resume>",
+    ].join("\n");
+
+    await this.sendMessage(session.id, prompt, session.mode, {
+      displayText: "Resume interrupted session",
+      isSlashCommand: true,
+      slashCommandLabel: "/resume interrupted session",
+    });
+    return true;
   }
 
   /**
@@ -1133,6 +1342,10 @@ export class AgentSessionManager {
     this.engine = null;
 
     session.status = "streaming";
+    if (!session.background) {
+      session.runState = { phase: "running", startedAt: Date.now() };
+      await this.saveSessionNow(session.id);
+    }
     let lastPersistedActiveAt = session.lastActiveAt;
 
     const persistIfHistoryChanged = () => {
@@ -1151,7 +1364,10 @@ export class AgentSessionManager {
     try {
       for await (const event of this.getEngine().run(session)) {
         if (event.type === "done") {
-          this.saveSession(session.id);
+          if (!session.background) {
+            session.runState = undefined;
+          }
+          await this.saveSessionNow(session.id);
         }
         this.recordAndEmitEvent(session.id, event);
       }
@@ -1163,7 +1379,10 @@ export class AgentSessionManager {
         error,
         retryable: false,
       });
-      this.saveSession(session.id);
+      if (!session.background) {
+        session.runState = undefined;
+      }
+      await this.saveSessionNow(session.id);
       this.recordAndEmitEvent(session.id, {
         type: "done",
         totalInputTokens: session.totalInputTokens,
@@ -1657,7 +1876,9 @@ export class AgentSessionManager {
 
   /** List all persisted sessions, most-recent first. */
   listPersistedSessions(): SessionSummary[] {
-    return this.persistence?.list() ?? [];
+    return (this.persistence?.list() ?? []).filter(
+      (session) => !session.background && session.messageCount > 0,
+    );
   }
 
   getPersistedSessionSummary(sessionId: string): SessionSummary | undefined {
@@ -1676,18 +1897,24 @@ export class AgentSessionManager {
    * Load a persisted session's message history into memory and make it the
    * foreground session. Returns the loaded session or null if not found.
    */
-  async loadPersistedSession(sessionId: string): Promise<AgentSession | null> {
+  async loadPersistedSession(
+    sessionId: string,
+    opts?: { onlyIfForegroundUnset?: boolean },
+  ): Promise<AgentSession | null> {
     if (!this.persistence) return null;
 
     const readResult = await this.persistence.readSession(sessionId);
     if (!readResult.ok) return null;
     const { summary, messages, metadata } = readResult.value;
 
+    if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
+
     // Reuse in-memory session if already loaded
     if (this.sessions.has(sessionId)) {
       if (!this.sessionRevisions.has(sessionId)) {
         this.sessionRevisions.set(sessionId, readResult.revision);
       }
+      if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
       this.foregroundId = sessionId;
       this.onSessionsChanged?.();
       return this.sessions.get(sessionId)!;
@@ -1732,6 +1959,7 @@ export class AgentSessionManager {
       lastCacheReadTokens: 0,
       reasoningEffort: metadata.reasoningEffort,
       loadedSkills: metadata.loadedSkills ?? [],
+      runState: metadata.runState,
       messages,
     });
     await session.rebuildSystemPrompt({
@@ -1739,6 +1967,7 @@ export class AgentSessionManager {
       workspaceFolders: this.getWorkspaceFolders(),
     });
 
+    if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
     this.sessions.set(sessionId, session);
     this.foregroundId = sessionId;
     this.onSessionsChanged?.();
@@ -1758,7 +1987,9 @@ export class AgentSessionManager {
     // was still in flight. This keeps auto-restore from stealing focus back.
     if (this.foregroundId) return null;
     const targetSessionId = sessions[0].id;
-    const session = await this.loadPersistedSession(targetSessionId);
+    const session = await this.loadPersistedSession(targetSessionId, {
+      onlyIfForegroundUnset: true,
+    });
     if (!session) return null;
     if (this.foregroundId !== targetSessionId) {
       return null;

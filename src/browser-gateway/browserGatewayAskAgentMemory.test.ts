@@ -689,7 +689,17 @@ describe("BrowserGatewayAskAgentMemory", () => {
     expect(hasAskAgentMemoryPastIntent("Do you know my name?")).toBe(true);
     expect(hasAskAgentMemoryPastIntent("What should you call me?")).toBe(true);
     expect(hasAskAgentMemoryPastIntent("What name did I give you?")).toBe(true);
-    for (const query of ["What is my name?", "Who am I?"]) {
+    expect(hasAskAgentMemoryPastIntent("What do you know about me?")).toBe(
+      true,
+    );
+    expect(hasAskAgentMemoryPastIntent("Have we discussed me before?")).toBe(
+      true,
+    );
+    for (const query of [
+      "What is my name?",
+      "Who am I?",
+      "What do you know about me?",
+    ]) {
       expect(searchAskAgentMemory(memories, query, { now: 300 })).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -700,6 +710,102 @@ describe("BrowserGatewayAskAgentMemory", () => {
         ]),
       );
     }
+  });
+
+  it("prioritizes entity-rich personal profile chunks over recursive recall recaps", () => {
+    const memories = snapshot({
+      sessions: [
+        {
+          sessionId: "recap",
+          title: "What the assistant knows about the user",
+          createdAt: 100,
+          lastActiveAt: 300,
+          messageCount: 2,
+          sourceRevision: "recap",
+          summary:
+            "User asked what the assistant knows about them and assistant gave a limited recap.",
+          topics: ["personal memory", "chat history"],
+          decisions: [],
+          openQuestions: [],
+          durableCandidateHints: [],
+          updatedAt: 300,
+        },
+        {
+          sessionId: "profile",
+          title: "Getting to Know Bones",
+          createdAt: 100,
+          lastActiveAt: 200,
+          messageCount: 2,
+          sourceRevision: "profile",
+          summary:
+            "User wants the assistant to learn more about them for personalized future help.",
+          topics: ["personalization", "preferences"],
+          decisions: [],
+          openQuestions: [],
+          durableCandidateHints: [],
+          updatedAt: 200,
+        },
+      ],
+      chunks: [
+        {
+          id: "recap-chunk",
+          sessionId: "recap",
+          sourceMessageIds: ["recap-user", "recap-assistant"],
+          startMessageIndex: 0,
+          endMessageIndex: 1,
+          sourceRevision: "recap-chunk",
+          summary:
+            "The user asked what the assistant knows about them and the assistant replied with limited memory while mentioning a shared name/preferred nickname and a Ferrari EV correction.",
+          keywords: [
+            "what do you know about me",
+            "name",
+            "preferred nickname",
+            "memory",
+          ],
+          entities: ["Ferrari"],
+          createdAt: 300,
+          updatedAt: 300,
+        },
+        {
+          id: "profile-chunk",
+          sessionId: "profile",
+          sourceMessageIds: ["profile-user", "profile-assistant"],
+          startMessageIndex: 0,
+          endMessageIndex: 1,
+          sourceRevision: "profile-chunk",
+          summary:
+            "Assistant asked follow-up questions to build a better personal profile and shared a tentative recap of known details.",
+          keywords: ["personal profile", "preferences", "hobbies"],
+          entities: ["Bones", "Cairns", "Warhammer 40k"],
+          createdAt: 200,
+          updatedAt: 200,
+        },
+      ],
+    });
+
+    const results = searchAskAgentMemory(
+      memories,
+      "What do you know about me?",
+      {
+        now: 400,
+        limit: 3,
+      },
+    );
+
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "chunk",
+          chunkId: "profile-chunk",
+          entities: ["Bones", "Cairns", "Warhammer 40k"],
+        }),
+      ]),
+    );
+    expect(
+      results.find((result) => result.chunkId === "profile-chunk")?.score,
+    ).toBeGreaterThan(
+      results.find((result) => result.chunkId === "recap-chunk")?.score ?? 0,
+    );
   });
 
   it("omits active-session chunks that are already present in recent transcript", () => {

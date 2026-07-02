@@ -1,3 +1,4 @@
+import type { CoreModelContentBlock } from "../modelRuntime.js";
 import type { FinalMessageMarker } from "../../shared/finalStatus.js";
 import type { ToolResult } from "../../shared/types.js";
 
@@ -50,6 +51,14 @@ export interface AdvertisedRuleReference {
   summary?: string;
 }
 
+export interface PendingQuestionRecoveryContext {
+  schemaVersion: 1;
+  assistantContent: CoreModelContentBlock[];
+  toolUseId: string;
+  toolName: "ask_user";
+  toolInput: Record<string, unknown>;
+}
+
 export interface AgentToolExecutionContext {
   sessionId: string;
   mode?: string;
@@ -62,6 +71,7 @@ export interface AgentToolExecutionContext {
   onFinalStatus?: (marker: FinalMessageMarker) => void;
   onCompleteTodos?: () => unknown[];
   getSessionImages?: () => SessionImageReference[];
+  pendingQuestionRecovery?: PendingQuestionRecoveryContext;
 }
 
 export interface AgentToolExecutionRequest {

@@ -777,6 +777,65 @@ function errorTextResult(error: string): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify({ error }) }] };
 }
 
+export async function buildAskUserToolResult(args: {
+  context: string;
+  questions: Question[];
+  response: QuestionResponse;
+  modeSwitchProvider?: ModeSwitchProvider;
+}): Promise<ToolResult> {
+  const { context, questions, response, modeSwitchProvider } = args;
+  const responses = questions.map((q) => {
+    const answer = response.answers[q.id];
+    const note = response.notes[q.id];
+    const entry: Record<string, unknown> = {
+      question: q.question,
+      answer: answer ?? null,
+    };
+    if (q.context) entry.context = q.context;
+    if (note) entry.note = note;
+    return entry;
+  });
+
+  const modeSwitchQuestion = questions.find(
+    (q) => q.modeSwitch && Object.keys(q.modeSwitch).length > 0,
+  );
+  let modeSwitched: string | undefined;
+  let modeSwitchFollowUp: string | undefined;
+  if (modeSwitchQuestion && modeSwitchProvider) {
+    const answer = response.answers[modeSwitchQuestion.id];
+    const mapping = modeSwitchQuestion.modeSwitch;
+    if (mapping && typeof answer === "string") {
+      const targetMode = mapping[answer];
+      if (targetMode) {
+        const note = response.notes[modeSwitchQuestion.id]?.trim();
+        const switchReason = note
+          ? `ask_user: "${answer}" — ${note}`
+          : `ask_user: "${answer}"`;
+        try {
+          const switchResult = await modeSwitchProvider.switchMode({
+            mode: targetMode,
+            reason: switchReason,
+            silent: true,
+          });
+          if (switchResult.approved) {
+            modeSwitched = switchResult.mode;
+            modeSwitchFollowUp = switchResult.followUp?.trim() || undefined;
+          }
+        } catch {
+          // ignore — fall back to no switch; agent can call switch_mode if needed
+        }
+      }
+    }
+  }
+
+  const payload: Record<string, unknown> = { context, responses };
+  if (modeSwitched) payload.modeSwitched = modeSwitched;
+  if (modeSwitchFollowUp) payload.follow_up = modeSwitchFollowUp;
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+  };
+}
+
 function getToolUsageOutcomeFromResult(result: ToolResult): ToolUsageOutcome {
   const text = result.content.find((item) => item.type === "text")?.text;
   if (!text) return "ok";
@@ -1015,9 +1074,19 @@ function createMcpToolInvocationProvider(
 
 function createUserQuestionProvider(
   onQuestion: NonNullable<ToolDispatchContext["onQuestion"]>,
+  pendingQuestionRecovery?: AgentToolExecutionRequest["context"]["pendingQuestionRecovery"],
 ): UserQuestionProvider {
   return {
     ask(request) {
+      if (pendingQuestionRecovery) {
+        return onQuestion(
+          request.context,
+          request.questions as Question[],
+          request.sessionId,
+          undefined,
+          pendingQuestionRecovery,
+        );
+      }
       return onQuestion(
         request.context,
         request.questions as Question[],
@@ -1099,6 +1168,7 @@ export interface ToolDispatchContext {
      * task name. The UI uses this for attribution on the question card.
      */
     backgroundTask?: string,
+    pendingQuestionRecovery?: AgentToolExecutionRequest["context"]["pendingQuestionRecovery"],
   ) => Promise<QuestionResponse>;
   /** Called whenever the agent reads a file — used to track files for folded context on condense */
   onFileRead?: (filePath: string) => void;
@@ -1131,6 +1201,8 @@ export interface ToolDispatchContext {
   skillAllowedTools?: string[];
   /** Abort signal for the current tool call, used to cancel in-flight MCP SDK requests. */
   toolAbortSignal?: AbortSignal;
+  /** Durable recovery context for a foreground ask_user call waiting on input. */
+  pendingQuestionRecovery?: AgentToolExecutionRequest["context"]["pendingQuestionRecovery"];
   /** Records the intended final marker for the current foreground turn. */
   onFinalStatus?: (marker: FinalMessageMarker) => void;
   /** Marks the current foreground todo list complete and returns the updated tree. */
@@ -2087,7 +2159,10 @@ export async function dispatchToolCall(
       const userQuestionProvider =
         ctx.userQuestionProvider ??
         (ctx.onQuestion
-          ? createUserQuestionProvider(ctx.onQuestion)
+          ? createUserQuestionProvider(
+              ctx.onQuestion,
+              ctx.pendingQuestionRecovery,
+            )
           : undefined);
       if (!userQuestionProvider) {
         return {
@@ -2164,61 +2239,17 @@ export async function dispatchToolCall(
         questions,
         sessionId: ctx.sessionId,
       });
-      // Format as a readable responses array so Claude sees question + answer + note together
-      const responses = questions.map((q) => {
-        const answer = response.answers[q.id];
-        const note = response.notes[q.id];
-        const entry: Record<string, unknown> = {
-          question: q.question,
-          answer: answer ?? null,
-        };
-        if (q.context) entry.context = q.context;
-        if (note) entry.note = note;
-        return entry;
-      });
-
-      // If the user picked an answer mapped to a mode, perform the switch
-      // silently (their choice is the consent).
-      let modeSwitched: string | undefined;
-      let modeSwitchFollowUp: string | undefined;
       const modeSwitchProvider =
         ctx.modeSwitchProvider ??
         (ctx.onModeSwitch
           ? createModeSwitchProvider(ctx.onModeSwitch)
           : undefined);
-      if (modeSwitchQuestion && modeSwitchProvider) {
-        const answer = response.answers[modeSwitchQuestion.id];
-        const mapping = modeSwitchQuestion.modeSwitch;
-        if (mapping && typeof answer === "string") {
-          const targetMode = mapping[answer];
-          if (targetMode) {
-            const note = response.notes[modeSwitchQuestion.id]?.trim();
-            const switchReason = note
-              ? `ask_user: "${answer}" — ${note}`
-              : `ask_user: "${answer}"`;
-            try {
-              const switchResult = await modeSwitchProvider.switchMode({
-                mode: targetMode,
-                reason: switchReason,
-                silent: true,
-              });
-              if (switchResult.approved) {
-                modeSwitched = switchResult.mode;
-                modeSwitchFollowUp = switchResult.followUp?.trim() || undefined;
-              }
-            } catch {
-              // ignore — fall back to no switch; agent can call switch_mode if needed
-            }
-          }
-        }
-      }
-
-      const payload: Record<string, unknown> = { context, responses };
-      if (modeSwitched) payload.modeSwitched = modeSwitched;
-      if (modeSwitchFollowUp) payload.follow_up = modeSwitchFollowUp;
-      return {
-        content: [{ type: "text", text: JSON.stringify(payload) }],
-      };
+      return buildAskUserToolResult({
+        context,
+        questions,
+        response,
+        modeSwitchProvider,
+      });
     }
 
     case "switch_mode": {

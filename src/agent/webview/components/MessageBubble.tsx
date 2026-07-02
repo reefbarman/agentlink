@@ -283,6 +283,16 @@ export function MessageBubble({
   return (
     <div class="message assistant-message">
       <div class="assistant-blocks">
+        {message.displayMedia && (
+          <UserAttachments
+            files={[]}
+            mediaLabel={null}
+            displayMedia={message.displayMedia}
+            imageLabel="generated image"
+            imageAlt="Generated image"
+            onOpenFile={onOpenFile}
+          />
+        )}
         {blockSegments.map((segment) => {
           if (segment.kind === "tool_group") {
             return (
@@ -691,12 +701,20 @@ function parseAttachments(content: string): {
 }
 
 /** Renders attachment chips above user message text */
+function imageDownloadName(image: { name?: string; mimeType: string }): string {
+  if (image.name?.trim()) return image.name.trim();
+  const extension = image.mimeType === "image/jpeg" ? "jpg" : "png";
+  return `agentlink-image.${extension}`;
+}
+
 function UserAttachments({
   files,
   mediaLabel,
   displayMedia,
   slashLabel,
   remote,
+  imageLabel = "attached image",
+  imageAlt = "Attached image",
   onOpenFile,
 }: {
   files: string[];
@@ -704,6 +722,8 @@ function UserAttachments({
   displayMedia?: ChatMessage["displayMedia"];
   slashLabel?: string;
   remote?: boolean;
+  imageLabel?: string;
+  imageAlt?: string;
   onOpenFile?: (path: string, line?: number) => void;
 }) {
   const [selectedImage, setSelectedImage] = useState<
@@ -739,22 +759,35 @@ function UserAttachments({
       {displayMedia?.images && displayMedia.images.length > 0 && (
         <div class="user-image-previews">
           {displayMedia.images.map((image, index) => {
-            const label = image.name || `attached image ${index + 1}`;
+            const label = image.name || `${imageLabel} ${index + 1}`;
+            const alt = image.name || `${imageAlt} ${index + 1}`;
+            const downloadName = imageDownloadName(image);
             return (
-              <button
+              <div
                 key={`${image.name}-${index}`}
-                class="user-image-preview-button"
-                type="button"
-                title={`Open ${label}`}
-                aria-label={`Open ${label}`}
-                onClick={() => setSelectedImage(image)}
+                class="user-image-preview-card"
               >
-                <img
-                  class="user-image-preview"
-                  src={image.src}
-                  alt={image.name || `Attached image ${index + 1}`}
-                />
-              </button>
+                <button
+                  class="user-image-preview-button"
+                  type="button"
+                  title={`Open ${label}`}
+                  aria-label={`Open ${label}`}
+                  onClick={() => setSelectedImage(image)}
+                >
+                  <img class="user-image-preview" src={image.src} alt={alt} />
+                </button>
+                <a
+                  class="icon-button user-image-download"
+                  href={image.src}
+                  download={downloadName}
+                  rel="noopener"
+                  title={`Download ${label}`}
+                  aria-label={`Download ${label}`}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <i class="codicon codicon-save" />
+                </a>
+              </div>
             );
           })}
         </div>
@@ -819,6 +852,16 @@ function UserAttachments({
               <span class="user-image-lightbox-title">
                 {selectedImage.name || "Attached image"}
               </span>
+              <a
+                class="icon-button user-image-lightbox-download"
+                href={selectedImage.src}
+                download={imageDownloadName(selectedImage)}
+                rel="noopener"
+                title="Download image"
+                aria-label="Download image"
+              >
+                <i class="codicon codicon-save" />
+              </a>
               <button
                 class="icon-button user-image-lightbox-close"
                 type="button"
@@ -832,7 +875,7 @@ function UserAttachments({
             <img
               class="user-image-lightbox-image"
               src={selectedImage.src}
-              alt={selectedImage.name || "Attached image"}
+              alt={selectedImage.name || imageAlt}
             />
           </div>
         </div>

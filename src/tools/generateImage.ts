@@ -1,21 +1,18 @@
-import * as crypto from "crypto";
 import * as fs from "fs/promises";
-import * as os from "os";
 import * as path from "path";
 
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
+import { openAiCodexAuthManager } from "../agent/providers/codex/OpenAiCodexAuthManager.js";
 import {
-  openAiCodexAuthManager,
-  type OpenAiCodexResolvedAuth,
-} from "../agent/providers/codex/OpenAiCodexAuthManager.js";
-import {
-  CODEX_API_BASE_URL,
-  OPENAI_API_BASE_URL,
-} from "../core/model/providers/codex/openaiClient.js";
-import {
-  CODEX_DEFAULT_MODEL,
-  remapToChatgptBackendModel,
-} from "../core/model/providers/codex/models.js";
+  codexGeneratedImageMetadata,
+  CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
+  CODEX_IMAGE_GENERATION_MAX_COUNT,
+  CodexImageGenerationError,
+  generateCodexImages,
+  parseCodexImageGenerationSse,
+  type CodexGeneratedImage,
+  type CodexImageReferenceImage,
+} from "../core/model/providers/codex/imageGeneration.js";
 import type { SessionImageReference } from "../agent/toolAdapter.js";
 import { toSupportedImageMediaType } from "../agent/providers/types.js";
 import {
@@ -25,22 +22,10 @@ import {
 } from "../shared/types.js";
 import { getRelativePath, resolveAndValidatePath } from "../util/paths.js";
 
-const DEFAULT_OUTPUT_DIR = "generated-images";
-const MAX_COUNT = 4;
-const DEFAULT_TIMEOUT_MS = 300_000;
-const TRANSIENT_RETRIES = 2;
+const MAX_COUNT = CODEX_IMAGE_GENERATION_MAX_COUNT;
+const DEFAULT_TIMEOUT_MS = CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS;
 const DEFAULT_RECENT_IMAGE_COUNT = 4;
 const MAX_REFERENCE_IMAGES = 8;
-
-class CodexImageGenerationError extends Error {
-  constructor(
-    message: string,
-    readonly status?: number,
-  ) {
-    super(message);
-    this.name = "CodexImageGenerationError";
-  }
-}
 
 type GenerateImageParams = {
   prompt?: unknown;
@@ -53,31 +38,10 @@ type GenerateImageParams = {
   use_recent_images?: unknown;
 };
 
-export type GenerateImageReferenceImage = {
-  id: string;
-  label: string;
-  mimeType: string;
-  base64: string;
-  source: "file" | "session";
-};
+export type GenerateImageReferenceImage = CodexImageReferenceImage;
 
-export type GeneratedImage = {
-  path: string;
-  bytes: number;
-  size?: string;
-  quality?: string;
-  background?: string;
-  output_format?: string;
-  event_type: string;
-};
-
-type StreamImageEvent = {
-  type?: string;
-  partial_image_b64?: string;
-  size?: string;
-  quality?: string;
-  background?: string;
-  output_format?: string;
+export type GeneratedImage = CodexGeneratedImage & {
+  path?: string;
 };
 
 function normalizePrompt(value: unknown): string {
@@ -105,10 +69,10 @@ function normalizeSize(value: unknown): string | undefined {
   return value.trim();
 }
 
-function outputPathInput(value: unknown): string {
+function outputPathInput(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
-    : DEFAULT_OUTPUT_DIR;
+    : undefined;
 }
 
 function normalizeStringArray(value: unknown, fieldName: string): string[] {
@@ -326,74 +290,7 @@ async function resolveOutputTargets(
   return targets;
 }
 
-export function buildRequestBodyForTest(params: {
-  prompt: string;
-  count: number;
-  model: string;
-  size?: string;
-  referenceImages?: GenerateImageReferenceImage[];
-}): Record<string, unknown> {
-  const countInstruction =
-    params.count === 1
-      ? "Create exactly one PNG image."
-      : `Create exactly ${params.count} distinct PNG images.`;
-  const sizeInstruction = params.size ? ` Requested size: ${params.size}.` : "";
-  const referenceImages = params.referenceImages ?? [];
-  return {
-    model: params.model,
-    stream: true,
-    store: false,
-    instructions: `You are an image generation helper. Use the image_generation tool. ${countInstruction}${sizeInstruction} Do not add commentary.`,
-    input: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: `Use image generation. ${params.prompt}`,
-          },
-          ...referenceImages.map((image) => ({
-            type: "input_image",
-            image_url: `data:${image.mimeType};base64,${image.base64}`,
-            detail: "auto",
-          })),
-        ],
-      },
-    ],
-    tools: [{ type: "image_generation" }],
-    tool_choice: { type: "image_generation" },
-  };
-}
-
-function buildHeaders(
-  auth: OpenAiCodexResolvedAuth,
-  sessionId: string,
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    authorization: `Bearer ${auth.bearerToken}`,
-    "content-type": "application/json",
-    accept: "text/event-stream",
-    "user-agent": `agentlink/1.0 (${os.platform()} ${os.release()}; ${os.arch()}) node/${process.version.slice(1)}`,
-  };
-  if (auth.method === "oauth") {
-    headers.originator = "agentlink";
-    headers.session_id = sessionId;
-    if (auth.accountId) {
-      headers["ChatGPT-Account-Id"] = auth.accountId;
-    }
-  }
-  return headers;
-}
-
-function getBaseUrl(auth: OpenAiCodexResolvedAuth): string {
-  return auth.method === "oauth" ? CODEX_API_BASE_URL : OPENAI_API_BASE_URL;
-}
-
-function getModel(auth: OpenAiCodexResolvedAuth): string {
-  return auth.method === "oauth"
-    ? remapToChatgptBackendModel(CODEX_DEFAULT_MODEL)
-    : CODEX_DEFAULT_MODEL;
-}
+export { buildCodexImageGenerationRequestBody as buildRequestBodyForTest } from "../core/model/providers/codex/imageGeneration.js";
 
 type ImageGenerationApprovalResult = {
   approved: boolean;
@@ -408,11 +305,12 @@ export async function requestImageGenerationApprovalForTest(params: {
   prompt: string;
   count: number;
   size?: string;
-  targets: Array<{ relPath: string }>;
+  targets?: Array<{ relPath: string }>;
   referenceImages?: GenerateImageReferenceImage[];
   billing: string;
 }): Promise<ImageGenerationApprovalResult> {
   const referenceImages = params.referenceImages ?? [];
+  const targets = params.targets ?? [];
   const detail = [
     `Generation prompt:\n${params.prompt}`,
     `Images: ${params.count}`,
@@ -422,10 +320,14 @@ export async function requestImageGenerationApprovalForTest(params: {
       : undefined,
     ...referenceImages.map((image) => `- ${image.label}`),
     `Billing: ${params.billing}`,
-    "Outputs:",
-    ...params.targets.map((target) => `- ${target.relPath}`),
+    targets.length > 0
+      ? "Outputs:"
+      : "Output: chat display only (no files will be written)",
+    ...targets.map((target) => `- ${target.relPath}`),
     "",
-    "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before files are written.",
+    targets.length > 0
+      ? "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before files are written."
+      : "Image generation consumes ChatGPT/Codex image quota or OpenAI API-key billing before images are returned to chat.",
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -457,183 +359,90 @@ export async function requestImageGenerationApprovalForTest(params: {
 
 export async function parseCodexImageSseForTest(params: {
   response: Response;
-  targets: Array<{ absolutePath: string; relPath: string }>;
+  targets?: Array<{ absolutePath: string; relPath: string }>;
   maxImages: number;
-  writtenImages: GeneratedImage[];
+  generatedImages: GeneratedImage[];
 }): Promise<{ images: GeneratedImage[]; eventTypes: string[] }> {
-  if (!params.response.body) {
-    throw new Error(
-      "Codex image generation response did not include a stream body",
-    );
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const imageSlots = new Map<string, number>();
-  const images = params.writtenImages;
-  const eventTypes: string[] = [];
-
-  async function handleLine(line: string): Promise<void> {
-    if (!line.startsWith("data:")) return;
-    const data = line.slice(5).trimStart();
-    if (!data || data === "[DONE]") return;
-
-    let event: StreamImageEvent;
-    try {
-      event = JSON.parse(data) as StreamImageEvent;
-    } catch {
-      return;
-    }
-
-    if (event.type) eventTypes.push(event.type);
-    if (
-      event.type !== "response.image_generation_call.partial_image" ||
-      typeof event.partial_image_b64 !== "string"
-    ) {
-      return;
-    }
-
-    const eventWithIdentity = event as StreamImageEvent & {
-      item_id?: string;
-      output_index?: number;
-      partial_image_index?: number;
-    };
-    const identity =
-      eventWithIdentity.item_id ??
-      (typeof eventWithIdentity.output_index === "number"
-        ? `output:${eventWithIdentity.output_index}`
-        : `fallback:${images.length}`);
-    let slot = imageSlots.get(identity);
-    if (slot === undefined) {
-      if (imageSlots.size >= params.maxImages) return;
-      slot = imageSlots.size;
-      imageSlots.set(identity, slot);
-    }
-
-    const target = params.targets[slot];
-    if (!target) return;
-    const bytes = Buffer.from(event.partial_image_b64, "base64");
+  const parsed = await parseCodexImageGenerationSse({
+    response: params.response,
+    maxImages: params.maxImages,
+    generatedImages: params.generatedImages,
+  });
+  const images = parsed.images as GeneratedImage[];
+  for (const [index, image] of images.entries()) {
+    const target = params.targets?.[index];
+    if (!target) continue;
     await fs.mkdir(path.dirname(target.absolutePath), { recursive: true });
-    await fs.writeFile(target.absolutePath, bytes);
-    images[slot] = {
-      path: target.relPath,
-      bytes: bytes.byteLength,
-      size: event.size,
-      quality: event.quality,
-      background: event.background,
-      output_format: event.output_format,
-      event_type: event.type,
-    };
+    await fs.writeFile(
+      target.absolutePath,
+      Buffer.from(image.base64, "base64"),
+    );
+    images[index] = { ...image, path: target.relPath };
   }
-
-  const reader = params.response.body.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let newlineIndex: number;
-    while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, newlineIndex).replace(/\r$/, "");
-      buffer = buffer.slice(newlineIndex + 1);
-      await handleLine(line);
-    }
-  }
-  if (buffer.trim()) await handleLine(buffer.trim());
-  return { images, eventTypes };
+  return { images, eventTypes: parsed.eventTypes };
 }
 
-async function callCodexImageGeneration(params: {
-  auth: OpenAiCodexResolvedAuth;
-  prompt: string;
-  count: number;
-  size?: string;
+async function writeGeneratedImageTargets(params: {
+  images: GeneratedImage[];
+  targets?: Array<{ absolutePath: string; relPath: string }>;
+}): Promise<GeneratedImage[]> {
+  if (!params.targets?.length) return params.images;
+  const images = [...params.images];
+  for (const [index, image] of images.entries()) {
+    const target = params.targets[index];
+    if (!target) continue;
+    await fs.mkdir(path.dirname(target.absolutePath), { recursive: true });
+    await fs.writeFile(
+      target.absolutePath,
+      Buffer.from(image.base64, "base64"),
+    );
+    images[index] = { ...image, path: target.relPath };
+  }
+  return images;
+}
+
+function buildGenerateImageSuccessResult(params: {
+  result: { images: GeneratedImage[]; eventTypes: string[]; model: string };
+  billing: string;
+  refreshedAuth?: boolean;
+  requestedCount: number;
   referenceImages: GenerateImageReferenceImage[];
-  timeoutMs: number;
-  targets: Array<{ absolutePath: string; relPath: string }>;
-  deadlineMs: number;
-  writtenImages: GeneratedImage[];
-}): Promise<{ images: GeneratedImage[]; eventTypes: string[]; model: string }> {
-  const model = getModel(params.auth);
-  const remainingMs = params.deadlineMs - Date.now();
-  if (remainingMs <= 0) {
-    throw new CodexImageGenerationError("Codex image generation timed out");
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), remainingMs);
-  try {
-    const response = await fetch(`${getBaseUrl(params.auth)}/responses`, {
-      method: "POST",
-      headers: buildHeaders(params.auth, crypto.randomUUID()),
-      body: JSON.stringify(
-        buildRequestBodyForTest({
-          prompt: params.prompt,
-          count: params.count,
-          model,
-          size: params.size,
-          referenceImages: params.referenceImages,
-        }),
-      ),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      const detail = body ? `: ${body.slice(0, 500)}` : "";
-      throw new CodexImageGenerationError(
-        `Codex image generation failed (${response.status})${detail}`,
-        response.status,
-      );
-    }
-
-    const parsed = await parseCodexImageSseForTest({
-      response,
-      targets: params.targets,
-      maxImages: params.count,
-      writtenImages: params.writtenImages,
-    });
-    if (parsed.images.length === 0) {
-      throw new Error(
-        "Codex image generation completed without an image payload",
-      );
-    }
-    return { ...parsed, model };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function isTransientError(error: unknown): boolean {
-  if (error instanceof CodexImageGenerationError) {
-    return error.status
-      ? [408, 409, 429, 500, 502, 503, 504].includes(error.status)
-      : false;
-  }
-  if (!(error instanceof Error)) return false;
-  if (error.name === "AbortError") return false;
-  return /network|socket|terminated/i.test(error.message);
-}
-
-async function generateWithRetries(params: {
-  auth: OpenAiCodexResolvedAuth;
-  prompt: string;
-  count: number;
-  size?: string;
-  referenceImages: GenerateImageReferenceImage[];
-  timeoutMs: number;
-  targets: Array<{ absolutePath: string; relPath: string }>;
-  deadlineMs: number;
-  writtenImages: GeneratedImage[];
-}): Promise<{ images: GeneratedImage[]; eventTypes: string[]; model: string }> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= TRANSIENT_RETRIES; attempt++) {
-    try {
-      return await callCodexImageGeneration(params);
-    } catch (error) {
-      lastError = error;
-      if (!isTransientError(error) || attempt === TRANSIENT_RETRIES) break;
-    }
-  }
-  throw lastError;
+  followUp?: string;
+}): ToolResult {
+  const { result, referenceImages } = params;
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            status: "accepted",
+            model: result.model,
+            billing: params.billing,
+            ...(params.refreshedAuth ? { refreshed_auth: true } : {}),
+            requested_count: params.requestedCount,
+            generated_count: result.images.length,
+            saved: result.images.some((image) => Boolean(image.path)),
+            reference_images: referenceImages.map((image) => ({
+              source: image.source,
+              label: image.label,
+              mime_type: image.mimeType,
+            })),
+            images: codexGeneratedImageMetadata(result.images),
+            event_types: Array.from(new Set(result.eventTypes)),
+            ...(params.followUp ? { follow_up: params.followUp } : {}),
+          },
+          null,
+          2,
+        ),
+      },
+      ...result.images.map((image) => ({
+        type: "image" as const,
+        data: image.base64,
+        mimeType: image.mimeType,
+      })),
+    ],
+  };
 }
 
 export async function handleGenerateImage(
@@ -654,11 +463,11 @@ export async function handleGenerateImage(
       useRecentImages: params.use_recent_images,
       getSessionImages,
     });
-    const targets = await resolveOutputTargets(
-      outputPathInput(params.output_path),
-      count,
-    );
-    const writtenImages: GeneratedImage[] = [];
+    const outputPath = outputPathInput(params.output_path);
+    const targets = outputPath
+      ? await resolveOutputTargets(outputPath, count)
+      : undefined;
+    const generatedImages: GeneratedImage[] = [];
 
     let auth = await openAiCodexAuthManager.resolveModelAuth();
     if (!auth) {
@@ -690,7 +499,7 @@ export async function handleGenerateImage(
             type: "text",
             text: JSON.stringify({
               status: "rejected_by_user",
-              output_paths: targets.map((target) => target.relPath),
+              output_paths: targets?.map((target) => target.relPath) ?? [],
               ...(approval.rejectionReason
                 ? { reason: approval.rejectionReason }
                 : {}),
@@ -702,43 +511,30 @@ export async function handleGenerateImage(
     }
 
     try {
-      const result = await generateWithRetries({
+      const rawResult = await generateCodexImages({
         auth,
         prompt,
         count,
         size,
         referenceImages,
         timeoutMs,
-        targets,
-        deadlineMs: Date.now() + timeoutMs,
-        writtenImages,
+        generatedImages,
+        sessionId,
       });
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                status: "accepted",
-                model: result.model,
-                billing,
-                requested_count: count,
-                generated_count: result.images.length,
-                reference_images: referenceImages.map((image) => ({
-                  source: image.source,
-                  label: image.label,
-                  mime_type: image.mimeType,
-                })),
-                images: result.images,
-                event_types: Array.from(new Set(result.eventTypes)),
-                ...(approval.followUp ? { follow_up: approval.followUp } : {}),
-              },
-              null,
-              2,
-            ),
-          },
-        ],
+      const result = {
+        ...rawResult,
+        images: await writeGeneratedImageTargets({
+          images: rawResult.images,
+          targets,
+        }),
       };
+      return buildGenerateImageSuccessResult({
+        result,
+        billing,
+        requestedCount: count,
+        referenceImages,
+        followUp: approval.followUp,
+      });
     } catch (error) {
       if (
         auth.method === "oauth" &&
@@ -753,50 +549,35 @@ export async function handleGenerateImage(
           throw new Error("Codex OAuth refresh failed after 401 response");
         }
         auth = refreshed;
-        const result = await generateWithRetries({
+        const rawResult = await generateCodexImages({
           auth,
           prompt,
           count,
           size,
           referenceImages,
           timeoutMs,
-          targets,
-          deadlineMs: Date.now() + timeoutMs,
-          writtenImages,
+          generatedImages,
+          sessionId,
         });
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: "accepted",
-                  model: result.model,
-                  billing,
-                  refreshed_auth: true,
-                  requested_count: count,
-                  generated_count: result.images.length,
-                  reference_images: referenceImages.map((image) => ({
-                    source: image.source,
-                    label: image.label,
-                    mime_type: image.mimeType,
-                  })),
-                  images: result.images,
-                  event_types: Array.from(new Set(result.eventTypes)),
-                  ...(approval.followUp
-                    ? { follow_up: approval.followUp }
-                    : {}),
-                },
-                null,
-                2,
-              ),
-            },
-          ],
+        const result = {
+          ...rawResult,
+          images: await writeGeneratedImageTargets({
+            images: rawResult.images,
+            targets,
+          }),
         };
+        return buildGenerateImageSuccessResult({
+          result,
+          billing,
+          refreshedAuth: true,
+          requestedCount: count,
+          referenceImages,
+          followUp: approval.followUp,
+        });
       }
-      if (writtenImages.length > 0 && error instanceof Error) {
+      if (generatedImages.length > 0 && error instanceof Error) {
         return errorResult(error.message, {
-          partial_images: writtenImages,
+          partial_images: codexGeneratedImageMetadata(generatedImages),
           ...(approval.followUp ? { follow_up: approval.followUp } : {}),
         });
       }
