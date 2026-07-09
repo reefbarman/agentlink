@@ -233,6 +233,7 @@ describe("AgentSessionManager host injection", () => {
             resolveModelForMode: () => "host-model",
             getCondenseThresholdForModel: () => 0.42,
             getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
           },
           providers,
           createSession: createSession as any,

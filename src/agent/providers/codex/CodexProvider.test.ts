@@ -1052,7 +1052,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     return captured;
   }
 
-  it("remaps an OAuth-unavailable model to gpt-5.5 on the ChatGPT backend", async () => {
+  it("remaps an OAuth-unavailable model to gpt-5.6-sol on the ChatGPT backend", async () => {
     const captured = captureBodyOnce();
     const provider = new CodexProvider(makeAuthManager() as never);
     for await (const _event of provider.stream({
@@ -1063,7 +1063,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     })) {
       // drain
     }
-    expect(captured.current?.model).toBe("gpt-5.5");
+    expect(captured.current?.model).toBe("gpt-5.6-sol");
   });
 
   it("remaps mini/nano tiers to the cheap served model", async () => {
@@ -1077,7 +1077,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     })) {
       // drain
     }
-    expect(captured.current?.model).toBe("gpt-5.4-mini");
+    expect(captured.current?.model).toBe("gpt-5.6-luna");
   });
 
   it("does not remap when authed with an API key", async () => {
@@ -1106,6 +1106,9 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     const oauthProvider = new CodexProvider(makeAuthManager() as never);
     await new Promise((resolve) => setTimeout(resolve, 0));
     const oauthIds = oauthProvider.listModels().map((m) => m.id);
+    expect(oauthIds).toContain("gpt-5.6-sol");
+    expect(oauthIds).toContain("gpt-5.6-terra");
+    expect(oauthIds).toContain("gpt-5.6-luna");
     expect(oauthIds).toContain("gpt-5.5");
     expect(oauthIds).toContain("gpt-5.4-mini");
     expect(oauthIds).not.toContain("gpt-5.4-pro");
@@ -1120,6 +1123,38 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     const apiKeyIds = apiKeyProvider.listModels().map((m) => m.id);
     expect(apiKeyIds).toContain("gpt-5.4-pro");
     expect(apiKeyIds).toContain("gpt-5.2-codex");
+  });
+
+  it("retries an unavailable preview model with its stable equivalent", async () => {
+    const attemptedModels: unknown[] = [];
+    createMock
+      .mockImplementationOnce(async (body: Record<string, unknown>) => {
+        attemptedModels.push(body.model);
+        throw Object.assign(new Error("Model not found gpt-5.6-luna"), {
+          status: 404,
+        });
+      })
+      .mockImplementationOnce(async (body: Record<string, unknown>) => {
+        attemptedModels.push(body.model);
+        return (async function* () {
+          yield {
+            type: "response.done",
+            response: { id: "resp", usage: { input_tokens: 1, output_tokens: 1 } },
+          };
+        })();
+      });
+
+    const provider = new CodexProvider(makeAuthManager() as never);
+    for await (const _event of provider.stream({
+      model: "gpt-5.6-luna",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "ping" }],
+      maxTokens: 64,
+    })) {
+      // drain
+    }
+
+    expect(attemptedModels).toEqual(["gpt-5.6-luna", "gpt-5.4-mini"]);
   });
 
   it("reports OAuth-specific GPT-5.5 caps unless API-key auth is preferred", async () => {

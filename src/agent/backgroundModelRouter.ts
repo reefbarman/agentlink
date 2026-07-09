@@ -10,6 +10,8 @@ import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
+const ANTHROPIC_BACKGROUND_DEFAULT_MODEL = "claude-fable-5";
+
 interface TaskRouteRule {
   preferredMode?: string;
   providerStrategy?: ProviderStrategy;
@@ -100,7 +102,7 @@ function scoreModel(model: ModelInfo, tier: ModelTier): number {
     (caps.supportsThinking ? 40 : 0) +
     (caps.supportsToolUse ? 20 : 0);
 
-  const cheapHints = /haiku|spark|mini|lite/;
+  const cheapHints = /haiku|spark|mini|lite|luna/;
   const deepHints = /mythos|opus|max|5\.3|sonnet|pro/;
   const isOpus = /opus/.test(id);
   const isSonnet = /sonnet/.test(id);
@@ -274,13 +276,24 @@ export async function resolveBackgroundRoute(
     );
     let picked = ranked[0];
 
-    // On the codex/gpt side, default non-cheap background work to gpt-5.5 rather
-    // than letting the heuristic land on a larger-context but OAuth-unavailable
-    // model (e.g. gpt-5.4-pro, which the ChatGPT backend rejects). Cheap-tier
-    // tasks keep their scored pick (the mini model).
-    if (picked.provider === "codex" && modelTier !== "cheap") {
-      const codexDefault = candidates.find((m) => m.id === CODEX_DEFAULT_MODEL);
-      if (codexDefault) picked = codexDefault;
+    if (modelTier !== "cheap") {
+      // On the codex/gpt side, default non-cheap background work to the current
+      // flagship model rather than letting the heuristic land on an older or
+      // OAuth-unavailable model. Cheap-tier tasks keep their scored pick.
+      if (picked.provider === "codex") {
+        const codexDefault = candidates.find(
+          (m) => m.id === CODEX_DEFAULT_MODEL,
+        );
+        if (codexDefault) picked = codexDefault;
+      }
+
+      // Prefer Fable 5 for Anthropic background agents once Anthropic advertises
+      // it through the dynamic model catalog. If it is not listed yet, keep the
+      // scored fallback instead of routing to an unavailable model ID.
+      const anthropicDefault = candidates.find(
+        (m) => m.id === ANTHROPIC_BACKGROUND_DEFAULT_MODEL,
+      );
+      if (anthropicDefault) picked = anthropicDefault;
     }
 
     const preferredHit = preferredAuthenticated.includes(picked.provider);

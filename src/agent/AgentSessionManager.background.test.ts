@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => {
         reason?: string;
         followUp?: string;
       } | null = null;
+      let assistantText = "background result";
       return {
         id: `bg-${seq}`,
         mode: opts.mode,
@@ -46,6 +47,12 @@ const mocks = vi.hoisted(() => {
         totalCacheReadTokens: 0,
         totalCacheCreationTokens: 0,
         addUserMessage: vi.fn(),
+        appendAssistantTurn: vi.fn((content: any[]) => {
+          assistantText = content
+            .filter((block) => block?.type === "text")
+            .map((block) => block.text)
+            .join("");
+        }),
         appendRuntimeError: vi.fn(),
         consumePendingInterjection: vi.fn(() => null),
         queuePendingModeResume: vi.fn((mode: string, opts?: any) => {
@@ -62,9 +69,16 @@ const mocks = vi.hoisted(() => {
         }),
         autoTitle: vi.fn(),
         getAllMessages: vi.fn(() => []),
+        createAbortController: vi.fn(() => new AbortController()),
         abort: vi.fn(),
-        getLastAssistantText: vi.fn(() => "background result"),
-        getFullAssistantTranscript: vi.fn(() => "background transcript"),
+        get isAborted() {
+          return false;
+        },
+        get abortSignal() {
+          return undefined;
+        },
+        getLastAssistantText: vi.fn(() => assistantText),
+        getFullAssistantTranscript: vi.fn(() => assistantText),
       };
     }),
   };
@@ -116,6 +130,15 @@ describe("AgentSessionManager background agents", () => {
     autoCondenseThreshold: 0.9,
   };
 
+  const configHost = {
+    getCondenseThresholdForModel: vi.fn(() => 0.9),
+    resolveModelForMode: vi.fn(
+      (_mode: string, fallbackModel: string) => fallbackModel,
+    ),
+    getBgSummaryMode: vi.fn(() => "heuristic" as const),
+    getBackgroundAgentSettings: vi.fn(() => ({})),
+  };
+
   const toolCtx: ToolDispatchContext = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     approvalManager: {} as any,
@@ -128,6 +151,7 @@ describe("AgentSessionManager background agents", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    configHost.getBackgroundAgentSettings.mockReturnValue({});
     mocks.runBehavior.mockReturnValue(
       (async function* () {
         yield { type: "done" };
@@ -150,6 +174,227 @@ describe("AgentSessionManager background agents", () => {
     await expect(
       mgr.spawnBackground({ task: "t", message: "m" }),
     ).rejects.toThrow(/concurrency limit reached/);
+  });
+
+  it("runs explicit ACP provider without native route resolution", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "ACP result" },
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: {
+            stopReason: "end_turn",
+            usage: {
+              totalTokens: 42,
+              inputTokens: 30,
+              outputTokens: 12,
+              cachedReadTokens: 5,
+              cachedWriteTokens: 2,
+            },
+          },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "external review",
+      message: "review this",
+      provider: "acp:claude",
+    });
+    const result = await mgr.waitForBackground(spawned.sessionId);
+
+    expect(result).toBe("ACP result");
+    expect(spawned).toMatchObject({
+      resolvedProvider: "acp",
+      resolvedModel: "acp:claude",
+    });
+    expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
+      status: "idle",
+      done: true,
+      partialOutput: "ACP result",
+      resolvedProvider: "acp",
+      tokenUsage: 42,
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.totalInputTokens).toBe(30);
+    expect(session.totalOutputTokens).toBe(12);
+    expect(session.totalCacheReadTokens).toBe(5);
+    expect(session.totalCacheCreationTokens).toBe(2);
+    expect(session.lastInputTokens).toBe(37);
+    expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
+  });
+
+  it("uses configured default ACP provider without native route resolution", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "tc-1",
+            title: "Inspecting files",
+            status: "in_progress",
+          },
+        });
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Default ACP result" },
+          },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "external review",
+      message: "review this",
+    });
+    const result = await mgr.waitForBackground(spawned.sessionId);
+
+    expect(result).toBe("Default ACP result");
+    expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
+      done: true,
+      toolCalls: 1,
+      resolvedProvider: "acp",
+    });
+    expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
+  });
+
+  it("cancels non-readonly ACP permission requests without surfacing approval", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const onApprovalRequest = vi.fn();
+    const permissionOutcome: unknown[] = [];
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        permissionOutcome.push(
+          await request.onRequestPermission({
+            toolCall: {
+              id: "tc-edit",
+              kind: "edit",
+              title: "Edit file",
+              rawInput: { path: "src/file.ts" },
+            },
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          }),
+        );
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Permission handled" },
+          },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext({ ...toolCtx, onApprovalRequest });
+
+    const spawned = await mgr.spawnBackground({
+      task: "external review",
+      message: "review this",
+    });
+    await mgr.waitForBackground(spawned.sessionId);
+
+    expect(permissionOutcome).toEqual([{ outcome: { outcome: "cancelled" } }]);
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  it("surfaces non-success ACP stop reasons as background errors", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Partial ACP result" },
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "refusal" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "external review",
+      message: "review this",
+    });
+    const result = await mgr.waitForBackground(spawned.sessionId);
+
+    expect(result).toContain("Partial ACP result");
+    expect(result).toContain("ACP background agent refused the request.");
+    expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
+      status: "error",
+      done: true,
+      partialOutput: result,
+    });
   });
 
   it("creates background engines through the host without reusing the memoized foreground engine", async () => {

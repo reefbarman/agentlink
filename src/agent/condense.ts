@@ -832,31 +832,31 @@ function getCodexCondenseModelCandidates(args: {
       ? args.activeModel
       : undefined;
 
-  const miniModel = CODEX_CONDENSE_MODEL;
-  const miniWindow = args.provider.getCapabilities(miniModel).contextWindow;
+  const cheapModel = CODEX_CONDENSE_MODEL;
+  const cheapWindow = args.provider.getCapabilities(cheapModel).contextWindow;
   const estimatedRequestTokens = estimatedInputTokens + 8192;
-  const miniSafeLimit = Math.floor(miniWindow * 0.8);
-  const miniFitsSafely = estimatedRequestTokens <= miniSafeLimit;
+  const cheapSafeLimit = Math.floor(cheapWindow * 0.8);
+  const cheapFitsSafely = estimatedRequestTokens <= cheapSafeLimit;
 
-  if (!miniFitsSafely) {
+  if (!cheapFitsSafely) {
     skippedModelCandidates.push({
-      model: miniModel,
-      reason: `Estimated condense request ~${estimatedRequestTokens.toLocaleString()} tokens exceeds safe budget for ${miniModel} (${miniSafeLimit.toLocaleString()} tokens).`,
+      model: cheapModel,
+      reason: `Estimated condense request ~${estimatedRequestTokens.toLocaleString()} tokens exceeds safe budget for ${cheapModel} (${cheapSafeLimit.toLocaleString()} tokens).`,
     });
   }
 
-  const ordered = miniFitsSafely
-    ? unique([miniModel, activeModel, ...CODEX_CONDENSE_MODEL_FALLBACKS])
+  const ordered = cheapFitsSafely
+    ? unique([cheapModel, activeModel, ...CODEX_CONDENSE_MODEL_FALLBACKS])
     : unique([
         activeModel,
         ...CODEX_CONDENSE_MODEL_FALLBACKS.filter(
-          (model) => model !== miniModel,
+          (model) => model !== cheapModel,
         ),
       ]);
 
   const modelCandidates = ordered.filter((model) => {
-    if (model !== miniModel) return true;
-    return miniFitsSafely;
+    if (model !== cheapModel) return true;
+    return cheapFitsSafely;
   });
 
   return {

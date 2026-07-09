@@ -15,6 +15,11 @@ import {
 } from "./modelCondenseThresholds.js";
 import { resolveModelForMode } from "./modeModelPreferences.js";
 import { providerRegistry, type ProviderRegistry } from "./providers/index.js";
+import {
+  StdioAcpBackgroundRunner,
+  type AcpBackgroundRunner,
+} from "./background/acpBackgroundRunner.js";
+import type { RawBackgroundAgentSettings } from "./background/acpAgentConfig.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import {
   createAgentToolRuntime,
@@ -42,6 +47,7 @@ export interface AgentSessionConfigHost {
   getCondenseThresholdForModel(model: string): number;
   resolveModelForMode(mode: string, fallbackModel: string): string;
   getBgSummaryMode(): BgSummaryMode;
+  getBackgroundAgentSettings(): RawBackgroundAgentSettings;
 }
 
 export interface CheckpointManagerLike {
@@ -96,6 +102,7 @@ export interface AgentSessionManagerHost {
     opts: ActivityTraceRecorderOptions,
   ) => ActivityTraceRecorderLike;
   createToolRuntime: (ctx: ToolDispatchContext) => AgentToolRuntime;
+  acpBackgroundRunner: AcpBackgroundRunner;
   persistence?: SessionStore;
   timers: TimerHost;
 }
@@ -145,6 +152,13 @@ export function createDefaultAgentSessionManagerHost(args: {
         }
         return "agent";
       },
+      getBackgroundAgentSettings: () => {
+        const config = vscode.workspace.getConfiguration("agentlink");
+        return {
+          defaultAgent: config.get<unknown>("background.defaultAgent"),
+          acpAgents: config.get<unknown>("background.acpAgents"),
+        };
+      },
     },
     providers: providerRegistry,
     createEngine: (registry, log) => new AgentEngine(registry, log),
@@ -173,6 +187,7 @@ export function createDefaultAgentSessionManagerHost(args: {
           ctx.renameSymbolProvider ??
           createVscodeRenameSymbolProvider(ctx.approvalManager),
       }),
+    acpBackgroundRunner: new StdioAcpBackgroundRunner(),
     persistence: args.store,
     timers: {
       setInterval: (handler, timeoutMs) => setInterval(handler, timeoutMs),
@@ -201,6 +216,8 @@ export function mergeAgentSessionManagerHost(
       overrides?.createActivityTraceRecorder ??
       base.createActivityTraceRecorder,
     createToolRuntime: overrides?.createToolRuntime ?? base.createToolRuntime,
+    acpBackgroundRunner:
+      overrides?.acpBackgroundRunner ?? base.acpBackgroundRunner,
     persistence:
       overrides && "persistence" in overrides
         ? overrides.persistence

@@ -193,11 +193,11 @@ describe("executeCodexResolvedCompletion", () => {
 
     expect(result.request).toMatchObject({
       configuredModel: "gpt-5.3-codex",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       remapped: true,
     });
     expect(capturedBody).toEqual({
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       input: [],
       instructions: "Summarize.",
       stream: true,

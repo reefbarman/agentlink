@@ -31,6 +31,7 @@ import {
 } from "./OpenAiCodexAuthManager.js";
 import {
   CODEX_CONDENSE_MODEL,
+  getCodexPreviewModelFallback,
   getCodexModelCapabilities,
   getEndpointCaps,
   isCodexModelServedOnChatgptBackend,
@@ -62,6 +63,7 @@ import {
   CodexRequestError,
   createCodexRequestError,
   getCodexErrorHandlingAction,
+  isCodexModelNotFoundError,
   toCodexRequestError,
   type CodexErrorShape,
 } from "../../../core/model/providers/codex/errors.js";
@@ -127,8 +129,8 @@ export class CodexProvider implements ModelProvider {
 
   /**
    * When authed against the ChatGPT/Codex OAuth backend, transparently remap a
-   * requested model the backend doesn't serve to one it does (gpt-5.5, or the
-   * cheap model for mini/nano tiers). Without this, an unsupported model id
+   * requested model the backend doesn't serve to one it does (the default, or
+   * the cheap model for mini/nano tiers). Without this, an unsupported model id
    * comes back as a bare `400 status code (no body)` and fails the run. The
    * API-key endpoint serves the full set, so it is never remapped.
    */
@@ -246,14 +248,15 @@ export class CodexProvider implements ModelProvider {
     }
 
     let auth = await this.getModelAuthOrThrow();
-    const effectiveModel = this.resolveEffectiveModel(model, auth, "stream()");
-    const reasoningEffort = resolveCodexReasoningEffort({
+    let effectiveModel = this.resolveEffectiveModel(model, auth, "stream()");
+    let reasoningEffort = resolveCodexReasoningEffort({
       modelId: effectiveModel,
       requestedEffort,
     });
 
     const attemptedOAuthAccountIds = new Set<string>();
     const refreshedOAuthAccountIds = new Set<string>();
+    let previewFallbackAttempted = false;
     if (auth.method === "oauth" && auth.oauthAccountPoolId) {
       attemptedOAuthAccountIds.add(auth.oauthAccountPoolId);
     }
@@ -293,6 +296,25 @@ export class CodexProvider implements ModelProvider {
         return;
       } catch (err) {
         const sdkErr = toCodexRequestError(err);
+
+        const previewFallback = getCodexPreviewModelFallback(effectiveModel);
+        if (
+          !previewFallbackAttempted &&
+          !streamState.outputStarted &&
+          previewFallback &&
+          isCodexModelNotFoundError(sdkErr)
+        ) {
+          previewFallbackAttempted = true;
+          this.log(
+            `[codex] stream(): preview model "${effectiveModel}" is unavailable; retrying with "${previewFallback}"`,
+          );
+          effectiveModel = previewFallback;
+          reasoningEffort = resolveCodexReasoningEffort({
+            modelId: effectiveModel,
+            requestedEffort,
+          });
+          continue;
+        }
 
         const action = getCodexErrorHandlingAction({ auth, error: sdkErr });
 
@@ -368,18 +390,19 @@ export class CodexProvider implements ModelProvider {
     const codexInput = translateCodexMessages(messages);
 
     let auth = await this.getModelAuthOrThrow();
-    const effectiveModel = this.resolveEffectiveModel(
+    let effectiveModel = this.resolveEffectiveModel(
       model,
       auth,
       "complete()",
     );
-    const reasoningEffort = resolveCodexReasoningEffort({
+    let reasoningEffort = resolveCodexReasoningEffort({
       modelId: effectiveModel,
       requestedEffort,
     });
 
     const attemptedOAuthAccountIds = new Set<string>();
     const refreshedOAuthAccountIds = new Set<string>();
+    let previewFallbackAttempted = false;
     if (auth.method === "oauth" && auth.oauthAccountPoolId) {
       attemptedOAuthAccountIds.add(auth.oauthAccountPoolId);
     }
@@ -419,6 +442,24 @@ export class CodexProvider implements ModelProvider {
         this.log(
           `[codex] complete() error: status=${sdkErr.status ?? "none"} message=${sdkErr.message} rawCode=${sdkErr.rawCode ?? "none"} body=${JSON.stringify(sdkErr.body ?? null)}`,
         );
+
+        const previewFallback = getCodexPreviewModelFallback(effectiveModel);
+        if (
+          !previewFallbackAttempted &&
+          previewFallback &&
+          isCodexModelNotFoundError(sdkErr)
+        ) {
+          previewFallbackAttempted = true;
+          this.log(
+            `[codex] complete(): preview model "${effectiveModel}" is unavailable; retrying with "${previewFallback}"`,
+          );
+          effectiveModel = previewFallback;
+          reasoningEffort = resolveCodexReasoningEffort({
+            modelId: effectiveModel,
+            requestedEffort,
+          });
+          continue;
+        }
 
         const action = getCodexErrorHandlingAction({ auth, error: sdkErr });
 

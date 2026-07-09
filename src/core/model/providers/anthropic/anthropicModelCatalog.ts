@@ -94,7 +94,8 @@ export interface AnthropicModelsApi {
   list(): Promise<{ data: SdkModelInfo[] }> | AsyncIterable<SdkModelInfo>;
 }
 
-export const ANTHROPIC_MODEL_CATALOG_SCHEMA_VERSION = 1;
+// Version 2 invalidates snapshots persisted before claude-fable-5 became listable.
+export const ANTHROPIC_MODEL_CATALOG_SCHEMA_VERSION = 2;
 
 /** Default auto-refresh TTL (Q2: 6h). Stale only gates refresh, never read. */
 export const ANTHROPIC_MODEL_CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
@@ -105,19 +106,11 @@ export const ANTHROPIC_MODEL_CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
  * for typical accounts (e.g. ZDR / Covered Model entitlement gaps). The Anthropic
  * Models API has no per-account availability field, so this is a manual list.
  *
- * `claude-fable-5` is a "Covered Model" requiring 30-day data retention and is
- * unavailable under zero-data-retention; calling it returns an error pointing to
- * Opus 4.8. It was also temporarily disabled around release due to a US national
- * security review.
- *
  * TODO: revisit — recheck availability over time and drop entries once these
  * models are generally callable (ideally replace this with a real entitlement
  * signal or a learn-from-failure mechanism if the API still lacks one).
  */
-export const ANTHROPIC_MODEL_BLOCKLIST = new Set<string>([
-  "claude-fable-5",
-  "claude-mythos-5",
-]);
+export const ANTHROPIC_MODEL_BLOCKLIST = new Set<string>(["claude-mythos-5"]);
 
 const SDK_EFFORT_TO_REASONING: Array<{
   key: keyof Omit<SdkEffortCapability, "supported">;
@@ -414,8 +407,8 @@ export class AnthropicModelCatalog {
     for (const sdk of sdkModels) {
       if (!sdk.id) continue;
       // Skip models that are listed platform-wide but not callable for the
-      // account (e.g. claude-fable-5). They must not reach the picker, the
-      // routing floor, or background model routing.
+      // account. They must not reach the picker, the routing floor, or
+      // background model routing.
       if (ANTHROPIC_MODEL_BLOCKLIST.has(sdk.id)) {
         this.log?.(
           `[anthropic] model "${sdk.id}" is blocklisted (not callable for this account); hiding from picker/routing`,

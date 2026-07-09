@@ -1,6 +1,7 @@
 import {
   CODEX_DEFAULT_MODEL,
   CODEX_OAUTH_CHEAP_MODEL,
+  getCodexPreviewModelFallback,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
 } from "./models.js";
@@ -15,10 +16,16 @@ describe("Codex model resolution", () => {
   });
 
   it("keeps OAuth-served models unchanged", () => {
-    expect(resolveCodexEffectiveModel("gpt-5.5", "oauth")).toEqual({
-      model: "gpt-5.5",
+    expect(resolveCodexEffectiveModel("gpt-5.6-sol", "oauth")).toEqual({
+      model: "gpt-5.6-sol",
       remapped: false,
     });
+  });
+
+  it("maps limited-preview models to stable equivalents", () => {
+    expect(getCodexPreviewModelFallback("gpt-5.6-sol")).toBe("gpt-5.5");
+    expect(getCodexPreviewModelFallback("gpt-5.6-terra")).toBe("gpt-5.4");
+    expect(getCodexPreviewModelFallback("gpt-5.6-luna")).toBe("gpt-5.4-mini");
   });
 
   it("remaps unavailable OAuth mini/nano models to the cheap OAuth model", () => {

@@ -16,6 +16,7 @@ import {
 } from "./condense.js";
 
 import type { AgentMessage } from "./types.js";
+import { CODEX_CONDENSE_MODEL } from "../core/model/providers/codex/models.js";
 
 const TEST_MODEL = "claude-sonnet-4-6";
 
@@ -113,14 +114,15 @@ function makeCodexProvider(
   const provider: ModelProvider = {
     id: "codex",
     displayName: "Codex",
-    condenseModel: "gpt-5.4-mini",
+    condenseModel: CODEX_CONDENSE_MODEL,
     async isAuthenticated() {
       return true;
     },
-    getCapabilities() {
+    getCapabilities(model: string) {
+      const contextWindow = model === CODEX_CONDENSE_MODEL ? 1_050_000 : 400_000;
       return {
         ...TEST_CAPABILITIES,
-        contextWindow: 400_000,
+        contextWindow,
         maxOutputTokens: 128_000,
       };
     },
@@ -550,7 +552,7 @@ User wants to fix the condense resume bug for Codex after summarization.
     );
   });
 
-  it("prefers the mini Codex condense model when the request safely fits", async () => {
+  it("prefers the cheap Codex condense model when the request safely fits", async () => {
     const { provider, complete } = makeCodexProvider();
 
     const result = await summarizeConversation({
@@ -564,16 +566,16 @@ User wants to fix the condense resume bug for Codex after summarization.
     expect(result.error).toBeUndefined();
     expect(complete).toHaveBeenCalledTimes(1);
     const request = complete.mock.calls[0][0] as CompleteRequest;
-    expect(request.model).toBe("gpt-5.4-mini");
-    expect(result.metadata?.modelCandidates[0]).toBe("gpt-5.4-mini");
-    expect(result.metadata?.selectedModel).toBe("gpt-5.4-mini");
+    expect(request.model).toBe(CODEX_CONDENSE_MODEL);
+    expect(result.metadata?.modelCandidates[0]).toBe(CODEX_CONDENSE_MODEL);
+    expect(result.metadata?.selectedModel).toBe(CODEX_CONDENSE_MODEL);
     expect(result.metadata?.skippedModelCandidates).toBeUndefined();
   });
 
-  it("skips the mini Codex condense model and prefers the active model when the request is too large", async () => {
+  it("skips the cheap Codex condense model and prefers the active model when the request is too large", async () => {
     const { provider, complete } = makeCodexProvider();
-    // Must exceed 80% of mini's 400K context (~320K tokens ≈ 1.28M chars)
-    const largeUserMessage = "x".repeat(1_300_000);
+    // Must exceed 80% of Luna's 1.05M context (~840K tokens ~= 3.36M chars).
+    const largeUserMessage = "x".repeat(3_400_000);
 
     const result = await summarizeConversation({
       messages: [
@@ -594,16 +596,16 @@ User wants to fix the condense resume bug for Codex after summarization.
     const request = complete.mock.calls[0][0] as CompleteRequest;
     expect(request.model).toBe("gpt-5.4");
     expect(result.metadata?.modelCandidates[0]).toBe("gpt-5.4");
-    expect(result.metadata?.modelCandidates).not.toContain("gpt-5.4-mini");
+    expect(result.metadata?.modelCandidates).not.toContain(CODEX_CONDENSE_MODEL);
     expect(result.metadata?.selectedModel).toBe("gpt-5.4");
     expect(result.metadata?.skippedModelCandidates).toEqual([
-      expect.objectContaining({ model: "gpt-5.4-mini" }),
+      expect.objectContaining({ model: CODEX_CONDENSE_MODEL }),
     ]);
   });
 
   it("retries the next Codex candidate after a context-window error", async () => {
     const { provider, complete } = makeCodexProvider((request) => {
-      if (request.model === "gpt-5.4-mini") {
+      if (request.model === CODEX_CONDENSE_MODEL) {
         throw new Error(
           "Codex API error unknown: Your input exceeds the context window of this model.",
         );
@@ -634,11 +636,11 @@ User wants to fix the condense resume bug for Codex after summarization.
     });
 
     expect(result.error).toBeUndefined();
-    // mini fails → falls through to gpt-5.4 (active model), then remaining
-    // fallbacks. The first non-mini candidate that succeeds wins.
+    // Cheap model fails, then falls through to gpt-5.4 (active model), then
+    // remaining fallbacks. The first non-cheap candidate that succeeds wins.
     expect(complete).toHaveBeenCalledTimes(2);
     expect((complete.mock.calls[0][0] as CompleteRequest).model).toBe(
-      "gpt-5.4-mini",
+      CODEX_CONDENSE_MODEL,
     );
     expect((complete.mock.calls[1][0] as CompleteRequest).model).toBe(
       "gpt-5.4",
@@ -691,7 +693,7 @@ User wants to fix the condense resume bug for Codex after summarization.
     });
 
     expect(result.error).toBeUndefined();
-    // mini fails with context error → falls through to gpt-5.4 which succeeds.
+    // Cheap model fails with context error, then gpt-5.4 succeeds.
     // No validation retry — just 2 model candidate calls.
     expect(complete).toHaveBeenCalledTimes(2);
     expect(result.summary).toBeTruthy();

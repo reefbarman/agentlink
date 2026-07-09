@@ -1136,6 +1136,69 @@ AgentLink includes static routing policy for background agents (`src/agent/backg
 - **Fallback behavior**: deterministic fallback order is used when preferred candidates are unavailable or unauthenticated.
 - **Transparency**: routing decisions are returned by `spawn_background_agent`, logged as `[bg-route]`, and shown in background UI/debug info.
 
+### ACP background-agent backends
+
+AgentLink can optionally run background agents through an [Agent Client Protocol](https://agentclientprotocol.com/) stdio agent instead of AgentLink's native background-agent runtime. This is intended first for read-only research and review lanes where another local ACP-compatible agent can inspect context and report back through the existing background-agent UI.
+
+Configure ACP agents in VS Code settings:
+
+```jsonc
+{
+  // Keep native AgentLink routing by default, or set this to "acp:<id>".
+  "agentlink.background.defaultAgent": "acp:external-reviewer",
+
+  "agentlink.background.acpAgents": [
+    {
+      "id": "external-reviewer",
+      "label": "External ACP Reviewer",
+      "command": "external-acp-agent",
+      "args": ["--stdio"],
+      "env": {
+        // Optional extra environment for the subprocess. Values are redacted in diagnostics.
+        "EXAMPLE_API_KEY": "..."
+      },
+      "initTimeoutMs": 10000,
+      "readonlyOnly": true
+    }
+  ]
+}
+```
+
+Routing options:
+
+- Use `"agentlink.background.defaultAgent": "native:auto"` to keep AgentLink's native background routing.
+- Use `"agentlink.background.defaultAgent": "acp:<id>"` to make all background spawns default to that ACP backend.
+- A foreground agent can target one ACP backend explicitly with `spawn_background_agent({ provider: "acp:<id>", ... })`; this bypasses native background model routing for that spawn.
+
+Runtime behavior:
+
+- ACP agents are launched as local stdio subprocesses with the workspace root as `cwd`.
+- Additional VS Code workspace folders are passed as ACP `additionalDirectories`.
+- Client capabilities are read-only in this first implementation (`fs.readTextFile=false`, `fs.writeTextFile=false`, `terminal=false`).
+- With `readonlyOnly: true` (default), write/move/delete/execute/unknown permission requests are rejected before showing approval UI.
+- ACP text, tool status, stop reason, and final usage are mapped into AgentLink's existing background status/result UI.
+- `kill_background_agent` aborts the ACP request and terminates the subprocess.
+
+#### ACP smoke-test checklist
+
+Use this when wiring a real ACP stdio agent:
+
+- Confirm the command starts from a normal terminal and speaks ACP over stdio; avoid commands that print banners or prompts on stdout before ACP JSON-RPC starts.
+- Add one `agentlink.background.acpAgents` entry with `readonlyOnly: true` and a short `initTimeoutMs` such as `10000`.
+- Set `agentlink.background.defaultAgent` to `acp:<id>` or spawn explicitly with `provider: "acp:<id>"`.
+- Start with a read-only/review prompt, for example: “Review this plan and report risks; do not edit files or run commands.”
+- Check the background strip/status: `resolvedProvider` should be `acp`, `resolvedModel` should be `acp:<id>`, and the result should appear through `get_background_result`.
+- If the run hangs, use `kill_background_agent`; then inspect **View > Output > AgentLink** for `[acp:<id>]` stderr logs and timeout/exit messages.
+
+#### ACP troubleshooting
+
+- **`Unknown ACP background agent "id"`** — the `acp:<id>` reference does not match any `agentlink.background.acpAgents[].id`.
+- **Initialization timeout** — increase `initTimeoutMs`, verify the command is installed on VS Code's environment `PATH`, and make sure the ACP agent writes protocol messages to stdout rather than human logs.
+- **Completed without output** — the ACP agent reached a stop response without sending `agent_message_chunk` text; check the agent's ACP implementation and stderr logs.
+- **Refusal / max token / max turn result** — AgentLink surfaces non-`end_turn` ACP stop reasons in the background result and marks the background session as an error.
+- **Permission request cancelled** — read-only ACP backends reject writes, deletes, moves, command execution, and unknown tool kinds. Keep ACP background agents focused on review/research until writable ACP support is designed.
+- **Native routing unexpectedly used** — confirm `agentlink.background.defaultAgent` is exactly `acp:<id>` or the spawn request uses `provider: "acp:<id>"`.
+
 ### Background guardrails
 
 Background runs enforce explicit safety limits:
@@ -1337,6 +1400,8 @@ Each VS Code window runs its own independent MCP server on its own port. The ext
 | `agentlink.openaiCompatible.timeoutMs` | `5000`                     | Timeout for helper endpoint calls before falling back                                                            |
 | `agentlink.questionDetection.mode`     | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)         |
 | `agentlink.bgSummary.mode`             | `agent`                    | How background-agent status snippets are summarized (`agent`, `openai`, `heuristic`)                             |
+| `agentlink.background.defaultAgent`    | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                      |
+| `agentlink.background.acpAgents`       | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                    |
 | `agentlink.semanticSearchEnabled`      | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                      |
 | `agentlink.qdrantUrl`                  | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                 |
 | `agentlink.autoIndex`                  | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                     |
@@ -1390,6 +1455,7 @@ Common fixes:
 - **Too much context / degraded responses** — use `/condense`, lower the active model's condense threshold, or leave `agentlink.autoCondense` enabled
 - **Approvals feel too noisy** — adjust write/command approvals and `agentlink.recentApprovalTtl`
 - **Want a different startup behavior** — change `agentlink.defaultMode`, `agentlink.modeModelPreferences`, or legacy fallback `agentlink.agentModel`
+- **ACP background agent not starting** — verify `agentlink.background.defaultAgent`, the matching `agentlink.background.acpAgents` entry, the subprocess command/args, and **View > Output > AgentLink** for `[acp:<id>]` logs
 
 ### Semantic search not working
 

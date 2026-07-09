@@ -6,6 +6,12 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("getLatestAutoContinueAction", () => {
+  it("guides the default completed continuation across remaining phases and plan items", () => {
+    expect(DEFAULT_COMPLETED_CONTINUE_ACTION.prompt).toContain(
+      "remaining phases, plan items, subtasks, or validation steps",
+    );
+  });
+
   it("continues completed markers even when the legacy tool-set suppression field is present", () => {
     expect(
       getLatestAutoContinueAction([

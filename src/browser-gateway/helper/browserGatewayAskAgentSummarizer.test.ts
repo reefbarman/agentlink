@@ -255,7 +255,7 @@ describe("BrowserGatewayAskAgentSummarizer", () => {
     expect(result.summary).toBe("Conversation summary from model.");
     expect(createCalls).toHaveLength(1);
     expect(createCalls[0]).toMatchObject({
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       stream: true,
       store: false,
       instructions: expect.stringContaining("Return only valid JSON"),

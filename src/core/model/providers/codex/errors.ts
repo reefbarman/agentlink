@@ -235,6 +235,13 @@ export function isCodexUsageLimitError(error: CodexErrorShape): boolean {
   return false;
 }
 
+export function isCodexModelNotFoundError(error: CodexErrorShape): boolean {
+  if (error.status !== 404) return false;
+  return /model not found|model_not_found|does not exist|not have access/i.test(
+    extractCodexErrorText(error),
+  );
+}
+
 export function buildCodexUsageLimitExhaustedError(params: {
   attemptedOAuthAccountIds: Iterable<string>;
   sourceError: CodexErrorShape;

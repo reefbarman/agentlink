@@ -32,6 +32,15 @@ const GPT_5_4_REASONING_EFFORTS = [
   "xhigh",
 ] as const satisfies readonly CoreReasoningEffort[];
 
+const GPT_5_6_REASONING_EFFORTS = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly CoreReasoningEffort[];
+
 const GPT_5_REASONING_EFFORTS = [
   "none",
   "minimal",
@@ -77,6 +86,9 @@ export interface ResponsesCaps {
  * CodexProvider is the backstop when this drifts.
  */
 export const CODEX_CHATGPT_BACKEND_MODEL_IDS = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
@@ -90,10 +102,10 @@ const CHATGPT_BACKEND_MODEL_SET = new Set<string>(
  * Default Codex model — routed to for background agents on the codex/gpt side
  * (e.g. "opposite" provider strategy) and used as the OAuth remap target.
  */
-export const CODEX_DEFAULT_MODEL = "gpt-5.5";
+export const CODEX_DEFAULT_MODEL = "gpt-5.6-sol";
 
 /** Cheapest OAuth-served Codex model, used for condensing and cheap-tier tasks. */
-export const CODEX_OAUTH_CHEAP_MODEL = "gpt-5.4-mini";
+export const CODEX_OAUTH_CHEAP_MODEL = "gpt-5.6-luna";
 
 export function isCodexModelServedOnChatgptBackend(modelId: string): boolean {
   return CHATGPT_BACKEND_MODEL_SET.has(modelId);
@@ -113,6 +125,20 @@ export function remapToChatgptBackendModel(modelId: string): string {
     return CODEX_OAUTH_CHEAP_MODEL;
   }
   return CODEX_DEFAULT_MODEL;
+}
+
+/** Stable equivalents used when a limited-preview GPT-5.6 model is unavailable. */
+export function getCodexPreviewModelFallback(modelId: string): string | undefined {
+  switch (modelId) {
+    case "gpt-5.6-sol":
+      return "gpt-5.5";
+    case "gpt-5.6-terra":
+      return "gpt-5.4";
+    case "gpt-5.6-luna":
+      return "gpt-5.4-mini";
+    default:
+      return undefined;
+  }
 }
 
 export function resolveCodexEffectiveModel(
@@ -165,6 +191,36 @@ const CODEX_1M_CONTEXT_TOKENS = 1_050_000;
 const CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS = 400_000;
 
 export const CODEX_MODELS: CodexModelDef[] = [
+  {
+    id: "gpt-5.6-sol",
+    displayName: "GPT-5.6 Sol (Preview)",
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
+  },
+  {
+    id: "gpt-5.6-terra",
+    displayName: "GPT-5.6 Terra (Preview)",
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
+  },
+  {
+    id: "gpt-5.6-luna",
+    displayName: "GPT-5.6 Luna (Preview)",
+    contextWindow: CODEX_1M_CONTEXT_TOKENS,
+    maxOutputTokens: 128_000,
+    supportsImages: true,
+    supportsThinking: true,
+    defaultReasoningEffort: "medium",
+    reasoningEfforts: [...GPT_5_6_REASONING_EFFORTS],
+  },
   {
     id: "gpt-5.5",
     displayName: "GPT-5.5",

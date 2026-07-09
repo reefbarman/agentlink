@@ -26,6 +26,16 @@ import {
 import type { SessionStore, SessionSummary } from "./SessionStore.js";
 import type { BgSessionInfo } from "../shared/types.js";
 import type { Checkpoint, RevertPreview } from "./CheckpointManager.js";
+import type {
+  ContentBlock as AcpContentBlock,
+  PromptResponse,
+  RequestPermissionRequest,
+  RequestPermissionResponse,
+  SessionUpdate,
+  ToolKind,
+} from "@agentclientprotocol/sdk" with { "resolution-mode": "import" };
+import { normalizeBackgroundAgentSettings } from "./background/acpAgentConfig.js";
+import { resolveBackgroundBackendRoute } from "./background/backgroundBackendRouter.js";
 import { resolveBackgroundRoute } from "./backgroundModelRouter.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import {
@@ -246,6 +256,190 @@ export class AgentSessionManager {
     this.toolCtx = ctx;
     if (this.engine) {
       this.engine.setToolRuntime(this.host.createToolRuntime(ctx));
+    }
+  }
+
+  private getBackgroundAgentSettings() {
+    return normalizeBackgroundAgentSettings(
+      this.host.config.getBackgroundAgentSettings(),
+    );
+  }
+
+  private getAcpAdditionalDirectories(): string[] {
+    return this.getWorkspaceFolders()
+      .map((folder) => folder.path)
+      .filter((folderPath) => folderPath && folderPath !== this.cwd);
+  }
+
+  private acpTextFromContentBlock(block: AcpContentBlock): string {
+    if (block.type === "text") return block.text;
+    if (block.type === "resource_link") return block.uri;
+    if (block.type === "resource") {
+      const resource = block.resource;
+      if ("text" in resource && typeof resource.text === "string") {
+        return resource.text;
+      }
+    }
+    return "";
+  }
+
+  private applyAcpPromptResponseUsage(
+    session: AgentSession,
+    response: PromptResponse,
+  ): void {
+    const usage = response.usage;
+    if (!usage) return;
+
+    session.totalInputTokens = usage.inputTokens;
+    session.totalOutputTokens = usage.outputTokens;
+    session.totalCacheReadTokens = usage.cachedReadTokens ?? 0;
+    session.totalCacheCreationTokens = usage.cachedWriteTokens ?? 0;
+    session.lastInputTokens =
+      usage.inputTokens +
+      (usage.cachedReadTokens ?? 0) +
+      (usage.cachedWriteTokens ?? 0);
+    session.lastOutputTokens = usage.outputTokens;
+    session.lastCacheReadTokens = usage.cachedReadTokens ?? 0;
+
+    const meta = this.bgMeta.get(session.id);
+    if (meta) meta.tokenUsage = usage.totalTokens;
+  }
+
+  private acpStopReasonMessage(response: PromptResponse): string | undefined {
+    if (response.stopReason === "end_turn") return undefined;
+    if (response.stopReason === "cancelled") {
+      return "ACP background agent cancelled.";
+    }
+    if (response.stopReason === "refusal") {
+      return "ACP background agent refused the request.";
+    }
+    if (response.stopReason === "max_tokens") {
+      return "ACP background agent stopped after reaching its token limit.";
+    }
+    if (response.stopReason === "max_turn_requests") {
+      return "ACP background agent stopped after reaching its turn limit.";
+    }
+    return `ACP background agent stopped: ${response.stopReason}`;
+  }
+
+  private acpToolKindToApprovalKind(
+    kind: ToolKind | null | undefined,
+  ): "command" | "write" | "mcp" {
+    if (kind === "execute") return "command";
+    if (kind === "edit" || kind === "delete" || kind === "move") return "write";
+    return "mcp";
+  }
+
+  private isReadonlyAllowedAcpToolKind(
+    kind: ToolKind | null | undefined,
+  ): boolean {
+    return (
+      kind === "read" ||
+      kind === "search" ||
+      kind === "think" ||
+      kind === "fetch"
+    );
+  }
+
+  private async handleAcpPermissionRequest(args: {
+    sessionId: string;
+    task: string;
+    readonlyOnly: boolean;
+    request: RequestPermissionRequest;
+  }): Promise<RequestPermissionResponse> {
+    const toolKind = args.request.toolCall.kind;
+    if (args.readonlyOnly && !this.isReadonlyAllowedAcpToolKind(toolKind)) {
+      return { outcome: { outcome: "cancelled" } };
+    }
+
+    const options = args.request.options;
+    if (options.length === 0) return { outcome: { outcome: "cancelled" } };
+
+    if (this.bgCancelled.has(args.sessionId)) {
+      return { outcome: { outcome: "cancelled" } };
+    }
+
+    const selected = await this.toolCtx?.onApprovalRequest?.(
+      {
+        kind: this.acpToolKindToApprovalKind(toolKind),
+        title:
+          args.request.toolCall.title?.trim() ||
+          "ACP background agent requests permission",
+        detail: JSON.stringify(
+          {
+            toolKind,
+            rawInput: args.request.toolCall.rawInput,
+            options: options.map((option) => ({
+              id: option.optionId,
+              name: option.name,
+              kind: option.kind,
+            })),
+          },
+          null,
+          2,
+        ),
+        choices: options.map((option) => ({
+          label: option.name,
+          value: option.optionId,
+          isPrimary: option.kind === "allow_once",
+          isDanger: option.kind.startsWith("reject"),
+        })),
+        backgroundTask: args.task,
+      },
+      args.sessionId,
+    );
+
+    if (!selected || typeof selected !== "string") {
+      return { outcome: { outcome: "cancelled" } };
+    }
+    return { outcome: { outcome: "selected", optionId: selected } };
+  }
+
+  private applyAcpSessionUpdate(args: {
+    session: AgentSession;
+    assistantTextParts: string[];
+    update: SessionUpdate;
+  }): void {
+    const { session, update } = args;
+    if (update.sessionUpdate === "agent_message_chunk") {
+      const text = this.acpTextFromContentBlock(update.content);
+      if (text) {
+        args.assistantTextParts.push(text);
+        this.appendBgStreamingText(session.id, text);
+        this.recordAndEmitEvent(session.id, { type: "text_delta", text });
+      }
+      return;
+    }
+
+    if (update.sessionUpdate === "tool_call") {
+      session.currentTool = update.title;
+      session.status = "tool_executing";
+      this.bgStatusDetail.set(session.id, update.title);
+      const meta = this.bgMeta.get(session.id);
+      if (meta) meta.toolCalls += 1;
+      this.recordAndEmitEvent(session.id, {
+        type: "tool_start",
+        toolCallId: update.toolCallId,
+        toolName: update.title,
+      });
+      return;
+    }
+
+    if (update.sessionUpdate === "tool_call_update") {
+      if (update.title) {
+        session.currentTool = update.title;
+        this.bgStatusDetail.set(session.id, update.title);
+      }
+      if (update.status === "completed" || update.status === "failed") {
+        session.currentTool = undefined;
+      }
+      return;
+    }
+
+    if (update.sessionUpdate === "usage_update") {
+      session.lastInputTokens = update.used;
+      const meta = this.bgMeta.get(session.id);
+      if (meta) meta.tokenUsage = update.used;
     }
   }
 
@@ -2219,10 +2413,203 @@ export class AgentSessionManager {
       );
     }
 
+    const backendRoute = resolveBackgroundBackendRoute(
+      this.getBackgroundAgentSettings(),
+      request,
+    );
     const fg = this.getForegroundSession();
+    const parentSessionId = fg?.id;
+
+    if (backendRoute.backend === "acp") {
+      const resolvedMode = request.mode?.trim() || "review";
+      const taskClass = request.taskClass?.trim() || "review";
+      const session = await this.host.createSession({
+        mode: resolvedMode,
+        config: {
+          ...this.config,
+          model: `acp:${backendRoute.agent.id}`,
+          thinkingBudget: 0,
+        },
+        cwd: this.cwd,
+        workspaceFolders: this.getWorkspaceFolders(),
+        devMode: this.devMode,
+        background: true,
+        isBackground: true,
+        lightweight: true,
+        providerId: "acp",
+      });
+      session.reasoningEffort = "none";
+      session.title = task.slice(0, 80);
+      session.status = "streaming";
+      session.addUserMessage(message);
+      session.createAbortController();
+      this.sessions.set(session.id, session);
+      if (parentSessionId) {
+        this.bgParents.set(session.id, { sessionId: parentSessionId, task });
+      }
+      this.bgMeta.set(session.id, {
+        resolvedMode,
+        resolvedModel: `acp:${backendRoute.agent.id}`,
+        resolvedProvider: "acp",
+        taskClass,
+        routingReason:
+          backendRoute.reason === "explicit_provider"
+            ? `explicit ACP provider override (${backendRoute.reference})`
+            : `configured default ACP background agent (${backendRoute.reference})`,
+        fallbackUsed: false,
+        toolCalls: 0,
+        tokenUsage: 0,
+      });
+      this.onSessionsChanged?.();
+
+      const assistantTextParts: string[] = [];
+      let promptResponse: PromptResponse | undefined;
+      void (async () => {
+        try {
+          await this.host.acpBackgroundRunner.run({
+            agent: backendRoute.agent,
+            cwd: this.cwd,
+            additionalDirectories: this.getAcpAdditionalDirectories(),
+            prompt: message,
+            signal: session.abortSignal,
+            onEvent: (event) => {
+              if (event.type === "stderr") {
+                this.log?.(
+                  `[acp:${backendRoute.agent.id}] ${event.text.trimEnd()}`,
+                );
+                return;
+              }
+              if (event.type === "stop") {
+                promptResponse = event.response;
+                this.applyAcpPromptResponseUsage(session, event.response);
+                return;
+              }
+              this.applyAcpSessionUpdate({
+                session,
+                assistantTextParts,
+                update: event.update,
+              });
+              const { status } = this.getProjectedBgStatus(session);
+              this.maybeScheduleBgSummary({
+                sessionId: session.id,
+                event: {
+                  type: "status_update",
+                  message: session.currentTool ?? status,
+                },
+                status,
+                currentTool: session.currentTool,
+                streamingText: this.bgStreamingText.get(session.id),
+                statusDetail: this.bgStatusDetail.get(session.id),
+              });
+              this.onSessionsChanged?.();
+            },
+            onRequestPermission: (permissionRequest) =>
+              this.handleAcpPermissionRequest({
+                sessionId: session.id,
+                task,
+                readonlyOnly: backendRoute.agent.readonlyOnly,
+                request: permissionRequest,
+              }),
+          });
+          if (!this.bgCancelled.has(session.id)) {
+            const finalText = assistantTextParts.join("").trim();
+            const stopReasonMessage = promptResponse
+              ? this.acpStopReasonMessage(promptResponse)
+              : undefined;
+            const assistantText = [finalText, stopReasonMessage]
+              .filter(Boolean)
+              .join("\n\n");
+            if (assistantText) {
+              session.appendAssistantTurn([
+                { type: "text", text: assistantText },
+              ]);
+            }
+            if (stopReasonMessage) {
+              session.status = "error";
+              this.setBgError(session.id, stopReasonMessage);
+              this.recordAndEmitEvent(session.id, {
+                type: "error",
+                error: stopReasonMessage,
+                retryable: false,
+              });
+            } else {
+              session.status = "idle";
+            }
+            this.recordAndEmitEvent(session.id, {
+              type: "done",
+              totalInputTokens: session.totalInputTokens,
+              totalOutputTokens: session.totalOutputTokens,
+              totalCacheReadTokens: session.totalCacheReadTokens,
+              totalCacheCreationTokens: session.totalCacheCreationTokens,
+            });
+          }
+        } catch (err: unknown) {
+          const error = err instanceof Error ? err.message : String(err);
+          if (this.bgCancelled.has(session.id) || session.isAborted) {
+            this.bgCancelled.add(session.id);
+          } else {
+            const partialText = assistantTextParts.join("").trim();
+            if (partialText) {
+              session.appendAssistantTurn([
+                { type: "text", text: partialText },
+              ]);
+            }
+            session.status = "error";
+            this.setBgError(session.id, error);
+            this.recordAndEmitEvent(session.id, {
+              type: "error",
+              error,
+              retryable: false,
+            });
+          }
+        } finally {
+          this.bgStatusDetail.delete(session.id);
+          this.markBgCompleted(session.id);
+          const fallbackMsg = this.bgErrors.get(session.id)
+            ? `ACP background agent stopped: ${this.bgErrors.get(session.id)}`
+            : "(ACP background agent completed without output)";
+          const resultText = session.getLastAssistantText() ?? fallbackMsg;
+          this.bgFinalResults.set(session.id, resultText);
+          for (const t of this.bgSafetyTimers.get(session.id) ?? []) {
+            this.host.timers.clearTimeout(t);
+          }
+          this.bgSafetyTimers.delete(session.id);
+          for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
+            resolve(resultText);
+          }
+          this.bgResultWaiters.delete(session.id);
+          this.onSessionsChanged?.();
+          void this.resumeParentAfterBackgroundCompletion(
+            session.id,
+            resultText,
+          );
+          this.host.timers.setTimeout(
+            () => {
+              this.bgFinalResults.delete(session.id);
+              this.bgParents.delete(session.id);
+              this.bgAutoResumed.delete(session.id);
+            },
+            5 * 60 * 1000,
+          );
+        }
+      })();
+
+      return {
+        sessionId: session.id,
+        resolvedMode,
+        resolvedModel: `acp:${backendRoute.agent.id}`,
+        resolvedProvider: "acp",
+        taskClass,
+        routingReason:
+          backendRoute.reason === "explicit_provider"
+            ? `explicit ACP provider override (${backendRoute.reference})`
+            : `configured default ACP background agent (${backendRoute.reference})`,
+        fallbackUsed: false,
+      };
+    }
+
     const foregroundMode = fg?.mode ?? "code";
     const foregroundModel = fg?.model ?? this.config.model;
-    const parentSessionId = fg?.id;
 
     const route = await resolveBackgroundRoute(this.host.providers, request, {
       mode: foregroundMode,

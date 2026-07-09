@@ -34,7 +34,7 @@ export interface FinalMessageContinueAction {
 export const DEFAULT_COMPLETED_CONTINUE_ACTION: FinalMessageContinueAction = {
   label: "Continue",
   prompt:
-    "Continue working from where you left off. If there are remaining subtasks, do the next one; if everything is complete, briefly confirm that no further work is needed.",
+    "Continue working from where you left off. If the original request or plan has remaining phases, plan items, subtasks, or validation steps, proceed with the next one; if everything is complete, briefly confirm that no further work is needed.",
 };
 
 export function getFinalMessageContinueAction(

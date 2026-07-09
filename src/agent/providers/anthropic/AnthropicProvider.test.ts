@@ -45,11 +45,6 @@ describe("AnthropicProvider capabilities", () => {
         }),
       ]),
     );
-    expect(provider.listModels()).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "claude-fable-5" }),
-      ]),
-    );
     expect(
       provider.getCapabilities("claude-opus-4-8").reasoningEfforts,
     ).toEqual(["none", "low", "medium", "high", "max"]);

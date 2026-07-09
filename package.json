@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.16.76",
+  "version": "1.16.80",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -341,7 +341,7 @@
           ],
           "enumDescriptions": [
             "Use the built-in regex heuristic (no LLM call).",
-            "Use the current chat provider's low-tier model (Claude Haiku, gpt-5.4-mini, etc.). Spends your provider quota on every idle turn.",
+            "Use the current chat provider's low-tier model (Claude Haiku, gpt-5.6-luna with stable fallback, etc.). Spends your provider quota on every idle turn.",
             "Use the OpenAI-compatible endpoint configured under agentlink.openaiCompatible.*."
           ],
           "default": "heuristic",
@@ -355,12 +355,85 @@
             "heuristic"
           ],
           "enumDescriptions": [
-            "Use the background session's own provider (Haiku / gpt-5.4-mini family).",
+            "Use the background session's own provider (Haiku / gpt-5.6-luna with stable fallback).",
             "Use the OpenAI-compatible endpoint configured under agentlink.openaiCompatible.*.",
             "Skip the LLM call and show only the inferred phase status."
           ],
           "default": "agent",
           "description": "How the tiny status string shown for background agents is summarized."
+        },
+        "agentlink.background.defaultAgent": {
+          "type": "string",
+          "default": "native:auto",
+          "pattern": "^(native:auto|acp:[A-Za-z0-9_.-]+)$",
+          "description": "Default backend for spawn_background_agent. Use native:auto for AgentLink's built-in background routing, or acp:<id> to launch a configured ACP stdio agent from agentlink.background.acpAgents."
+        },
+        "agentlink.background.acpAgents": {
+          "type": "array",
+          "default": [],
+          "description": "ACP-compatible stdio agent subprocesses that can be used as background-agent backends for read-only/review work. Reference an entry with agentlink.background.defaultAgent = acp:<id> or spawn_background_agent provider = acp:<id>.",
+          "examples": [
+            [
+              {
+                "id": "my-agent",
+                "label": "My ACP Agent",
+                "command": "my-acp-agent",
+                "args": [],
+                "env": {},
+                "initTimeoutMs": 10000,
+                "readonlyOnly": true
+              }
+            ]
+          ],
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "command"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+$",
+                "description": "Short identifier referenced as acp:<id>."
+              },
+              "label": {
+                "type": "string",
+                "description": "Human-readable label shown in routing/debug output. Defaults to id."
+              },
+              "command": {
+                "type": "string",
+                "description": "Executable command for the ACP agent subprocess."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Arguments passed to the ACP agent subprocess."
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "description": "Extra environment variables for the ACP agent subprocess. Values are redacted in AgentLink diagnostics."
+              },
+              "initTimeoutMs": {
+                "type": "number",
+                "minimum": 1,
+                "default": 10000,
+                "description": "Milliseconds to wait for ACP process initialization before failing the background spawn."
+              },
+              "readonlyOnly": {
+                "type": "boolean",
+                "default": true,
+                "description": "Treat this ACP agent as read-only. Write, move, delete, execute, and unknown permission requests are rejected in the MVP."
+              }
+            }
+          }
         },
         "agentlink.questionDetection.llmEnabled": {
           "type": "boolean",
@@ -584,19 +657,20 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.104.2",
+    "@agentclientprotocol/sdk": "^1.1.0",
+    "@anthropic-ai/sdk": "^0.110.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@tanstack/virtual-core": "^3.17.1",
     "@types/multicast-dns": "^7.2.4",
     "@vscode/codicons": "^0.0.45",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "diff": "^9.0.0",
-    "dompurify": "^3.4.10",
+    "dompurify": "^3.4.11",
     "eslint": "^10.5.0",
     "marked": "^18.0.5",
     "mermaid": "^11.15.0",
     "multicast-dns": "^7.2.5",
-    "openai": "^6.42.0",
+    "openai": "^6.46.0",
     "picomatch": "^4.0.3",
     "preact": "^10.29.2",
     "simple-git": "^3.36.0",
@@ -610,6 +684,7 @@
     "zod-to-json-schema": "^3.25.2"
   },
   "overrides": {
+    "dompurify": "^3.4.11",
     "uuid": "^14.0.0"
   },
   "devDependencies": {

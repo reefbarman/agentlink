@@ -336,10 +336,10 @@ describe("Codex translation", () => {
 
     expect(result).toEqual({
       configuredModel: "gpt-5.3-codex",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       remapped: true,
       body: {
-        model: "gpt-5.5",
+        model: "gpt-5.6-sol",
         input: [],
         instructions: "system",
         stream: true,
@@ -358,10 +358,10 @@ describe("Codex translation", () => {
         instructions: "system",
       }),
     ).toMatchObject({
-      configuredModel: "gpt-5.5",
-      model: "gpt-5.5",
+      configuredModel: "gpt-5.6-sol",
+      model: "gpt-5.6-sol",
       remapped: false,
-      body: { model: "gpt-5.5", store: false },
+      body: { model: "gpt-5.6-sol", store: false },
     });
   });
 

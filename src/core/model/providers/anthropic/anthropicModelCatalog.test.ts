@@ -298,7 +298,7 @@ describe("AnthropicModelCatalog refresh", () => {
     expect(api.list).toHaveBeenCalledTimes(1);
   });
 
-  it("hides blocklisted models (claude-fable-5) from the picker and routing", async () => {
+  it("surfaces claude-fable-5 when listed by Anthropic", async () => {
     const catalog = makeCatalog();
     await catalog.refresh(
       listResult([
@@ -324,15 +324,14 @@ describe("AnthropicModelCatalog refresh", () => {
         },
       ]),
     );
-    expect(catalog.listModels().map((m) => m.id)).not.toContain(
-      "claude-fable-5",
-    );
-    expect(catalog.listRoutableModelIds()).not.toContain("claude-fable-5");
-    expect(catalog.getCapabilities("claude-fable-5")).toBeUndefined();
-    // Non-blocklisted models still surface.
-    expect(catalog.listModels().map((m) => m.id)).toContain(
-      "claude-sonnet-4-6",
-    );
+    expect(catalog.listModels().map((m) => m.id)).toContain("claude-fable-5");
+    expect(catalog.listRoutableModelIds()).toContain("claude-fable-5");
+    expect(catalog.getCapabilities("claude-fable-5")).toMatchObject({
+      contextWindow: 1_000_000,
+      maxOutputTokens: 64_000,
+      supportsAdaptiveThinking: true,
+      reasoningEfforts: ["none", "high", "max"],
+    });
   });
 
   it("logs retired static models absent from a successful list()", async () => {
@@ -421,10 +420,13 @@ describe("AnthropicModelCatalog persistence + TTL", () => {
     );
   });
 
-  it("ignores a snapshot with a mismatched schema version", () => {
+  it.each([
+    ANTHROPIC_MODEL_CATALOG_SCHEMA_VERSION - 1,
+    ANTHROPIC_MODEL_CATALOG_SCHEMA_VERSION + 1,
+  ])("ignores a snapshot with schema version %s", (schemaVersion) => {
     const persistence: ModelCatalogPersistence = {
       load: () => ({
-        schemaVersion: ANTHROPIC_MODEL_CATALOG_SCHEMA_VERSION + 1,
+        schemaVersion,
         fetchedAt: Date.now(),
         models: [
           {
@@ -438,6 +440,7 @@ describe("AnthropicModelCatalog persistence + TTL", () => {
     };
     const catalog = makeCatalog({ persistence });
     expect(catalog.hasDynamicData()).toBe(false);
+    expect(catalog.hasFreshData()).toBe(false);
     expect(catalog.getCapabilities("claude-snapshot-1")).toBeUndefined();
   });
 
