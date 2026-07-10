@@ -1,11 +1,8 @@
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
+import { sleep } from "../util/sleep.js";
 
 import { type ToolResult } from "../shared/types.js";
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 const INTERACTIVE_PROMPT_PATTERNS: RegExp[] = [
   /\b(y\/n|yes\/no|press\s+(enter|return)|continue\?|are you sure)\b/i,

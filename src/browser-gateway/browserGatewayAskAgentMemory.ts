@@ -5,6 +5,7 @@ import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 
 import type { ChatMessage } from "../agent/webview/types.js";
+import { sleep } from "../util/sleep.js";
 
 export const BROWSER_GATEWAY_ASK_AGENT_MEMORY_SCHEMA_VERSION = 1;
 
@@ -197,10 +198,6 @@ function sanitizeString(value: unknown, fallback = ""): string {
 
 function sanitizeNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function sanitizeStringArray(value: unknown): string[] {

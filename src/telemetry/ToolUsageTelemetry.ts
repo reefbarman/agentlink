@@ -1,7 +1,9 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+
 import { randomUUID } from "crypto";
+import { sleep } from "../util/sleep.js";
 
 export type ToolUsageSource = "agent" | "mcp";
 export type ToolUsageOutcome = "ok" | "error" | "cancelled" | "rejected";
@@ -79,10 +81,6 @@ function isAlreadyExistsError(err: unknown): boolean {
     "code" in err &&
     String((err as { code?: unknown }).code) === "EEXIST"
   );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export class ToolUsageTelemetry {

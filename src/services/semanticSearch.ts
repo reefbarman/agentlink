@@ -17,6 +17,7 @@ import {
   getRipgrepBinPath,
   parseRipgrepOutput,
 } from "../util/ripgrep.js";
+import { sleep } from "../util/sleep.js";
 
 import { type ToolResult } from "../shared/types.js";
 import { getSemanticReadinessMessage } from "../shared/semanticReadiness.js";
@@ -33,10 +34,6 @@ const EMBEDDING_MAX_RETRIES = 3;
 
 export async function getEmbeddingAuth(): Promise<OpenAiCodexResolvedAuth | null> {
   return openAiCodexAuthManager.resolveEmbeddingAuth();
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isRetryableEmbeddingStatus(status: number): boolean {

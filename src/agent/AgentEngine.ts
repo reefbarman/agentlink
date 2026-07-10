@@ -50,6 +50,7 @@ import type {
 } from "./providers/types.js";
 import { toSupportedImageMediaType } from "./providers/types.js";
 import { toCoreModelDocumentMediaType } from "../core/modelRuntime.js";
+import { sleep } from "../util/sleep.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_API_RETRIES = 3;
@@ -997,8 +998,7 @@ export class AgentEngine {
               ? { budgetTokens: session.thinkingBudget }
               : undefined,
             reasoningEffort,
-            reasoningMode:
-              isCodex && session.codexProMode ? "pro" : "standard",
+            reasoningMode: isCodex && session.codexProMode ? "pro" : "standard",
             cache: currentCache,
             state: currentState,
             signal: requestController.signal,
@@ -1019,72 +1019,75 @@ export class AgentEngine {
               );
               if (next.done) break;
               const event = next.value;
-            if (signal.aborted) break;
+              if (signal.aborted) break;
 
-            if (!firstTokenReceived) {
-              firstTokenReceived = true;
-              timeToFirstToken = Date.now() - startTime;
-            }
+              if (!firstTokenReceived) {
+                firstTokenReceived = true;
+                timeToFirstToken = Date.now() - startTime;
+              }
 
-            switch (event.type) {
-              case "model_fallback":
-                session.model = event.effectiveModel;
-                yield {
-                  type: "warning",
-                  message: `${event.requestedModel} is unavailable for this account. Switched to ${event.effectiveModel}.`,
-                  modelFallback: {
-                    requestedModel: event.requestedModel,
-                    effectiveModel: event.effectiveModel,
-                  },
-                };
-                break;
-              case "thinking_start":
-                yield { type: "thinking_start", thinkingId: event.thinkingId };
-                break;
-              case "thinking_delta":
-                yield {
-                  type: "thinking_delta",
-                  thinkingId: event.thinkingId,
-                  text: event.text,
-                };
-                break;
-              case "thinking_end":
-                yield { type: "thinking_end", thinkingId: event.thinkingId };
-                break;
-              case "text_delta":
-                yield { type: "text_delta", text: event.text };
-                break;
-              case "tool_start":
-                session.currentTool = event.toolName;
-                yield {
-                  type: "tool_start",
-                  toolCallId: event.toolCallId,
-                  toolName: event.toolName,
-                };
-                break;
-              case "tool_input_delta":
-                yield {
-                  type: "tool_input_delta",
-                  toolCallId: event.toolCallId,
-                  partialJson: event.partialJson,
-                };
-                break;
-              case "tool_done":
-                // Handled at content_blocks
-                break;
-              case "content_blocks":
-                contentBlocks = event.blocks;
-                break;
-              case "usage":
-                inputTokens = event.inputTokens;
-                outputTokens = event.outputTokens;
-                cacheReadTokens = event.cacheReadTokens ?? 0;
-                cacheCreationTokens = event.cacheCreationTokens ?? 0;
-                providerResponseId = event.providerResponseId;
-                break;
-              case "done":
-                break;
-            }
+              switch (event.type) {
+                case "model_fallback":
+                  session.model = event.effectiveModel;
+                  yield {
+                    type: "warning",
+                    message: `${event.requestedModel} is unavailable for this account. Switched to ${event.effectiveModel}.`,
+                    modelFallback: {
+                      requestedModel: event.requestedModel,
+                      effectiveModel: event.effectiveModel,
+                    },
+                  };
+                  break;
+                case "thinking_start":
+                  yield {
+                    type: "thinking_start",
+                    thinkingId: event.thinkingId,
+                  };
+                  break;
+                case "thinking_delta":
+                  yield {
+                    type: "thinking_delta",
+                    thinkingId: event.thinkingId,
+                    text: event.text,
+                  };
+                  break;
+                case "thinking_end":
+                  yield { type: "thinking_end", thinkingId: event.thinkingId };
+                  break;
+                case "text_delta":
+                  yield { type: "text_delta", text: event.text };
+                  break;
+                case "tool_start":
+                  session.currentTool = event.toolName;
+                  yield {
+                    type: "tool_start",
+                    toolCallId: event.toolCallId,
+                    toolName: event.toolName,
+                  };
+                  break;
+                case "tool_input_delta":
+                  yield {
+                    type: "tool_input_delta",
+                    toolCallId: event.toolCallId,
+                    partialJson: event.partialJson,
+                  };
+                  break;
+                case "tool_done":
+                  // Handled at content_blocks
+                  break;
+                case "content_blocks":
+                  contentBlocks = event.blocks;
+                  break;
+                case "usage":
+                  inputTokens = event.inputTokens;
+                  outputTokens = event.outputTokens;
+                  cacheReadTokens = event.cacheReadTokens ?? 0;
+                  cacheCreationTokens = event.cacheCreationTokens ?? 0;
+                  providerResponseId = event.providerResponseId;
+                  break;
+                case "done":
+                  break;
+              }
             }
           } finally {
             signal.removeEventListener("abort", abortRequest);
@@ -1235,7 +1238,7 @@ export class AgentEngine {
               retryAttempt: retryCount,
               retryMaxAttempts: MAX_API_RETRIES,
             };
-            await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+            await sleep(delayMs);
             if (signal.aborted) break;
             continue;
           }

@@ -8,6 +8,7 @@ import {
   type BrowserGatewayHelperDiscoveryRecord,
   type BrowserGatewayHelperHealthResponse,
 } from "../protocol.js";
+import { sleep } from "../../util/sleep.js";
 
 export interface BrowserGatewayHelperBootstrapOptions {
   extensionRootPath: string;
@@ -135,7 +136,7 @@ export async function waitForHelperReady(
     ) {
       return discovery;
     }
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    await sleep(120);
   }
   throw new Error("helper_start_timeout");
 }
@@ -165,7 +166,7 @@ async function terminateStaleHelper(
   const deadline = Date.now() + HELPER_TERMINATION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (!isPidLikelyAlive(discovery.pid)) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await sleep(100);
   }
 
   // Still alive — escalate.
@@ -178,7 +179,7 @@ async function terminateStaleHelper(
     // already gone
   }
   // Give the OS a beat to release the port.
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  await sleep(250);
 }
 
 export async function bootstrapBrowserGatewayHelper(

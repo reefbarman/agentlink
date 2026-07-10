@@ -4,6 +4,7 @@ import * as path from "path";
 
 import type { BrowserGatewayDiscoveryRecord } from "./browserGatewayDiscovery.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
+import { sleep } from "../util/sleep.js";
 
 const REGISTRY_DIR = path.join(os.homedir(), ".agentlink");
 const REGISTRY_PATH = path.join(REGISTRY_DIR, "browser-gateways.json");
@@ -73,10 +74,6 @@ function isAlreadyExistsError(err: unknown): boolean {
     "code" in err &&
     String((err as { code?: unknown }).code) === "EEXIST"
   );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function withRegistryLock<T>(operation: () => Promise<T>): Promise<T> {

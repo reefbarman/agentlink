@@ -12,6 +12,7 @@ import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 import type { OnApprovalRequest } from "../shared/types.js";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
 import { randomUUID } from "crypto";
+import { sleep } from "../util/sleep.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
 export { FileLockTimeoutError, withFileLock } from "../util/fileLock.js";
@@ -887,7 +888,7 @@ async function waitForVisibleFileEditor(
     );
     if (editor) return editor;
     if (Date.now() >= deadline) return undefined;
-    await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+    await sleep(intervalMs);
   }
 }
 

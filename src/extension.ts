@@ -4,6 +4,7 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 
 import { StatusBarManager } from "./util/StatusBarManager.js";
+import { sleep } from "./util/sleep.js";
 import {
   disposeTerminalManager,
   initializeTerminalManager,
@@ -264,8 +265,9 @@ async function consumeWorktreeStartupIntent(
           void exchangeStore.update(intent.fleetExchangeId!, {
             status: "cancelled",
             error: "cancelled_by_parent",
-            resultText:
-              agentSessionManager.getSession(childSessionId)?.getLastAssistantText(),
+            resultText: agentSessionManager
+              .getSession(childSessionId)
+              ?.getLastAssistantText(),
           });
         });
       }, 1000);
@@ -1238,7 +1240,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
     }
 
     throw new Error("helper_shutdown_timeout");
@@ -1344,15 +1346,14 @@ export function activate(context: vscode.ExtensionContext): void {
     (workflow) => agentSessionManager.startFleetWorkflow(workflow),
   );
   const fleetAutomationReady = fleetAutomationStore.load();
-  const removeFleetAutomationListener = agentSessionManager.addFleetEventListener(
-    (_sessionId, event) => {
+  const removeFleetAutomationListener =
+    agentSessionManager.addFleetEventListener((_sessionId, event) => {
       void fleetAutomationReady
         .then(() => fleetAutomationStore.trigger(event.type))
         .catch((error) =>
           log(`[fleet-automation] event trigger failed: ${String(error)}`),
         );
-    },
-  );
+    });
   const fleetAutomationTimer = setInterval(() => {
     void fleetAutomationReady
       .then(() => fleetAutomationStore.runDue())
@@ -1432,14 +1433,16 @@ export function activate(context: vscode.ExtensionContext): void {
       if (action === "history") return fleetAutomationStore.history(id);
       if (!id) throw new Error(`${action} requires an automation id`);
       if (action === "enable") return fleetAutomationStore.setEnabled(id, true);
-      if (action === "disable") return fleetAutomationStore.setEnabled(id, false);
+      if (action === "disable")
+        return fleetAutomationStore.setEnabled(id, false);
       return { removed: await fleetAutomationStore.remove(id) };
     },
     worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
       globalStorageUri: context.globalStorageUri,
       onApprovalRequest: (request, sessionId) =>
         chatViewProvider.requestApproval(request, sessionId),
-      sessionId: () => agentSessionManager.getForegroundSession()?.id ?? "agent",
+      sessionId: () =>
+        agentSessionManager.getForegroundSession()?.id ?? "agent",
     }),
     toolCallTracker,
     toolUsageTelemetry: toolUsageTelemetry ?? undefined,

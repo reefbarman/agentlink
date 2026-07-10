@@ -62,6 +62,7 @@ import type {
   ChunkGranularity,
 } from "./types.js";
 import { EMBEDDING_DIM, EMBEDDING_MODEL } from "./types.js";
+import { sleep } from "../util/sleep.js";
 
 // --- Constants ---
 
@@ -1087,12 +1088,4 @@ async function deletePoints(
     const err = await response.text();
     throw new Error(`Qdrant delete failed: ${err}`);
   }
-}
-
-// ============================================================
-// Utilities
-// ============================================================
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
