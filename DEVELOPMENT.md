@@ -2,7 +2,11 @@
 
 ## Building & Installing
 
+Development requires Node.js 22.19 or newer. With nvm, run `nvm install` once to install the version in `.nvmrc`, then use `nvm use` when returning to the project.
+
 ```sh
+nvm install
+nvm use
 npm install
 npm run build     # one-shot build
 npm run watch     # rebuild on change

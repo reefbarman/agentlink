@@ -22,7 +22,7 @@ const extensionOptions = {
   external: ["vscode"],
   format: "cjs",
   platform: "node",
-  target: "node20",
+  target: "node22",
   sourcemap: true,
   minify: false,
   define: {
@@ -121,7 +121,7 @@ const indexerOptions = {
   external: ["vscode"],
   format: "cjs",
   platform: "node",
-  target: "node20",
+  target: "node22",
   sourcemap: true,
   minify: false,
   define: {
@@ -144,7 +144,7 @@ const browserGatewayHelperOptions = {
   external: ["vscode"],
   format: "cjs",
   platform: "node",
-  target: "node20",
+  target: "node22",
   sourcemap: true,
   minify: false,
   define: {

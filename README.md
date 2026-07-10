@@ -1481,7 +1481,11 @@ If Qdrant is reachable but returns no collection, AgentLink will report that no 
 
 ## Development
 
+Development requires Node.js 22.19 or newer. The included `.nvmrc` selects the minimum supported version with nvm.
+
 ```sh
+nvm install
+nvm use
 npm install
 npm run build     # one-shot build
 npm run watch     # rebuild on change

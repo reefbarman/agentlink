@@ -121,7 +121,7 @@ async function main() {
     write: false,
     metafile: true,
     platform: "node",
-    target: "node20",
+    target: "node22",
     format: "cjs",
     external: ["vscode"],
     treeShaking: true,
