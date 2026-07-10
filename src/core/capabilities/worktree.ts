@@ -9,6 +9,7 @@ export interface WorktreeAgentLaunchRequest {
   worktreePath?: string;
   mode?: string;
   autoSubmit?: boolean;
+  fleetExchangeId?: string;
 }
 
 export interface WorktreeAgentLaunchProvider {

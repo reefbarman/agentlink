@@ -75,6 +75,7 @@ import {
   planFleetWorkflow,
   type FleetWorkflowRequest,
 } from "./FleetWorkflows.js";
+import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
 
 export interface BtwQuestionResult {
   answer: string;
@@ -191,6 +192,10 @@ export class AgentSessionManager {
     sessionId: string;
     start: () => Promise<void>;
   }> = [];
+  private readonly worktreeMonitorTimers = new Map<
+    string,
+    ReturnType<AgentSessionManagerHost["timers"]["setInterval"]>
+  >();
   private readonly fleetScheduler: FleetScheduler;
   /** True while a transient /btw side question is running. */
   private btwInFlight = false;
@@ -214,6 +219,16 @@ export class AgentSessionManager {
 
   /** Callback invoked with each event from the running agent */
   onEvent?: (sessionId: string, event: AgentEvent) => void;
+  private readonly agentEventListeners = new Set<
+    (sessionId: string, event: AgentEvent) => void
+  >();
+
+  addAgentEventListener(
+    listener: (sessionId: string, event: AgentEvent) => void,
+  ): () => void {
+    this.agentEventListeners.add(listener);
+    return () => this.agentEventListeners.delete(listener);
+  }
 
   /** Callback when session list changes */
   onSessionsChanged?: () => void;
@@ -522,6 +537,9 @@ export class AgentSessionManager {
       session?.background ? "background_agent" : "foreground_agent",
     );
     this.onEvent?.(sessionId, event);
+    for (const listener of this.agentEventListeners) {
+      listener(sessionId, event);
+    }
   }
 
   private async withSessionSendQueue(
@@ -1467,6 +1485,17 @@ export class AgentSessionManager {
 
     const session = this.sessions.get(sessionId);
     if (session) {
+      const exchangeId = session.fleetMetadata?.worktreeExchangeId;
+      const globalStoragePath = this.toolCtx?.globalStorageUri?.fsPath;
+      if (exchangeId && globalStoragePath) {
+        void new WorktreeFleetExchangeStore(globalStoragePath)
+          .requestCancel(exchangeId)
+          .catch((error) =>
+            this.log?.(
+              `[worktree-fleet] cancellation request failed: ${String(error)}`,
+            ),
+          );
+      }
       this.bgLaunchQueue = this.bgLaunchQueue.filter(
         (queued) => queued.sessionId !== sessionId,
       );
@@ -4437,20 +4466,9 @@ export class AgentSessionManager {
     parent: AgentSession | undefined,
   ): Promise<SpawnBackgroundResult> {
     const provider = this.toolCtx?.worktreeAgentLaunchProvider;
-    if (!provider) {
+    const globalStoragePath = this.toolCtx?.globalStorageUri?.fsPath;
+    if (!provider || !globalStoragePath) {
       throw new Error("Isolated worktree launcher is unavailable");
-    }
-    const result = await provider.start({
-      task: request.task,
-      prompt: request.message,
-      sourcePath: this.cwd,
-      mode: request.mode,
-      autoSubmit: true,
-    });
-    const text = result.content.find((item) => item.type === "text")?.text ?? "{}";
-    const payload = JSON.parse(text) as Record<string, unknown>;
-    if (payload.error || payload.status === "rejected") {
-      throw new Error(String(payload.error ?? "Worktree launch rejected"));
     }
     const mode = request.mode?.trim() || parent?.mode || "code";
     const model = request.model?.trim() || parent?.model || this.config.model;
@@ -4466,7 +4484,7 @@ export class AgentSessionManager {
     });
     session.title = request.task.slice(0, 80);
     session.addUserMessage(request.message);
-    session.status = "idle";
+    session.status = "streaming";
     this.sessions.set(session.id, session);
     this.bgMeta.set(session.id, {
       resolvedMode: mode,
@@ -4501,13 +4519,54 @@ export class AgentSessionManager {
       goalId: request.goalId,
     });
     session.fleetMetadata.placement = "worktree";
-    session.fleetMetadata.lifecycle = "completed";
-    session.fleetMetadata.terminalReason = "delegated_to_worktree_window";
-    session.fleetMetadata.completedAt = Date.now();
-    session.fleetMetadata.finalResult = text;
-    this.appendFleetEvent(session, "completed", "Worktree agent launched");
+    session.fleetMetadata.lifecycle = "running";
+    const exchangeStore = new WorktreeFleetExchangeStore(globalStoragePath);
+    const exchange = await exchangeStore.create({
+      parentFleetSessionId: session.id,
+      sourceWorkspacePath: this.cwd,
+    });
+    session.fleetMetadata.worktreeExchangeId = exchange.id;
+    this.appendFleetEvent(session, "queued", "Worktree agent launch requested");
     this.saveSession(session.id);
     this.onSessionsChanged?.();
+    try {
+      const result = await provider.start({
+        task: request.task,
+        prompt: request.message,
+        sourcePath: this.cwd,
+        mode: request.mode,
+        autoSubmit: true,
+        fleetExchangeId: exchange.id,
+      });
+      const text =
+        result.content.find((item) => item.type === "text")?.text ?? "{}";
+      const payload = JSON.parse(text) as Record<string, unknown>;
+      if (payload.error || payload.status === "rejected") {
+        throw new Error(String(payload.error ?? "Worktree launch rejected"));
+      }
+      const worktreePath =
+        typeof payload.worktreePath === "string"
+          ? payload.worktreePath
+          : undefined;
+      session.fleetMetadata.worktreePath = worktreePath;
+      await exchangeStore.update(exchange.id, { worktreePath });
+      this.appendFleetEvent(session, "started", "Worktree window opened");
+      this.startWorktreeExchangeMonitor(session, exchangeStore, exchange.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      session.status = "error";
+      session.fleetMetadata.lifecycle = "failed";
+      session.fleetMetadata.terminalReason = "worktree_launch_failed";
+      session.fleetMetadata.finalResult = message;
+      session.fleetMetadata.completedAt = Date.now();
+      await exchangeStore.update(exchange.id, {
+        status: "failed",
+        error: message,
+      });
+      this.appendFleetEvent(session, "failed", message);
+      this.saveSession(session.id);
+      throw error;
+    }
     return {
       sessionId: session.id,
       resolvedMode: mode,
@@ -4517,6 +4576,70 @@ export class AgentSessionManager {
       routingReason: "isolated worktree delegation",
       fallbackUsed: false,
     };
+  }
+
+  private startWorktreeExchangeMonitor(
+    session: AgentSession,
+    store: WorktreeFleetExchangeStore,
+    exchangeId: string,
+  ): void {
+    const poll = async () => {
+      const record = await store.read(exchangeId);
+      if (!record || !session.fleetMetadata) return;
+      session.fleetMetadata.childSessionId = record.childSessionId;
+      session.fleetMetadata.worktreePath = record.worktreePath;
+      if (record.status === "claimed" || record.status === "running") {
+        session.status = "streaming";
+        session.fleetMetadata.lifecycle = "running";
+      } else if (
+        record.status === "completed" ||
+        record.status === "failed" ||
+        record.status === "cancelled"
+      ) {
+        const timer = this.worktreeMonitorTimers.get(session.id);
+        if (timer) this.host.timers.clearInterval(timer);
+        this.worktreeMonitorTimers.delete(session.id);
+        session.status = record.status === "failed" ? "error" : "idle";
+        session.fleetMetadata.lifecycle = record.status;
+        session.fleetMetadata.terminalReason =
+          record.status === "completed"
+            ? undefined
+            : record.error ?? `worktree_${record.status}`;
+        session.fleetMetadata.finalResult =
+          record.resultText ?? record.error ?? "Worktree agent ended without output";
+        session.fleetMetadata.completedAt = Date.now();
+        const meta = this.bgMeta.get(session.id);
+        if (meta && record.usage) {
+          meta.tokenUsage = record.usage.inputTokens + record.usage.outputTokens;
+        }
+        this.bgFinalResults.set(
+          session.id,
+          session.fleetMetadata.finalResult,
+        );
+        for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
+          resolve(session.fleetMetadata.finalResult);
+        }
+        this.bgResultWaiters.delete(session.id);
+        this.appendFleetEvent(
+          session,
+          record.status === "completed"
+            ? "completed"
+            : record.status === "cancelled"
+              ? "cancelled"
+              : "failed",
+          session.fleetMetadata.finalResult,
+        );
+      }
+      this.saveSession(session.id);
+      this.onSessionsChanged?.();
+    };
+    const timer = this.host.timers.setInterval(() => {
+      void poll().catch((error) =>
+        this.log?.(`[worktree-fleet] exchange poll failed: ${String(error)}`),
+      );
+    }, 1000);
+    this.worktreeMonitorTimers.set(session.id, timer);
+    void poll();
   }
 
   private isFleetDescendant(sessionId: string, ancestorId: string): boolean {

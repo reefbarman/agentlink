@@ -6927,22 +6927,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     prompt: string;
     mode?: string;
     autoSubmit?: boolean;
-  }): Promise<void> {
+  }): Promise<string> {
     const mode = opts.mode?.trim();
-    if (mode && this.sessionManager) {
-      const current = this.sessionManager.getForegroundSession();
-      if (current) {
-        await this.sessionManager.switchForegroundMode(mode);
-      } else {
-        const session = await this.sessionManager.createSession(mode);
-        this.postSessionLoaded(session, {
-          checkpoints: this.getSessionCheckpoints(session.id),
-          tailTurns: 0,
-        });
-      }
+    if (!this.sessionManager) {
+      throw new Error("Agent session manager is unavailable");
+    }
+    let current = this.sessionManager.getForegroundSession();
+    if (!current) {
+      current = await this.sessionManager.createSession(mode || "code");
+      this.postSessionLoaded(current, {
+        checkpoints: this.getSessionCheckpoints(current.id),
+        tailTurns: 0,
+      });
+    } else if (mode) {
+      await this.sessionManager.switchForegroundMode(mode);
+    }
+    if (mode) {
       this.sendInitialState();
     }
     this.injectPrompt(opts.prompt, [], opts.autoSubmit);
+    return current.id;
   }
 
   public injectPrompt(

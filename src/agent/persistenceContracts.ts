@@ -118,6 +118,9 @@ export interface PersistedFleetMetadata {
   budgetWarning?: { kind: string; ratio: number; emittedAt: number };
   archivedAt?: number;
   resumedFromSessionId?: string;
+  worktreeExchangeId?: string;
+  worktreePath?: string;
+  childSessionId?: string;
   eventSequence?: number;
   events?: Array<{
     id: string;

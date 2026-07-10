@@ -187,6 +187,9 @@ export async function handleStartWorktreeAgent(
       prompt,
       ...(mode ? { mode } : {}),
       autoSubmit: finalAutoSubmit,
+      ...(params.fleetExchangeId
+        ? { fleetExchangeId: params.fleetExchangeId }
+        : {}),
       ttlMs: DEFAULT_INTENT_TTL_MS,
     });
 

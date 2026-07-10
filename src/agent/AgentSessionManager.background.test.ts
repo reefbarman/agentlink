@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp } from "fs/promises";
+import * as os from "os";
+import * as path from "path";
 
 import { AgentSessionManager } from "./AgentSessionManager.js";
 import { ProviderRegistry } from "./providers/index.js";
 import type { ToolDispatchContext } from "./toolAdapter.js";
+import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
 
 const mocks = vi.hoisted(() => {
   let seq = 0;
@@ -191,6 +195,9 @@ describe("AgentSessionManager background agents", () => {
   });
 
   it("launches isolated delegation through the worktree provider and records it", async () => {
+    const globalStoragePath = await mkdtemp(
+      path.join(os.tmpdir(), "fleet-worktree-test-"),
+    );
     const start = vi.fn().mockResolvedValue({
       content: [
         {
@@ -206,6 +213,7 @@ describe("AgentSessionManager background agents", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext({
       ...toolCtx,
+      globalStorageUri: { fsPath: globalStoragePath } as any,
       worktreeAgentLaunchProvider: { start },
     });
     const result = await mgr.spawnBackground({
@@ -216,11 +224,30 @@ describe("AgentSessionManager background agents", () => {
     expect(start).toHaveBeenCalledWith(
       expect.objectContaining({ task: "isolated", autoSubmit: true }),
     );
-    expect((mgr as any).sessions.get(result.sessionId).fleetMetadata).toEqual(
+    const fleet = (mgr as any).sessions.get(result.sessionId).fleetMetadata;
+    expect(fleet).toEqual(
       expect.objectContaining({
         placement: "worktree",
+        lifecycle: "running",
+        worktreeExchangeId: expect.any(String),
+        worktreePath: "/tmp/repo-worktrees/task",
+      }),
+    );
+    await new WorktreeFleetExchangeStore(globalStoragePath).update(
+      fleet.worktreeExchangeId,
+      {
+        status: "completed",
+        childSessionId: "child-window-session",
+        resultText: "worktree result",
+        usage: { inputTokens: 12, outputTokens: 3 },
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect((mgr as any).sessions.get(result.sessionId).fleetMetadata).toEqual(
+      expect.objectContaining({
         lifecycle: "completed",
-        terminalReason: "delegated_to_worktree_window",
+        childSessionId: "child-window-session",
+        finalResult: "worktree result",
       }),
     );
   });

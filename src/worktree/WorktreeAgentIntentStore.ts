@@ -15,6 +15,7 @@ export interface WorktreeAgentStartupIntent {
   prompt: string;
   mode?: string;
   autoSubmit: boolean;
+  fleetExchangeId?: string;
   consumedAt?: number;
 }
 
@@ -63,6 +64,9 @@ export class WorktreeAgentIntentStore {
       prompt: intent.prompt,
       ...(intent.mode ? { mode: intent.mode } : {}),
       autoSubmit: intent.autoSubmit,
+      ...(intent.fleetExchangeId
+        ? { fleetExchangeId: intent.fleetExchangeId }
+        : {}),
     };
 
     await fs.mkdir(this.intentDir, { recursive: true });
@@ -211,6 +215,8 @@ function isValidIntent(
     typeof value.prompt === "string" &&
     typeof value.autoSubmit === "boolean" &&
     (value.mode === undefined || typeof value.mode === "string") &&
+    (value.fleetExchangeId === undefined ||
+      typeof value.fleetExchangeId === "string") &&
     (value.consumedAt === undefined || typeof value.consumedAt === "number")
   );
 }

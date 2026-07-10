@@ -70,6 +70,7 @@ import type { CoreModelCatalogEntry } from "./core/modelCatalog.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browser-gateway/browserGatewayModelProviderIds.js";
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
 import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js";
+import { WorktreeFleetExchangeStore } from "./worktree/WorktreeFleetExchangeStore.js";
 import { createVscodeWorktreeAgentLaunchProvider } from "./adapters/vscode/worktreeAgentLaunchCapabilities.js";
 import { FleetAutomationStore } from "./agent/FleetAutomationStore.js";
 import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
@@ -204,11 +205,77 @@ async function consumeWorktreeStartupIntent(
     logFn(
       `[worktree-agent] consumed startup intent ${intent.id} for ${intent.worktreePath}`,
     );
-    await provider.startPromptInMode({
+    const childSessionId = await provider.startPromptInMode({
       prompt: intent.prompt,
       mode: intent.mode,
       autoSubmit: intent.autoSubmit,
     });
+    if (intent.fleetExchangeId) {
+      const exchangeStore = new WorktreeFleetExchangeStore(
+        context.globalStorageUri.fsPath,
+      );
+      await exchangeStore.update(intent.fleetExchangeId, {
+        childSessionId,
+        worktreePath: intent.worktreePath,
+        status: "claimed",
+      });
+      const removeListener = agentSessionManager.addAgentEventListener(
+        (sessionId, event) => {
+          if (sessionId !== childSessionId) return;
+          const session = agentSessionManager.getSession(childSessionId);
+          if (event.type === "api_request") {
+            void exchangeStore.update(intent.fleetExchangeId!, {
+              status: "running",
+              usage: {
+                inputTokens: session?.totalInputTokens ?? 0,
+                outputTokens: session?.totalOutputTokens ?? 0,
+              },
+            });
+          } else if (event.type === "done") {
+            clearInterval(cancellationTimer);
+            removeListener();
+            void exchangeStore.update(intent.fleetExchangeId!, {
+              status: "completed",
+              resultText:
+                session?.getLastAssistantText() ??
+                "Worktree agent completed without output",
+              usage: {
+                inputTokens: session?.totalInputTokens ?? 0,
+                outputTokens: session?.totalOutputTokens ?? 0,
+              },
+            });
+          } else if (event.type === "error") {
+            clearInterval(cancellationTimer);
+            removeListener();
+            void exchangeStore.update(intent.fleetExchangeId!, {
+              status: "failed",
+              error: event.error,
+              resultText: session?.getLastAssistantText(),
+            });
+          }
+        },
+      );
+      const cancellationTimer = setInterval(() => {
+        void exchangeStore.read(intent.fleetExchangeId!).then((record) => {
+          if (!record?.cancelRequestedAt) return;
+          clearInterval(cancellationTimer);
+          removeListener();
+          agentSessionManager.stopSession(childSessionId);
+          void exchangeStore.update(intent.fleetExchangeId!, {
+            status: "cancelled",
+            error: "cancelled_by_parent",
+            resultText:
+              agentSessionManager.getSession(childSessionId)?.getLastAssistantText(),
+          });
+        });
+      }, 1000);
+      context.subscriptions.push({
+        dispose: () => {
+          clearInterval(cancellationTimer);
+          removeListener();
+        },
+      });
+    }
   } catch (err) {
     logFn(
       `[worktree-agent] failed to consume startup intent: ${err instanceof Error ? err.message : String(err)}`,
