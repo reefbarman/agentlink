@@ -22,6 +22,8 @@ function statusLabel(
   displayStatus?: string,
 ): string {
   switch (status) {
+    case "queued":
+      return "queued";
     case "pending":
       return "starting…";
     case "streaming":
@@ -41,6 +43,7 @@ function statusLabel(
 
 function statusIcon(status: BgSessionInfoProps["status"]): string {
   switch (status) {
+    case "queued":
     case "pending":
     case "streaming":
     case "tool_executing":

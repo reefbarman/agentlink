@@ -20,6 +20,7 @@ export interface SpawnBackgroundResult {
 
 export interface BackgroundAgentStatusResult {
   status:
+    | "queued"
     | "streaming"
     | "tool_executing"
     | "awaiting_approval"

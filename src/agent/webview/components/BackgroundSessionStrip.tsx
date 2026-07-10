@@ -4,6 +4,7 @@ export interface BgSessionInfoProps {
   id: string;
   task: string;
   status:
+    | "queued"
     | "streaming"
     | "tool_executing"
     | "awaiting_approval"
@@ -60,6 +61,7 @@ function formatElapsed(startMs: number, now: number): string {
 
 function statusIcon(status: BgSessionInfoProps["status"]): string {
   switch (status) {
+    case "queued":
     case "pending":
     case "streaming":
     case "tool_executing":
@@ -81,6 +83,8 @@ function statusText(
   displayStatus?: string,
 ): string {
   switch (status) {
+    case "queued":
+      return "Queued";
     case "pending":
       return "Starting…";
     case "streaming":

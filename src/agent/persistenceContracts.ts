@@ -61,6 +61,7 @@ export type PersistedSessionRunState =
     };
 
 export type PersistedFleetLifecycle =
+  | "queued"
   | "running"
   | "completed"
   | "failed"

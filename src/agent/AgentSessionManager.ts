@@ -177,6 +177,10 @@ export class AgentSessionManager {
   >();
   /** Current heuristic phase bucket per background session. */
   private bgPhase = new Map<string, string>();
+  private bgLaunchQueue: Array<{
+    sessionId: string;
+    start: () => Promise<void>;
+  }> = [];
   /** True while a transient /btw side question is running. */
   private btwInFlight = false;
   /** Background summary state keyed by session id. */
@@ -1375,6 +1379,7 @@ export class AgentSessionManager {
       return { killed: false, partialOutput: "Not a background session" };
     }
     const isRunning =
+      session.status === "queued" ||
       session.status === "streaming" ||
       session.status === "tool_executing" ||
       session.status === "awaiting_approval";
@@ -2530,6 +2535,50 @@ export class AgentSessionManager {
   // Background agents
   // ---------------------------------------------------------------------------
 
+  private activeBackgroundCount(): number {
+    return Array.from(this.sessions.values()).filter(
+      (session) =>
+        session.background &&
+        session.status !== "queued" &&
+        (session.status === "streaming" ||
+          session.status === "tool_executing" ||
+          session.status === "awaiting_approval"),
+    ).length;
+  }
+
+  private scheduleBackgroundLaunch(
+    session: AgentSession,
+    start: () => Promise<void>,
+  ): void {
+    if (this.activeBackgroundCount() >= this.bgDefaults.maxConcurrent) {
+      session.status = "queued";
+      if (session.fleetMetadata) session.fleetMetadata.lifecycle = "queued";
+      this.bgLaunchQueue.push({ sessionId: session.id, start });
+      this.saveSession(session.id);
+      this.onSessionsChanged?.();
+      return;
+    }
+    session.status = "streaming";
+    if (session.fleetMetadata) session.fleetMetadata.lifecycle = "running";
+    void start().finally(() => this.drainBackgroundQueue());
+  }
+
+  private drainBackgroundQueue(): void {
+    while (
+      this.bgLaunchQueue.length > 0 &&
+      this.activeBackgroundCount() < this.bgDefaults.maxConcurrent
+    ) {
+      const queued = this.bgLaunchQueue.shift()!;
+      const session = this.sessions.get(queued.sessionId);
+      if (!session || this.bgCancelled.has(queued.sessionId)) continue;
+      session.status = "streaming";
+      if (session.fleetMetadata) session.fleetMetadata.lifecycle = "running";
+      this.saveSession(session.id);
+      this.onSessionsChanged?.();
+      void queued.start().finally(() => this.drainBackgroundQueue());
+    }
+  }
+
   /**
    * Spawn a background agent session and return the resolved routing metadata.
    */
@@ -2545,21 +2594,6 @@ export class AgentSessionManager {
     if (!task || !message) {
       throw new Error(
         "spawn_background_agent requires non-empty task and message",
-      );
-    }
-
-    const activeBackgroundCount = Array.from(this.sessions.values()).filter(
-      (s) =>
-        s.background &&
-        (s.status === "streaming" ||
-          s.status === "tool_executing" ||
-          s.status === "awaiting_approval"),
-    ).length;
-    if (activeBackgroundCount >= this.bgDefaults.maxConcurrent) {
-      const reason = `concurrency limit reached (${this.bgDefaults.maxConcurrent})`;
-      this.log?.(`[bg-guard] reject spawn: ${reason}`);
-      throw new Error(
-        `Background spawn rejected: ${reason}. Wait for another background run to finish.`,
       );
     }
 
@@ -2590,7 +2624,7 @@ export class AgentSessionManager {
       });
       session.reasoningEffort = "none";
       session.title = task.slice(0, 80);
-      session.status = "streaming";
+      session.status = "queued";
       session.addUserMessage(message);
       session.createAbortController();
       this.sessions.set(session.id, session);
@@ -2629,7 +2663,7 @@ export class AgentSessionManager {
 
       const assistantTextParts: string[] = [];
       let promptResponse: PromptResponse | undefined;
-      void (async () => {
+      const runAcpBackground = async () => {
         try {
           await this.host.acpBackgroundRunner.run({
             agent: backendRoute.agent,
@@ -2759,7 +2793,8 @@ export class AgentSessionManager {
             5 * 60 * 1000,
           );
         }
-      })();
+      };
+      this.scheduleBackgroundLaunch(session, runAcpBackground);
 
       return {
         sessionId: session.id,
@@ -2818,7 +2853,7 @@ export class AgentSessionManager {
     // Set status to "streaming" BEFORE registering the session, so the first
     // bgSessionsUpdate the UI receives already shows the agent as running
     // (not briefly "idle"/done).
-    session.status = "streaming";
+    session.status = "queued";
     this.sessions.set(session.id, session);
     if (parentSessionId) {
       this.bgParents.set(session.id, {
@@ -2880,7 +2915,7 @@ export class AgentSessionManager {
     // Background agents run indefinitely (like foreground agents) using
     // auto-condensing to manage context. The foreground agent can kill
     // a background agent via the kill_background_agent tool if needed.
-    void (async () => {
+    const runNativeBackground = async () => {
       let lastPersistedActiveAt = session.lastActiveAt;
       const persistIfHistoryChanged = () => {
         if (session.lastActiveAt !== lastPersistedActiveAt) {
@@ -2943,6 +2978,7 @@ export class AgentSessionManager {
 
           this.recordAndEmitEvent(session.id, event);
         }
+        if (session.status === "streaming") session.status = "idle";
       } catch (err: unknown) {
         const error = err instanceof Error ? err.message : String(err);
         session.status = "error";
@@ -3002,7 +3038,8 @@ export class AgentSessionManager {
         },
         5 * 60 * 1000,
       );
-    })();
+    };
+    this.scheduleBackgroundLaunch(session, runNativeBackground);
 
     return {
       sessionId: session.id,
@@ -3119,6 +3156,7 @@ export class AgentSessionManager {
       .toLowerCase()
       .slice(-700);
 
+    if (args.status === "queued") return "Queued";
     if (args.status === "awaiting_approval") return "Awaiting approval";
     if (args.status === "idle") return "Done";
     if (args.status === "cancelled") return "Cancelled";

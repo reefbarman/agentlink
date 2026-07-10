@@ -156,6 +156,7 @@ export interface BgSessionInfo {
   id: string;
   task: string;
   status:
+    | "queued"
     | "streaming"
     | "tool_executing"
     | "awaiting_approval"

@@ -171,7 +171,7 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("rejects spawn when max concurrent limit is reached", async () => {
+  it("queues spawn when the concurrent limit is reached", async () => {
     const mgr = new AgentSessionManager(
       config,
       "/tmp",
@@ -183,9 +183,55 @@ describe("AgentSessionManager background agents", () => {
     );
     mgr.setToolContext(toolCtx);
 
-    await expect(
-      mgr.spawnBackground({ task: "t", message: "m" }),
-    ).rejects.toThrow(/concurrency limit reached/);
+    const spawned = await mgr.spawnBackground({ task: "t", message: "m" });
+    expect(mgr.getBackgroundStatus(spawned.sessionId)).toEqual(
+      expect.objectContaining({ status: "queued", done: false }),
+    );
+  });
+
+  it("starts the next queued agent when capacity becomes available", async () => {
+    let releaseFirst: (() => void) | undefined;
+    mocks.runBehavior
+      .mockReturnValueOnce(
+        (async function* () {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+          yield { type: "done" };
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          yield { type: "done" };
+        })(),
+      );
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 1 },
+    );
+    mgr.setToolContext(toolCtx);
+
+    await mgr.spawnBackground({ task: "first", message: "hold" });
+    await waitFor(
+      () => releaseFirst,
+      (release) => typeof release === "function",
+    );
+    const second = await mgr.spawnBackground({ task: "second", message: "wait" });
+    expect(mgr.getBackgroundStatus(second.sessionId).status).toBe("queued");
+
+    releaseFirst?.();
+    await waitFor(
+      () => mgr.getBackgroundStatus(second.sessionId),
+      (status) => status.done,
+    );
+
+    expect(mocks.runArgs).toHaveBeenCalledTimes(2);
+    expect(mgr.getBackgroundStatus(second.sessionId).done).toBe(true);
   });
 
   it("runs explicit ACP provider without native route resolution", async () => {

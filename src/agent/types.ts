@@ -201,6 +201,7 @@ export type AgentEvent =
 // --- Session types ---
 
 export type SessionStatus =
+  | "queued"
   | "idle"
   | "streaming"
   | "tool_executing"

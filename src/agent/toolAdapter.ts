@@ -555,6 +555,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
 /** Return value of get_background_status — non-blocking snapshot. */
 export interface BgStatusResult {
   status:
+    | "queued"
     | "streaming"
     | "tool_executing"
     | "awaiting_approval"
