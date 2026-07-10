@@ -131,6 +131,7 @@ const DOCUMENT_EXTENSION_MIME_TYPES: Record<string, string> = {
 };
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_DOC_BYTES = 10 * 1024 * 1024; // 10 MB (conservative for v1)
+const ATTACHMENT_KEY_SEPARATOR = "\u001f";
 
 function getDocumentMimeType(file: File): string | null {
   if (ACCEPTED_DOC_TYPES.has(file.type)) return file.type;
@@ -884,7 +885,9 @@ export function InputArea({
       const seenFiles = new Set<string>();
 
       const addClipboardFile = (file: File, itemType = file.type) => {
-        const key = `${file.name} ${file.size} ${file.type} ${file.lastModified}`;
+        const key = [file.name, file.size, file.type, file.lastModified].join(
+          ATTACHMENT_KEY_SEPARATOR,
+        );
         if (seenFiles.has(key)) return;
         const mimeType = itemType || file.type;
         const isImage = ACCEPTED_IMAGE_TYPES.has(mimeType);

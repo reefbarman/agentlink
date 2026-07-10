@@ -59,6 +59,7 @@ import {
   AUTO_CONTINUE_NO_PROGRESS_REASON,
   turnMadeProgress,
 } from "../../shared/autoContinueProgress";
+import { isForwardedBuiltinCommand } from "../../shared/builtinCommandForwarding";
 import { randomId } from "../../shared/randomId";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 
@@ -3421,23 +3422,18 @@ export function BrowserGatewayApp({
         if (modelId) handleSelectModel(modelId);
         break;
       }
-      case "condense":
-      case "checkpoint":
-      case "revert":
-      case "mcp-config":
-      case "mcp-refresh":
-      case "btw":
-      case "help":
-        void handleSend(`/${name}${args ? ` ${args}` : ""}`, []);
-        break;
       case "mcp":
         setShowMcpStatus(true);
-        break;
+        return;
       case "pair":
         setModeStatus(
           "Run /pair in VS Code to add a new browser device — pairing codes can only be generated there.",
         );
-        break;
+        return;
+    }
+
+    if (isForwardedBuiltinCommand("browser", name)) {
+      void handleSend(`/${name}${args ? ` ${args}` : ""}`, []);
     }
   };
 

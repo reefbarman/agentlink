@@ -1,6 +1,12 @@
 import type { ChatMessage, ContentBlock } from "../types";
 import { ToolCallGroup, segmentBlocks } from "./ToolCallGroup";
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "preact/hooks";
 
 import { ApiRequestBlock } from "./ApiRequestBlock";
 import { BgAgentBlock } from "./BgAgentBlock";
@@ -97,8 +103,6 @@ export function MessageBubble({
   onOpenTranscript,
   onFinalMarkerContinue,
 }: MessageBubbleProps) {
-  // Track whether the streaming text block has started its reveal animation
-  const [_textRevealed, setTextRevealed] = useState(false);
   const [showAllDetectedOptions, setShowAllDetectedOptions] = useState(false);
   const [settledToolIds, setSettledToolIds] = useState<Set<string>>(
     () => new Set(),
@@ -118,10 +122,13 @@ export function MessageBubble({
         )
       : [];
 
-  // Reset when streaming starts a new message
-  useEffect(() => {
-    if (streaming) setTextRevealed(false);
-  }, [streaming]);
+  const parsedAttachments = useMemo(
+    () =>
+      message.role === "user"
+        ? parseAttachments(message.content)
+        : { files: [], mediaLabel: null, cleanText: message.content },
+    [message.content, message.role],
+  );
 
   useEffect(() => {
     return () => {
@@ -215,7 +222,7 @@ export function MessageBubble({
         </div>
       );
     }
-    const { files, mediaLabel, cleanText } = parseAttachments(message.content);
+    const { files, mediaLabel, cleanText } = parsedAttachments;
     const displayMedia = message.displayMedia;
     const slashLabel = message.slashCommandLabel;
     const hasSlashLabel = Boolean(message.isSlashCommand && slashLabel);
@@ -341,9 +348,6 @@ export function MessageBubble({
                   showCopy={!isActiveStream}
                   onOpenFile={onOpenFile}
                   onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
-                  onRevealStart={
-                    isActiveStream ? () => setTextRevealed(true) : undefined
-                  }
                 />
               );
             }

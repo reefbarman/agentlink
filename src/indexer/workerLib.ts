@@ -193,8 +193,6 @@ export interface DiffResult {
     content: string;
     hash: string;
   }>;
-  /** Relative paths of files whose old points should be deleted */
-  staleRelPaths: string[];
   /** Non-fatal errors encountered during file reading */
   errors: string[];
 }
@@ -224,7 +222,7 @@ const IO_CONCURRENCY = 10;
 
 /**
  * Given a list of file paths and the current cache, determine which files
- * need indexing, which are stale, and which can be skipped.
+ * need indexing and which can be skipped.
  */
 export function diffFiles(
   files: string[],
@@ -233,7 +231,6 @@ export function diffFiles(
 ): DiffResult {
   const toIndex: DiffResult["toIndex"] = [];
   const errors: string[] = [];
-  const currentFiles = new Set<string>();
 
   for (let fi = 0; fi < files.length; fi++) {
     const absPath = files[fi];
@@ -244,8 +241,6 @@ export function diffFiles(
 
     // Safety: skip if relative path escapes the workspace
     if (relPath.startsWith("..")) continue;
-
-    currentFiles.add(relPath);
 
     // Skip files with non-indexable extensions
     const ext = path.extname(absPath).toLowerCase();
@@ -271,18 +266,7 @@ export function diffFiles(
     }
   }
 
-  // Stale = in cache but either deleted or changed
-  const staleRelPaths: string[] = [];
-  for (const relPath of Object.keys(cache.files)) {
-    if (
-      !currentFiles.has(relPath) ||
-      toIndex.some((f) => f.relPath === relPath)
-    ) {
-      staleRelPaths.push(relPath);
-    }
-  }
-
-  return { toIndex, staleRelPaths, errors };
+  return { toIndex, errors };
 }
 
 // --- Memory-efficient scan (for large codebases) ---

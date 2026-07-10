@@ -11,6 +11,7 @@ import type {
 } from "../agent/webview/types.js";
 
 import type { DetectedQuestion } from "./questionDetection.js";
+import { randomId } from "./randomId.js";
 import type {
   McpApprovalPromotionMeta,
   RequestContextBreakdown,
@@ -667,7 +668,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
       const summaryText = getSummaryText(m.content);
       const hint = m.uiHint?.condense;
       result.push({
-        id: crypto.randomUUID(),
+        id: randomId(),
         role: "condense",
         content: "",
         timestamp: Date.now(),
@@ -683,7 +684,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
       });
       if (summaryText) {
         result.push({
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "assistant",
           content: "",
           timestamp: Date.now(),
@@ -697,7 +698,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
       if (typeof m.content === "string") {
         const hint = m.uiHint?.userMessage;
         result.push({
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "user",
           content: hint?.displayText ?? m.content,
           timestamp: Date.now(),
@@ -741,12 +742,12 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         } else if (block.type === "thinking" && block.thinking?.trim()) {
           blocks.push({
             type: "thinking",
-            id: block.id ?? crypto.randomUUID(),
+            id: block.id ?? randomId(),
             text: block.thinking,
             complete: true,
           });
         } else if (block.type === "tool_use") {
-          const toolId = block.id ?? crypto.randomUUID();
+          const toolId = block.id ?? randomId();
           const toolName = normalizeProjectedToolName(block.name ?? "");
           const toolResult = toolResults.get(toolId) ?? "";
           const resultImages = toolResultImages.get(toolId);
@@ -951,7 +952,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         const generatedDisplayMedia =
           generatedImagesToDisplayMedia(messageResultImages);
         result.push({
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "assistant",
           content: "",
           timestamp: Date.now(),
@@ -984,7 +985,7 @@ function ensureAssistant(messages: ChatMessage[]): ChatMessage[] {
   return [
     ...messages,
     {
-      id: crypto.randomUUID(),
+      id: randomId(),
       role: "assistant",
       content: "",
       timestamp: Date.now(),
@@ -1266,7 +1267,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       const withNewRows = [
         ...messagesWithoutContinueActions,
         {
-          id: action.id ?? crypto.randomUUID(),
+          id: action.id ?? randomId(),
           role: "user" as const,
           content: action.text,
           timestamp: Date.now(),
@@ -1276,7 +1277,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           displayMedia: action.displayMedia,
         },
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "assistant" as const,
           content: "",
           timestamp: Date.now(),
@@ -1309,7 +1310,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         messages: [
           ...state.messages,
           {
-            id: crypto.randomUUID(),
+            id: randomId(),
             role: "user",
             content: action.text,
             badge: action.badge,
@@ -1317,7 +1318,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
             blocks: [],
           },
           {
-            id: crypto.randomUUID(),
+            id: randomId(),
             role: "assistant",
             content: "",
             timestamp: Date.now(),
@@ -1923,7 +1924,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       const withInterjection = [
         ...state.messages,
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "user" as const,
           content: action.text,
           timestamp: Date.now(),
@@ -1933,7 +1934,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           displayMedia: action.displayMedia,
         },
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "assistant" as const,
           content: "",
           timestamp: Date.now(),
@@ -1990,7 +1991,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       const withCommittedRows = [
         ...messagesWithoutContinueActions,
         {
-          id: action.id ?? crypto.randomUUID(),
+          id: action.id ?? randomId(),
           role: "user" as const,
           content: action.text,
           timestamp: Date.now(),
@@ -2001,7 +2002,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           displayMedia: action.displayMedia,
         },
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "assistant" as const,
           content: "",
           timestamp: Date.now(),
@@ -2087,7 +2088,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         messages: [
           ...base,
           {
-            id: crypto.randomUUID(),
+            id: randomId(),
             role: "condense" as const,
             content: "",
             timestamp: Date.now(),
@@ -2113,7 +2114,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         messages: [
           ...filtered,
           {
-            id: crypto.randomUUID(),
+            id: randomId(),
             role: "condense" as const,
             content: "",
             timestamp: Date.now(),
@@ -2129,7 +2130,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
           // immediately after condensing while waiting for the next API response.
           // DONE strips this if the agent ends without producing any content.
           {
-            id: crypto.randomUUID(),
+            id: randomId(),
             role: "assistant" as const,
             content: "",
             timestamp: Date.now(),
@@ -2149,7 +2150,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         messages: [
           ...state.messages,
           {
-            id: crypto.randomUUID(),
+            id: randomId(),
             role: "warning" as const,
             content: "",
             timestamp: Date.now(),
@@ -2182,7 +2183,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         messages: [
           ...state.messages,
           {
-            id: crypto.randomUUID(),
+            id: randomId(),
             role: "assistant" as const,
             content: "",
             timestamp: Date.now(),
@@ -2236,7 +2237,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       const withCondenseRow = [
         ...filtered,
         {
-          id: crypto.randomUUID(),
+          id: randomId(),
           role: "condense" as const,
           content: "",
           timestamp: Date.now(),
@@ -2356,7 +2357,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         messages: [
           ...state.messages,
           {
-            id: crypto.randomUUID(),
+            id: randomId(),
             role: "assistant" as const,
             content: "",
             timestamp: Date.now(),

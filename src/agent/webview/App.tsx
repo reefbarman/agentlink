@@ -59,6 +59,8 @@ import { TranscriptView } from "./components/TranscriptView";
 import { UrlElicitationModal } from "./components/UrlElicitationModal";
 import { detectQuestionFromAssistantText } from "./questionDetection";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
+import { isForwardedBuiltinCommand } from "../../shared/builtinCommandForwarding";
+import { randomId } from "../../shared/randomId";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
@@ -1311,7 +1313,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
       }>,
       origin: "user" | "autoContinue" = "user",
     ) => {
-      const userMessageId = crypto.randomUUID();
+      const userMessageId = randomId();
       if (origin === "autoContinue") {
         pendingAutoContinueUserMessageIdRef.current = userMessageId;
       } else {
@@ -1362,7 +1364,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
       // While streaming, enqueue the message instead of sending immediately.
       if (state.streaming) {
-        const queueId = crypto.randomUUID();
+        const queueId = randomId();
         dispatch({
           type: "ENQUEUE_MESSAGE",
           id: queueId,
@@ -1813,33 +1815,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             thinkingEnabled: false,
           });
           break;
-        case "skills":
-          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
-          break;
-        case "mcp":
-          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
-          break;
-        case "mcp-config":
-          // args is "project" or "global" (from the webview mcp-config sub-picker)
-          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
-          break;
-        case "mcp-refresh":
-          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
-          break;
-        case "btw":
-          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
-          break;
-        case "pair":
-          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
-          break;
-        case "usage":
-          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
-          break;
-        case "condense":
-        case "checkpoint":
-        case "revert":
-          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
-          break;
+      }
+
+      if (isForwardedBuiltinCommand("vscode", name)) {
+        vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
       }
     },
     [vscodeApi, handleSwitchMode],

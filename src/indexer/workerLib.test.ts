@@ -283,7 +283,6 @@ describe("diffFiles", () => {
       "a.ts",
       "b.ts",
     ]);
-    expect(result.staleRelPaths).toHaveLength(0);
     expect(result.errors).toHaveLength(0);
   });
 
@@ -305,7 +304,6 @@ describe("diffFiles", () => {
 
     const result = diffFiles([f1], workspaceRoot, cache);
     expect(result.toIndex).toHaveLength(0);
-    expect(result.staleRelPaths).toHaveLength(0);
   });
 
   it("detects changed files", () => {
@@ -325,27 +323,6 @@ describe("diffFiles", () => {
     const result = diffFiles([f1], workspaceRoot, cache);
     expect(result.toIndex).toHaveLength(1);
     expect(result.toIndex[0].relPath).toBe("changed.ts");
-    // Changed file should also appear as stale (old points need deletion)
-    expect(result.staleRelPaths).toContain("changed.ts");
-  });
-
-  it("detects stale files (in cache but not in file list)", () => {
-    const f1 = writeFile("current.ts", "const x = 1;");
-
-    const cache: IndexCache = {
-      version: 1,
-      files: {
-        "deleted.ts": {
-          hash: "some-hash",
-          pointIds: ["p1", "p2"],
-          indexedAt: "2026-01-01T00:00:00.000Z",
-        },
-      },
-    };
-
-    const result = diffFiles([f1], workspaceRoot, cache);
-    expect(result.toIndex).toHaveLength(1);
-    expect(result.staleRelPaths).toContain("deleted.ts");
   });
 
   it("skips files larger than MAX_FILE_SIZE", () => {

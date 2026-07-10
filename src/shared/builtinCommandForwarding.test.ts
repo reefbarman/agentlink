@@ -1,0 +1,50 @@
+import { describe, expect, it } from "vitest";
+
+import { isForwardedBuiltinCommand } from "./builtinCommandForwarding";
+
+describe("isForwardedBuiltinCommand", () => {
+  it.each([
+    "skills",
+    "mcp",
+    "mcp-config",
+    "mcp-refresh",
+    "btw",
+    "pair",
+    "usage",
+    "condense",
+    "checkpoint",
+    "revert",
+  ])("forwards the VS Code command %s", (name) => {
+    expect(isForwardedBuiltinCommand("vscode", name)).toBe(true);
+  });
+
+  it.each([
+    "condense",
+    "checkpoint",
+    "revert",
+    "mcp-config",
+    "mcp-refresh",
+    "btw",
+    "help",
+  ])("forwards the browser command %s", (name) => {
+    expect(isForwardedBuiltinCommand("browser", name)).toBe(true);
+  });
+
+  it.each([
+    ["vscode", "unknown"],
+    ["vscode", "help"],
+    ["vscode", "new"],
+    ["vscode", "mode"],
+    ["vscode", "model"],
+    ["browser", "unknown"],
+    ["browser", "skills"],
+    ["browser", "usage"],
+    ["browser", "new"],
+    ["browser", "mode"],
+    ["browser", "model"],
+    ["browser", "mcp"],
+    ["browser", "pair"],
+  ] as const)("does not forward %s command %s", (surface, name) => {
+    expect(isForwardedBuiltinCommand(surface, name)).toBe(false);
+  });
+});
