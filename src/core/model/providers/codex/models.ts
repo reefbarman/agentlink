@@ -189,6 +189,9 @@ export const CODEX_CONDENSE_MODEL_FALLBACKS = [
 const CODEX_400K_INPUT_TOKENS = 272_000;
 const CODEX_1M_CONTEXT_TOKENS = 1_050_000;
 const CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS = 400_000;
+const CODEX_OAUTH_GPT_5_6_INPUT_TOKENS = 353_000;
+const CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS =
+  CODEX_OAUTH_GPT_5_6_INPUT_TOKENS + 128_000;
 
 export const CODEX_MODELS: CodexModelDef[] = [
   {
@@ -352,18 +355,48 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
   };
 }
 
+/**
+ * The ChatGPT/Codex OAuth backend enforces smaller context windows than the
+ * models' API metadata advertises, and rejects over-limit requests with
+ * context_window_exceeded instead of compacting. GPT-5.5 errors at ~272k input
+ * tokens (400k window minus the 128k output reserve); GPT-5.6 Sol errors at
+ * ~353k. Terra/Luna are unverified but assumed to share the 5.6 generation cap
+ * — under-clamping only compacts earlier, while over-advertising causes hard
+ * request failures.
+ */
+const CODEX_OAUTH_WINDOW_OVERRIDES: Record<
+  string,
+  Pick<CodexModelDef, "contextWindow" | "maxInputTokens">
+> = {
+  "gpt-5.5": {
+    contextWindow: CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS,
+    maxInputTokens: CODEX_400K_INPUT_TOKENS,
+  },
+  "gpt-5.6-sol": {
+    contextWindow: CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS,
+    maxInputTokens: CODEX_OAUTH_GPT_5_6_INPUT_TOKENS,
+  },
+  "gpt-5.6-terra": {
+    contextWindow: CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS,
+    maxInputTokens: CODEX_OAUTH_GPT_5_6_INPUT_TOKENS,
+  },
+  "gpt-5.6-luna": {
+    contextWindow: CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS,
+    maxInputTokens: CODEX_OAUTH_GPT_5_6_INPUT_TOKENS,
+  },
+};
+
 function getAuthAdjustedModelDef(
   model: string,
   authMethod?: CodexAuthMethod,
 ): CodexModelDef | undefined {
   const def = CODEX_MODEL_MAP.get(model);
-  if (authMethod !== "oauth" || model !== "gpt-5.5" || !def) return def;
+  if (!def || authMethod !== "oauth") return def;
 
-  return {
-    ...def,
-    contextWindow: CODEX_OAUTH_GPT_5_5_CONTEXT_TOKENS,
-    maxInputTokens: CODEX_400K_INPUT_TOKENS,
-  };
+  const override = CODEX_OAUTH_WINDOW_OVERRIDES[model];
+  if (!override) return def;
+
+  return { ...def, ...override };
 }
 
 export function getCodexModelCapabilities(

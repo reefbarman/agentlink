@@ -1,6 +1,7 @@
 import {
   CODEX_DEFAULT_MODEL,
   CODEX_OAUTH_CHEAP_MODEL,
+  getCodexModelCapabilities,
   getCodexPreviewModelFallback,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
@@ -78,5 +79,29 @@ describe("Codex model resolution", () => {
     expect(resolveCodexReasoningEffort({ modelId: "unknown-model" })).toBe(
       "medium",
     );
+  });
+});
+
+describe("Codex OAuth context window clamps", () => {
+  it("clamps gpt-5.5 to the enforced 400k/272k window over OAuth", () => {
+    const caps = getCodexModelCapabilities("gpt-5.5", "oauth");
+    expect(caps.contextWindow).toBe(400_000);
+    expect(caps.maxInputTokens).toBe(272_000);
+  });
+
+  it("clamps GPT-5.6 models to the enforced 353k input window over OAuth", () => {
+    for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      const caps = getCodexModelCapabilities(model, "oauth");
+      expect(caps.maxInputTokens).toBe(353_000);
+      expect(caps.contextWindow).toBe(481_000);
+    }
+  });
+
+  it("keeps the full advertised window over API-key auth", () => {
+    for (const model of ["gpt-5.5", "gpt-5.6-sol"]) {
+      const caps = getCodexModelCapabilities(model, "apiKey");
+      expect(caps.contextWindow).toBe(1_050_000);
+      expect(caps.maxInputTokens).toBeUndefined();
+    }
   });
 });
