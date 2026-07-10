@@ -3324,7 +3324,7 @@ export function BrowserGatewayApp({
   };
 
   const handleBackgroundAction = (
-    action: "steer" | "detach" | "retry" | "archive",
+    action: "steer" | "detach" | "retry" | "archive" | "pause" | "resume",
     sessionId: string,
     message?: string,
   ): void => {
@@ -4958,6 +4958,12 @@ export function BrowserGatewayApp({
                   }
                   onArchive={(sessionId) =>
                     handleBackgroundAction("archive", sessionId)
+                  }
+                  onPause={(sessionId) =>
+                    handleBackgroundAction("pause", sessionId)
+                  }
+                  onResume={(sessionId) =>
+                    handleBackgroundAction("resume", sessionId)
                   }
                 />
               )}

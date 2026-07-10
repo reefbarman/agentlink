@@ -2885,6 +2885,11 @@ export class AgentSessionManager {
             });
           }
         } finally {
+          if (session.fleetMetadata?.lifecycle === "paused") {
+            this.saveSession(session.id);
+            this.onSessionsChanged?.();
+            return;
+          }
           this.bgStatusDetail.delete(session.id);
           this.markBgCompleted(session.id);
           const fallbackMsg = this.bgErrors.get(session.id)
@@ -3137,6 +3142,12 @@ export class AgentSessionManager {
       } finally {
         this.host.timers.clearInterval(inFlightPersistTimer);
         persistIfHistoryChanged();
+      }
+
+      if (session.fleetMetadata?.lifecycle === "paused") {
+        this.saveSession(session.id);
+        this.onSessionsChanged?.();
+        return;
       }
 
       // Clear transient status detail once the run has finished.
@@ -3929,6 +3940,53 @@ export class AgentSessionManager {
     this.saveSession(sessionId);
     this.onSessionsChanged?.();
     return { archived: true };
+  }
+
+  pauseBackground(sessionId: string): { paused: boolean; reason?: string } {
+    const session = this.sessions.get(sessionId);
+    const fleet = session?.fleetMetadata;
+    if (!session?.background || !fleet) {
+      return { paused: false, reason: "background session not found" };
+    }
+    if (fleet.backend !== "native") {
+      return { paused: false, reason: "backend does not support pause" };
+    }
+    if (
+      session.status !== "queued" &&
+      session.status !== "streaming" &&
+      session.status !== "tool_executing" &&
+      session.status !== "awaiting_approval"
+    ) {
+      return { paused: false, reason: "session is not active" };
+    }
+    this.bgLaunchQueue = this.bgLaunchQueue.filter(
+      (queued) => queued.sessionId !== sessionId,
+    );
+    fleet.lifecycle = "paused";
+    fleet.terminalReason = "paused_by_user";
+    session.abort();
+    session.status = "idle";
+    this.saveSession(sessionId);
+    this.onSessionsChanged?.();
+    return { paused: true };
+  }
+
+  async resumeBackground(sessionId: string): Promise<SpawnBackgroundResult> {
+    const session = this.sessions.get(sessionId);
+    if (session?.fleetMetadata?.lifecycle !== "paused") {
+      throw new Error("Only paused background sessions can be resumed");
+    }
+    const result = await this.retryBackground(sessionId);
+    const replacement = this.sessions.get(result.sessionId);
+    if (replacement?.fleetMetadata) {
+      replacement.fleetMetadata.resumedFromSessionId = sessionId;
+      this.saveSession(replacement.id);
+    }
+    session.fleetMetadata.terminalReason = "resumed_as_new_session";
+    session.fleetMetadata.archivedAt = Date.now();
+    this.saveSession(sessionId);
+    this.onSessionsChanged?.();
+    return result;
   }
 
   async retryBackground(sessionId: string): Promise<SpawnBackgroundResult> {

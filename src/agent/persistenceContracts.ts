@@ -67,6 +67,7 @@ export type PersistedFleetLifecycle =
   | "failed"
   | "cancelled"
   | "budget_exhausted"
+  | "paused"
   | "interrupted";
 
 /** Durable execution identity for non-foreground fleet sessions. */
@@ -116,6 +117,7 @@ export interface PersistedFleetMetadata {
   };
   budgetWarning?: { kind: string; ratio: number; emittedAt: number };
   archivedAt?: number;
+  resumedFromSessionId?: string;
 }
 
 export interface PersistedSessionMetadata {

@@ -886,6 +886,39 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("pauses native work durably and resumes it as a linked replacement", async () => {
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const original = await mgr.spawnBackground({ task: "pause me", message: "work" });
+
+    expect(mgr.pauseBackground(original.sessionId)).toEqual({ paused: true });
+    expect((mgr as any).sessions.get(original.sessionId).fleetMetadata).toEqual(
+      expect.objectContaining({
+        lifecycle: "paused",
+        terminalReason: "paused_by_user",
+      }),
+    );
+
+    const resumed = await mgr.resumeBackground(original.sessionId);
+    expect((mgr as any).sessions.get(resumed.sessionId).fleetMetadata).toEqual(
+      expect.objectContaining({ resumedFromSessionId: original.sessionId }),
+    );
+    expect((mgr as any).sessions.get(original.sessionId).fleetMetadata).toEqual(
+      expect.objectContaining({
+        archivedAt: expect.any(Number),
+        terminalReason: "resumed_as_new_session",
+      }),
+    );
+    mgr.stopSession(resumed.sessionId);
+  });
+
   it("propagates parent cancellation through the descendant subtree", async () => {
     mocks.runBehavior.mockImplementation(() =>
       (async function* () {

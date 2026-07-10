@@ -1633,6 +1633,18 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     },
     [vscodeApi],
   );
+  const handlePauseBackground = useCallback(
+    (sessionId: string) => {
+      vscodeApi.postMessage({ command: "pauseBgAgent", sessionId });
+    },
+    [vscodeApi],
+  );
+  const handleResumeBackground = useCallback(
+    (sessionId: string) => {
+      vscodeApi.postMessage({ command: "resumeBgAgent", sessionId });
+    },
+    [vscodeApi],
+  );
 
   const handleNewSession = useCallback(() => {
     startupRestorePendingRef.current = false;
@@ -2534,6 +2546,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onDetach={handleDetachBackground}
           onRetry={handleRetryBackground}
           onArchive={handleArchiveBackground}
+          onPause={handlePauseBackground}
+          onResume={handleResumeBackground}
         />
         <InputArea
           onSend={handleSend}

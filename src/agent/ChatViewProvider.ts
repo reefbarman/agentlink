@@ -3309,7 +3309,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async submitBrowserBackgroundAction(input: {
-    action: "steer" | "detach" | "retry" | "archive";
+    action: "steer" | "detach" | "retry" | "archive" | "pause" | "resume";
     sessionId: string;
     message?: string;
   }): Promise<{ ok: boolean; error?: string; sessionId?: string }> {
@@ -3333,6 +3333,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (input.action === "archive") {
       const result = this.sessionManager.archiveBackground(input.sessionId);
       return { ok: result.archived, error: result.reason };
+    }
+    if (input.action === "pause") {
+      const result = this.sessionManager.pauseBackground(input.sessionId);
+      return { ok: result.paused, error: result.reason };
+    }
+    if (input.action === "resume") {
+      try {
+        const result = await this.sessionManager.resumeBackground(input.sessionId);
+        return { ok: true, sessionId: result.sessionId };
+      } catch (error) {
+        return { ok: false, error: String(error) };
+      }
     }
     if (input.action === "retry") {
       try {
@@ -4661,6 +4673,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "archiveBgAgent": {
         if (typeof msg.sessionId === "string") {
           this.sessionManager?.archiveBackground(msg.sessionId);
+        }
+        break;
+      }
+
+      case "pauseBgAgent": {
+        if (typeof msg.sessionId === "string") {
+          this.sessionManager?.pauseBackground(msg.sessionId);
+        }
+        break;
+      }
+
+      case "resumeBgAgent": {
+        if (typeof msg.sessionId === "string") {
+          void this.sessionManager?.resumeBackground(msg.sessionId);
         }
         break;
       }

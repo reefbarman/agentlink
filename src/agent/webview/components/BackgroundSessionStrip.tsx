@@ -41,6 +41,7 @@ export interface BgSessionInfoProps {
     | "failed"
     | "cancelled"
     | "budget_exhausted"
+    | "paused"
     | "interrupted";
   terminalReason?: string;
   createdAt?: number;
@@ -97,6 +98,8 @@ interface Props {
   onDetach?: (sessionId: string) => void;
   onRetry?: (sessionId: string) => void;
   onArchive?: (sessionId: string) => void;
+  onPause?: (sessionId: string) => void;
+  onResume?: (sessionId: string) => void;
 }
 
 const ACTIVE_STATUSES = new Set<BgSessionInfoProps["status"]>([
@@ -165,6 +168,8 @@ export function BackgroundSessionStrip({
   onDetach,
   onRetry,
   onArchive,
+  onPause,
+  onResume,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [filter, setFilter] = useState<
@@ -346,6 +351,24 @@ export function BackgroundSessionStrip({
                   title="Steer agent"
                 >
                   <i class="codicon codicon-debug-step-over" />
+                </button>
+              )}
+              {ACTIVE_STATUSES.has(s.status) && onPause && (
+                <button
+                  class="icon-button bg-session-action"
+                  onClick={() => onPause(s.id)}
+                  title="Pause agent"
+                >
+                  <i class="codicon codicon-debug-pause" />
+                </button>
+              )}
+              {s.lifecycle === "paused" && onResume && (
+                <button
+                  class="icon-button bg-session-action"
+                  onClick={() => onResume(s.id)}
+                  title="Resume agent"
+                >
+                  <i class="codicon codicon-debug-start" />
                 </button>
               )}
               {s.parentSessionId && onDetach && (

@@ -202,6 +202,7 @@ export interface BgSessionInfo {
     | "failed"
     | "cancelled"
     | "budget_exhausted"
+    | "paused"
     | "interrupted";
   terminalReason?: string;
   createdAt?: number;

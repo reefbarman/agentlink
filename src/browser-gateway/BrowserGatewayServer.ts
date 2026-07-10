@@ -2109,7 +2109,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
     const body = (await this.readJsonBody(req)) as {
-      action?: "steer" | "detach" | "retry" | "archive";
+      action?: "steer" | "detach" | "retry" | "archive" | "pause" | "resume";
       sessionId?: string;
       message?: string;
     };
