@@ -50,6 +50,7 @@ import { InputArea } from "./components/InputArea";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation";
 import { MessageQueuePanel } from "./components/MessageQueuePanel";
+import { ProviderUsagePanel } from "./components/ProviderUsageBlock";
 import { QuestionCard } from "./components/QuestionCard";
 import { SessionHistory } from "./components/SessionHistory";
 import { StreamingStatusBar } from "./components/StreamingStatusBar";
@@ -185,6 +186,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const dragCounterRef = useRef(0);
   const [mcpManagerSnapshot, setMcpManagerSnapshot] =
     useState<McpConfigSnapshot | null>(null);
+  const [providerUsage, setProviderUsage] = useState<
+    import("./types").ProviderUsageCardData | null
+  >(null);
   const [mcpManagerView, setMcpManagerView] = useState<
     "status" | "config" | "add" | "edit"
   >("status");
@@ -587,6 +591,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         case "agentSlashCommandsUpdate":
           dispatch({ type: "SET_SLASH_COMMANDS", commands: msg.commands });
           break;
+        case "agentProviderUsage": {
+          setMcpManagerSnapshot(null);
+          setProviderUsage(msg.data);
+          break;
+        }
         case "agentModeSwitchRequest":
           // Agent requested a mode switch — create a new session in the new mode
           // but do NOT clear the current chat history (it stays visible while the
@@ -613,6 +622,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         case "agentMcpStatus":
           if (msg.configSnapshot) {
             if (msg.open) {
+              setProviderUsage(null);
               setMcpManagerSnapshot(msg.configSnapshot);
               setMcpManagerView(msg.view ?? "status");
             } else {
@@ -1733,6 +1743,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         case "pair":
           vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
           break;
+        case "usage":
+          vscodeApi.postMessage({ command: "agentSlashCommand", name, args });
+          break;
         case "condense":
         case "checkpoint":
         case "revert":
@@ -1914,6 +1927,13 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const handleOpenFile = useCallback(
     (path: string, line?: number) => {
       vscodeApi.postMessage({ command: "agentOpenFile", path, line });
+    },
+    [vscodeApi],
+  );
+
+  const handleContinueToolCallInBackground = useCallback(
+    (id: string) => {
+      vscodeApi.postMessage({ command: "continueToolCallInBackground", id });
     },
     [vscodeApi],
   );
@@ -2243,6 +2263,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
           onDismissDetectedQuestion={handleDismissDetectedQuestion}
           onOpenFile={handleOpenFile}
+          onContinueToolCallInBackground={handleContinueToolCallInBackground}
           onCompleteToolCall={handleCompleteToolCall}
           onCancelToolCall={handleCancelToolCall}
           onPromoteMcpToolApproval={handlePromoteMcpToolApproval}
@@ -2376,6 +2397,19 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 profile: mcpManagerSnapshot.profile,
                 scope,
                 serverName,
+              })
+            }
+          />
+        )}
+        {providerUsage && (
+          <ProviderUsagePanel
+            data={providerUsage}
+            onClose={() => setProviderUsage(null)}
+            onRefresh={() =>
+              vscodeApi.postMessage({
+                command: "agentSlashCommand",
+                name: "usage",
+                args: "",
               })
             }
           />

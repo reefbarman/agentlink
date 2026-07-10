@@ -13,6 +13,7 @@ interface ChatViewProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
   onCancelToolCall?: (id: string) => void;
   onPromoteMcpToolApproval?: (promotion: {
@@ -48,6 +49,7 @@ export function ChatView({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onContinueToolCallInBackground,
   onCompleteToolCall,
   onCancelToolCall,
   onPromoteMcpToolApproval,
@@ -216,6 +218,7 @@ export function ChatView({
           onDetectedQuestionAnswer={onDetectedQuestionAnswer}
           onDismissDetectedQuestion={onDismissDetectedQuestion}
           onOpenFile={onOpenFile}
+          onContinueToolCallInBackground={onContinueToolCallInBackground}
           onCompleteToolCall={onCompleteToolCall}
           onCancelToolCall={onCancelToolCall}
           onPromoteMcpToolApproval={onPromoteMcpToolApproval}

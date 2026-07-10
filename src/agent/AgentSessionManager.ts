@@ -445,6 +445,25 @@ export class AgentSessionManager {
 
   private recordAndEmitEvent(sessionId: string, event: AgentEvent): void {
     const session = this.sessions.get(sessionId);
+    if (session && event.type === "warning" && event.modelFallback) {
+      session.model = event.modelFallback.effectiveModel;
+      this.applyThresholdToSession(session);
+      const backgroundMeta = this.bgMeta.get(sessionId);
+      if (backgroundMeta) {
+        backgroundMeta.resolvedModel = event.modelFallback.effectiveModel;
+        backgroundMeta.fallbackUsed = true;
+      }
+      if (!session.background && this.foregroundId === sessionId) {
+        this.updateConfig({
+          model: event.modelFallback.effectiveModel,
+          autoCondenseThreshold: this.getCondenseThresholdForModel(
+            event.modelFallback.effectiveModel,
+          ),
+        });
+      }
+      this.saveSession(sessionId);
+      this.onSessionsChanged?.();
+    }
     this.activityTraceRecorder.appendAgentEvent(
       sessionId,
       event,

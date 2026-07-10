@@ -959,6 +959,17 @@ export class AgentEngine {
             }
 
             switch (event.type) {
+              case "model_fallback":
+                session.model = event.effectiveModel;
+                yield {
+                  type: "warning",
+                  message: `${event.requestedModel} is unavailable for this account. Switched to ${event.effectiveModel}.`,
+                  modelFallback: {
+                    requestedModel: event.requestedModel,
+                    effectiveModel: event.effectiveModel,
+                  },
+                };
+                break;
               case "thinking_start":
                 yield { type: "thinking_start", thinkingId: event.thinkingId };
                 break;

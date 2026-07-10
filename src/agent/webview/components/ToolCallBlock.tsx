@@ -8,6 +8,7 @@ export type ToolCallData = ContentBlock & { type: "tool_call" };
 interface ToolCallBlockProps {
   toolCall: ToolCallData;
   onOpenFile?: (path: string, line?: number) => void;
+  onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
   onCancelToolCall?: (id: string) => void;
   onPromoteMcpToolApproval?: (promotion: {
@@ -527,6 +528,7 @@ export function getToolCallVisualState(toolCall: {
 export function ToolCallBlock({
   toolCall,
   onOpenFile,
+  onContinueToolCallInBackground,
   onCompleteToolCall,
   onCancelToolCall,
   onPromoteMcpToolApproval,
@@ -571,8 +573,10 @@ export function ToolCallBlock({
     mcpApprovalPromotion?.scopes.filter(
       (scope) => !promotedScopes.has(scope),
     ) ?? [];
+  const canContinueInBackground = toolCall.name === "execute_command";
   const showRunningActions =
-    !complete && (onCompleteToolCall || onCancelToolCall);
+    !complete &&
+    (onContinueToolCallInBackground || onCompleteToolCall || onCancelToolCall);
   const resultImages =
     complete && toolCall.resultImages ? toolCall.resultImages : [];
 
@@ -637,6 +641,17 @@ export function ToolCallBlock({
             class="tool-call-inline-actions"
             aria-label={`Actions for ${toolCall.name}`}
           >
+            {canContinueInBackground && onContinueToolCallInBackground && (
+              <button
+                type="button"
+                class="tool-call-inline-action"
+                aria-label="Continue execute_command in background"
+                title="Return control to the agent while the command keeps running"
+                onClick={() => onContinueToolCallInBackground(toolCall.id)}
+              >
+                <i class="codicon codicon-debug-continue" aria-hidden="true" />
+              </button>
+            )}
             {onCompleteToolCall && (
               <button
                 type="button"

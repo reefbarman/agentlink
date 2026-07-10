@@ -17,6 +17,7 @@ interface TranscriptMessageListProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
   onCancelToolCall?: (id: string) => void;
   onPromoteMcpToolApproval?: (promotion: {
@@ -182,6 +183,7 @@ export function TranscriptMessageList({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onContinueToolCallInBackground,
   onCompleteToolCall,
   onCancelToolCall,
   onPromoteMcpToolApproval,
@@ -255,6 +257,7 @@ export function TranscriptMessageList({
                   : onDismissDetectedQuestion
               }
               onOpenFile={onOpenFile}
+              onContinueToolCallInBackground={onContinueToolCallInBackground}
               onCompleteToolCall={onCompleteToolCall}
               onCancelToolCall={onCancelToolCall}
               onPromoteMcpToolApproval={onPromoteMcpToolApproval}

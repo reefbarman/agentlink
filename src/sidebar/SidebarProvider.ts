@@ -15,12 +15,12 @@ import type {
   ToolCallTracker,
   TrackedCallInfo,
 } from "../server/ToolCallTracker.js";
-import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
 import { getAgentById, matchClientName } from "../agents/registry.js";
 
 import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
 import { randomUUID } from "crypto";
+import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
 export type { AgentInfo, SidebarState };
 
@@ -316,6 +316,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           if (message.id) {
             vscode.commands.executeCommand(
               "agentlink.completeToolCall",
+              message.id,
+            );
+          }
+          break;
+        case "continueToolCallInBackground":
+          if (message.id) {
+            vscode.commands.executeCommand(
+              "agentlink.continueToolCallInBackground",
               message.id,
             );
           }

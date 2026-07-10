@@ -999,6 +999,7 @@ describe("MessageBubble slash-command rendering", () => {
   });
 
   it("renders inline controls for running tool calls", () => {
+    const onContinueInBackground = vi.fn();
     const onComplete = vi.fn();
     const onCancel = vi.fn();
     const message: ChatMessage = {
@@ -1022,11 +1023,17 @@ describe("MessageBubble slash-command rendering", () => {
       <MessageBubble
         message={message}
         streaming={true}
+        onContinueToolCallInBackground={onContinueInBackground}
         onCompleteToolCall={onComplete}
         onCancelToolCall={onCancel}
       />,
     );
 
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Continue execute_command in background",
+      }),
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "Complete execute_command" }),
     );
@@ -1034,8 +1041,47 @@ describe("MessageBubble slash-command rendering", () => {
       screen.getByRole("button", { name: "Cancel execute_command" }),
     );
 
+    expect(onContinueInBackground).toHaveBeenCalledWith("tool-running");
     expect(onComplete).toHaveBeenCalledWith("tool-running");
     expect(onCancel).toHaveBeenCalledWith("tool-running");
+  });
+
+  it("offers background continuation for inline-file commands", () => {
+    const message: ChatMessage = {
+      id: "assistant-inline-files",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "tool_call",
+          id: "tool-inline-files",
+          name: "execute_command",
+          inputJson: JSON.stringify({
+            command: "node {{file:script.js}}",
+            files: [{ name: "script.js", content: "console.log('ok')" }],
+          }),
+          result: "",
+          complete: false,
+        },
+      ],
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={true}
+        onContinueToolCallInBackground={vi.fn()}
+        onCompleteToolCall={vi.fn()}
+        onCancelToolCall={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Continue execute_command in background",
+      }),
+    ).not.toBeNull();
   });
 
   it("does not render inline controls for completed tool calls", () => {

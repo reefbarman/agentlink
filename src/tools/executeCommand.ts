@@ -124,6 +124,13 @@ export async function handleExecuteCommand(
     let commandEditedByUser = false;
     let inlineRun: ReturnType<typeof materializeInlineCommandFiles> | undefined;
     let inlineFiles: InlineCommandFilePreview[] | undefined;
+    let commandFinalizationDeferred = false;
+    let inlineCleanupComplete = false;
+    const cleanupInlineRun = () => {
+      if (inlineCleanupComplete) return;
+      inlineCleanupComplete = true;
+      inlineRun?.cleanup();
+    };
     let approvalFollowUp: string | undefined;
     let approvalAudit: CommandApprovalAudit | undefined = masterBypass
       ? { by: "master_bypass" }
@@ -133,12 +140,6 @@ export async function handleExecuteCommand(
       | undefined;
 
     if (params.files && params.files.length > 0) {
-      if (params.background) {
-        return rejectedCommandResult(
-          params.command,
-          "execute_command files cannot be used with background=true because temp-file cleanup would be unsafe.",
-        );
-      }
       if (process.platform === "win32") {
         return rejectedCommandResult(
           params.command,
@@ -327,6 +328,12 @@ export async function handleExecuteCommand(
         onTerminalAssigned: trackerCtx
           ? (tid) => trackerCtx.setTerminalId(tid)
           : undefined,
+        onCommandFinalizationDeferred: inlineRun
+          ? () => {
+              commandFinalizationDeferred = true;
+            }
+          : undefined,
+        onCommandFinalized: inlineRun ? cleanupInlineRun : undefined,
       });
 
       // Apply output filtering and temp file saving
@@ -405,7 +412,9 @@ export async function handleExecuteCommand(
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
     } finally {
-      inlineRun?.cleanup();
+      if (!commandFinalizationDeferred) {
+        cleanupInlineRun();
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -200,7 +200,22 @@ describe("handleExecuteCommand", () => {
     ]);
   });
 
-  it("rejects inline files with background commands", async () => {
+  it("defers inline-file cleanup for background commands", async () => {
+    let finalizeCommand!: () => void;
+    vi.mocked(terminalProvider.executeCommand).mockImplementationOnce(
+      async (options) => {
+        options.onCommandFinalizationDeferred?.();
+        finalizeCommand = () => options.onCommandFinalized?.();
+        return {
+          exit_code: null,
+          output: "started",
+          output_captured: true,
+          terminal_id: "term_inline_background",
+          backgrounded: true,
+          is_running: true,
+        };
+      },
+    );
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
@@ -216,8 +231,21 @@ describe("handleExecuteCommand", () => {
       { terminalProvider },
     );
 
-    expect(executeCommand).not.toHaveBeenCalled();
-    expect(textPayload(result)).toMatchObject({ status: "rejected" });
+    const executed = vi.mocked(terminalProvider.executeCommand).mock.calls[0][0]
+      .command;
+    const tempPath = executed.match(/'([^']+\/body)'/)?.[1];
+    expect(tempPath).toBeTruthy();
+    expect(fs.existsSync(tempPath!)).toBe(true);
+    expect(textPayload(result)).toMatchObject({
+      backgrounded: true,
+      is_running: true,
+      terminal_id: "term_inline_background",
+    });
+
+    finalizeCommand();
+    expect(fs.existsSync(tempPath!)).toBe(false);
+    finalizeCommand();
+    expect(fs.existsSync(tempPath!)).toBe(false);
   });
 
   it("prompts inline-file commands even when tier auto-approval is enabled", async () => {

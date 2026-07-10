@@ -18,6 +18,7 @@ export type BlockSegment =
 interface ToolCallGroupProps {
   blocks: ToolBlock[];
   onOpenFile?: (path: string, line?: number) => void;
+  onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
   onCancelToolCall?: (id: string) => void;
   onPromoteMcpToolApproval?: (promotion: {
@@ -183,6 +184,7 @@ export function getToolGroupStatus(blocks: ToolBlock[]): {
 export function ToolCallGroup({
   blocks,
   onOpenFile,
+  onContinueToolCallInBackground,
   onCompleteToolCall,
   onCancelToolCall,
   onPromoteMcpToolApproval,
@@ -232,6 +234,7 @@ export function ToolCallGroup({
               key={block.id}
               toolCall={block}
               onOpenFile={onOpenFile}
+              onContinueToolCallInBackground={onContinueToolCallInBackground}
               onCompleteToolCall={onCompleteToolCall}
               onCancelToolCall={onCancelToolCall}
               onPromoteMcpToolApproval={onPromoteMcpToolApproval}

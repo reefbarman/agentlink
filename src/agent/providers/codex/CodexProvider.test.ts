@@ -1145,16 +1145,22 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
       });
 
     const provider = new CodexProvider(makeAuthManager() as never);
-    for await (const _event of provider.stream({
+    const events = [];
+    for await (const event of provider.stream({
       model: "gpt-5.6-luna",
       systemPrompt: "system",
       messages: [{ role: "user", content: "ping" }],
       maxTokens: 64,
     })) {
-      // drain
+      events.push(event);
     }
 
     expect(attemptedModels).toEqual(["gpt-5.6-luna", "gpt-5.4-mini"]);
+    expect(events).toContainEqual({
+      type: "model_fallback",
+      requestedModel: "gpt-5.6-luna",
+      effectiveModel: "gpt-5.4-mini",
+    });
   });
 
   it("reports OAuth-specific GPT-5.5 caps unless API-key auth is preferred", async () => {

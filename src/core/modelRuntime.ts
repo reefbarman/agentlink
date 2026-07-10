@@ -203,6 +203,11 @@ export interface CoreModelCompleteResult {
 }
 
 export type CoreModelStreamEvent =
+  | {
+      type: "model_fallback";
+      requestedModel: string;
+      effectiveModel: string;
+    }
   | { type: "thinking_start"; thinkingId: string }
   | { type: "thinking_delta"; thinkingId: string; text: string }
   | { type: "thinking_end"; thinkingId: string }

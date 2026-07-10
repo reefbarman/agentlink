@@ -42,6 +42,7 @@ export interface TrackedCall {
   forceResolve: (result: ToolResult) => void;
   approvalId?: string;
   terminalId?: string;
+  backgroundRequested?: boolean;
   lastHeartbeatAt?: number;
   source: ToolCallSource;
 }
@@ -55,6 +56,7 @@ export interface TrackedCallInfo {
   status: "active" | "completed" | "rejected";
   completedAt?: number;
   lastHeartbeatAt?: number;
+  canContinueInBackground?: boolean;
   /** Where this tool call originated — "mcp" for external agents, "agent" for the built-in agent. */
   source: ToolCallSource;
 }
@@ -234,6 +236,7 @@ export class ToolCallTracker extends EventEmitter {
         startedAt: c.startedAt,
         status: "active" as const,
         lastHeartbeatAt: c.lastHeartbeatAt,
+        canContinueInBackground: c.toolName === "execute_command",
         source: c.source,
       }),
     );
@@ -276,6 +279,9 @@ export class ToolCallTracker extends EventEmitter {
       this.log(
         `TERMINAL_ASSIGNED ${call.toolName} (${toolCallId.slice(0, 8)}), terminalId=${terminalId}`,
       );
+      if (call.backgroundRequested) {
+        void this.detachExecuteCommand(call);
+      }
     }
   }
 
@@ -518,6 +524,36 @@ export class ToolCallTracker extends EventEmitter {
       outcome,
       durationMs: Date.now() - startedAt,
     });
+  }
+
+  // ── Continue in background ──────────────────────────────────────────────
+
+  continueInBackground(id: string): void {
+    const call = this.activeCalls.get(id);
+    if (!call || call.toolName !== "execute_command") {
+      this.log(
+        `BACKGROUND_MISS (${id.slice(0, 8)}) — no active execute_command`,
+      );
+      return;
+    }
+
+    call.backgroundRequested = true;
+    this.log(
+      `BACKGROUND_REQUEST ${call.toolName} (${id.slice(0, 8)}), terminalId=${call.terminalId ?? "pending"}`,
+    );
+    if (call.terminalId) {
+      void this.detachExecuteCommand(call);
+    }
+  }
+
+  private async detachExecuteCommand(call: TrackedCall): Promise<void> {
+    if (!call.terminalId) return;
+    const { getTerminalManager } =
+      await import("../integrations/TerminalManager.js");
+    const detached = getTerminalManager().detachTerminal(call.terminalId);
+    this.log(
+      `BACKGROUND_DETACH ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId}, detached=${detached}`,
+    );
   }
 
   // ── Cancel ───────────────────────────────────────────────────────────────

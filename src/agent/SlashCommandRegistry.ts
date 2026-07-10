@@ -184,6 +184,12 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     source: "builtin",
     builtin: true,
   },
+  {
+    name: "usage",
+    description: "Show Codex subscription usage and reset times",
+    source: "builtin",
+    builtin: true,
+  },
 ];
 
 function skillToSlashCommand(skill: {

@@ -5659,3 +5659,167 @@ body.approval-resizing {
   color: var(--vscode-textLink-foreground);
   word-break: break-all;
 }
+
+.provider-usage-body {
+  display: grid;
+  gap: 12px;
+  padding: 10px 12px 12px;
+}
+
+.provider-usage-card {
+  border-top: 1px solid var(--vscode-panel-border);
+  flex-shrink: 0;
+  font-size: 12px;
+  max-height: 42vh;
+  overflow: auto;
+}
+
+.provider-usage-card-header {
+  align-items: center;
+  background: var(--vscode-textCodeBlock-background);
+  color: var(--vscode-descriptionForeground);
+  display: flex;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 6px;
+  padding: 5px 12px;
+}
+
+.provider-usage-card-count {
+  font-weight: 400;
+  margin-left: auto;
+}
+
+.provider-usage-provider + .provider-usage-provider {
+  border-top: 1px solid var(--vscode-panel-border);
+  padding-top: 12px;
+}
+
+.provider-usage-provider-header,
+.provider-usage-window-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.provider-usage-provider-header {
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.provider-usage-provider-header > .codicon-pass-filled {
+  color: var(--vscode-terminal-ansiGreen, #4ec9b0);
+}
+
+.provider-usage-provider-header > .codicon-circle-slash {
+  color: var(--vscode-errorForeground);
+}
+
+.provider-usage-provider-header .provider-usage-plan {
+  margin-left: auto;
+}
+
+.provider-usage-account-row {
+  align-items: flex-start;
+  background: color-mix(
+    in srgb,
+    var(--vscode-textCodeBlock-background) 65%,
+    transparent
+  );
+  border-radius: 3px;
+  display: flex;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 7px 8px;
+}
+
+.provider-usage-account-row > .codicon {
+  color: var(--vscode-descriptionForeground);
+  margin-top: 1px;
+}
+
+.provider-usage-account-label {
+  font-weight: 600;
+}
+
+.provider-usage-account-source {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  margin-top: 1px;
+}
+
+.provider-usage-plan {
+  background: var(--vscode-badge-background);
+  border-radius: 999px;
+  color: var(--vscode-badge-foreground);
+  font-size: 10px;
+  padding: 1px 7px;
+  text-transform: uppercase;
+}
+
+.provider-usage-limit {
+  margin-top: 9px;
+}
+
+.provider-usage-limit-name {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+
+.provider-usage-window + .provider-usage-window {
+  margin-top: 8px;
+}
+
+.provider-usage-window-header,
+.provider-usage-reset,
+.provider-usage-stats,
+.provider-usage-unavailable {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.provider-usage-switch-account {
+  border-top: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  margin-top: 10px;
+  padding-top: 8px;
+}
+
+.provider-usage-switch-account summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.provider-usage-switch-account > div {
+  line-height: 1.45;
+  padding-top: 6px;
+}
+
+.provider-usage-track {
+  background: var(--vscode-progressBar-background, rgba(127, 127, 127, 0.25));
+  border-radius: 999px;
+  height: 5px;
+  margin: 4px 0;
+  overflow: hidden;
+}
+
+.provider-usage-fill {
+  background: var(--vscode-charts-blue, var(--vscode-focusBorder));
+  height: 100%;
+}
+
+.provider-usage-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 9px;
+}
+
+.provider-usage-unavailable {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}

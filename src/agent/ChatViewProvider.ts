@@ -2,11 +2,12 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
-import { providerRegistry } from "./providers/index.js";
+import { providerRegistry, queryProviderUsage } from "./providers/index.js";
 import type { ModelProvider } from "./providers/types.js";
 import type {
   ChatMessage,
   ExtensionMessage,
+  ProviderUsageCardData,
   SlashCommandInfo,
   WebviewModelInfo,
 } from "./webview/types.js";
@@ -702,7 +703,8 @@ export type ExtensionToWebview =
       status: "pending" | "consumed" | "expired" | "cancelled";
       deviceId?: string;
       deviceLabel?: string;
-    };
+    }
+  | { type: "agentProviderUsage"; data: ProviderUsageCardData };
 
 export interface ChatState {
   sessionId: string | null;
@@ -3928,6 +3930,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "continueToolCallInBackground": {
+        const id = msg.id as string | undefined;
+        if (id) {
+          void vscode.commands.executeCommand(
+            "agentlink.continueToolCallInBackground",
+            id,
+          );
+        }
+        break;
+      }
+
       case "agentSteerQueuedMessage": {
         await this.steerQueuedMessageFromUi({
           sessionId: msg.sessionId as string,
@@ -4501,6 +4514,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           } else {
             await this.handlePairCommand();
           }
+        } else if (name === "usage") {
+          const data = await queryProviderUsage();
+          this.postMessage({ type: "agentProviderUsage", data });
         } else {
           this.log(`[slash] /${name} not yet implemented`);
           vscode.window.showInformationMessage(
@@ -5777,7 +5793,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ) {
             break;
           }
-          const parsed = JSON.parse(resultText);
+          let parsed: { follow_up?: string; status?: string; reason?: string };
+          try {
+            parsed = JSON.parse(resultText);
+          } catch {
+            // MCP tool results carry the server-owned result in the first
+            // block(s) and the approval follow-up as a trailing JSON block —
+            // fall back to parsing just the last line.
+            parsed = JSON.parse(resultText.trimEnd().split("\n").pop() ?? "");
+          }
           if (parsed.follow_up) {
             this.postMessage({
               type: "agentUserAnnotation",

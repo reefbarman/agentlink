@@ -56,7 +56,12 @@ import {
   providerRegistry,
   CodexProvider,
   openAiCodexAuthManager,
+  queryCodexCliUsage,
 } from "./agent/providers/index.js";
+import type {
+  CodexRateLimitSnapshot,
+  CodexSubscriptionUsage,
+} from "./agent/providers/codex/CodexCliUsageClient.js";
 import type { CodexCredentials } from "./agent/providers/codex/CodexOAuthManager.js";
 import { CodexOAuthFlowError } from "./agent/providers/codex/CodexOAuthManager.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
@@ -699,6 +704,7 @@ async function manageCodexAccountsFlow(): Promise<void> {
 
   const action = await vscode.window.showQuickPick(
     [
+      { label: "View subscription usage", value: "usage" },
       { label: "Set active", value: "setActive" },
       { label: "Re-sign in / replace", value: "replace" },
       { label: "Rename label", value: "rename" },
@@ -711,6 +717,11 @@ async function manageCodexAccountsFlow(): Promise<void> {
   );
 
   if (!action) return;
+
+  if (action.value === "usage") {
+    await showCodexSubscriptionUsage();
+    return;
+  }
 
   if (action.value === "setActive") {
     await openAiCodexAuthManager.setActiveOAuthAccount(account.id);
@@ -772,6 +783,84 @@ async function manageCodexAccountsFlow(): Promise<void> {
     await openAiCodexAuthManager.removeOAuthAccount(account.id);
     vscode.window.showInformationMessage(`Removed account ${account.label}.`);
   }
+}
+
+function formatResetTime(timestamp: number | null): string {
+  if (timestamp === null) return "reset time unavailable";
+  return `resets ${new Date(timestamp * 1_000).toLocaleString()}`;
+}
+
+function rateLimitDetail(snapshot: CodexRateLimitSnapshot): string {
+  const windows = [snapshot.primary, snapshot.secondary]
+    .filter((window) => window !== null)
+    .map(
+      (window) =>
+        `${Math.round(window.usedPercent)}% used · ${formatResetTime(window.resetsAt)}`,
+    );
+  return windows.length > 0 ? windows.join(" · ") : "No window data";
+}
+
+function usageQuickPickItems(usage: CodexSubscriptionUsage): Array<{
+  label: string;
+  description?: string;
+  detail?: string;
+}> {
+  const buckets = usage.rateLimitsByLimitId
+    ? Object.entries(usage.rateLimitsByLimitId)
+    : [[usage.rateLimits.limitId ?? "codex", usage.rateLimits] as const];
+  const items: Array<{
+    label: string;
+    description?: string;
+    detail?: string;
+  }> = buckets.map(([id, snapshot]) => ({
+    label: `$(dashboard) ${snapshot.limitName ?? id}`,
+    description: snapshot.planType ?? undefined,
+    detail: rateLimitDetail(snapshot),
+  }));
+
+  const summary = usage.tokenUsage.summary;
+  if (summary.lifetimeTokens !== null) {
+    items.push({
+      label: "$(symbol-numeric) Lifetime token activity",
+      description: summary.lifetimeTokens.toLocaleString(),
+      ...(summary.peakDailyTokens === null
+        ? {}
+        : {
+            detail: `Peak daily activity: ${summary.peakDailyTokens.toLocaleString()} tokens`,
+          }),
+    });
+  }
+  if (usage.rateLimitResetCredits?.availableCount) {
+    items.push({
+      label: "$(refresh) Rate-limit resets available",
+      description: String(usage.rateLimitResetCredits.availableCount),
+    });
+  }
+  return items;
+}
+
+async function showCodexSubscriptionUsage(): Promise<void> {
+  const result = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "Reading Codex subscription usage…",
+    },
+    () => queryCodexCliUsage(),
+  );
+
+  if (!result.available) {
+    log(`[codex] Subscription usage unavailable: ${result.reason}`);
+    vscode.window.showInformationMessage(
+      "Codex subscription usage is unavailable. Install and sign in to the Codex CLI to enable it.",
+    );
+    return;
+  }
+
+  await vscode.window.showQuickPick(usageQuickPickItems(result.usage), {
+    title: "Codex Subscription Usage",
+    placeHolder: "Usage is read from the locally installed Codex CLI",
+    ignoreFocusOut: true,
+  });
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -1594,6 +1683,10 @@ export function activate(context: vscode.ExtensionContext): void {
       toolCallTracker.cancelCall(id, approvalPanel),
     ),
     vscode.commands.registerCommand(
+      "agentlink.continueToolCallInBackground",
+      (id: string) => toolCallTracker.continueInBackground(id),
+    ),
+    vscode.commands.registerCommand(
       "agentlink.completeToolCall",
       (id: string) => toolCallTracker.completeCall(id, approvalPanel),
     ),
@@ -2109,6 +2202,10 @@ export function activate(context: vscode.ExtensionContext): void {
       async () => {
         await manageCodexAccountsFlow();
       },
+    ),
+    vscode.commands.registerCommand(
+      "agentlink.codexSubscriptionUsage",
+      showCodexSubscriptionUsage,
     ),
     vscode.commands.registerCommand("agentlink.codexSignOut", async () => {
       const hasOAuth = await openAiCodexAuthManager.hasOAuth();

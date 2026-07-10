@@ -456,6 +456,215 @@ describe("TerminalManager terminal selection", () => {
     expect(result.verification_hint).toContain("Do not re-run");
   });
 
+  it("starts in background when detached before shell integration is ready", async () => {
+    const manager = new TerminalManager();
+    let assignedTerminalId = "";
+
+    vi.spyOn(
+      manager as unknown as {
+        waitForShellIntegration: (terminal: unknown) => Promise<boolean>;
+      },
+      "waitForShellIntegration",
+    ).mockImplementation(() => new Promise(() => {}));
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => {
+      const managed = {
+        id: "term_waiting",
+        name,
+        cwd,
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal: {
+          show: vi.fn(),
+          sendText: vi.fn(),
+          dispose: vi.fn(),
+        },
+      } satisfies MockManagedTerminal;
+      (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+        managed,
+      ];
+      return managed;
+    });
+
+    const execution = manager.executeCommand({
+      command: "npm run dev",
+      cwd: "/workspace",
+      onTerminalAssigned: (terminalId) => {
+        assignedTerminalId = terminalId;
+      },
+    });
+    await waitForCondition(() => assignedTerminalId.length > 0);
+
+    expect(manager.detachTerminal(assignedTerminalId)).toBe(true);
+    const result = await execution;
+
+    expect(result).toMatchObject({
+      terminal_id: assignedTerminalId,
+      backgrounded: true,
+      is_running: true,
+      execution_mode: "send_text",
+    });
+    expect(manager.getBackgroundState(assignedTerminalId)).toMatchObject({
+      is_running: true,
+      output_captured: false,
+    });
+    expect(manager.detachTerminal(assignedTerminalId)).toBe(false);
+
+    manager.interruptTerminal(assignedTerminalId);
+  });
+
+  it("detaches an active shell execution and finalizes deferred cleanup on completion", async () => {
+    const manager = new TerminalManager();
+    const onCommandFinalizationDeferred = vi.fn();
+    const onCommandFinalized = vi.fn();
+    let releaseCompletion!: () => void;
+    const completionReady = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    const executeCommand = vi.fn(() => ({
+      read: async function* () {
+        yield "watching\r\n";
+        await completionReady;
+        yield "done\r\n\x1B]633;D;0\x07";
+      },
+    }));
+
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => {
+      const managed = {
+        id: "term_detach",
+        name,
+        cwd,
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal: {
+          show: vi.fn(),
+          sendText: vi.fn(),
+          dispose: vi.fn(),
+          shellIntegration: {
+            cwd: { fsPath: cwd },
+            executeCommand,
+          },
+        },
+      } satisfies MockManagedTerminal;
+      (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+        managed,
+      ];
+      return managed;
+    });
+
+    const execution = manager.executeCommand({
+      command: "npm run dev",
+      cwd: "/workspace",
+      onCommandFinalizationDeferred,
+      onCommandFinalized,
+    });
+    await waitForCondition(() => executeCommand.mock.calls.length > 0);
+    await waitForCondition(
+      () =>
+        manager.getCurrentOutput("term_detach", { force: true }) === "watching",
+    );
+
+    expect(manager.detachTerminal("term_detach")).toBe(true);
+    const result = await execution;
+
+    expect(result).toMatchObject({
+      terminal_id: "term_detach",
+      backgrounded: true,
+      is_running: true,
+      output_captured: true,
+    });
+    expect(result.output).toContain("watching");
+    expect(result.output).toContain("get_terminal_output");
+    expect(onCommandFinalizationDeferred).toHaveBeenCalledTimes(1);
+    expect(onCommandFinalized).not.toHaveBeenCalled();
+    expect(manager.getBackgroundState("term_detach")).toMatchObject({
+      is_running: true,
+      output: "watching",
+      output_captured: true,
+    });
+
+    releaseCompletion();
+    await waitForCondition(
+      () => manager.getBackgroundState("term_detach")?.is_running === false,
+      1_000,
+    );
+    expect(manager.getBackgroundState("term_detach")).toMatchObject({
+      is_running: false,
+      exit_code: 0,
+      output: "watching\ndone",
+      output_captured: true,
+    });
+    expect(onCommandFinalized).toHaveBeenCalledTimes(1);
+  });
+
+  it("finalizes deferred cleanup when background dispatch fails", async () => {
+    const manager = new TerminalManager();
+    const onCommandFinalizationDeferred = vi.fn();
+    const onCommandFinalized = vi.fn();
+    const executeCommand = vi.fn(() => {
+      throw new Error("dispatch failed");
+    });
+
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => ({
+      id: "term_dispatch_failure",
+      name,
+      cwd,
+      busy: false,
+      backgroundRunning: false,
+      lastCommandEndedAt: 0,
+      outputBuffer: "",
+      backgroundExitCode: null,
+      backgroundOutputCaptured: false,
+      backgroundDisposables: [],
+      terminal: {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+        shellIntegration: {
+          cwd: { fsPath: cwd },
+          executeCommand,
+        },
+      },
+    }));
+
+    await expect(
+      manager.executeCommand({
+        command: "npm run dev",
+        cwd: "/workspace",
+        background: true,
+        onCommandFinalizationDeferred,
+        onCommandFinalized,
+      }),
+    ).rejects.toThrow("dispatch failed");
+
+    expect(onCommandFinalizationDeferred).toHaveBeenCalledTimes(1);
+    expect(onCommandFinalized).toHaveBeenCalledTimes(1);
+  });
+
   it("treats a returned shell prompt as completion when Ctrl+C omits the exit marker", async () => {
     const manager = new TerminalManager();
     const executeCommand = vi.fn(() => ({
@@ -503,6 +712,96 @@ describe("TerminalManager terminal selection", () => {
       output_captured: true,
       terminal_id: "term_prompt",
     });
+  });
+
+  it("ignores stale shell end events from a prior execution", async () => {
+    const manager = new TerminalManager();
+    const onCommandFinalizationDeferred = vi.fn();
+    const onCommandFinalized = vi.fn();
+    const endListeners: Array<
+      Parameters<typeof vscode.window.onDidEndTerminalShellExecution>[0]
+    > = [];
+    vi.spyOn(
+      vscode.window,
+      "onDidEndTerminalShellExecution",
+    ).mockImplementation((listener) => {
+      endListeners.push(listener);
+      return { dispose: vi.fn() };
+    });
+
+    const execution = {
+      read: async function* () {
+        yield "";
+        await new Promise(() => {});
+      },
+    };
+    const executeCommand = vi.fn(() => execution);
+    let terminal!: MockManagedTerminal["terminal"];
+
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => {
+      terminal = {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+        shellIntegration: {
+          cwd: { fsPath: cwd },
+          executeCommand,
+        },
+      };
+      const managed = {
+        id: "term_exact_execution",
+        name,
+        cwd,
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal,
+      } satisfies MockManagedTerminal;
+      (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+        managed,
+      ];
+      return managed;
+    });
+
+    await manager.executeCommand({
+      command: "npm run dev",
+      cwd: "/workspace",
+      background: true,
+      onCommandFinalizationDeferred,
+      onCommandFinalized,
+    });
+
+    expect(endListeners).toHaveLength(1);
+    endListeners[0]({
+      terminal: terminal as never,
+      shellIntegration: terminal.shellIntegration as never,
+      execution: {} as never,
+      exitCode: 0,
+    });
+    expect(onCommandFinalized).not.toHaveBeenCalled();
+    expect(manager.getBackgroundState("term_exact_execution")?.is_running).toBe(
+      true,
+    );
+
+    endListeners[0]({
+      terminal: terminal as never,
+      shellIntegration: terminal.shellIntegration as never,
+      execution: execution as never,
+      exitCode: 0,
+    });
+    expect(onCommandFinalized).toHaveBeenCalledTimes(1);
+    expect(manager.getBackgroundState("term_exact_execution")?.is_running).toBe(
+      false,
+    );
   });
 
   it("marks captured background commands finished when Ctrl+C returns the prompt without an exit marker", async () => {
@@ -555,8 +854,7 @@ describe("TerminalManager terminal selection", () => {
 
     expect(result.terminal_id).toBe("term_bg_prompt");
     await waitForCondition(
-      () =>
-        manager.getBackgroundState("term_bg_prompt")?.is_running === false,
+      () => manager.getBackgroundState("term_bg_prompt")?.is_running === false,
     );
 
     expect(manager.getBackgroundState("term_bg_prompt")).toMatchObject({
@@ -677,8 +975,10 @@ describe("TerminalManager terminal selection", () => {
     });
   });
 
-  it("releases a send_text fallback reservation when interrupted", async () => {
+  it("releases a send_text fallback reservation and deferred cleanup when interrupted", async () => {
     const manager = new TerminalManager();
+    const onCommandFinalizationDeferred = vi.fn();
+    const onCommandFinalized = vi.fn();
 
     vi.spyOn(
       manager as unknown as {
@@ -690,12 +990,17 @@ describe("TerminalManager terminal selection", () => {
     const first = await manager.executeCommand({
       command: "long-running-command",
       cwd: "/workspace",
+      onCommandFinalizationDeferred,
+      onCommandFinalized,
     });
 
+    expect(onCommandFinalizationDeferred).toHaveBeenCalledTimes(1);
+    expect(onCommandFinalized).not.toHaveBeenCalled();
     const firstState = manager.getBackgroundState(first.terminal_id);
     expect(firstState?.is_running).toBe(true);
 
     expect(manager.interruptTerminal(first.terminal_id)).toBe(true);
+    expect(onCommandFinalized).toHaveBeenCalledTimes(1);
 
     const releasedState = manager.getBackgroundState(first.terminal_id);
     expect(releasedState).toMatchObject({

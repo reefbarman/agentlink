@@ -33,6 +33,8 @@ export interface TerminalCommandResult {
     threshold: "safe" | "sensitive";
   };
   timed_out?: boolean;
+  backgrounded?: boolean;
+  is_running?: boolean;
   execution_mode?: "shell_integration" | "send_text";
   verification_hint?: string;
   command_sent?: boolean;
@@ -48,6 +50,10 @@ export interface TerminalExecuteOptions {
   timeout?: number;
   env?: Record<string, string>;
   onTerminalAssigned?: (terminalId: string) => void;
+  /** Called when cleanup ownership transfers to a background terminal lifecycle. */
+  onCommandFinalizationDeferred?: () => void;
+  /** Called exactly once when a deferred command ends or its terminal closes. */
+  onCommandFinalized?: () => void;
 }
 
 export interface TerminalBackgroundState {

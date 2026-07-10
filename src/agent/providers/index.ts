@@ -37,6 +37,7 @@ export {
   codexOAuthManager,
   OpenAiCodexAuthManager,
   openAiCodexAuthManager,
+  queryCodexCliUsage,
   type CodexCredentials,
   type CodexOAuthAccountInfo,
   type SaveOAuthAccountOptions,
@@ -44,9 +45,19 @@ export {
   type OpenAiCodexAuthMethod,
   type OpenAiCodexResolvedAuth,
   type OpenAiApiKeyCredential,
+  type CodexCliUsageResult,
+  type CodexSubscriptionUsage,
 } from "./codex/index.js";
 
 import type { ModelProvider, ModelInfo } from "./types.js";
+
+export {
+  queryProviderUsage,
+  createCodexUsageAdapter,
+  type ProviderUsageAdapter,
+  type ProviderUsageEntry,
+  type ProviderUsageSnapshot,
+} from "./ProviderUsageService.js";
 
 export class ProviderRegistry {
   private providers = new Map<string, ModelProvider>();

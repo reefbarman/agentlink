@@ -1,5 +1,6 @@
-import { useState, useEffect } from "preact/hooks";
-import type { TrackedCallInfo, PostCommand } from "../types.js";
+import type { PostCommand, TrackedCallInfo } from "../types.js";
+import { useEffect, useState } from "preact/hooks";
+
 import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
@@ -84,6 +85,17 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
             </div>
           )}
           <div class="tool-call-actions">
+            {c.canContinueInBackground && (
+              <button
+                class="btn"
+                title="Return control to the agent while the command keeps running"
+                onClick={() =>
+                  postCommand("continueToolCallInBackground", { id: c.id })
+                }
+              >
+                Continue in background
+              </button>
+            )}
             <button
               class="btn btn-complete"
               onClick={() => postCommand("completeToolCall", { id: c.id })}

@@ -308,6 +308,11 @@ export class CodexProvider implements ModelProvider {
           this.log(
             `[codex] stream(): preview model "${effectiveModel}" is unavailable; retrying with "${previewFallback}"`,
           );
+          yield {
+            type: "model_fallback",
+            requestedModel: effectiveModel,
+            effectiveModel: previewFallback,
+          };
           effectiveModel = previewFallback;
           reasoningEffort = resolveCodexReasoningEffort({
             modelId: effectiveModel,

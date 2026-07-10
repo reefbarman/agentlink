@@ -1,5 +1,9 @@
 import * as vscode from "vscode";
 
+import type {
+  TerminalCommandResult,
+  TerminalExecuteOptions,
+} from "../core/capabilities/terminal.js";
 import { cleanTerminalOutput, cleanTerminalRawOutput } from "../util/ansi.js";
 
 import { buildAgentExecutionEnv } from "../process/agentExecutionPolicy.js";
@@ -75,6 +79,10 @@ interface ManagedTerminal {
   backgroundOutputCaptured: boolean;
   /** Disposables for background listeners (stream reader, exit listener) */
   backgroundDisposables: vscode.Disposable[];
+  /** Resolves the active foreground execution into background mode. */
+  detachForeground?: () => void;
+  /** Cleanup owned by a command that outlived its foreground tool call. */
+  deferredCommandFinalizer?: () => void;
 }
 
 interface ClosedTerminalSnapshot {
@@ -130,59 +138,8 @@ type ManagedTerminalListener<T extends ManagedTerminalEventName> = (
   event: ManagedTerminalEvents[T],
 ) => void;
 
-export interface CommandResult {
-  exit_code: number | null;
-  output: string;
-  cwd?: string;
-  output_captured: boolean;
-  terminal_id: string;
-  terminal_name?: string;
-  output_file?: string;
-  output_warning?: string;
-  terminal_raw_output?: string;
-  total_lines?: number;
-  lines_shown?: number;
-  command?: string;
-  command_template?: string;
-  command_modified?: boolean;
-  original_command?: string;
-  inline_files?: Array<{ name: string; bytes: number; sha256: string }>;
-  follow_up?: string;
-  approval?:
-    | { by: "master_bypass" }
-    | { by: "explicit_rule" }
-    | { by: "recent_approval" }
-    | {
-        by: "tier";
-        tier: "safe" | "sensitive" | "dangerous";
-        threshold: "safe" | "sensitive";
-      }
-    | { by: "human" }
-    | { by: "human_edited" };
-  auto_approved?: {
-    by: "tier";
-    tier: "safe" | "sensitive" | "dangerous";
-    threshold: "safe" | "sensitive";
-  };
-  timed_out?: boolean;
-  execution_mode?: "shell_integration" | "send_text";
-  verification_hint?: string;
-  command_sent?: boolean;
-}
-
-export interface ExecuteOptions {
-  command: string;
-  cwd: string;
-  terminal_id?: string;
-  terminal_name?: string;
-  /** Split the new terminal alongside this terminal (by id or name) */
-  split_from?: string;
-  background?: boolean;
-  timeout?: number;
-  env?: Record<string, string>;
-  /** Called once the terminal is resolved, before execution begins */
-  onTerminalAssigned?: (terminalId: string) => void;
-}
+export type CommandResult = TerminalCommandResult;
+export type ExecuteOptions = TerminalExecuteOptions;
 
 const SHELL_INTEGRATION_TIMEOUT = 15000; // 15 seconds (WSL2 / heavy shell configs can be slow)
 
@@ -375,11 +332,64 @@ export class TerminalManager {
     }
   }
 
+  private disposeBackgroundTracking(managed: ManagedTerminal): void {
+    for (const disposable of managed.backgroundDisposables) {
+      disposable.dispose();
+    }
+    managed.backgroundDisposables = [];
+  }
+
   private stopTrackingManagedTerminal(managed: ManagedTerminal): void {
     this.rememberClosedTerminal(managed);
-    for (const d of managed.backgroundDisposables) d.dispose();
-    managed.backgroundDisposables = [];
+    this.disposeBackgroundTracking(managed);
+    this.finalizeDeferredCommand(managed);
     this.emitTerminalEvent("close", this.terminalMetadataEvent(managed));
+  }
+
+  private deferCommandFinalization(
+    managed: ManagedTerminal,
+    options: ExecuteOptions,
+  ): void {
+    if (!options.onCommandFinalized || managed.deferredCommandFinalizer) return;
+    let finalized = false;
+    managed.deferredCommandFinalizer = () => {
+      if (finalized) return;
+      finalized = true;
+      try {
+        options.onCommandFinalized?.();
+      } catch (error) {
+        this.log?.(`[terminal-cleanup] Deferred finalizer failed: ${error}`);
+      }
+    };
+    options.onCommandFinalizationDeferred?.();
+  }
+
+  private finalizeDeferredCommand(managed: ManagedTerminal): void {
+    const finalize = managed.deferredCommandFinalizer;
+    managed.deferredCommandFinalizer = undefined;
+    finalize?.();
+  }
+
+  private finishBackgroundCommand(
+    managed: ManagedTerminal,
+    commandId: string,
+    options?: { normalizeOutput?: boolean },
+  ): boolean {
+    if (!managed.backgroundRunning) return false;
+    managed.backgroundRunning = false;
+    managed.lastCommandEndedAt = Date.now();
+    if (options?.normalizeOutput) {
+      managed.outputBuffer = cleanTerminalRawOutput(managed.outputBuffer);
+    }
+    this.emitTerminalEvent("commandEnd", {
+      terminalId: managed.id,
+      commandId,
+      timestamp: managed.lastCommandEndedAt,
+      exitCode: managed.backgroundExitCode,
+    });
+    this.disposeBackgroundTracking(managed);
+    this.finalizeDeferredCommand(managed);
+    return true;
   }
 
   private syncTerminalRegistry(): void {
@@ -465,31 +475,78 @@ export class TerminalManager {
       : options.command;
 
     const managed = await this.resolveTerminal(options);
+
+    let resolveDetach!: () => void;
+    const detachPromise = new Promise<void>((resolve) => {
+      resolveDetach = resolve;
+    });
+    const detachForeground = () => resolveDetach();
+    if (!options.background) {
+      managed.detachForeground = detachForeground;
+    }
     options.onTerminalAssigned?.(managed.id);
 
     try {
       // Show the terminal so the user can see it
       managed.terminal.show(true); // preserveFocus = true
 
-      // Wait for shell integration
-      const hasShellIntegration = await this.waitForShellIntegration(
-        managed.terminal,
-      );
+      // Wait for shell integration, unless the user asks to continue in the
+      // background first. In that case start immediately using the best mode
+      // currently available instead of keeping the agent blocked.
+      const shellReadinessController = new AbortController();
+      const readiness = await Promise.race([
+        this.waitForShellIntegration(
+          managed.terminal,
+          shellReadinessController.signal,
+        ).then(
+          (hasShellIntegration) =>
+            ({ kind: "ready", hasShellIntegration }) as const,
+        ),
+        ...(!options.background
+          ? [detachPromise.then(() => ({ kind: "detach" }) as const)]
+          : []),
+      ]);
 
-      if (options.background) {
-        return this.executeBackground(managed, command, hasShellIntegration);
+      if (readiness.kind === "detach") {
+        shellReadinessController.abort();
+        this.deferCommandFinalization(managed, options);
+        const result = this.executeBackground(
+          managed,
+          command,
+          !!managed.terminal.shellIntegration,
+        );
+        return { ...result, backgrounded: true, is_running: true };
       }
 
-      if (hasShellIntegration) {
+      if (options.background) {
+        this.deferCommandFinalization(managed, options);
+        return this.executeBackground(
+          managed,
+          command,
+          readiness.hasShellIntegration,
+        );
+      }
+
+      if (readiness.hasShellIntegration) {
         return await this.executeWithShellIntegration(
           managed,
           command,
           options.timeout,
+          detachPromise,
+          detachForeground,
+          options,
         );
       } else {
+        this.deferCommandFinalization(managed, options);
         return this.executeWithSendText(managed, command);
       }
+    } catch (error) {
+      this.finalizeDeferredCommand(managed);
+      throw error;
     } finally {
+      if (managed.detachForeground === detachForeground) {
+        managed.detachForeground = undefined;
+      }
       managed.lastCommandEndedAt = Date.now();
       managed.busy = false;
       this.emitTerminalEvent("state", this.terminalMetadataEvent(managed));
@@ -701,6 +758,7 @@ export class TerminalManager {
 
   private async waitForShellIntegration(
     terminal: vscode.Terminal,
+    signal?: AbortSignal,
   ): Promise<boolean> {
     if (terminal.shellIntegration) {
       return true;
@@ -714,6 +772,7 @@ export class TerminalManager {
         clearTimeout(timeout);
         clearInterval(poll);
         disposable.dispose();
+        signal?.removeEventListener("abort", onAbort);
         if (!result) {
           this.log?.(
             `[waitForShellIntegration] TIMEOUT after ${SHELL_INTEGRATION_TIMEOUT}ms`,
@@ -739,17 +798,23 @@ export class TerminalManager {
           done(true);
         }
       }, 200);
+      const onAbort = () => done(false);
+      signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
 
   private async executeWithShellIntegration(
     managed: ManagedTerminal,
     command: string,
-    timeout?: number,
+    timeout: number | undefined,
+    detachPromise: Promise<void>,
+    detachForeground: () => void,
+    options: ExecuteOptions,
   ): Promise<CommandResult> {
     const terminal = managed.terminal;
     const shellIntegration = terminal.shellIntegration!;
     let timedOut = false;
+    let detached = false;
     const disposables: vscode.Disposable[] = [];
 
     // Reset the output buffer for this execution
@@ -818,10 +883,11 @@ export class TerminalManager {
     disposables.push({ dispose: () => clearInterval(stallCheck) });
 
     // --- Primary: shell integration events ---
+    let execution: vscode.TerminalShellExecution | undefined;
     const exitCodePromise = new Promise<number | undefined>((resolve) => {
       disposables.push(
         vscode.window.onDidEndTerminalShellExecution((e) => {
-          if (e.terminal === terminal) {
+          if (execution && e.execution === execution) {
             diag.endEventFired = true;
             logDiag(`END_EVENT exitCode=${e.exitCode}`);
             resolve(e.exitCode);
@@ -846,7 +912,7 @@ export class TerminalManager {
       // shell queue delays don't eat into the user-specified timeout.
       disposables.push(
         vscode.window.onDidStartTerminalShellExecution((e) => {
-          if (e.terminal === terminal) {
+          if (execution && e.execution === execution) {
             diag.startEventFired = true;
             this.recordStartupLatency(Date.now() - executeCalledAt);
             logDiag("START_EVENT");
@@ -895,7 +961,7 @@ export class TerminalManager {
     const executeCalledAt = Date.now();
     const commandId = `${managed.id}:${executeCalledAt}`;
     logDiag("CALLING_EXECUTE_COMMAND");
-    const execution = shellIntegration.executeCommand(command);
+    execution = shellIntegration.executeCommand(command);
     this.emitTerminalEvent("commandStart", {
       terminalId: managed.id,
       commandId,
@@ -976,13 +1042,56 @@ export class TerminalManager {
           text: data,
           timestamp: diag.lastActivityAt,
         });
-        if (checkForMarker("stream")) break;
+        if (!detached && checkForMarker("stream")) break;
       }
       diag.streamDone = true;
       logDiag("STREAM_COMPLETED");
     })();
 
-    await Promise.race([streamDone, exitCodePromise, streamMarkerPromise]);
+    const raceResult = await Promise.race([
+      streamDone.then(() => ({ kind: "stream" }) as const),
+      exitCodePromise.then((exitCode) => ({ kind: "exit", exitCode }) as const),
+      streamMarkerPromise.then(
+        (exitCode) => ({ kind: "marker", exitCode }) as const,
+      ),
+      detachPromise.then(() => ({ kind: "detach" }) as const),
+    ]);
+
+    if (raceResult.kind === "detach") {
+      detached = true;
+      diag.raceResolved = true;
+      diag.raceWinner = "detach";
+      logDiag("RACE_RESOLVED");
+      this.deferCommandFinalization(managed, options);
+      this.transitionToBackground(managed, commandId, execution);
+      clearInterval(markerPoll);
+      for (const d of disposables) d.dispose();
+
+      const actualCwd = shellIntegration.cwd?.fsPath;
+      if (actualCwd) {
+        managed.cwd = actualCwd;
+      }
+      const output = cleanTerminalOutput(managed.outputBuffer);
+      const rawOutput = cleanTerminalRawOutput(managed.outputBuffer);
+      const message = `Command continues in the background. Use get_terminal_output with terminal_id "${managed.id}" to check on progress.`;
+      return {
+        exit_code: null,
+        output: output ? `${output}\n[${message}]` : `[${message}]`,
+        ...(rawOutput && { terminal_raw_output: rawOutput }),
+        ...(actualCwd && { cwd: actualCwd }),
+        output_captured: true,
+        terminal_id: managed.id,
+        terminal_name: managed.name,
+        execution_mode: "shell_integration",
+        command_sent: true,
+        backgrounded: true,
+        is_running: true,
+      };
+    }
+
+    if (managed.detachForeground === detachForeground) {
+      managed.detachForeground = undefined;
+    }
 
     // If the race resolved but we have no output yet, the stream may
     // still be delivering data (observed when exit event fires ~100ms
@@ -1066,7 +1175,8 @@ export class TerminalManager {
     };
 
     if (timedOut) {
-      this.transitionToBackground(managed, commandId);
+      this.deferCommandFinalization(managed, options);
+      this.transitionToBackground(managed, commandId, execution);
       result.timed_out = true;
       const timeoutMessage = `[Timed out after ${timeout! / 1000}s — command may still be running. Use get_terminal_output with terminal_id "${managed.id}" to check on progress, or add kill: true to stop it.]`;
       result.output += `\n${timeoutMessage}`;
@@ -1086,8 +1196,7 @@ export class TerminalManager {
     // Without shell integration we cannot tell when a foreground command ends,
     // so treat the terminal as background-running to prevent immediate reuse by
     // another execute_command call on the same managed terminal.
-    for (const d of managed.backgroundDisposables) d.dispose();
-    managed.backgroundDisposables = [];
+    this.disposeBackgroundTracking(managed);
     managed.outputBuffer = "";
     managed.backgroundRunning = true;
     managed.backgroundOutputCaptured = false;
@@ -1096,17 +1205,7 @@ export class TerminalManager {
     const commandId = `${managed.id}:${timestamp}`;
 
     const finalize = () => {
-      if (!managed.backgroundRunning) return;
-      managed.backgroundRunning = false;
-      managed.lastCommandEndedAt = Date.now();
-      this.emitTerminalEvent("commandEnd", {
-        terminalId: managed.id,
-        commandId,
-        timestamp: managed.lastCommandEndedAt,
-        exitCode: managed.backgroundExitCode,
-      });
-      for (const d of managed.backgroundDisposables) d.dispose();
-      managed.backgroundDisposables = [];
+      this.finishBackgroundCommand(managed, commandId);
     };
 
     const exitDisposable = vscode.window.onDidEndTerminalShellExecution((e) => {
@@ -1156,10 +1255,10 @@ export class TerminalManager {
   private transitionToBackground(
     managed: ManagedTerminal,
     commandId: string,
+    execution: vscode.TerminalShellExecution,
   ): void {
     // Clean up any stale background state
-    for (const d of managed.backgroundDisposables) d.dispose();
-    managed.backgroundDisposables = [];
+    this.disposeBackgroundTracking(managed);
 
     managed.backgroundRunning = true;
     managed.backgroundOutputCaptured = true;
@@ -1177,17 +1276,10 @@ export class TerminalManager {
     // Helper to finalize background state
     const finalize = (source: string) => {
       if (!managed.backgroundRunning) return;
-      managed.backgroundRunning = false;
-      managed.outputBuffer = cleanTerminalRawOutput(managed.outputBuffer);
-      this.emitTerminalEvent("commandEnd", {
-        terminalId: managed.id,
-        commandId,
-        timestamp: Date.now(),
-        exitCode: managed.backgroundExitCode,
-      });
       clearInterval(markerPoll);
-      for (const d of managed.backgroundDisposables) d.dispose();
-      managed.backgroundDisposables = [];
+      this.finishBackgroundCommand(managed, commandId, {
+        normalizeOutput: true,
+      });
       logBg(
         `FINALIZED source=${source} exit_code=${managed.backgroundExitCode}`,
       );
@@ -1195,7 +1287,7 @@ export class TerminalManager {
 
     // Listen for shell execution end event
     const exitDisposable = vscode.window.onDidEndTerminalShellExecution((e) => {
-      if (e.terminal === managed.terminal) {
+      if (execution && e.execution === execution) {
         logBg(`END_EVENT exitCode=${e.exitCode}`);
         managed.backgroundExitCode = e.exitCode ?? null;
         finalize("exitEvent");
@@ -1252,8 +1344,7 @@ export class TerminalManager {
     _hasShellIntegration: boolean,
   ): CommandResult {
     // Clean up any previous background state
-    for (const d of managed.backgroundDisposables) d.dispose();
-    managed.backgroundDisposables = [];
+    this.disposeBackgroundTracking(managed);
     managed.backgroundRunning = true;
     managed.backgroundExitCode = null;
     managed.outputBuffer = "";
@@ -1272,18 +1363,11 @@ export class TerminalManager {
 
     // Helper to clean up background state and dispose listeners
     const finalize = (source: string) => {
-      if (!managed.backgroundRunning) return; // already finalized
-      managed.backgroundRunning = false;
-      managed.outputBuffer = cleanTerminalRawOutput(managed.outputBuffer);
-      this.emitTerminalEvent("commandEnd", {
-        terminalId: managed.id,
-        commandId: execTag,
-        timestamp: Date.now(),
-        exitCode: managed.backgroundExitCode,
-      });
+      if (!managed.backgroundRunning) return;
       clearInterval(markerPoll);
-      for (const d of managed.backgroundDisposables) d.dispose();
-      managed.backgroundDisposables = [];
+      this.finishBackgroundCommand(managed, execTag, {
+        normalizeOutput: true,
+      });
       logBg(
         `FINALIZED source=${source} exit_code=${managed.backgroundExitCode}`,
       );
@@ -1291,9 +1375,17 @@ export class TerminalManager {
 
     // --- Register listeners BEFORE executing (prevents race for fast commands) ---
 
-    // Listen for shell execution end event as primary completion signal
+    const shellIntegration = managed.terminal.shellIntegration;
+    let execution: vscode.TerminalShellExecution | undefined;
+
+    // Listen for shell execution end event as primary completion signal.
+    // Shell-integrated commands match the exact execution so a delayed event
+    // from a prior command cannot finalize this command early.
     const exitDisposable = vscode.window.onDidEndTerminalShellExecution((e) => {
-      if (e.terminal === managed.terminal) {
+      if (
+        (execution && e.execution === execution) ||
+        (!shellIntegration && e.terminal === managed.terminal)
+      ) {
         logBg(`END_EVENT exitCode=${e.exitCode}`);
         managed.backgroundExitCode = e.exitCode ?? null;
         // If we used sendText but shell integration picked up the execution,
@@ -1352,14 +1444,11 @@ export class TerminalManager {
       dispose: () => clearInterval(markerPoll),
     });
 
-    // --- Re-verify shell integration at point of use (don't trust stale boolean) ---
-    const shellIntegration = managed.terminal.shellIntegration;
-
     if (shellIntegration) {
       managed.backgroundOutputCaptured = true;
       logBg(`EXEC_START cmd="${command.slice(0, 120)}" mode=shellIntegration`);
 
-      const execution = shellIntegration.executeCommand(command);
+      execution = shellIntegration.executeCommand(command);
       this.emitTerminalEvent("commandStart", {
         terminalId: managed.id,
         commandId,
@@ -1440,8 +1529,8 @@ export class TerminalManager {
 
     for (const managed of toClose) {
       this.rememberClosedTerminal(managed);
-      for (const d of managed.backgroundDisposables) d.dispose();
-      managed.backgroundDisposables = [];
+      this.disposeBackgroundTracking(managed);
+      this.finalizeDeferredCommand(managed);
       managed.terminal.dispose();
     }
 
@@ -1507,6 +1596,19 @@ export class TerminalManager {
   }
 
   /**
+   * Stop waiting for a foreground command while leaving it running and tracked.
+   * Returns false when the terminal has no detachable foreground execution.
+   */
+  detachTerminal(terminalId: string): boolean {
+    const managed = this.terminals.find((t) => t.id === terminalId);
+    if (!managed?.detachForeground) return false;
+    const detach = managed.detachForeground;
+    managed.detachForeground = undefined;
+    detach();
+    return true;
+  }
+
+  /**
    * Send Ctrl+C (SIGINT) to a managed terminal to interrupt the running process.
    * Returns true if the terminal was found and interrupted.
    */
@@ -1517,8 +1619,8 @@ export class TerminalManager {
     if (managed.backgroundRunning && !managed.backgroundOutputCaptured) {
       managed.backgroundRunning = false;
       managed.lastCommandEndedAt = Date.now();
-      for (const d of managed.backgroundDisposables) d.dispose();
-      managed.backgroundDisposables = [];
+      this.disposeBackgroundTracking(managed);
+      this.finalizeDeferredCommand(managed);
     }
     return true;
   }

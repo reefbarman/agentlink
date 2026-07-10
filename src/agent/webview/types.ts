@@ -62,6 +62,29 @@ export interface SlashCommandInfo {
   isCurrent?: boolean;
 }
 
+export interface ProviderUsageCardData {
+  providers: Array<{
+    providerId: string;
+    providerName: string;
+    available: boolean;
+    reason?: string;
+    accountLabel?: string;
+    accountSource?: string;
+    switchAccountInstructions?: string;
+    planType?: string;
+    rateLimits?: Array<{
+      id: string;
+      name?: string;
+      primary?: { usedPercent: number; resetsAt: number | null };
+      secondary?: { usedPercent: number; resetsAt: number | null };
+    }>;
+    lifetimeTokens?: number;
+    peakDailyTokens?: number;
+    resetCredits?: number;
+  }>;
+  queriedAt: number;
+}
+
 /** A question posed by the agent via the ask_user tool */
 export interface QuestionRequest {
   id: string;
@@ -276,6 +299,7 @@ export type ExtensionMessage =
   | { type: "agentModesUpdate"; modes: ModeInfo[] }
   | { type: "agentModelsUpdate"; models: WebviewModelInfo[] }
   | { type: "agentSlashCommandsUpdate"; commands: SlashCommandInfo[] }
+  | { type: "agentProviderUsage"; data: ProviderUsageCardData }
   | { type: "agentModeSwitchRequest"; mode: string; reason?: string }
   | {
       type: "agentElicitationRequest";

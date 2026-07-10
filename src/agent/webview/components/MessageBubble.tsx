@@ -54,6 +54,7 @@ interface MessageBubbleProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
   onCancelToolCall?: (id: string) => void;
   onPromoteMcpToolApproval?: (promotion: {
@@ -82,6 +83,7 @@ export function MessageBubble({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onContinueToolCallInBackground,
   onCompleteToolCall,
   onCancelToolCall,
   onPromoteMcpToolApproval,
@@ -300,6 +302,7 @@ export function MessageBubble({
                 key={`group-${segment.blocks[0].id}`}
                 blocks={segment.blocks}
                 onOpenFile={onOpenFile}
+                onContinueToolCallInBackground={onContinueToolCallInBackground}
                 onCompleteToolCall={onCompleteToolCall}
                 onCancelToolCall={onCancelToolCall}
                 onPromoteMcpToolApproval={onPromoteMcpToolApproval}
@@ -318,6 +321,9 @@ export function MessageBubble({
                   key={block.id}
                   toolCall={block}
                   onOpenFile={onOpenFile}
+                  onContinueToolCallInBackground={
+                    onContinueToolCallInBackground
+                  }
                   onCompleteToolCall={onCompleteToolCall}
                   onCancelToolCall={onCancelToolCall}
                   onPromoteMcpToolApproval={onPromoteMcpToolApproval}

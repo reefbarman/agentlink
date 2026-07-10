@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "MCP server that provides AI agents with native VS Code tools — diff-based file editing, integrated terminal, diagnostics",
-  "version": "1.16.80",
+  "version": "1.16.85",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -106,6 +106,10 @@
         "title": "AgentLink: Complete Tool Call"
       },
       {
+        "command": "agentlink.continueToolCallInBackground",
+        "title": "AgentLink: Continue Tool Call in Background"
+      },
+      {
         "command": "agentlink.openBrowserGateway",
         "title": "AgentLink: Open Browser Gateway"
       },
@@ -184,6 +188,10 @@
       {
         "command": "agentlink.codexReplaceAccount",
         "title": "AgentLink: Re-sign In / Replace ChatGPT/Codex Account"
+      },
+      {
+        "command": "agentlink.codexSubscriptionUsage",
+        "title": "AgentLink: Show Codex Subscription Usage"
       },
       {
         "command": "agentlink.setupSemanticSearch",

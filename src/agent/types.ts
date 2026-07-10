@@ -161,6 +161,10 @@ export type AgentEvent =
   | {
       type: "warning";
       message: string;
+      modelFallback?: {
+        requestedModel: string;
+        effectiveModel: string;
+      };
       /** Defaults to true. Set false for transient retry notices that should remain log/trace-only. */
       visible?: boolean;
       retryDelayMs?: number;

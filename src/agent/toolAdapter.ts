@@ -1399,9 +1399,12 @@ export async function dispatchToolCall(
       | import("../shared/types.js").McpApprovalPromotionMeta
       | undefined;
 
+    let approvalFollowUp: string | undefined;
+
     if (!isAutoApproved) {
       const inputPreview = JSON.stringify(input, null, 2).slice(0, 600);
       let choice: string;
+      let rejectionReason: string | undefined;
 
       const cwd =
         vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
@@ -1440,7 +1443,13 @@ export async function dispatchToolCall(
           },
           sessionId,
         );
-        choice = typeof raw === "string" ? raw : raw.decision;
+        if (typeof raw === "string") {
+          choice = raw;
+        } else {
+          choice = raw.decision;
+          approvalFollowUp = raw.followUp?.trim() || undefined;
+          rejectionReason = raw.rejectionReason?.trim() || undefined;
+        }
       } else {
         // Fallback VS Code modal (no inline card available)
         const alwaysAllowServer = `Always allow from ${serverName}` as const;
@@ -1462,12 +1471,25 @@ export async function dispatchToolCall(
                 : "deny";
       }
 
-      if (choice === "deny" || !choice) {
+      const allowChoices = new Set([
+        "allow-once",
+        "always-tool-session",
+        "always-tool-project",
+        "always-tool-global",
+        "always-server-project",
+        "always-server-global",
+      ]);
+      if (!choice || !allowChoices.has(choice)) {
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ error: "User denied MCP tool execution" }),
+              text: JSON.stringify({
+                status: "rejected_by_user",
+                error: "User denied MCP tool execution",
+                ...(rejectionReason && { reason: rejectionReason }),
+                ...(approvalFollowUp && { follow_up: approvalFollowUp }),
+              }),
             },
           ],
         };
@@ -1524,6 +1546,18 @@ export async function dispatchToolCall(
         ...result.uiMeta,
         mcpApprovalPromotion: promotionMeta,
       };
+    }
+    if (approvalFollowUp) {
+      // The user typed a follow-up message alongside their approval; surface
+      // it to the agent as an extra content block since the MCP server owns
+      // the shape of the primary result.
+      result.content = [
+        ...result.content,
+        {
+          type: "text",
+          text: JSON.stringify({ follow_up: approvalFollowUp }),
+        },
+      ];
     }
     return result;
   }

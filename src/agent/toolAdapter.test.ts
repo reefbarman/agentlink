@@ -2730,6 +2730,125 @@ describe("dispatchToolCall", () => {
     });
   });
 
+  it("returns the typed rejection reason and follow-up when the user denies an MCP tool", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue({
+      decision: "deny",
+      rejectionReason: "Wrong Linear team; use the ENG workspace.",
+      followUp: "List projects first so we can pick the right one.",
+    });
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn(),
+    };
+
+    const result = await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "list_issues", input: { query: "bug" } },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        onApprovalRequest,
+        mcpHub: mcpHub as any,
+      },
+    );
+
+    expect(mcpHub.callTool).not.toHaveBeenCalled();
+    const parsed = JSON.parse(
+      (result.content[0] as { type: "text"; text: string }).text,
+    );
+    expect(parsed).toEqual({
+      status: "rejected_by_user",
+      error: "User denied MCP tool execution",
+      reason: "Wrong Linear team; use the ENG workspace.",
+      follow_up: "List projects first so we can pick the right one.",
+    });
+  });
+
+  it("treats unknown approval decisions as deny for MCP tools", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue("reject");
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn(),
+    };
+
+    const result = await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "list_issues", input: {} },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        onApprovalRequest,
+        mcpHub: mcpHub as any,
+      },
+    );
+
+    expect(mcpHub.callTool).not.toHaveBeenCalled();
+    const parsed = JSON.parse(
+      (result.content[0] as { type: "text"; text: string }).text,
+    );
+    expect(parsed.status).toBe("rejected_by_user");
+  });
+
+  it("appends the approval follow-up to the MCP tool result", async () => {
+    const onApprovalRequest = vi.fn().mockResolvedValue({
+      decision: "allow-once",
+      followUp: "Only look at issues from this sprint.",
+    });
+    const mcpHub = {
+      getToolDefs: vi.fn().mockReturnValue([
+        {
+          name: "linear__list_issues",
+          description: "List issues",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]),
+      getServerConfig: vi.fn().mockReturnValue(undefined),
+      callTool: vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: JSON.stringify({ issues: [] }) }],
+      }),
+    };
+
+    const result = await dispatchToolCall(
+      "call_mcp_tool",
+      { server: "linear", tool: "list_issues", input: { query: "bug" } },
+      {
+        ...mockCtx,
+        approvalManager: {
+          isMcpApproved: vi.fn().mockReturnValue(false),
+        } as any,
+        onApprovalRequest,
+        mcpHub: mcpHub as any,
+      },
+    );
+
+    expect(mcpHub.callTool).toHaveBeenCalled();
+    expect(result.content).toHaveLength(2);
+    const followUpBlock = JSON.parse(
+      (result.content[1] as { type: "text"; text: string }).text,
+    );
+    expect(followUpBlock).toEqual({
+      follow_up: "Only look at issues from this sprint.",
+    });
+  });
+
   it("tracks nested call_mcp_tool targets and aborts the MCP request when cancelled", async () => {
     let nestedForceResolve: ((result: ToolResult) => void) | undefined;
     const mcpHub = {

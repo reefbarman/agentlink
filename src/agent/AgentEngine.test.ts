@@ -1690,6 +1690,51 @@ describe("AgentEngine", () => {
       });
     });
 
+    it("surfaces model fallback and records the effective model", async () => {
+      const provider = makeMockProvider([
+        {
+          type: "model_fallback",
+          requestedModel: "gpt-5.6-luna",
+          effectiveModel: "gpt-5.4-mini",
+        },
+        ...makeProviderStream(),
+      ]);
+      provider.listModels = () => [
+        {
+          id: "gpt-5.6-luna",
+          displayName: "GPT-5.6 Luna",
+          provider: provider.id,
+          capabilities: TEST_CAPABILITIES,
+        },
+        {
+          id: "gpt-5.4-mini",
+          displayName: "GPT-5.4 Mini",
+          provider: provider.id,
+          capabilities: TEST_CAPABILITIES,
+        },
+      ];
+      const session = await makeSession();
+      session.model = "gpt-5.6-luna";
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(session.model).toBe("gpt-5.4-mini");
+      expect(events).toContainEqual({
+        type: "warning",
+        message:
+          "gpt-5.6-luna is unavailable for this account. Switched to gpt-5.4-mini.",
+        modelFallback: {
+          requestedModel: "gpt-5.6-luna",
+          effectiveModel: "gpt-5.4-mini",
+        },
+      });
+      expect(events.find((event) => event.type === "api_request")).toMatchObject({
+        model: "gpt-5.4-mini",
+      });
+    });
+
     it("retries codex once without previous_response_id when the remote state cannot be resolved", async () => {
       const streamCalls: StreamRequest[] = [];
       const provider: ModelProvider = {

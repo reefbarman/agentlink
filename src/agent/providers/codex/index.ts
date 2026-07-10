@@ -18,3 +18,8 @@ export {
   type OpenAiCodexResolvedAuth,
   type OpenAiApiKeyCredential,
 } from "./OpenAiCodexAuthManager.js";
+export {
+  queryCodexCliUsage,
+  type CodexCliUsageResult,
+  type CodexSubscriptionUsage,
+} from "./CodexCliUsageClient.js";
