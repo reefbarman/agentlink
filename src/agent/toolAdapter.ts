@@ -18,6 +18,8 @@ import type {
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
 } from "./backgroundTypes.js";
+import type { FleetWorkflowRequest } from "./FleetWorkflows.js";
+import type { FleetAutomation } from "./FleetAutomationStore.js";
 import {
   getMcpConfigFilePaths,
   persistMcpServerApproval,
@@ -604,6 +606,55 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
       type: "object",
       properties: { sessionId: { type: "string" } },
       required: ["sessionId"],
+    },
+  },
+  {
+    name: "start_fleet_workflow",
+    description:
+      "Start a structured diff review, browser verification, isolated best-of-N run, or persistent goal using the normal fleet scheduler and policies.",
+    input_schema: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          enum: [
+            "structured_diff_review",
+            "browser_verification",
+            "best_of_n",
+            "persistent_goal",
+          ],
+        },
+        task: { type: "string" },
+        message: { type: "string" },
+        goalId: { type: "string" },
+        candidates: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              model: { type: "string" },
+              provider: { type: "string" },
+            },
+          },
+        },
+        budget: { type: "object" },
+      },
+      required: ["kind", "task", "message"],
+    },
+  },
+  {
+    name: "schedule_fleet_workflow",
+    description:
+      "Persist a recurring or fleet-event-triggered workflow automation.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        everyMinutes: { type: "number" },
+        eventType: { type: "string" },
+        workflow: { type: "object" },
+      },
+      required: ["name", "workflow"],
     },
   },
 ];
@@ -1283,6 +1334,20 @@ export interface ToolDispatchContext {
     callerSessionId: string,
     sessionId: string,
   ) => { detached: boolean; reason?: string };
+  onStartFleetWorkflow?: (
+    callerSessionId: string,
+    request: FleetWorkflowRequest,
+  ) => Promise<{
+    workflowId: string;
+    goalId?: string;
+    sessions: SpawnBackgroundResult[];
+  }>;
+  onScheduleFleetAutomation?: (input: {
+    name: string;
+    workflow: FleetWorkflowRequest;
+    everyMs?: number;
+    eventType?: string;
+  }) => Promise<FleetAutomation>;
   /** Active skill tool allowlist, enforced for direct and deferred MCP dispatch. */
   skillAllowedTools?: string[];
   /** Abort signal for the current tool call, used to cancel in-flight MCP SDK requests. */
@@ -2706,6 +2771,65 @@ export async function dispatchToolCall(
         ctx.sessionId,
         String(params.sessionId ?? ""),
       );
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
+    case "start_fleet_workflow": {
+      if (!ctx.onStartFleetWorkflow) {
+        return errorResult("Fleet workflows not available");
+      }
+      const allowedKinds = new Set<FleetWorkflowRequest["kind"]>([
+        "structured_diff_review",
+        "browser_verification",
+        "best_of_n",
+        "persistent_goal",
+      ]);
+      const kind = String(params.kind ?? "") as FleetWorkflowRequest["kind"];
+      if (!allowedKinds.has(kind)) return errorResult("Invalid fleet workflow kind");
+      const candidates = Array.isArray(params.candidates)
+        ? params.candidates
+            .filter(
+              (item): item is Record<string, unknown> =>
+                typeof item === "object" && item !== null,
+            )
+            .map((item) => ({
+              model: typeof item.model === "string" ? item.model : undefined,
+              provider:
+                typeof item.provider === "string" ? item.provider : undefined,
+            }))
+        : undefined;
+      const result = await ctx.onStartFleetWorkflow(ctx.sessionId, {
+        kind,
+        task: String(params.task ?? ""),
+        message: String(params.message ?? ""),
+        goalId: typeof params.goalId === "string" ? params.goalId : undefined,
+        candidates,
+        budget:
+          typeof params.budget === "object" && params.budget !== null
+            ? (params.budget as FleetWorkflowRequest["budget"])
+            : undefined,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
+    case "schedule_fleet_workflow": {
+      if (!ctx.onScheduleFleetAutomation) {
+        return errorResult("Fleet automation scheduling not available");
+      }
+      if (!params.workflow || typeof params.workflow !== "object") {
+        return errorResult("workflow is required");
+      }
+      const everyMinutes = Number(params.everyMinutes);
+      const result = await ctx.onScheduleFleetAutomation({
+        name: String(params.name ?? "Fleet automation"),
+        workflow: params.workflow as unknown as FleetWorkflowRequest,
+        everyMs:
+          Number.isFinite(everyMinutes) && everyMinutes > 0
+            ? everyMinutes * 60_000
+            : undefined,
+        eventType:
+          typeof params.eventType === "string" ? params.eventType : undefined,
+      });
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
 

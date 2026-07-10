@@ -71,6 +71,10 @@ import {
   FleetAdmissionError,
   FleetScheduler,
 } from "./FleetScheduler.js";
+import {
+  planFleetWorkflow,
+  type FleetWorkflowRequest,
+} from "./FleetWorkflows.js";
 
 export interface BtwQuestionResult {
   answer: string;
@@ -218,6 +222,22 @@ export class AgentSessionManager {
     sessionId: string,
     event: NonNullable<PersistedFleetMetadata["events"]>[number],
   ) => void;
+  private readonly fleetEventListeners = new Set<
+    (
+      sessionId: string,
+      event: NonNullable<PersistedFleetMetadata["events"]>[number],
+    ) => void
+  >();
+
+  addFleetEventListener(
+    listener: (
+      sessionId: string,
+      event: NonNullable<PersistedFleetMetadata["events"]>[number],
+    ) => void,
+  ): () => void {
+    this.fleetEventListeners.add(listener);
+    return () => this.fleetEventListeners.delete(listener);
+  }
 
   constructor(
     config: AgentConfig,
@@ -3232,6 +3252,26 @@ export class AgentSessionManager {
     };
   }
 
+  async startFleetWorkflow(
+    request: FleetWorkflowRequest,
+    parentSessionId?: string,
+  ): Promise<{
+    workflowId: string;
+    goalId?: string;
+    sessions: SpawnBackgroundResult[];
+  }> {
+    const plan = planFleetWorkflow(request);
+    const sessions: SpawnBackgroundResult[] = [];
+    for (const delegation of plan.delegations) {
+      sessions.push(await this.spawnBackground(delegation, parentSessionId));
+    }
+    return {
+      workflowId: plan.workflowId,
+      goalId: plan.goalId,
+      sessions,
+    };
+  }
+
   private normalizeBgStatusPhrase(status: string): string {
     const raw = status.trim();
     if (!raw) return "";
@@ -4168,6 +4208,9 @@ export class AgentSessionManager {
     fleet.events = [...(fleet.events ?? []).slice(-99), event];
     this.saveSession(session.id);
     this.onFleetEvent?.(session.id, event);
+    for (const listener of this.fleetEventListeners) {
+      listener(session.id, event);
+    }
     this.onSessionsChanged?.();
   }
 

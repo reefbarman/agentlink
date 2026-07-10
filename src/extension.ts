@@ -71,6 +71,7 @@ import { normalizeBrowserGatewayModelCredentialProviderId } from "./browser-gate
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
 import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js";
 import { createVscodeWorktreeAgentLaunchProvider } from "./adapters/vscode/worktreeAgentLaunchCapabilities.js";
+import { FleetAutomationStore } from "./agent/FleetAutomationStore.js";
 import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
 import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
 import {
@@ -1270,6 +1271,30 @@ export function activate(context: vscode.ExtensionContext): void {
   builtinApprovalPanel.onForwardApprovalIdle = () =>
     chatViewProvider.sendApprovalIdle();
 
+  const fleetAutomationStore = new FleetAutomationStore(
+    path.join(context.globalStorageUri.fsPath, "fleet-automations.json"),
+    (workflow) => agentSessionManager.startFleetWorkflow(workflow),
+  );
+  await fleetAutomationStore.load();
+  const removeFleetAutomationListener = agentSessionManager.addFleetEventListener(
+    (_sessionId, event) => {
+      void fleetAutomationStore.trigger(event.type).catch((error) =>
+        log(`[fleet-automation] event trigger failed: ${String(error)}`),
+      );
+    },
+  );
+  const fleetAutomationTimer = setInterval(() => {
+    void fleetAutomationStore.runDue().catch((error) =>
+      log(`[fleet-automation] scheduled run failed: ${String(error)}`),
+    );
+  }, 30_000);
+  context.subscriptions.push({
+    dispose: () => {
+      clearInterval(fleetAutomationTimer);
+      removeFleetAutomationListener();
+    },
+  });
+
   // Wire up tool dispatch context (mcpHub provided by ChatViewProvider after initialize)
   agentSessionManager.setToolContext({
     approvalManager,
@@ -1321,6 +1346,9 @@ export function activate(context: vscode.ExtensionContext): void {
         callerSessionId,
         sessionId,
       ),
+    onStartFleetWorkflow: (callerSessionId, request) =>
+      agentSessionManager.startFleetWorkflow(request, callerSessionId),
+    onScheduleFleetAutomation: (input) => fleetAutomationStore.schedule(input),
     worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
       globalStorageUri: context.globalStorageUri,
       onApprovalRequest: (request, sessionId) =>
