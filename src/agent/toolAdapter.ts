@@ -18,7 +18,11 @@ import type {
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
 } from "./backgroundTypes.js";
-import type { FleetWorkflowRequest } from "./FleetWorkflows.js";
+import type {
+  FleetWorkflowKind,
+  FleetWorkflowOutcome,
+  FleetWorkflowRequest,
+} from "./FleetWorkflows.js";
 import type { FleetAutomation } from "./FleetAutomationStore.js";
 import {
   getMcpConfigFilePaths,
@@ -659,6 +663,27 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         workflow: { type: "object" },
       },
       required: ["name", "workflow"],
+    },
+  },
+  {
+    name: "get_fleet_workflow_result",
+    description:
+      "Wait for all workflow candidates, collect structured evidence, and select a best-of-N winner when applicable.",
+    input_schema: {
+      type: "object",
+      properties: {
+        workflowId: { type: "string" },
+        kind: {
+          type: "string",
+          enum: [
+            "structured_diff_review",
+            "browser_verification",
+            "best_of_n",
+            "persistent_goal",
+          ],
+        },
+      },
+      required: ["workflowId", "kind"],
     },
   },
 ];
@@ -1352,6 +1377,10 @@ export interface ToolDispatchContext {
     everyMs?: number;
     eventType?: string;
   }) => Promise<FleetAutomation>;
+  onCollectFleetWorkflow?: (
+    workflowId: string,
+    kind: FleetWorkflowKind,
+  ) => Promise<FleetWorkflowOutcome>;
   /** Active skill tool allowlist, enforced for direct and deferred MCP dispatch. */
   skillAllowedTools?: string[];
   /** Abort signal for the current tool call, used to cancel in-flight MCP SDK requests. */
@@ -2834,6 +2863,17 @@ export async function dispatchToolCall(
         eventType:
           typeof params.eventType === "string" ? params.eventType : undefined,
       });
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
+    case "get_fleet_workflow_result": {
+      if (!ctx.onCollectFleetWorkflow) {
+        return errorResult("Fleet workflow collection not available");
+      }
+      const result = await ctx.onCollectFleetWorkflow(
+        String(params.workflowId ?? ""),
+        String(params.kind ?? "") as FleetWorkflowKind,
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
 

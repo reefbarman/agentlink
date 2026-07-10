@@ -185,7 +185,10 @@ export interface BgSessionInfo {
   parentSessionId?: string;
   rootSessionId?: string;
   goalId?: string;
+  workflowId?: string;
   workspace?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
   depth?: number;
   placement?: "background" | "worktree" | "remote";
   delegation?: {

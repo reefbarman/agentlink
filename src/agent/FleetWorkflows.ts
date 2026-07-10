@@ -22,6 +22,21 @@ export interface FleetWorkflowPlan {
   delegations: SpawnBackgroundRequest[];
 }
 
+export interface FleetWorkflowOutcome {
+  workflowId: string;
+  kind: FleetWorkflowKind;
+  completed: boolean;
+  candidates: Array<{
+    sessionId: string;
+    result: FleetResultEnvelope;
+    worktreePath?: string;
+    worktreeBranch?: string;
+    score?: number;
+  }>;
+  winnerSessionId?: string;
+  summary: string;
+}
+
 /** Builds higher-autonomy workflows exclusively from normal fleet delegations. */
 export function planFleetWorkflow(request: FleetWorkflowRequest): FleetWorkflowPlan {
   const workflowId = randomUUID();
@@ -133,6 +148,23 @@ export function parseFleetResultEnvelope(
     }
   }
   return { type: "text", text };
+}
+
+export function scoreFleetCandidate(result: FleetResultEnvelope): number {
+  if (result.type === "patch") {
+    return 100 + result.files.length * 5 + (result.verification ? 25 : 0);
+  }
+  if (result.type === "verification") {
+    return (
+      (result.passed ? 100 : 0) +
+      (result.screenshots?.length ?? 0) * 5 +
+      (result.logs?.length ?? 0)
+    );
+  }
+  if (result.type === "review_findings") {
+    return Math.max(0, 50 - result.findings.length);
+  }
+  return Math.min(25, result.text.trim().length / 100);
 }
 
 export function withFleetResultInstruction(

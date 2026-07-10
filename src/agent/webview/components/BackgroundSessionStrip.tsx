@@ -24,7 +24,10 @@ export interface BgSessionInfoProps {
   parentSessionId?: string;
   rootSessionId?: string;
   goalId?: string;
+  workflowId?: string;
   workspace?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
   depth?: number;
   placement?: "background" | "worktree" | "remote";
   delegation?: {
@@ -371,7 +374,10 @@ export function BackgroundSessionStrip({
                 s.resolvedModel ? `model: ${s.resolvedModel}` : null,
                 s.lifecycle ? `lifecycle: ${s.lifecycle}` : null,
                 s.goalId ? `goal: ${s.goalId}` : null,
+                s.workflowId ? `workflow: ${s.workflowId}` : null,
                 s.workspace ? `workspace: ${s.workspace}` : null,
+                s.worktreePath ? `worktree: ${s.worktreePath}` : null,
+                s.worktreeBranch ? `branch: ${s.worktreeBranch}` : null,
                 s.delegation ? `delegation: ${JSON.stringify(s.delegation)}` : null,
                 s.terminalReason ? `reason: ${s.terminalReason}` : null,
                 `tokens: ${(s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0)}`,

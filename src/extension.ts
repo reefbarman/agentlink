@@ -1423,6 +1423,8 @@ export function activate(context: vscode.ExtensionContext): void {
       await fleetAutomationReady;
       return fleetAutomationStore.schedule(input);
     },
+    onCollectFleetWorkflow: (workflowId, kind) =>
+      agentSessionManager.collectFleetWorkflow(workflowId, kind),
     worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
       globalStorageUri: context.globalStorageUri,
       onApprovalRequest: (request, sessionId) =>

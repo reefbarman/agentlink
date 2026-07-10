@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseFleetResultEnvelope,
   planFleetWorkflow,
+  scoreFleetCandidate,
   withFleetResultInstruction,
 } from "./FleetWorkflows.js";
 
@@ -27,6 +28,19 @@ describe("fleet workflows", () => {
         message: "Verify in browser",
       }).delegations[0].expectedResult,
     ).toBe("verification");
+  });
+
+  it("scores verified patches above unverified or plain-text candidates", () => {
+    expect(
+      scoreFleetCandidate({
+        type: "patch",
+        summary: "done",
+        files: ["a.ts"],
+        verification: "tests pass",
+      }),
+    ).toBeGreaterThan(
+      scoreFleetCandidate({ type: "text", text: "looks plausible" }),
+    );
   });
 
   it("isolates every best-of-N candidate", () => {

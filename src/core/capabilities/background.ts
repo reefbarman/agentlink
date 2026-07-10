@@ -24,6 +24,8 @@ export interface SpawnBackgroundRequest {
   expectedResult?: "text" | "review_findings" | "patch" | "verification";
   budget?: AgentBudget;
   goalId?: string;
+  /** Internal orchestration identity shared by workflow candidates. */
+  workflowId?: string;
 }
 
 export interface SpawnBackgroundResult {

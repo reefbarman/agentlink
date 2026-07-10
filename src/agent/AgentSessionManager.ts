@@ -74,7 +74,9 @@ import {
 import {
   parseFleetResultEnvelope,
   planFleetWorkflow,
+  scoreFleetCandidate,
   type FleetWorkflowRequest,
+  type FleetWorkflowOutcome,
   withFleetResultInstruction,
 } from "./FleetWorkflows.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
@@ -2843,6 +2845,7 @@ export class AgentSessionManager {
         },
         budget: request.budget,
         goalId: request.goalId,
+        workflowId: request.workflowId,
       });
       this.appendFleetEvent(session, "queued", "Agent admitted to the fleet");
       this.saveSession(session.id);
@@ -3085,6 +3088,7 @@ export class AgentSessionManager {
       },
       budget: request.budget,
       goalId: request.goalId,
+      workflowId: request.workflowId,
     });
     this.appendFleetEvent(session, "queued", "Agent admitted to the fleet");
     this.saveSession(session.id);
@@ -3298,12 +3302,63 @@ export class AgentSessionManager {
     const plan = planFleetWorkflow(request);
     const sessions: SpawnBackgroundResult[] = [];
     for (const delegation of plan.delegations) {
-      sessions.push(await this.spawnBackground(delegation, parentSessionId));
+      sessions.push(
+        await this.spawnBackground(
+          { ...delegation, workflowId: plan.workflowId },
+          parentSessionId,
+        ),
+      );
     }
     return {
       workflowId: plan.workflowId,
       goalId: plan.goalId,
       sessions,
+    };
+  }
+
+  async collectFleetWorkflow(
+    workflowId: string,
+    kind: import("./FleetWorkflows.js").FleetWorkflowKind,
+  ): Promise<FleetWorkflowOutcome> {
+    const sessions = Array.from(this.sessions.values()).filter(
+      (session) => session.fleetMetadata?.workflowId === workflowId,
+    );
+    if (sessions.length === 0) {
+      throw new Error(`Fleet workflow not found: ${workflowId}`);
+    }
+    await Promise.all(
+      sessions.map((session) => this.waitForBackground(session.id)),
+    );
+    const candidates = sessions.map((session) => {
+      const fleet = session.fleetMetadata!;
+      const result =
+        fleet.structuredResult ??
+        parseFleetResultEnvelope(
+          fleet.delegation
+            ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
+          fleet.finalResult ?? "",
+        );
+      return {
+        sessionId: session.id,
+        result,
+        worktreePath: fleet.worktreePath,
+        worktreeBranch: fleet.worktreeBranch,
+        score: scoreFleetCandidate(result),
+      };
+    });
+    const winner =
+      kind === "best_of_n"
+        ? candidates.slice().sort((a, b) => b.score - a.score)[0]
+        : undefined;
+    return {
+      workflowId,
+      kind,
+      completed: true,
+      candidates,
+      winnerSessionId: winner?.sessionId,
+      summary: winner
+        ? `Selected ${winner.sessionId} with evidence score ${winner.score}. Review worktree ${winner.worktreePath ?? "unknown"} before integration.`
+        : `Collected ${candidates.length} structured workflow result(s).`,
     };
   }
 
@@ -4527,6 +4582,7 @@ export class AgentSessionManager {
       },
       budget: request.budget,
       goalId: request.goalId,
+      workflowId: request.workflowId,
     });
     session.fleetMetadata.placement = "worktree";
     session.fleetMetadata.lifecycle = "running";
@@ -4562,6 +4618,8 @@ export class AgentSessionManager {
           ? payload.worktreePath
           : undefined;
       session.fleetMetadata.worktreePath = worktreePath;
+      session.fleetMetadata.worktreeBranch =
+        typeof payload.branch === "string" ? payload.branch : undefined;
       await exchangeStore.update(exchange.id, { worktreePath });
       this.appendFleetEvent(session, "started", "Worktree window opened");
       this.startWorktreeExchangeMonitor(session, exchangeStore, exchange.id);
@@ -4897,7 +4955,10 @@ export class AgentSessionManager {
           parentSessionId: s.fleetMetadata?.parentSessionId,
           rootSessionId: s.fleetMetadata?.rootSessionId,
           goalId: s.fleetMetadata?.goalId,
+          workflowId: s.fleetMetadata?.workflowId,
           workspace: s.cwd,
+          worktreePath: s.fleetMetadata?.worktreePath,
+          worktreeBranch: s.fleetMetadata?.worktreeBranch,
           depth: s.fleetMetadata?.depth,
           placement: s.fleetMetadata?.placement,
           delegation: s.fleetMetadata?.delegation,

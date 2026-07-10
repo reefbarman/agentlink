@@ -92,6 +92,7 @@ export interface PersistedFleetMetadata {
   completedAt?: number;
   finalResult?: string;
   goalId?: string;
+  workflowId?: string;
   delegation?: {
     ownedPaths?: string[];
     forbiddenPaths?: string[];
@@ -121,6 +122,7 @@ export interface PersistedFleetMetadata {
   resumedFromSessionId?: string;
   worktreeExchangeId?: string;
   worktreePath?: string;
+  worktreeBranch?: string;
   childSessionId?: string;
   structuredResult?: FleetResultEnvelope;
   eventSequence?: number;
