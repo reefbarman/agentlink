@@ -1008,6 +1008,35 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("persists sequenced fleet events and read state", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const onFleetEvent = vi.fn();
+    mgr.onFleetEvent = onFleetEvent;
+    const spawned = await mgr.spawnBackground({
+      task: "eventful",
+      message: "work",
+    });
+    await waitFor(
+      () => (mgr as any).sessions.get(spawned.sessionId).fleetMetadata.lifecycle,
+      (lifecycle) => lifecycle === "completed",
+    );
+    const info = mgr.getBgSessionInfos().find((item) => item.id === spawned.sessionId);
+    expect(info?.events?.map((event) => event.type)).toEqual([
+      "queued",
+      "started",
+      "completed",
+    ]);
+    expect(info?.unreadEventCount).toBe(3);
+    expect(onFleetEvent).toHaveBeenCalledTimes(3);
+
+    expect(mgr.markFleetEventsRead(spawned.sessionId)).toEqual({ marked: 3 });
+    expect(
+      mgr.getBgSessionInfos().find((item) => item.id === spawned.sessionId)
+        ?.unreadEventCount,
+    ).toBe(0);
+  });
+
   it("restores persisted background ancestry and marks running work interrupted", async () => {
     const summary = {
       schemaVersion: 1,

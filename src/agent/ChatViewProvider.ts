@@ -3309,7 +3309,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async submitBrowserBackgroundAction(input: {
-    action: "steer" | "detach" | "retry" | "archive" | "pause" | "resume";
+    action:
+      | "steer"
+      | "detach"
+      | "retry"
+      | "archive"
+      | "pause"
+      | "resume"
+      | "mark_read";
     sessionId: string;
     message?: string;
   }): Promise<{ ok: boolean; error?: string; sessionId?: string }> {
@@ -3333,6 +3340,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (input.action === "archive") {
       const result = this.sessionManager.archiveBackground(input.sessionId);
       return { ok: result.archived, error: result.reason };
+    }
+    if (input.action === "mark_read") {
+      this.sessionManager.markFleetEventsRead(input.sessionId);
+      return { ok: true };
     }
     if (input.action === "pause") {
       const result = this.sessionManager.pauseBackground(input.sessionId);
@@ -3613,6 +3624,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       void this.slashRegistry?.reload().then(() => this.sendSlashCommands());
       this.sendInitialState();
       this.sendBgSessionsUpdate();
+    };
+    manager.onFleetEvent = (sessionId, event) => {
+      this.postMessage({ type: "agentFleetEvent", sessionId, event });
+      const task = manager.getSession(sessionId)?.title ?? "Background agent";
+      if (event.type === "approval" || event.type === "question") {
+        void vscode.window.showInformationMessage(`${task}: ${event.summary}`);
+      } else if (event.type === "failed" || event.type === "budget_warning") {
+        void vscode.window.showWarningMessage(`${task}: ${event.summary}`);
+      } else if (event.type === "completed") {
+        void vscode.window.showInformationMessage(`${task} completed`);
+      }
     };
   }
 
@@ -4687,6 +4709,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "resumeBgAgent": {
         if (typeof msg.sessionId === "string") {
           void this.sessionManager?.resumeBackground(msg.sessionId);
+        }
+        break;
+      }
+
+      case "markBgEventsRead": {
+        if (typeof msg.sessionId === "string") {
+          this.sessionManager?.markFleetEventsRead(msg.sessionId);
         }
         break;
       }

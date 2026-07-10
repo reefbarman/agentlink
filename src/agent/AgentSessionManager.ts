@@ -213,6 +213,11 @@ export class AgentSessionManager {
 
   /** Callback when session list changes */
   onSessionsChanged?: () => void;
+  /** Durable fleet lifecycle hook for notifications and automations. */
+  onFleetEvent?: (
+    sessionId: string,
+    event: NonNullable<PersistedFleetMetadata["events"]>[number],
+  ) => void;
 
   constructor(
     config: AgentConfig,
@@ -1460,6 +1465,7 @@ export class AgentSessionManager {
             session.getLastAssistantText() ??
             this.bgStreamingText.get(sessionId) ??
             undefined;
+          this.appendFleetEvent(session, "cancelled", "Agent cancelled");
         }
       }
       this.onSessionsChanged?.();
@@ -2634,6 +2640,7 @@ export class AgentSessionManager {
     }
     session.status = "streaming";
     if (session.fleetMetadata) session.fleetMetadata.lifecycle = "running";
+    this.appendFleetEvent(session, "started", "Agent started");
     void launch().finally(() => this.drainBackgroundQueue());
   }
 
@@ -2652,6 +2659,7 @@ export class AgentSessionManager {
       if (!session || this.bgCancelled.has(queued.sessionId)) continue;
       session.status = "streaming";
       if (session.fleetMetadata) session.fleetMetadata.lifecycle = "running";
+      this.appendFleetEvent(session, "started", "Agent started from queue");
       this.saveSession(session.id);
       this.onSessionsChanged?.();
       void queued.start().finally(() => this.drainBackgroundQueue());
@@ -2781,6 +2789,7 @@ export class AgentSessionManager {
         budget: request.budget,
         goalId: request.goalId,
       });
+      this.appendFleetEvent(session, "queued", "Agent admitted to the fleet");
       this.saveSession(session.id);
       this.onSessionsChanged?.();
 
@@ -3022,6 +3031,7 @@ export class AgentSessionManager {
       budget: request.budget,
       goalId: request.goalId,
     });
+    this.appendFleetEvent(session, "queued", "Agent admitted to the fleet");
     this.saveSession(session.id);
     this.onSessionsChanged?.();
 
@@ -3036,11 +3046,24 @@ export class AgentSessionManager {
         forbiddenPaths: request.forbiddenPaths,
       },
       onApprovalRequest: baseCtx.onApprovalRequest
-        ? (req) => baseCtx.onApprovalRequest!({ ...req, backgroundTask: task })
+        ? (req) => {
+            this.appendFleetEvent(
+              session,
+              "approval",
+              req.title || "Approval required",
+            );
+            return baseCtx.onApprovalRequest!({ ...req, backgroundTask: task });
+          }
         : undefined,
       onQuestion: baseCtx.onQuestion
-        ? (context, questions, bgSessionId) =>
-            baseCtx.onQuestion!(context, questions, bgSessionId, task)
+        ? (context, questions, bgSessionId) => {
+            this.appendFleetEvent(
+              session,
+              "question",
+              questions[0]?.question || "Answer required",
+            );
+            return baseCtx.onQuestion!(context, questions, bgSessionId, task);
+          }
         : undefined,
     };
 
@@ -3919,6 +3942,7 @@ export class AgentSessionManager {
     fleet.parentSessionId = undefined;
     this.bgParents.delete(sessionId);
     updateSubtree(session, session.id, 1);
+    this.appendFleetEvent(session, "detached", "Subtree detached");
     this.onSessionsChanged?.();
     return { detached: true };
   }
@@ -3966,6 +3990,7 @@ export class AgentSessionManager {
     fleet.terminalReason = "paused_by_user";
     session.abort();
     session.status = "idle";
+    this.appendFleetEvent(session, "paused", "Agent paused");
     this.saveSession(sessionId);
     this.onSessionsChanged?.();
     return { paused: true };
@@ -3980,6 +4005,7 @@ export class AgentSessionManager {
     const replacement = this.sessions.get(result.sessionId);
     if (replacement?.fleetMetadata) {
       replacement.fleetMetadata.resumedFromSessionId = sessionId;
+      this.appendFleetEvent(replacement, "resumed", "Agent resumed");
       this.saveSession(replacement.id);
     }
     session.fleetMetadata.terminalReason = "resumed_as_new_session";
@@ -4115,6 +4141,49 @@ export class AgentSessionManager {
     }
   }
 
+  private appendFleetEvent(
+    session: AgentSession,
+    type: NonNullable<PersistedFleetMetadata["events"]>[number]["type"],
+    summary: string,
+  ): void {
+    const fleet = session.fleetMetadata;
+    if (!fleet) return;
+    const existing = fleet.events?.at(-1);
+    if (existing?.type === type && !existing.readAt) return;
+    const sequence = (fleet.eventSequence ?? 0) + 1;
+    fleet.eventSequence = sequence;
+    const event = {
+      id: `${session.id}:${sequence}`,
+      sequence,
+      type,
+      timestamp: Date.now(),
+      summary: summary.slice(0, 240),
+    };
+    fleet.events = [...(fleet.events ?? []).slice(-99), event];
+    this.saveSession(session.id);
+    this.onFleetEvent?.(session.id, event);
+    this.onSessionsChanged?.();
+  }
+
+  markFleetEventsRead(sessionId: string): { marked: number } {
+    const session = this.sessions.get(sessionId);
+    const events = session?.fleetMetadata?.events;
+    if (!events) return { marked: 0 };
+    const readAt = Date.now();
+    let marked = 0;
+    for (const event of events) {
+      if (!event.readAt) {
+        event.readAt = readAt;
+        marked += 1;
+      }
+    }
+    if (marked) {
+      this.saveSession(sessionId);
+      this.onSessionsChanged?.();
+    }
+    return { marked };
+  }
+
   private createFleetMetadata(
     session: AgentSession,
     args: Omit<
@@ -4165,14 +4234,18 @@ export class AgentSessionManager {
     if (this.bgCancelled.has(session.id)) {
       fleet.lifecycle = "cancelled";
       fleet.terminalReason ??= "cancelled_by_user";
+      this.appendFleetEvent(session, "cancelled", "Agent cancelled");
     } else if (fleet.terminalReason?.startsWith("budget_exhausted:")) {
       fleet.lifecycle = "budget_exhausted";
+      this.appendFleetEvent(session, "failed", fleet.terminalReason);
     } else if (session.status === "error") {
       fleet.lifecycle = "failed";
       fleet.terminalReason = this.bgErrors.get(session.id) ?? "agent_error";
+      this.appendFleetEvent(session, "failed", fleet.terminalReason);
     } else {
       fleet.lifecycle = "completed";
       fleet.terminalReason = undefined;
+      this.appendFleetEvent(session, "completed", "Agent completed");
     }
   }
 
@@ -4322,6 +4395,11 @@ export class AgentSessionManager {
         ...warning,
         emittedAt: Date.now(),
       };
+      this.appendFleetEvent(
+        owner,
+        "budget_warning",
+        `${warning.kind} budget at ${Math.round(warning.ratio * 100)}%`,
+      );
       this.saveSession(owner.id);
       this.onSessionsChanged?.();
     }
@@ -4451,12 +4529,17 @@ export class AgentSessionManager {
           heuristicStatus,
           summary,
         });
+        const events = s.fleetMetadata?.events ?? [];
+        const unreadEvents = events.filter((event) => !event.readAt);
+        const latestUnread = unreadEvents.at(-1);
         const eventKind =
-          status === "awaiting_approval"
-            ? "approval"
-            : s.fleetMetadata?.budgetWarning
-              ? "budget_warning"
-            : s.fleetMetadata?.lifecycle === "interrupted"
+          latestUnread?.type === "question"
+            ? "question"
+            : status === "awaiting_approval" || latestUnread?.type === "approval"
+              ? "approval"
+              : latestUnread?.type === "budget_warning"
+                ? "budget_warning"
+                : s.fleetMetadata?.lifecycle === "interrupted"
               ? "interrupted"
               : status === "error"
                 ? "failure"
@@ -4523,9 +4606,11 @@ export class AgentSessionManager {
           apiTurns: meta?.apiTurns,
           budget: s.fleetMetadata?.budget,
           attention:
-            status === "awaiting_approval"
+            latestUnread?.type === "question"
+              ? "question"
+              : status === "awaiting_approval" || latestUnread?.type === "approval"
               ? "approval"
-              : s.fleetMetadata?.budgetWarning
+              : latestUnread?.type === "budget_warning"
                 ? "budget_warning"
               : s.fleetMetadata?.lifecycle === "interrupted"
                 ? "interrupted"
@@ -4540,6 +4625,8 @@ export class AgentSessionManager {
               }
             : undefined,
           archivedAt: s.fleetMetadata?.archivedAt,
+          unreadEventCount: unreadEvents.length,
+          events,
           streamingText,
           resultText,
           errorMessage,

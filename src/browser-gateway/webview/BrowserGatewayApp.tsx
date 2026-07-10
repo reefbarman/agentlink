@@ -3324,7 +3324,14 @@ export function BrowserGatewayApp({
   };
 
   const handleBackgroundAction = (
-    action: "steer" | "detach" | "retry" | "archive" | "pause" | "resume",
+    action:
+      | "steer"
+      | "detach"
+      | "retry"
+      | "archive"
+      | "pause"
+      | "resume"
+      | "mark_read",
     sessionId: string,
     message?: string,
   ): void => {
@@ -4964,6 +4971,9 @@ export function BrowserGatewayApp({
                   }
                   onResume={(sessionId) =>
                     handleBackgroundAction("resume", sessionId)
+                  }
+                  onMarkRead={(sessionId) =>
+                    handleBackgroundAction("mark_read", sessionId)
                   }
                 />
               )}

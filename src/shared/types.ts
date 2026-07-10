@@ -221,11 +221,17 @@ export interface BgSessionInfo {
     warningThresholdRatio?: number;
     scope?: "session" | "subtree" | "goal";
   };
-  attention?: "approval" | "failed" | "interrupted" | "budget_warning";
+  attention?:
+    | "approval"
+    | "question"
+    | "failed"
+    | "interrupted"
+    | "budget_warning";
   attentionEvent?: {
     id: string;
     kind:
       | "approval"
+      | "question"
       | "completion"
       | "failure"
       | "interrupted"
@@ -233,6 +239,15 @@ export interface BgSessionInfo {
     timestamp: number;
   };
   archivedAt?: number;
+  unreadEventCount?: number;
+  events?: Array<{
+    id: string;
+    sequence: number;
+    type: string;
+    timestamp: number;
+    summary: string;
+    readAt?: number;
+  }>;
   /** Accumulated streaming text from the bg agent (last ~500 chars for preview). */
   streamingText?: string;
   /** Final result text when agent is done. */

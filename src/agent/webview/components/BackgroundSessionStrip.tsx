@@ -60,11 +60,17 @@ export interface BgSessionInfoProps {
     warningThresholdRatio?: number;
     scope?: "session" | "subtree" | "goal";
   };
-  attention?: "approval" | "failed" | "interrupted" | "budget_warning";
+  attention?:
+    | "approval"
+    | "question"
+    | "failed"
+    | "interrupted"
+    | "budget_warning";
   attentionEvent?: {
     id: string;
     kind:
       | "approval"
+      | "question"
       | "completion"
       | "failure"
       | "interrupted"
@@ -72,6 +78,15 @@ export interface BgSessionInfoProps {
     timestamp: number;
   };
   archivedAt?: number;
+  unreadEventCount?: number;
+  events?: Array<{
+    id: string;
+    sequence: number;
+    type: string;
+    timestamp: number;
+    summary: string;
+    readAt?: number;
+  }>;
   streamingText?: string;
   resultText?: string;
   resultSummary?: string;
@@ -100,6 +115,7 @@ interface Props {
   onArchive?: (sessionId: string) => void;
   onPause?: (sessionId: string) => void;
   onResume?: (sessionId: string) => void;
+  onMarkRead?: (sessionId: string) => void;
 }
 
 const ACTIVE_STATUSES = new Set<BgSessionInfoProps["status"]>([
@@ -170,6 +186,7 @@ export function BackgroundSessionStrip({
   onArchive,
   onPause,
   onResume,
+  onMarkRead,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [filter, setFilter] = useState<
@@ -298,6 +315,15 @@ export function BackgroundSessionStrip({
               <span class="bg-session-task" title={s.task}>
                 {s.task}
               </span>
+              {(s.unreadEventCount ?? 0) > 0 && (
+                <button
+                  class="bg-session-unread"
+                  onClick={() => onMarkRead?.(s.id)}
+                  title="Mark fleet events read"
+                >
+                  {s.unreadEventCount}
+                </button>
+              )}
               <span
                 class="bg-session-status"
                 title={[

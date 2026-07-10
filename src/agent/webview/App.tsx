@@ -1645,6 +1645,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     },
     [vscodeApi],
   );
+  const handleMarkBackgroundRead = useCallback(
+    (sessionId: string) => {
+      vscodeApi.postMessage({ command: "markBgEventsRead", sessionId });
+    },
+    [vscodeApi],
+  );
 
   const handleNewSession = useCallback(() => {
     startupRestorePendingRef.current = false;
@@ -2548,6 +2554,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onArchive={handleArchiveBackground}
           onPause={handlePauseBackground}
           onResume={handleResumeBackground}
+          onMarkRead={handleMarkBackgroundRead}
         />
         <InputArea
           onSend={handleSend}

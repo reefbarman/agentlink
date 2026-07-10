@@ -118,6 +118,26 @@ export interface PersistedFleetMetadata {
   budgetWarning?: { kind: string; ratio: number; emittedAt: number };
   archivedAt?: number;
   resumedFromSessionId?: string;
+  eventSequence?: number;
+  events?: Array<{
+    id: string;
+    sequence: number;
+    type:
+      | "queued"
+      | "started"
+      | "approval"
+      | "question"
+      | "budget_warning"
+      | "completed"
+      | "failed"
+      | "cancelled"
+      | "paused"
+      | "resumed"
+      | "detached";
+    timestamp: number;
+    summary: string;
+    readAt?: number;
+  }>;
 }
 
 export interface PersistedSessionMetadata {
