@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type MessageHandler = (message: Record<string, unknown>) => void;
 
 const commandExec = vi.fn();
+const clipboardWriteText = vi.fn();
 
 const mockVscode = {
   window: {
@@ -21,6 +22,11 @@ const mockVscode = {
   commands: {
     executeCommand: commandExec,
   },
+  env: {
+    clipboard: {
+      writeText: clipboardWriteText,
+    },
+  },
   Uri: {
     joinPath: (...parts: Array<{ path?: string } | string>) => ({
       path: parts
@@ -38,6 +44,80 @@ const mockVscode = {
 };
 
 vi.mock("vscode", () => mockVscode);
+
+function makeApprovalManager() {
+  return {
+    onDidChange: () => ({ dispose: vi.fn() }),
+    getActiveSessions: () => [
+      {
+        id: "session-a",
+        writeApproved: true,
+        agentWriteApproved: true,
+        commandRuleCount: 1,
+        pathRuleCount: 1,
+        writeRuleCount: 1,
+        lastActivity: Date.now(),
+      },
+    ],
+    getAgentWriteApprovalState: () => "prompt",
+    getWriteApprovalState: () => "prompt",
+    getCommandRules: (sessionId: string) => ({
+      session:
+        sessionId === "session-a"
+          ? [{ pattern: "npm test", mode: "exact" as const }]
+          : [],
+      project: [{ pattern: "npm", mode: "prefix" as const }],
+      global: [{ pattern: "git status", mode: "exact" as const }],
+    }),
+    getPathRules: (sessionId: string) => ({
+      session:
+        sessionId === "session-a"
+          ? [{ pattern: "src/**", mode: "glob" as const }]
+          : [],
+      project: [],
+      global: [],
+    }),
+    getWriteRules: (sessionId: string) => ({
+      session:
+        sessionId === "session-a"
+          ? [{ pattern: "src/**", mode: "glob" as const }]
+          : [],
+      project: [],
+      global: [],
+      settings: ["**/*.test.ts"],
+    }),
+    resetWriteApproval: vi.fn(),
+    resetAgentWriteApproval: vi.fn(),
+    setWriteApproval: vi.fn(),
+    setAgentWriteApproval: vi.fn(),
+  };
+}
+
+function makeWebviewView() {
+  let onDidReceiveMessage: MessageHandler | undefined;
+  const postMessage = vi.fn();
+  const view = {
+    webview: {
+      options: {},
+      html: "",
+      cspSource: "vscode-resource:",
+      postMessage,
+      onDidReceiveMessage: (cb: MessageHandler) => {
+        onDidReceiveMessage = cb;
+        return { dispose: vi.fn() };
+      },
+      asWebviewUri: (uri: unknown) => uri,
+    },
+    visible: true,
+    onDidChangeVisibility: vi.fn(),
+    onDidDispose: vi.fn(),
+  };
+  return {
+    view,
+    postMessage,
+    getMessageHandler: () => onDidReceiveMessage,
+  };
+}
 
 describe("SidebarProvider write approval sync", () => {
   beforeEach(() => {
@@ -137,4 +217,139 @@ describe("SidebarProvider write approval sync", () => {
       "session",
     );
   });
+});
+
+describe("SidebarProvider retained activity behavior", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("restores approval, index, session, and tool-call state on webviewReady", async () => {
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const provider = new SidebarProvider({ path: "/ext" } as never);
+    provider.setApprovalManager(makeApprovalManager() as never);
+    provider.setMcpSessionProvider(() => [
+      {
+        id: "session-a",
+        clientName: "Claude Code",
+        clientVersion: "1.2.3",
+        lastActivity: Date.now(),
+        trusted: true,
+      },
+    ]);
+    const toolCalls = [
+      {
+        id: "tool-1",
+        toolName: "execute_command",
+        displayArgs: "npm test",
+        startedAt: 1,
+        status: "active" as const,
+        canContinueInBackground: true,
+        source: "agent" as const,
+      },
+    ];
+    provider.setToolCallTracker({
+      on: vi.fn(),
+      getActiveCalls: () => toolCalls,
+    } as never);
+    provider.updateIndexStatus({
+      state: "indexing",
+      current: 2,
+      total: 10,
+      detail: "Indexing files",
+    });
+    const webview = makeWebviewView();
+
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+    webview.getMessageHandler()?.({ command: "webviewReady" });
+
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: "stateUpdate",
+      state: expect.objectContaining({
+        writeApproval: "session",
+        globalCommandRules: [{ pattern: "git status", mode: "exact" }],
+        projectCommandRules: [{ pattern: "npm", mode: "prefix" }],
+        activeSessions: [
+          expect.objectContaining({
+            id: "session-a",
+            writeApproved: true,
+            agentWriteApproved: true,
+            clientName: "Claude Code",
+            clientVersion: "1.2.3",
+            commandRules: [{ pattern: "npm test", mode: "exact" }],
+            pathRules: [{ pattern: "src/**", mode: "glob" }],
+            writeRules: [{ pattern: "src/**", mode: "glob" }],
+          }),
+        ],
+        connectedAgents: [
+          expect.objectContaining({
+            sessionId: "session-a",
+            clientName: "Claude Code",
+            trustState: "trusted",
+          }),
+        ],
+        indexStatus: expect.objectContaining({
+          state: "indexing",
+          current: 2,
+          total: 10,
+        }),
+      }),
+    });
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: "updateToolCalls",
+      calls: toolCalls,
+    });
+  });
+
+  it.each([
+    ["openSettings", ["workbench.action.openSettings", "agentlink"]],
+    ["openOutput", ["workbench.action.output.show", "AgentLink"]],
+    ["rebuildIndex", ["agentlink.rebuildIndex"]],
+    ["cancelIndex", ["agentlink.cancelIndex"]],
+    ["resumeIndex", ["agentlink.resumeIndex"]],
+    ["setOpenaiApiKey", ["agentlink.setOpenaiApiKey"]],
+    [
+      "setOpenaiModelsAndEmbeddingsApiKey",
+      ["agentlink.codexSignIn", "apiKeyOnly"],
+    ],
+  ])("forwards the retained %s shortcut", async (command, expected) => {
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const provider = new SidebarProvider({ path: "/ext" } as never);
+    const webview = makeWebviewView();
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+
+    webview.getMessageHandler()?.({ command });
+
+    expect(commandExec).toHaveBeenCalledWith(...expected);
+  });
+
+  it.each([
+    ["cancelToolCall", "agentlink.cancelToolCall"],
+    ["completeToolCall", "agentlink.completeToolCall"],
+    ["continueToolCallInBackground", "agentlink.continueToolCallInBackground"],
+  ])(
+    "forwards the retained %s control with its call id",
+    async (command, id) => {
+      const { SidebarProvider } = await import("./SidebarProvider.js");
+      const provider = new SidebarProvider({ path: "/ext" } as never);
+      const webview = makeWebviewView();
+      provider.resolveWebviewView(
+        webview.view as never,
+        {} as never,
+        {} as never,
+      );
+
+      webview.getMessageHandler()?.({ command, id: "tool-1" });
+
+      expect(commandExec).toHaveBeenCalledWith(id, "tool-1");
+    },
+  );
 });
