@@ -68,6 +68,8 @@ const GPT_5_CODEX_MAX_REASONING_EFFORTS = [
  */
 export interface ResponsesCaps {
   supportsPreviousResponseId: boolean;
+  supportsPersistedReasoning: boolean;
+  supportsProMode: boolean;
   supportsPromptCacheKey: boolean;
   supportsPromptCacheRetention: boolean;
   supportsMaxOutputTokens: boolean;
@@ -341,6 +343,8 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
   if (auth.method === "apiKey") {
     return {
       supportsPreviousResponseId: true,
+      supportsPersistedReasoning: true,
+      supportsProMode: true,
       supportsPromptCacheKey: true,
       supportsPromptCacheRetention: true,
       supportsMaxOutputTokens: true,
@@ -349,6 +353,8 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
 
   return {
     supportsPreviousResponseId: false,
+    supportsPersistedReasoning: false,
+    supportsProMode: false,
     supportsPromptCacheKey: false,
     supportsPromptCacheRetention: false,
     supportsMaxOutputTokens: false,

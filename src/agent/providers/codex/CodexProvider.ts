@@ -228,6 +228,7 @@ export class CodexProvider implements ModelProvider {
       tools,
       maxTokens,
       reasoningEffort: requestedEffort,
+      reasoningMode,
       cache,
       state,
       signal,
@@ -270,6 +271,7 @@ export class CodexProvider implements ModelProvider {
         state,
         cache,
         reasoningEffort,
+        reasoningMode,
         tools: codexTools,
         caps: getEndpointCaps(auth),
       });
@@ -388,6 +390,7 @@ export class CodexProvider implements ModelProvider {
       maxTokens,
       temperature: _temperature,
       reasoningEffort: requestedEffort,
+      reasoningMode,
       cache,
       state,
     } = request;
@@ -421,6 +424,7 @@ export class CodexProvider implements ModelProvider {
         state,
         cache,
         reasoningEffort,
+        reasoningMode,
         caps: getEndpointCaps(auth),
       });
 

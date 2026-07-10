@@ -53,6 +53,7 @@ export class AgentSession {
   autoCondenseThreshold: number;
   codexStatefulResponses: boolean;
   codexStoreResponses: boolean;
+  codexProMode: boolean;
   private _status: SessionStatus = "idle";
   private _statusListeners = new Set<() => void>();
   title: string = "New Chat";
@@ -186,6 +187,7 @@ export class AgentSession {
     this.autoCondenseThreshold = opts.config.autoCondenseThreshold ?? 0.9;
     this.codexStatefulResponses = opts.config.codexStatefulResponses ?? true;
     this.codexStoreResponses = opts.config.codexStoreResponses ?? false;
+    this.codexProMode = opts.config.codexProMode ?? false;
     this.background = opts.background ?? false;
     this.createdAt = Date.now();
     this.lastActiveAt = this.createdAt;

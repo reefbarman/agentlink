@@ -752,6 +752,7 @@ export function activate(context: vscode.ExtensionContext): void {
       agentConfiguration.get<boolean>("codexStatefulResponses") ?? true,
     codexStoreResponses:
       agentConfiguration.get<boolean>("codexStoreResponses") ?? false,
+    codexProMode: agentConfiguration.get<boolean>("codexProMode") ?? false,
   };
 
   const isDevMode = context.extensionMode === vscode.ExtensionMode.Development;
@@ -1472,7 +1473,8 @@ export function activate(context: vscode.ExtensionContext): void {
         e.affectsConfiguration("agentlink.autoCondenseThreshold") ||
         e.affectsConfiguration("agentlink.modelCondenseThresholds") ||
         e.affectsConfiguration("agentlink.codexStatefulResponses") ||
-        e.affectsConfiguration("agentlink.codexStoreResponses")
+        e.affectsConfiguration("agentlink.codexStoreResponses") ||
+        e.affectsConfiguration("agentlink.codexProMode")
       ) {
         const config = vscode.workspace.getConfiguration("agentlink");
         const fgMode = agentSessionManager.getForegroundSession()?.mode;
@@ -1498,6 +1500,7 @@ export function activate(context: vscode.ExtensionContext): void {
             config.get<boolean>("codexStatefulResponses") ?? true,
           codexStoreResponses:
             config.get<boolean>("codexStoreResponses") ?? false,
+          codexProMode: config.get<boolean>("codexProMode") ?? false,
         });
       }
     }),

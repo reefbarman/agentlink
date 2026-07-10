@@ -1017,6 +1017,7 @@ export class AgentSessionManager {
           autoCondenseThreshold: fg.autoCondenseThreshold,
           codexStatefulResponses: fg.codexStatefulResponses,
           codexStoreResponses: fg.codexStoreResponses,
+          codexProMode: fg.codexProMode,
         }
       : this.buildConfigForModel(model);
 

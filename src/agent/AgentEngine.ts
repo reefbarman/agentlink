@@ -997,6 +997,8 @@ export class AgentEngine {
               ? { budgetTokens: session.thinkingBudget }
               : undefined,
             reasoningEffort,
+            reasoningMode:
+              isCodex && session.codexProMode ? "pro" : "standard",
             cache: currentCache,
             state: currentState,
             signal: requestController.signal,

@@ -233,4 +233,5 @@ export interface AgentConfig {
   autoCondenseThreshold: number; // 0–1, e.g. 0.9 = 90%
   codexStatefulResponses?: boolean;
   codexStoreResponses?: boolean;
+  codexProMode?: boolean;
 }

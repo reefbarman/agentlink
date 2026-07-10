@@ -127,6 +127,8 @@ export function translateCodexMessages(
             userContent.push({
               type: "input_image",
               image_url: `data:${src.media_type};base64,${src.data}`,
+              // GPT-5.6 preserves source dimensions for `auto`; older models
+              // retain their established automatic detail behavior.
               detail: "auto",
             });
           }
@@ -218,10 +220,16 @@ export function translateCodexTools(
   return translated;
 }
 
-export function buildCodexReasoning(effort: CoreReasoningEffort): Reasoning {
+export function buildCodexReasoning(
+  effort: CoreReasoningEffort,
+  context?: "all_turns",
+  mode?: "pro",
+): Reasoning {
   return {
     effort: effort as Reasoning["effort"],
     summary: "detailed",
+    ...(context ? { context } : {}),
+    ...(mode ? { mode } : {}),
   };
 }
 
@@ -241,6 +249,7 @@ export function buildCodexResolvedRequestBody(args: {
   state?: { store?: boolean; previousResponseId?: string };
   cache?: { key?: string; retention?: CodexPromptCacheRetention };
   reasoningEffort?: CoreReasoningEffort;
+  reasoningMode?: "standard" | "pro";
   tools?: CodexTool[];
 }): CodexResolvedRequestBodyResult {
   const configuredModel = args.model?.trim() || CODEX_DEFAULT_MODEL;
@@ -256,6 +265,7 @@ export function buildCodexResolvedRequestBody(args: {
     state: args.state,
     cache: args.cache,
     reasoningEffort: args.reasoningEffort,
+    reasoningMode: args.reasoningMode,
     tools: args.tools,
     caps: getEndpointCaps({ method: args.authMethod }),
   });
@@ -276,6 +286,7 @@ export function buildCodexEndpointRequestBody(args: {
   state?: { store?: boolean; previousResponseId?: string };
   cache?: { key?: string; retention?: CodexPromptCacheRetention };
   reasoningEffort?: CoreReasoningEffort;
+  reasoningMode?: "standard" | "pro";
   tools?: CodexTool[];
   caps: ResponsesCaps;
 }): CodexRequestBody {
@@ -286,7 +297,20 @@ export function buildCodexEndpointRequestBody(args: {
     store: args.state?.store ?? false,
     maxTokens: args.caps.supportsMaxOutputTokens ? args.maxTokens : undefined,
     reasoning: args.reasoningEffort
-      ? buildCodexReasoning(args.reasoningEffort)
+      ? buildCodexReasoning(
+          args.reasoningEffort,
+          args.caps.supportsPersistedReasoning &&
+            args.model.startsWith("gpt-5.6") &&
+            args.state?.store &&
+            args.state.previousResponseId
+            ? "all_turns"
+            : undefined,
+          args.caps.supportsProMode &&
+            args.model.startsWith("gpt-5.6") &&
+            args.reasoningMode === "pro"
+            ? "pro"
+            : undefined,
+        )
       : undefined,
     previousResponseId: args.caps.supportsPreviousResponseId
       ? args.state?.previousResponseId

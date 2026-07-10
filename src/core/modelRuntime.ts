@@ -174,6 +174,7 @@ export interface CoreModelRequestBase {
   messages: CoreModelMessage[];
   maxTokens: number;
   reasoningEffort?: CoreReasoningEffort;
+  reasoningMode?: "standard" | "pro";
   cache?: CoreModelCacheOptions;
   state?: CoreModelStateOptions;
   providerHints?: CoreModelProviderHints;

@@ -185,7 +185,7 @@ describe("Codex translation", () => {
   it("builds endpoint-filtered stream request bodies", () => {
     expect(
       buildCodexStreamRequestBody({
-        model: "gpt-5.5",
+        model: "gpt-5.6",
         input: [],
         instructions: "system",
         store: false,
@@ -196,7 +196,7 @@ describe("Codex translation", () => {
         promptCacheRetention: "24h",
       }),
     ).toMatchObject({
-      model: "gpt-5.5",
+      model: "gpt-5.6",
       input: [],
       instructions: "system",
       stream: true,
@@ -212,28 +212,36 @@ describe("Codex translation", () => {
   it("builds endpoint-gated request bodies with supported API-key caps", () => {
     expect(
       buildCodexEndpointRequestBody({
-        model: "gpt-5.5",
+        model: "gpt-5.6",
         input: [],
         instructions: "system",
         maxTokens: 128,
         state: { store: true, previousResponseId: "resp_123" },
         cache: { key: "cache-key", retention: "24h" },
         reasoningEffort: "high",
+        reasoningMode: "pro",
         caps: {
           supportsPreviousResponseId: true,
+          supportsPersistedReasoning: true,
+          supportsProMode: true,
           supportsPromptCacheKey: true,
           supportsPromptCacheRetention: true,
           supportsMaxOutputTokens: true,
         },
       }),
     ).toMatchObject({
-      model: "gpt-5.5",
+      model: "gpt-5.6",
       input: [],
       instructions: "system",
       stream: true,
       store: true,
       max_output_tokens: 128,
-      reasoning: { effort: "high", summary: "detailed" },
+      reasoning: {
+        effort: "high",
+        summary: "detailed",
+        context: "all_turns",
+        mode: "pro",
+      },
       previous_response_id: "resp_123",
       prompt_cache_key: "cache-key",
       prompt_cache_retention: "24h",
@@ -249,6 +257,8 @@ describe("Codex translation", () => {
         cache: { key: "cache-key", retention: "in_memory" },
         caps: {
           supportsPreviousResponseId: true,
+          supportsPersistedReasoning: true,
+          supportsProMode: true,
           supportsPromptCacheKey: true,
           supportsPromptCacheRetention: true,
           supportsMaxOutputTokens: true,
@@ -276,6 +286,8 @@ describe("Codex translation", () => {
         reasoningEffort: "medium",
         caps: {
           supportsPreviousResponseId: false,
+          supportsPersistedReasoning: false,
+          supportsProMode: false,
           supportsPromptCacheKey: false,
           supportsPromptCacheRetention: false,
           supportsMaxOutputTokens: false,
