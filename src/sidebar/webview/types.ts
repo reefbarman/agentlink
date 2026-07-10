@@ -25,24 +25,6 @@ export interface SessionInfo {
   agentId?: string;
 }
 
-export interface ConnectedAgent {
-  sessionId: string;
-  clientName?: string;
-  clientVersion?: string;
-  agentId?: string;
-  agentDisplayName?: string;
-  /** Epoch ms of last MCP activity for this session. */
-  lastActivity: number;
-  /** Whether this session has completed the workspace handshake. */
-  trustState: "trusted" | "untrusted";
-}
-
-export interface AgentInfo {
-  id: string;
-  name: string;
-  selected: boolean;
-}
-
 export interface IndexStatusInfo {
   state: "idle" | "discovering" | "indexing" | "error";
   phase?: string;
@@ -64,16 +46,8 @@ export interface IndexStatusInfo {
 }
 
 export interface SidebarState {
-  serverRunning: boolean;
-  port: number | null;
-  sessions: number;
-  authEnabled: boolean;
-  agentConfigured: boolean;
   masterBypass: boolean;
   hasWorkspace: boolean;
-  onboardingStep?: number;
-  knownAgents?: AgentInfo[];
-  configuredAgentIds?: string[];
   writeApproval?: "prompt" | "session" | "project" | "global";
   globalCommandRules?: CommandRule[];
   projectCommandRules?: CommandRule[];
@@ -83,7 +57,6 @@ export interface SidebarState {
   projectWriteRules?: PathRule[];
   settingsWriteRules?: string[];
   activeSessions?: SessionInfo[];
-  connectedAgents?: ConnectedAgent[];
   indexStatus?: IndexStatusInfo;
 }
 
@@ -121,9 +94,6 @@ export type ExtensionMessage =
 
 // Webview → Extension messages
 export type WebviewCommand =
-  | { command: "startServer" }
-  | { command: "stopServer" }
-  | { command: "showStatus" }
   | { command: "openSettings" }
   | { command: "openOutput" }
   | { command: "clearSessionApprovals" }
@@ -134,10 +104,8 @@ export type WebviewCommand =
   | { command: "setOpenaiModelsAndEmbeddingsApiKey" }
   | { command: "setupSemanticSearch"; reason?: string }
   | { command: "addTrustedCommand" }
-  | { command: "configureAgents" }
   | { command: "cancelToolCall"; id: string }
   | { command: "completeToolCall"; id: string }
-  | { command: "saveAgents"; agentIds: string[] }
   | { command: "deleteRule"; ruleType: string; index: number; scope: string }
   | { command: "editRule"; ruleType: string; index: number; scope: string }
   | { command: string; [key: string]: unknown };

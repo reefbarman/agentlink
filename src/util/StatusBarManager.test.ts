@@ -43,11 +43,12 @@ describe("StatusBarManager retained approval and error behavior", () => {
     mocks.items.length = 0;
   });
 
-  it("restores the prior running state after an approval alert", () => {
+  it("stays hidden while idle and hides after an approval alert", () => {
     vi.useFakeTimers();
     const manager = new StatusBarManager();
     const primary = mocks.items[0];
-    manager.setRunning(47123, [{ trusted: true }]);
+
+    expect(primary.show).not.toHaveBeenCalled();
 
     const alert = manager.showAlert("Command approval required");
     expect(primary).toMatchObject({
@@ -55,17 +56,19 @@ describe("StatusBarManager retained approval and error behavior", () => {
       command: "agentLink.focusApproval",
       backgroundColor: { id: "statusBarItem.warningBackground" },
     });
+    expect(primary.show).toHaveBeenCalledTimes(1);
 
     vi.advanceTimersByTime(800);
     expect(primary.text).toBe("     Command approval required");
 
     alert.dispose();
     expect(primary).toMatchObject({
-      text: "$(link) AgentLink — Trusted",
-      tooltip: "1 trusted session",
-      command: "agentlink.showStatus",
+      text: "",
+      tooltip: undefined,
+      command: undefined,
       backgroundColor: undefined,
     });
+    expect(primary.hide).toHaveBeenCalledTimes(1);
     manager.dispose();
   });
 
@@ -82,19 +85,21 @@ describe("StatusBarManager retained approval and error behavior", () => {
     manager.dispose();
   });
 
-  it("preserves an indexer error across an alert and restores the base state when cleared", () => {
+  it("preserves an indexer error across an alert and hides when cleared", () => {
     const manager = new StatusBarManager();
     const primary = mocks.items[0];
-    manager.setRunning(47123, []);
     manager.setError("Indexing: Qdrant unavailable");
 
     expect(primary).toMatchObject({
       text: "$(link) AgentLink — Error",
       tooltip: "Indexing: Qdrant unavailable",
+      command: "agentLink.statusView.focus",
       backgroundColor: { id: "statusBarItem.errorBackground" },
     });
+    expect(primary.show).toHaveBeenCalledTimes(1);
 
     const alert = manager.showAlert("File approval required");
+    expect(primary.tooltip).toBe("File approval required");
     alert.dispose();
     expect(primary).toMatchObject({
       text: "$(link) AgentLink — Error",
@@ -104,10 +109,12 @@ describe("StatusBarManager retained approval and error behavior", () => {
 
     manager.clearError();
     expect(primary).toMatchObject({
-      text: "$(link) AgentLink — Waiting",
-      tooltip: "Waiting for an agent to connect",
+      text: "",
+      tooltip: undefined,
+      command: undefined,
       backgroundColor: undefined,
     });
+    expect(primary.hide).toHaveBeenCalledTimes(1);
     manager.dispose();
   });
 

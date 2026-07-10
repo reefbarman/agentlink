@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type MessageHandler = (message: Record<string, unknown>) => void;
 
 const commandExec = vi.fn();
-const clipboardWriteText = vi.fn();
 
 const mockVscode = {
   window: {
@@ -22,11 +21,7 @@ const mockVscode = {
   commands: {
     executeCommand: commandExec,
   },
-  env: {
-    clipboard: {
-      writeText: clipboardWriteText,
-    },
-  },
+
   Uri: {
     joinPath: (...parts: Array<{ path?: string } | string>) => ({
       path: parts
@@ -228,15 +223,6 @@ describe("SidebarProvider retained activity behavior", () => {
     const { SidebarProvider } = await import("./SidebarProvider.js");
     const provider = new SidebarProvider({ path: "/ext" } as never);
     provider.setApprovalManager(makeApprovalManager() as never);
-    provider.setMcpSessionProvider(() => [
-      {
-        id: "session-a",
-        clientName: "Claude Code",
-        clientVersion: "1.2.3",
-        lastActivity: Date.now(),
-        trusted: true,
-      },
-    ]);
     const toolCalls = [
       {
         id: "tool-1",
@@ -278,18 +264,9 @@ describe("SidebarProvider retained activity behavior", () => {
             id: "session-a",
             writeApproved: true,
             agentWriteApproved: true,
-            clientName: "Claude Code",
-            clientVersion: "1.2.3",
             commandRules: [{ pattern: "npm test", mode: "exact" }],
             pathRules: [{ pattern: "src/**", mode: "glob" }],
             writeRules: [{ pattern: "src/**", mode: "glob" }],
-          }),
-        ],
-        connectedAgents: [
-          expect.objectContaining({
-            sessionId: "session-a",
-            clientName: "Claude Code",
-            trustState: "trusted",
           }),
         ],
         indexStatus: expect.objectContaining({

@@ -3,37 +3,27 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import type {
-  AgentInfo,
-  IndexStatusInfo,
-  SidebarState,
-} from "./webview/types.js";
-import type {
   ApprovalManager,
   RuleScope,
 } from "../approvals/ApprovalManager.js";
+import type { IndexStatusInfo, SidebarState } from "./webview/types.js";
 import type {
   ToolCallTracker,
   TrackedCallInfo,
 } from "../server/ToolCallTracker.js";
 import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
-import { getAgentById, matchClientName } from "../agents/registry.js";
 
 import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
 import { randomUUID } from "crypto";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
-export type { AgentInfo, SidebarState };
+export type { SidebarState };
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "agentLink.statusView";
 
   private view: vscode.WebviewView | undefined;
   private state: SidebarState = {
-    serverRunning: false,
-    port: null,
-    sessions: 0,
-    authEnabled: true,
-    agentConfigured: false,
     masterBypass: false,
     hasWorkspace: (vscode.workspace.workspaceFolders ?? []).length > 0,
   };
@@ -41,42 +31,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private toolCallTracker: ToolCallTracker | undefined;
   private activeToolCalls: TrackedCallInfo[] = [];
   private log: (msg: string) => void;
-  private mcpSessionProvider?: () => Array<{
-    id: string;
-    clientName?: string;
-    clientVersion?: string;
-    lastActivity: number;
-    trusted: boolean;
-  }>;
-  private sidebarRefreshInterval?: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     log?: (msg: string) => void,
   ) {
     this.log = log ?? (() => {});
-    // Periodic refresh so "last seen" times and stale-session filtering stay current
-    this.sidebarRefreshInterval = setInterval(
-      () => this.refreshApprovalState(),
-      30_000,
-    );
   }
 
   setApprovalManager(manager: ApprovalManager): void {
     this.approvalManager = manager;
     manager.onDidChange(() => this.refreshApprovalState());
-  }
-
-  setMcpSessionProvider(
-    provider: () => Array<{
-      id: string;
-      clientName?: string;
-      clientVersion?: string;
-      lastActivity: number;
-      trusted: boolean;
-    }>,
-  ): void {
-    this.mcpSessionProvider = provider;
   }
 
   setToolCallTracker(tracker: ToolCallTracker): void {
@@ -159,18 +124,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this.refreshFeedback();
           }
           break;
-        case "startServer":
-          vscode.commands.executeCommand("agentlink.startServer");
-          break;
-        case "stopServer":
-          vscode.commands.executeCommand("agentlink.stopServer");
-          break;
-        case "copyConfig":
-          this.copyMcpConfig();
-          break;
-        case "copyCliCommand":
-          this.copyCliCommand();
-          break;
         case "openSettings":
           vscode.commands.executeCommand(
             "workbench.action.openSettings",
@@ -188,41 +141,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "openProjectConfig":
           this.openConfigFile("project");
-          break;
-        case "installCli":
-          this.installViaCli();
-          break;
-        case "saveAgents":
-          this.saveAgentSelection((message.agents as string).split(","));
-          break;
-        case "resetOnboarding":
-          vscode.commands.executeCommand("agentlink.resetOnboarding");
-          break;
-        case "dismissOnboarding":
-          void this.useBuiltInAgentOnly().catch((err) => {
-            this.log(`Failed to switch to built-in agent only: ${String(err)}`);
-          });
-          break;
-        case "setupInstructions":
-          vscode.commands.executeCommand(
-            "agentlink.setupInstructions",
-            message.agentId,
-          );
-          // Enable auto-update for future startups
-          vscode.workspace
-            .getConfiguration("agentlink")
-            .update(
-              "autoUpdateInstructions",
-              true,
-              vscode.ConfigurationTarget.Global,
-            );
-          break;
-        case "installHooks":
-          vscode.commands.executeCommand("agentlink.installHooks");
-          // Enable auto-update for future startups
-          vscode.workspace
-            .getConfiguration("agentlink")
-            .update("autoUpdateHooks", true, vscode.ConfigurationTarget.Global);
           break;
         case "resetWriteApproval":
           // Reset both legacy and agent write approval tracks so sidebar control
@@ -451,15 +369,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  getState(): SidebarState {
-    return { ...this.state };
-  }
-
-  updateState(partial: Partial<SidebarState>): void {
-    Object.assign(this.state, partial);
-    this.refreshApprovalState();
-  }
-
   private async editRule(
     oldPattern: string,
     oldMode: string,
@@ -572,8 +481,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     // where a postMessage update is lost during webview reload.
     this.activeToolCalls = this.toolCallTracker?.getActiveCalls() ?? [];
 
-    const mcpSessions = this.mcpSessionProvider?.() ?? [];
-
     if (this.approvalManager) {
       const sessions = this.approvalManager.getActiveSessions();
       // Show the "best" write approval state across all sessions.
@@ -611,141 +518,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.state.globalWriteRules = writeRules.global;
       this.state.projectWriteRules = writeRules.project;
       this.state.settingsWriteRules = writeRules.settings;
-      // Merge MCP session client info into approval sessions
-      const mcpMap = new Map(mcpSessions.map((s) => [s.id, s]));
-
-      this.state.activeSessions = sessions.map((s) => {
-        const mcp = mcpMap.get(s.id);
-        return {
-          id: s.id,
-          writeApproved: s.writeApproved,
-          agentWriteApproved: s.agentWriteApproved,
-          commandRules: this.approvalManager!.getCommandRules(s.id).session,
-          pathRules: this.approvalManager!.getPathRules(s.id).session,
-          writeRules: this.approvalManager!.getWriteRules(s.id).session,
-          clientName: mcp?.clientName,
-          clientVersion: mcp?.clientVersion,
-          agentId: mcp?.clientName
-            ? matchClientName(mcp.clientName)
-            : undefined,
-        };
-      });
+      this.state.activeSessions = sessions.map((s) => ({
+        id: s.id,
+        writeApproved: s.writeApproved,
+        agentWriteApproved: s.agentWriteApproved,
+        commandRules: this.approvalManager!.getCommandRules(s.id).session,
+        pathRules: this.approvalManager!.getPathRules(s.id).session,
+        writeRules: this.approvalManager!.getWriteRules(s.id).session,
+      }));
     }
-
-    // Build connected agents list from all MCP sessions (not just approval sessions).
-    // This is outside the approvalManager block so trust-state changes always
-    // propagate to the sidebar even before any approval interaction.
-    const STALE_REMOVE_MS = 2 * 60_000;
-    const now = Date.now();
-    this.state.connectedAgents = mcpSessions
-      .filter((s) => now - s.lastActivity < STALE_REMOVE_MS)
-      .map((s) => {
-        const agentId = s.clientName
-          ? matchClientName(s.clientName)
-          : undefined;
-        return {
-          sessionId: s.id,
-          clientName: s.clientName,
-          clientVersion: s.clientVersion,
-          agentId,
-          agentDisplayName: agentId ? getAgentById(agentId)?.name : undefined,
-          lastActivity: s.lastActivity,
-          trustState: s.trusted ? ("trusted" as const) : ("untrusted" as const),
-        };
-      });
     this.state.masterBypass = this.getMasterBypass();
     // Send state via postMessage instead of full HTML replacement
     this.view?.webview.postMessage({ type: "stateUpdate", state: this.state });
-  }
-
-  private copyMcpConfig(): void {
-    if (!this.state.port) {
-      vscode.window.showWarningMessage("Server is not running.");
-      return;
-    }
-
-    const config = {
-      agentlink: {
-        type: "http",
-        url: `http://localhost:${this.state.port}/mcp`,
-      },
-    };
-
-    vscode.env.clipboard.writeText(JSON.stringify(config, null, 2));
-    vscode.window.showInformationMessage("MCP config copied to clipboard.");
-  }
-
-  private copyCliCommand(): void {
-    if (!this.state.port) {
-      vscode.window.showWarningMessage("Server is not running.");
-      return;
-    }
-
-    const cmd = `claude mcp add --transport http agentlink http://localhost:${this.state.port}/mcp`;
-    vscode.env.clipboard.writeText(cmd);
-    vscode.window.showInformationMessage("CLI command copied to clipboard.");
-  }
-
-  private async installViaCli(): Promise<void> {
-    if (!this.state.port) {
-      vscode.window.showWarningMessage("Server is not running.");
-      return;
-    }
-
-    const terminal = vscode.window.createTerminal({
-      name: "AgentLink Setup",
-    });
-    terminal.show();
-    terminal.sendText(
-      `claude mcp add --transport http agentlink http://localhost:${this.state.port}/mcp`,
-      true,
-    );
-  }
-
-  private async saveAgentSelection(agentIds: string[]): Promise<void> {
-    if (!agentIds || agentIds.length === 0) return;
-    await vscode.workspace
-      .getConfiguration("agentlink")
-      .update("agents", agentIds, vscode.ConfigurationTarget.Global);
-    this.log(`Configured agents: ${agentIds.join(", ")}`);
-
-    // Transition to step 2 (confirmation + verification)
-    this.state.onboardingStep = 2;
-    this.state.configuredAgentIds = agentIds;
-    this.refreshApprovalState();
-
-    // Trigger re-config via command (extension.ts handles the actual config writing)
-    // Skip auto-update — user will manually click buttons on step 2
-    vscode.commands.executeCommand("agentlink.applyAgentConfig", {
-      skipAutoUpdate: true,
-    });
-  }
-
-  private async useBuiltInAgentOnly(): Promise<void> {
-    const config = vscode.workspace.getConfiguration("agentlink");
-    await config.update("agents", [], vscode.ConfigurationTarget.Global);
-    await config.update(
-      "autoUpdateInstructions",
-      false,
-      vscode.ConfigurationTarget.Global,
-    );
-    await config.update(
-      "autoUpdateHooks",
-      false,
-      vscode.ConfigurationTarget.Global,
-    );
-    await vscode.commands.executeCommand("agentlink.applyAgentConfig", {
-      skipAutoUpdate: true,
-    });
-    this.log("Configured AgentLink for built-in agent only");
-    this.dismissOnboarding();
-  }
-
-  private dismissOnboarding(): void {
-    this.state.onboardingStep = undefined;
-    this.state.configuredAgentIds = undefined;
-    this.state.knownAgents = undefined;
-    this.refreshApprovalState();
   }
 
   private openConfigFile(scope: "global" | "project"): void {

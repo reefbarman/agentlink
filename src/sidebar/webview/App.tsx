@@ -1,22 +1,20 @@
-import { useReducer, useEffect } from "preact/hooks";
 import type {
-  SidebarState,
-  TrackedCallInfo,
+  ExtensionMessage,
   FeedbackEntry,
   IndexStatusInfo,
-  ExtensionMessage,
   PostCommand,
+  SidebarState,
+  TrackedCallInfo,
 } from "./types.js";
+import { useEffect, useReducer } from "preact/hooks";
+
 import { ActiveToolCalls } from "./components/ActiveToolCalls.js";
-import { ServerStatus } from "./components/ServerStatus.js";
-import { IndexStatus } from "./components/IndexStatus.js";
-import { Configuration } from "./components/Configuration.js";
-import { WriteApproval } from "./components/WriteApproval.js";
-import { TrustedPaths } from "./components/TrustedPaths.js";
-import { TrustedCommands } from "./components/TrustedCommands.js";
 import { AvailableTools } from "./components/AvailableTools.js";
 import { FeedbackList } from "./components/FeedbackList.js";
-import { CollapsibleSection } from "./components/common/CollapsibleSection.js";
+import { IndexStatus } from "./components/IndexStatus.js";
+import { TrustedCommands } from "./components/TrustedCommands.js";
+import { TrustedPaths } from "./components/TrustedPaths.js";
+import { WriteApproval } from "./components/WriteApproval.js";
 
 interface VsCodeApi {
   postMessage(message: unknown): void;
@@ -42,11 +40,6 @@ type Action =
 
 const initialState: State = {
   sidebar: {
-    serverRunning: false,
-    port: null,
-    sessions: 0,
-    authEnabled: true,
-    agentConfigured: false,
     masterBypass: false,
     hasWorkspace: false,
   },
@@ -97,21 +90,10 @@ export function App({ vscodeApi }: AppProps) {
     return () => window.removeEventListener("message", handler);
   }, []);
 
-  // During onboarding, show only the agent picker/confirmation
-  if (state.sidebar.onboardingStep) {
-    return (
-      <div>
-        <Configuration state={state.sidebar} postCommand={postCommand} />
-      </div>
-    );
-  }
-
   return (
     <div>
       <ActiveToolCalls calls={state.toolCalls} postCommand={postCommand} />
-      <ServerStatus state={state.sidebar} postCommand={postCommand} />
       <IndexStatus state={state.sidebar} postCommand={postCommand} />
-      <Configuration state={state.sidebar} postCommand={postCommand} />
       <WriteApproval state={state.sidebar} postCommand={postCommand} />
       <TrustedPaths state={state.sidebar} postCommand={postCommand} />
       <TrustedCommands state={state.sidebar} postCommand={postCommand} />
@@ -121,18 +103,6 @@ export function App({ vscodeApi }: AppProps) {
           entries={state.feedbackEntries}
           postCommand={postCommand}
         />
-      )}
-      {__DEV_BUILD__ && (
-        <CollapsibleSection title="Dev Tools">
-          <div class="button-group">
-            <button
-              class="btn btn-secondary"
-              onClick={() => postCommand("resetOnboarding")}
-            >
-              Reset Onboarding
-            </button>
-          </div>
-        </CollapsibleSection>
       )}
     </div>
   );
