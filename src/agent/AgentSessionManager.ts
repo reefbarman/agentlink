@@ -2751,6 +2751,7 @@ export class AgentSessionManager {
         task,
         parentSessionId,
         backend: `acp:${backendRoute.agent.id}`,
+        readonlyOnly: backendRoute.agent.readonlyOnly,
         resolvedMode,
         resolvedModel: `acp:${backendRoute.agent.id}`,
         resolvedProvider: "acp",
@@ -4113,6 +4114,18 @@ export class AgentSessionManager {
           heuristicStatus,
           summary,
         });
+        const eventKind =
+          status === "awaiting_approval"
+            ? "approval"
+            : s.fleetMetadata?.lifecycle === "interrupted"
+              ? "interrupted"
+              : status === "error"
+                ? "failure"
+                : s.fleetMetadata?.lifecycle === "completed"
+                  ? "completion"
+                  : undefined;
+        const eventTimestamp =
+          s.fleetMetadata?.completedAt ?? s.lastActiveAt ?? s.createdAt;
 
         return {
           id: s.id,
@@ -4132,6 +4145,35 @@ export class AgentSessionManager {
           depth: s.fleetMetadata?.depth,
           placement: s.fleetMetadata?.placement,
           backend: s.fleetMetadata?.backend,
+          capabilities: s.fleetMetadata
+            ? s.fleetMetadata.backend === "native"
+              ? {
+                  canRead: true,
+                  canWrite:
+                    s.fleetMetadata.delegation?.permissionProfile !==
+                    "review-only",
+                  canExecute:
+                    s.fleetMetadata.delegation?.permissionProfile !==
+                    "review-only",
+                  canUseMcp: true,
+                  canDelegate: true,
+                  limitationReason:
+                    s.fleetMetadata.delegation?.permissionProfile ===
+                    "review-only"
+                      ? "The delegation selected the review-only permission profile."
+                      : undefined,
+                }
+              : {
+                  canRead: true,
+                  canWrite: !s.fleetMetadata.readonlyOnly,
+                  canExecute: !s.fleetMetadata.readonlyOnly,
+                  canUseMcp: false,
+                  canDelegate: false,
+                  limitationReason: s.fleetMetadata.readonlyOnly
+                    ? "This ACP backend declares read-only operation."
+                    : "Capabilities are declared by the ACP backend.",
+                }
+            : undefined,
           lifecycle: s.fleetMetadata?.lifecycle,
           terminalReason: s.fleetMetadata?.terminalReason,
           createdAt: s.createdAt,
@@ -4149,6 +4191,13 @@ export class AgentSessionManager {
                 : status === "error"
                   ? "failed"
                   : undefined,
+          attentionEvent: eventKind
+            ? {
+                id: `${s.id}:${eventKind}:${eventTimestamp}`,
+                kind: eventKind,
+                timestamp: eventTimestamp,
+              }
+            : undefined,
           streamingText,
           resultText,
           errorMessage,

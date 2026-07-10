@@ -26,6 +26,14 @@ export interface BgSessionInfoProps {
   depth?: number;
   placement?: "background" | "worktree" | "remote";
   backend?: string;
+  capabilities?: {
+    canRead: boolean;
+    canWrite: boolean;
+    canExecute: boolean;
+    canUseMcp: boolean;
+    canDelegate: boolean;
+    limitationReason?: string;
+  };
   lifecycle?:
     | "queued"
     | "running"
@@ -48,6 +56,11 @@ export interface BgSessionInfoProps {
     maxElapsedMs?: number;
   };
   attention?: "approval" | "failed" | "interrupted";
+  attentionEvent?: {
+    id: string;
+    kind: "approval" | "completion" | "failure" | "interrupted";
+    timestamp: number;
+  };
   streamingText?: string;
   resultText?: string;
   resultSummary?: string;
@@ -241,6 +254,9 @@ export function BackgroundSessionStrip({
                 s.parentSessionId ? `parent: ${s.parentSessionId}` : null,
                 s.resolvedMode ? `mode: ${s.resolvedMode}` : null,
                 s.backend ? `backend: ${s.backend}` : null,
+                s.capabilities?.limitationReason
+                  ? `limitation: ${s.capabilities.limitationReason}`
+                  : null,
                 s.resolvedProvider ? `provider: ${s.resolvedProvider}` : null,
                 s.resolvedModel ? `model: ${s.resolvedModel}` : null,
                 s.lifecycle ? `lifecycle: ${s.lifecycle}` : null,

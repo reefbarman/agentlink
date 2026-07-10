@@ -187,6 +187,14 @@ export interface BgSessionInfo {
   depth?: number;
   placement?: "background" | "worktree" | "remote";
   backend?: string;
+  capabilities?: {
+    canRead: boolean;
+    canWrite: boolean;
+    canExecute: boolean;
+    canUseMcp: boolean;
+    canDelegate: boolean;
+    limitationReason?: string;
+  };
   lifecycle?:
     | "queued"
     | "running"
@@ -209,6 +217,11 @@ export interface BgSessionInfo {
     maxElapsedMs?: number;
   };
   attention?: "approval" | "failed" | "interrupted";
+  attentionEvent?: {
+    id: string;
+    kind: "approval" | "completion" | "failure" | "interrupted";
+    timestamp: number;
+  };
   /** Accumulated streaming text from the bg agent (last ~500 chars for preview). */
   streamingText?: string;
   /** Final result text when agent is done. */

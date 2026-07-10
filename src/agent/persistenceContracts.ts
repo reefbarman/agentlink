@@ -78,6 +78,7 @@ export interface PersistedFleetMetadata {
   task: string;
   depth: number;
   backend: "native" | `acp:${string}`;
+  readonlyOnly?: boolean;
   resolvedMode: string;
   resolvedModel: string;
   resolvedProvider: string;
