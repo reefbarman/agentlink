@@ -189,6 +189,18 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("does not claim isolated execution without the worktree launcher", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await expect(
+      mgr.spawnBackground({
+        task: "isolated",
+        message: "edit safely",
+        worktree: "isolated",
+      }),
+    ).rejects.toThrow(/must use start_worktree_agent/);
+  });
+
   it("starts the next queued agent when capacity becomes available", async () => {
     let releaseFirst: (() => void) | undefined;
     mocks.runBehavior

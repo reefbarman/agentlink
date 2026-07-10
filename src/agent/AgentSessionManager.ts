@@ -2666,6 +2666,11 @@ export class AgentSessionManager {
         "spawn_background_agent requires non-empty task and message",
       );
     }
+    if (request.worktree === "isolated") {
+      throw new Error(
+        "Background spawn rejected: isolated execution must use start_worktree_agent so AgentLink can create and verify the worktree before launching.",
+      );
+    }
 
     const parent = parentSessionId
       ? this.sessions.get(parentSessionId)

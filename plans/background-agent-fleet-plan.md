@@ -1,7 +1,7 @@
 # Background Agent Parity and Fleet Plan
 
 **Updated:** 2026-07-10
-**Status:** Proposed implementation plan; no implementation committed
+**Status:** Core program implemented; higher-autonomy Phase 6 workflows remain independent follow-ons
 **Related roadmap:** [`harness-feature-landscape-2026-top-20.md`](./harness-feature-landscape-2026-top-20.md)
 
 ## Objective
