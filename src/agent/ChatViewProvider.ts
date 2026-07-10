@@ -3308,6 +3308,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { ok: true };
   }
 
+  public async submitBrowserBackgroundAction(input: {
+    action: "steer" | "detach" | "retry" | "archive";
+    sessionId: string;
+    message?: string;
+  }): Promise<{ ok: boolean; error?: string; sessionId?: string }> {
+    if (!this.sessionManager) return { ok: false, error: "unavailable" };
+    const foregroundId = this.sessionManager.getForegroundSession()?.id;
+    if (input.action === "steer" && foregroundId) {
+      const result = this.sessionManager.steerAuthorizedBackground(
+        foregroundId,
+        input.sessionId,
+        input.message ?? "",
+      );
+      return { ok: result.accepted, error: result.reason };
+    }
+    if (input.action === "detach" && foregroundId) {
+      const result = this.sessionManager.detachAuthorizedBackground(
+        foregroundId,
+        input.sessionId,
+      );
+      return { ok: result.detached, error: result.reason };
+    }
+    if (input.action === "archive") {
+      const result = this.sessionManager.archiveBackground(input.sessionId);
+      return { ok: result.archived, error: result.reason };
+    }
+    if (input.action === "retry") {
+      try {
+        const result = await this.sessionManager.retryBackground(input.sessionId);
+        return { ok: true, sessionId: result.sessionId };
+      } catch (error) {
+        return { ok: false, error: String(error) };
+      }
+    }
+    return { ok: false, error: "invalid_action" };
+  }
+
   public getBrowserBgTranscript(sessionId: string): {
     ok: boolean;
     transcript?: {
@@ -4587,6 +4624,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               "Background agent session not found — it may have been cleaned up.",
             );
           }
+        }
+        break;
+      }
+
+      case "steerBgAgent": {
+        const foregroundId = this.sessionManager?.getForegroundSession()?.id;
+        if (foregroundId && typeof msg.sessionId === "string") {
+          this.sessionManager?.steerAuthorizedBackground(
+            foregroundId,
+            msg.sessionId,
+            String(msg.message ?? ""),
+          );
+        }
+        break;
+      }
+
+      case "detachBgAgent": {
+        const foregroundId = this.sessionManager?.getForegroundSession()?.id;
+        if (foregroundId && typeof msg.sessionId === "string") {
+          this.sessionManager?.detachAuthorizedBackground(
+            foregroundId,
+            msg.sessionId,
+          );
+        }
+        break;
+      }
+
+      case "retryBgAgent": {
+        if (typeof msg.sessionId === "string") {
+          void this.sessionManager?.retryBackground(msg.sessionId);
+        }
+        break;
+      }
+
+      case "archiveBgAgent": {
+        if (typeof msg.sessionId === "string") {
+          this.sessionManager?.archiveBackground(msg.sessionId);
         }
         break;
       }

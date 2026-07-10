@@ -70,6 +70,7 @@ export interface BgSessionInfoProps {
       | "budget_warning";
     timestamp: number;
   };
+  archivedAt?: number;
   streamingText?: string;
   resultText?: string;
   resultSummary?: string;
@@ -92,6 +93,10 @@ interface Props {
   sessions: BgSessionInfoProps[];
   onStop: (sessionId: string) => void;
   onOpenTranscript?: (sessionId: string) => void;
+  onSteer?: (sessionId: string, message: string) => void;
+  onDetach?: (sessionId: string) => void;
+  onRetry?: (sessionId: string) => void;
+  onArchive?: (sessionId: string) => void;
 }
 
 const ACTIVE_STATUSES = new Set<BgSessionInfoProps["status"]>([
@@ -156,10 +161,14 @@ export function BackgroundSessionStrip({
   sessions,
   onStop,
   onOpenTranscript,
+  onSteer,
+  onDetach,
+  onRetry,
+  onArchive,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [filter, setFilter] = useState<
-    "all" | "active" | "attention" | "completed"
+    "all" | "active" | "attention" | "completed" | "archived"
   >("all");
   const [startedAt, setStartedAt] = useState<Map<string, number>>(new Map());
   const [now, setNow] = useState(Date.now());
@@ -204,9 +213,10 @@ export function BackgroundSessionStrip({
     if (filter === "active") return ACTIVE_STATUSES.has(session.status);
     if (filter === "attention") return Boolean(session.attention);
     if (filter === "completed") {
-      return !ACTIVE_STATUSES.has(session.status);
+      return !ACTIVE_STATUSES.has(session.status) && !session.archivedAt;
     }
-    return true;
+    if (filter === "archived") return Boolean(session.archivedAt);
+    return !session.archivedAt;
   });
   if (sessions.length === 0) return null;
 
@@ -238,7 +248,7 @@ export function BackgroundSessionStrip({
       {!collapsed && (
         <div class="bg-session-strip-body">
           <div class="bg-session-filters" role="group" aria-label="Fleet filters">
-            {(["all", "active", "attention", "completed"] as const).map(
+            {(["all", "active", "attention", "completed", "archived"] as const).map(
               (value) => (
                 <button
                   key={value}
@@ -324,6 +334,45 @@ export function BackgroundSessionStrip({
                   title="Stop background agent"
                 >
                   <i class="codicon codicon-close" />
+                </button>
+              )}
+              {ACTIVE_STATUSES.has(s.status) && onSteer && (
+                <button
+                  class="icon-button bg-session-action"
+                  onClick={() => {
+                    const message = window.prompt("Steer this agent:");
+                    if (message?.trim()) onSteer(s.id, message.trim());
+                  }}
+                  title="Steer agent"
+                >
+                  <i class="codicon codicon-debug-step-over" />
+                </button>
+              )}
+              {s.parentSessionId && onDetach && (
+                <button
+                  class="icon-button bg-session-action"
+                  onClick={() => onDetach(s.id)}
+                  title="Detach subtree"
+                >
+                  <i class="codicon codicon-link" />
+                </button>
+              )}
+              {!ACTIVE_STATUSES.has(s.status) && onRetry && (
+                <button
+                  class="icon-button bg-session-action"
+                  onClick={() => onRetry(s.id)}
+                  title="Retry agent"
+                >
+                  <i class="codicon codicon-refresh" />
+                </button>
+              )}
+              {!ACTIVE_STATUSES.has(s.status) && !s.archivedAt && onArchive && (
+                <button
+                  class="icon-button bg-session-action"
+                  onClick={() => onArchive(s.id)}
+                  title="Archive agent"
+                >
+                  <i class="codicon codicon-archive" />
                 </button>
               )}
               <button

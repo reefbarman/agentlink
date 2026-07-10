@@ -923,6 +923,16 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
+    if (method === "POST" && url === "/api/background/action") {
+      void this.handleBackgroundAction(req, res).catch((err) => {
+        this.log(`[browser-gateway] background action failed: ${err}`);
+        if (!res.headersSent) {
+          this.writeJson(res, 500, { error: "internal_error" });
+        }
+      });
+      return;
+    }
+
     if (method === "POST" && url === "/api/background/open-transcript") {
       void this.handleBackgroundOpenTranscriptAction(req, res).catch((err) => {
         this.log(
@@ -2088,6 +2098,31 @@ export class BrowserGatewayServer implements vscode.Disposable {
       body.sessionId,
     );
     this.writeJson(res, result.ok ? 200 : 404, result);
+  }
+
+  private async handleBackgroundAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    const body = (await this.readJsonBody(req)) as {
+      action?: "steer" | "detach" | "retry" | "archive";
+      sessionId?: string;
+      message?: string;
+    };
+    if (!body.action || typeof body.sessionId !== "string") {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result = await this.chatViewProvider.submitBrowserBackgroundAction({
+      action: body.action,
+      sessionId: body.sessionId,
+      message: body.message,
+    });
+    this.writeJson(res, result.ok ? 200 : 400, result);
   }
 
   private async handleBackgroundOpenTranscriptAction(

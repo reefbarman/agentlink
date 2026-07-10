@@ -1609,6 +1609,30 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     },
     [vscodeApi],
   );
+  const handleSteerBackground = useCallback(
+    (sessionId: string, message: string) => {
+      vscodeApi.postMessage({ command: "steerBgAgent", sessionId, message });
+    },
+    [vscodeApi],
+  );
+  const handleDetachBackground = useCallback(
+    (sessionId: string) => {
+      vscodeApi.postMessage({ command: "detachBgAgent", sessionId });
+    },
+    [vscodeApi],
+  );
+  const handleRetryBackground = useCallback(
+    (sessionId: string) => {
+      vscodeApi.postMessage({ command: "retryBgAgent", sessionId });
+    },
+    [vscodeApi],
+  );
+  const handleArchiveBackground = useCallback(
+    (sessionId: string) => {
+      vscodeApi.postMessage({ command: "archiveBgAgent", sessionId });
+    },
+    [vscodeApi],
+  );
 
   const handleNewSession = useCallback(() => {
     startupRestorePendingRef.current = false;
@@ -2506,6 +2530,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           sessions={bgSessions}
           onStop={handleStopBackground}
           onOpenTranscript={handleOpenBgTranscript}
+          onSteer={handleSteerBackground}
+          onDetach={handleDetachBackground}
+          onRetry={handleRetryBackground}
+          onArchive={handleArchiveBackground}
         />
         <InputArea
           onSend={handleSend}

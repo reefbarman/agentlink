@@ -3912,6 +3912,68 @@ export class AgentSessionManager {
     return { detached: true };
   }
 
+  archiveBackground(sessionId: string): { archived: boolean; reason?: string } {
+    const session = this.sessions.get(sessionId);
+    if (!session?.fleetMetadata || !session.background) {
+      return { archived: false, reason: "background session not found" };
+    }
+    if (
+      session.status === "streaming" ||
+      session.status === "tool_executing" ||
+      session.status === "awaiting_approval" ||
+      session.status === "queued"
+    ) {
+      return { archived: false, reason: "active sessions cannot be archived" };
+    }
+    session.fleetMetadata.archivedAt = Date.now();
+    this.saveSession(sessionId);
+    this.onSessionsChanged?.();
+    return { archived: true };
+  }
+
+  async retryBackground(sessionId: string): Promise<SpawnBackgroundResult> {
+    const session = this.sessions.get(sessionId);
+    const fleet = session?.fleetMetadata;
+    if (!session?.background || !fleet) {
+      throw new Error("Background session not found");
+    }
+    const firstUserMessage = session
+      .getAllMessages()
+      .find(
+        (message) =>
+          message.role === "user" && typeof message.content === "string",
+      );
+    return this.spawnBackground(
+      {
+        task: fleet.task,
+        message:
+          typeof firstUserMessage?.content === "string"
+            ? firstUserMessage.content
+            : `Retry the task: ${fleet.task}`,
+        mode: fleet.resolvedMode,
+        model: fleet.resolvedModel,
+        provider: fleet.resolvedProvider,
+        taskClass: fleet.taskClass,
+        ownedPaths: fleet.delegation?.ownedPaths,
+        forbiddenPaths: fleet.delegation?.forbiddenPaths,
+        permissionProfile: fleet.delegation?.permissionProfile as
+          | "review-only"
+          | "workspace-safe"
+          | "interactive"
+          | undefined,
+        expectedResult: fleet.delegation?.expectedResult as
+          | "text"
+          | "review_findings"
+          | "patch"
+          | "verification"
+          | undefined,
+        budget: fleet.budget,
+        goalId: fleet.goalId,
+      },
+      fleet.parentSessionId,
+    );
+  }
+
   /**
    * Async — blocks until the background session finishes.
    * Returns the last assistant message text.
@@ -4419,6 +4481,7 @@ export class AgentSessionManager {
                 timestamp: eventTimestamp,
               }
             : undefined,
+          archivedAt: s.fleetMetadata?.archivedAt,
           streamingText,
           resultText,
           errorMessage,

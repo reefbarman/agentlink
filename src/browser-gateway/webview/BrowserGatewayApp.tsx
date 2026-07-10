@@ -3323,6 +3323,28 @@ export function BrowserGatewayApp({
     })();
   };
 
+  const handleBackgroundAction = (
+    action: "steer" | "detach" | "retry" | "archive",
+    sessionId: string,
+    message?: string,
+  ): void => {
+    void fetch(buildApiPath("/api/background/action"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ action, sessionId, message }),
+    }).then(async (response) => {
+      const body = (await response.json()) as { ok?: boolean; error?: string };
+      setModeStatus(
+        body.ok
+          ? `Background ${action} accepted`
+          : `${action} failed: ${body.error ?? response.status}`,
+      );
+    });
+  };
+
   const handleAskAgentExecuteBuiltinCommand = (
     name: string,
     _args: string,
@@ -4925,6 +4947,18 @@ export function BrowserGatewayApp({
                   sessions={background}
                   onStop={handleStopBackground}
                   onOpenTranscript={handleOpenBgTranscript}
+                  onSteer={(sessionId, message) =>
+                    handleBackgroundAction("steer", sessionId, message)
+                  }
+                  onDetach={(sessionId) =>
+                    handleBackgroundAction("detach", sessionId)
+                  }
+                  onRetry={(sessionId) =>
+                    handleBackgroundAction("retry", sessionId)
+                  }
+                  onArchive={(sessionId) =>
+                    handleBackgroundAction("archive", sessionId)
+                  }
                 />
               )}
               {!mobileReviewOpen && (

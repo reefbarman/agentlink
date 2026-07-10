@@ -115,6 +115,7 @@ export interface PersistedFleetMetadata {
     estimatedCostUsd?: number;
   };
   budgetWarning?: { kind: string; ratio: number; emittedAt: number };
+  archivedAt?: number;
 }
 
 export interface PersistedSessionMetadata {
