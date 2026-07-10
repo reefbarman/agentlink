@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from "crypto";
 import * as fs from "fs/promises";
 import * as path from "path";
+import {
+  clearTimeout as clearNodeTimeout,
+  setTimeout as setNodeTimeout,
+} from "timers";
 import type { AgentSession } from "./AgentSession.js";
 import type { AgentEvent } from "./types.js";
 import {
@@ -50,6 +54,37 @@ import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_API_RETRIES = 3;
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
+const DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS = 90_000;
+const DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS = 120_000;
+
+class ProviderStreamTimeoutError extends Error {
+  constructor(kind: "first event" | "inactivity", timeoutMs: number) {
+    super(`Provider stream ${kind} timed out after ${timeoutMs}ms`);
+    this.name = "ProviderStreamTimeoutError";
+  }
+}
+
+async function nextProviderEventWithTimeout<T>(
+  iterator: AsyncIterator<T>,
+  timeoutMs: number,
+  kind: "first event" | "inactivity",
+  requestController: AbortController,
+): Promise<IteratorResult<T>> {
+  let timer: ReturnType<typeof setNodeTimeout> | undefined;
+  try {
+    return await Promise.race([
+      iterator.next(),
+      new Promise<never>((_, reject) => {
+        timer = setNodeTimeout(() => {
+          requestController.abort();
+          reject(new ProviderStreamTimeoutError(kind, timeoutMs));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearNodeTimeout(timer);
+  }
+}
 
 const buildErrorMessage = buildAgentErrorMessage;
 const isRetryableError = isAgentRetryableErrorMessage;
@@ -548,6 +583,10 @@ export class AgentEngine {
       toolProfile?: string;
       maxApiTurns?: number;
       maxToolCalls?: number;
+      /** Test/diagnostic override. Production uses the bounded defaults above. */
+      providerFirstEventTimeoutMs?: number;
+      /** Test/diagnostic override. Production uses the bounded defaults above. */
+      providerInactivityTimeoutMs?: number;
     },
   ): AsyncGenerator<AgentEvent> {
     const ac = session.createAbortController();
@@ -579,6 +618,7 @@ export class AgentEngine {
     try {
       let retryCount = 0;
       let emptyResponseRetryCount = 0;
+      let pendingEmptyResponseNudge = false;
       let emptyResponseCondenseAttempted = false;
       let contextTooLongCondenseAttempted = false;
       let thinkingSignatureRetryAttempted = false;
@@ -888,6 +928,15 @@ export class AgentEngine {
               return { role, content };
             },
           );
+          // Empty-response recovery input is request-local. It must reach the
+          // provider without becoming a persisted/user-visible chat message.
+          if (pendingEmptyResponseNudge) {
+            apiMessages.push({
+              role: "user",
+              content:
+                "Your previous response was empty. Continue from where you left off and provide the full response.",
+            });
+          }
 
           // Summary: count image/document blocks across all apiMessages only
           // when logging is enabled; this is otherwise pure hot-path overhead.
@@ -935,6 +984,9 @@ export class AgentEngine {
             messageAssemblyStartedAt,
             `apiMessages=${apiMessages.length}`,
           );
+          const requestController = new AbortController();
+          const abortRequest = () => requestController.abort();
+          signal.addEventListener("abort", abortRequest, { once: true });
           const streamGen = provider.stream({
             model: session.model,
             systemPrompt: session.systemPrompt,
@@ -947,10 +999,24 @@ export class AgentEngine {
             reasoningEffort,
             cache: currentCache,
             state: currentState,
-            signal: ac.signal,
+            signal: requestController.signal,
           });
+          const streamIterator = streamGen[Symbol.asyncIterator]();
 
-          for await (const event of streamGen) {
+          try {
+            while (true) {
+              const next = await nextProviderEventWithTimeout(
+                streamIterator,
+                firstTokenReceived
+                  ? (opts?.providerInactivityTimeoutMs ??
+                      DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS)
+                  : (opts?.providerFirstEventTimeoutMs ??
+                      DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS),
+                firstTokenReceived ? "inactivity" : "first event",
+                requestController,
+              );
+              if (next.done) break;
+              const event = next.value;
             if (signal.aborted) break;
 
             if (!firstTokenReceived) {
@@ -1017,6 +1083,9 @@ export class AgentEngine {
               case "done":
                 break;
             }
+            }
+          } finally {
+            signal.removeEventListener("abort", abortRequest);
           }
         } catch (streamErr: unknown) {
           if (signal.aborted) break;
@@ -1268,19 +1337,15 @@ export class AgentEngine {
                   "Provider returned an empty response — asking it to continue…",
                 visible: false,
               };
-              // Intentionally do not append an empty assistant turn to history.
-              session.addUserMessage(
-                "Your previous response was empty. Continue from where you left off and provide the full response.",
-              );
+              // Intentionally do not append an empty assistant turn or retry
+              // nudge to history. The next request receives it ephemerally.
+              pendingEmptyResponseNudge = true;
             }
             session.status = "streaming";
             continue;
           }
 
-          // Clean up the injected retry nudge message so the session isn't
-          // left dirty (it was only meant as a transient nudge, not permanent
-          // history). Only the second retry injects a message.
-          session.popLastMessage("user");
+          pendingEmptyResponseNudge = false;
 
           // Last resort: try auto-condensing and retrying once — this resets
           // the context and gives the model a fresh start. Only attempt once
@@ -1319,6 +1384,7 @@ export class AgentEngine {
         }
 
         emptyResponseRetryCount = 0;
+        pendingEmptyResponseNudge = false;
 
         // Extract tool_use blocks
         const toolUseBlocks = contentBlocks.filter(

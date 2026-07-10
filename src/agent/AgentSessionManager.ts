@@ -2651,9 +2651,6 @@ export class AgentSessionManager {
       this.host.providers.tryResolveProvider(route.resolvedModel)?.id ??
       route.resolvedProvider;
 
-    // Use lightweight prompt for review task classes to reduce system prompt bloat
-    const isReviewTask = route.taskClass.startsWith("review_");
-
     const session = await this.host.createSession({
       mode: route.resolvedMode,
       config: bgConfig,
@@ -2662,7 +2659,6 @@ export class AgentSessionManager {
       devMode: this.devMode,
       background: true,
       isBackground: true,
-      lightweight: isReviewTask,
       providerId,
     });
 

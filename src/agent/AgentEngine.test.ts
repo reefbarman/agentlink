@@ -2412,6 +2412,86 @@ describe("AgentEngine", () => {
       ]);
     });
 
+    it("sends the empty-response nudge only to the provider request", async () => {
+      const requests: StreamRequest[] = [];
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        attempts += 1;
+        if (attempts <= 2) {
+          yield { type: "content_blocks", blocks: [] };
+          yield { type: "usage", inputTokens: 100, outputTokens: 0 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "Recovered response" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      await collectEvents(engine.run(session));
+
+      expect(requests).toHaveLength(3);
+      expect(requests[2].messages.at(-1)).toEqual({
+        role: "user",
+        content:
+          "Your previous response was empty. Continue from where you left off and provide the full response.",
+      });
+      expect(session.getAllMessages()).not.toContainEqual(
+        expect.objectContaining({
+          content:
+            "Your previous response was empty. Continue from where you left off and provide the full response.",
+        }),
+      );
+    });
+
+    it("bounds provider streams that never produce a first event", async () => {
+      let attempts = 0;
+      const requestSignals: AbortSignal[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        attempts += 1;
+        if (request.signal) requestSignals.push(request.signal);
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      };
+      const backoffSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(
+          engine.run(session, { providerFirstEventTimeoutMs: 5 }),
+        );
+        const error = events.find((event) => event.type === "error");
+
+        expect(attempts).toBe(4);
+        expect(requestSignals).toHaveLength(4);
+        expect(requestSignals.every((signal) => signal.aborted)).toBe(true);
+        expect(error).toEqual(
+          expect.objectContaining({
+            type: "error",
+            retryable: true,
+          }),
+        );
+        expect((error as { error?: string }).error).toContain(
+          "first event timed out",
+        );
+      } finally {
+        backoffSpy.mockRestore();
+      }
+    });
+
     it("surfaces a retryable error after consecutive empty responses", async () => {
       let attempts = 0;
       const provider = makeMockProvider();

@@ -9,26 +9,21 @@
   "taskClasses": {
     "review_code": {
       "preferredMode": "review",
-      "providerStrategy": "opposite",
-      "useForegroundModelByDefault": false,
-      "requireReviewCapableModel": true,
-      "thinkingBudget": 4096,
-      "toolProfile": "review"
+      "providerStrategy": "same",
+      "useForegroundModelByDefault": true,
+      "requireReviewCapableModel": true
     },
     "review_plan": {
       "preferredMode": "review",
-      "providerStrategy": "opposite",
+      "providerStrategy": "same",
       "modelTier": "balanced",
-      "useForegroundModelByDefault": false,
-      "requireReviewCapableModel": false,
-      "thinkingBudget": 0,
-      "toolProfile": "review"
+      "useForegroundModelByDefault": true,
+      "requireReviewCapableModel": false
     },
     "readonly-research": {
       "preferredMode": "ask",
       "providerStrategy": "same",
-      "modelTier": "balanced",
-      "toolProfile": "readonly-research"
+      "modelTier": "balanced"
     },
     "research": {
       "preferredMode": "ask",

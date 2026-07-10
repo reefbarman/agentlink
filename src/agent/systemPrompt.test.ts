@@ -953,14 +953,15 @@ describe("buildSystemPrompt", () => {
     expect(lightweight.length).toBeLessThan(full.length * 0.5);
   });
 
-  it("background review section has scope constraints", async () => {
+  it("gives background reviews full capabilities without an artificial tool-call target", async () => {
     const result = await buildSystemPrompt("review", tmpDir, {
       isBackground: true,
     });
-    expect(result).toContain("Scope rules");
-    expect(result).toContain("3-5 tool calls");
+    expect(result).toContain("Background placement does not reduce your capabilities");
+    expect(result).toContain("active mode");
     expect(result).toContain("Skip pre-task user alignment");
-    expect(result).toContain("Do not ask clarifying questions");
+    expect(result).toContain("same context-management and recovery expectations");
+    expect(result).not.toContain("3-5 tool calls");
   });
 
   it("non-review background section does not have scope constraints", async () => {

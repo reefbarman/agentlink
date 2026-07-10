@@ -527,6 +527,27 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("creates native review agents with the full prompt path", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    await mgr.spawnBackground({
+      task: "review task",
+      message: "review thoroughly",
+      taskClass: "review_code",
+    });
+
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        background: true,
+        isBackground: true,
+      }),
+    );
+    expect(mocks.createSession.mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "lightweight",
+    );
+  });
+
   it("disables reasoning effort when the background route disables thinking", async () => {
     mocks.resolveBackgroundRoute.mockResolvedValueOnce({
       resolvedMode: "review",
