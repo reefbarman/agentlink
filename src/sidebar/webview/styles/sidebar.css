@@ -254,23 +254,7 @@ h3 {
   padding: 1px 4px;
   border-radius: 3px;
 }
-.tool-call-source {
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  padding: 0 4px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-.tool-call-source-mcp {
-  color: var(--vscode-descriptionForeground);
-  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
-}
-.tool-call-source-agent {
-  color: #4ec9b0;
-  background: rgba(78, 201, 176, 0.12);
-}
+
 .tool-call-elapsed {
   font-size: 11px;
   color: var(--vscode-descriptionForeground);
@@ -307,12 +291,7 @@ h3 {
   white-space: pre-wrap;
   word-break: break-all;
 }
-.tool-call-heartbeat {
-  font-size: 10px;
-  color: var(--vscode-descriptionForeground);
-  opacity: 0.7;
-  margin-bottom: 4px;
-}
+
 .tool-call-actions {
   display: flex;
   gap: 4px;
@@ -340,15 +319,6 @@ h3 {
   opacity: 0.85;
 }
 
-/* Rejected tool calls (untrusted session) */
-.tool-call-rejected {
-  opacity: 0.6;
-  border-left: 2px solid var(--vscode-testing-iconFailed, #f14c4c);
-}
-.tool-call-rejected-label {
-  color: var(--vscode-testing-iconFailed, #f14c4c);
-  font-weight: 600;
-}
 
 /* Completed tool calls */
 .tool-call-completed {

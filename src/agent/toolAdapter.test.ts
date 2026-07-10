@@ -2957,7 +2957,6 @@ describe("dispatchToolCall", () => {
           nestedForceResolve = forceResolve;
           return {
             toolCallId: "nested-call",
-            setApprovalId: vi.fn(),
             setTerminalId: vi.fn(),
           };
         },
@@ -2977,7 +2976,6 @@ describe("dispatchToolCall", () => {
         toolCallTracker: toolCallTracker as any,
         trackerCtx: {
           toolCallId: "outer-call",
-          setApprovalId: vi.fn(),
           setTerminalId: vi.fn(),
         },
       },
@@ -3044,7 +3042,6 @@ describe("dispatchToolCall", () => {
           _forceResolve: (result: ToolResult) => void,
         ) => ({
           toolCallId: "nested-call",
-          setApprovalId: vi.fn(),
           setTerminalId: vi.fn(),
         }),
       ),
@@ -3064,7 +3061,6 @@ describe("dispatchToolCall", () => {
         toolCallTracker: toolCallTracker as any,
         trackerCtx: {
           toolCallId: "outer-call",
-          setApprovalId: vi.fn(),
           setTerminalId: vi.fn(),
         },
       },

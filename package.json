@@ -80,11 +80,11 @@
       },
       {
         "command": "agentlink.addTrustedCommand",
-        "title": "AgentLink: Add Trusted Command Pattern"
+        "title": "AgentLink: Add Built-In Agent Trusted Command Pattern"
       },
       {
         "command": "agentlink.clearSessionApprovals",
-        "title": "AgentLink: Clear Session Approvals"
+        "title": "AgentLink: Clear Built-In Agent Session Approvals"
       },
       {
         "command": "agentlink.cancelToolCall",

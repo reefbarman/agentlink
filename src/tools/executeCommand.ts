@@ -6,7 +6,7 @@ import { getWorkspaceRoots, tryGetFirstWorkspaceRoot } from "../util/paths.js";
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
-import type { TrackerContext } from "../server/ToolCallTracker.js";
+import type { TrackerContext } from "../agent/AgentToolCallTracker.js";
 import {
   splitCompoundCommand,
   expandSubCommands,

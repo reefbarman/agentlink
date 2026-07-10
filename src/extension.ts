@@ -19,7 +19,7 @@ import {
 } from "./approvals/ApprovalManager.js";
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
-import { ToolCallTracker } from "./server/ToolCallTracker.js";
+import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { runLegacyAgentIntegrationCleanup } from "./util/legacyAgentIntegrationCleanup.js";
 
 import {
@@ -85,7 +85,7 @@ let statusBarManager: StatusBarManager;
 let sidebarProvider: SidebarProvider;
 let approvalManager: ApprovalManager;
 let approvalPanel: ApprovalPanelProvider;
-let toolCallTracker: ToolCallTracker;
+let toolCallTracker: AgentToolCallTracker;
 let builtinApprovalPanel: ApprovalPanelProvider;
 let indexerManager: IndexerManager | null = null;
 let chatViewProvider: ChatViewProvider;
@@ -216,8 +216,8 @@ async function consumeWorktreeStartupIntent(
 
 async function addTrustedCommandViaUI(): Promise<void> {
   const pattern = await vscode.window.showInputBox({
-    title: "Trusted Command Pattern",
-    prompt: "Enter a command pattern to trust",
+    title: "Built-In Agent Trusted Command Pattern",
+    prompt: "Enter a command pattern to trust for built-in agent sessions",
     ignoreFocusOut: true,
     validateInput: (v) => (v.trim() ? null : "Pattern cannot be empty"),
   });
@@ -613,7 +613,7 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
   });
   context.subscriptions.push(toolUsageTelemetry);
-  toolCallTracker = new ToolCallTracker(log, extVersion, toolUsageTelemetry);
+  toolCallTracker = new AgentToolCallTracker(log);
 
   // Status bar manager for approval alerts and indexer errors
   statusBarManager = new StatusBarManager();
@@ -1390,7 +1390,7 @@ export function activate(context: vscode.ExtensionContext): void {
       approvalPanel.focusApproval(),
     ),
     vscode.commands.registerCommand("agentlink.cancelToolCall", (id: string) =>
-      toolCallTracker.cancelCall(id, approvalPanel),
+      toolCallTracker.cancelCall(id),
     ),
     vscode.commands.registerCommand(
       "agentlink.continueToolCallInBackground",
@@ -1398,7 +1398,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand(
       "agentlink.completeToolCall",
-      (id: string) => toolCallTracker.completeCall(id, approvalPanel),
+      (id: string) => toolCallTracker.completeCall(id),
     ),
     vscode.commands.registerCommand("agentlink.clearSessionApprovals", () => {
       for (const s of approvalManager.getActiveSessions()) {
@@ -1406,7 +1406,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       approvalManager.resetWriteApproval();
       approvalManager.resetAgentWriteApproval();
-      vscode.window.showInformationMessage("All session approvals cleared.");
+      vscode.window.showInformationMessage(
+        "All built-in agent session approvals cleared.",
+      );
     }),
     vscode.commands.registerCommand(
       "agentlink.restartBrowserGateway",

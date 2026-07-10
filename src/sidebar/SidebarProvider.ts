@@ -3,14 +3,14 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import type {
+  AgentToolCallTracker,
+  TrackedCallInfo,
+} from "../agent/AgentToolCallTracker.js";
+import type {
   ApprovalManager,
   RuleScope,
 } from "../approvals/ApprovalManager.js";
 import type { IndexStatusInfo, SidebarState } from "./webview/types.js";
-import type {
-  ToolCallTracker,
-  TrackedCallInfo,
-} from "../server/ToolCallTracker.js";
 import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
 
 import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
@@ -28,7 +28,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     hasWorkspace: (vscode.workspace.workspaceFolders ?? []).length > 0,
   };
   private approvalManager: ApprovalManager | undefined;
-  private toolCallTracker: ToolCallTracker | undefined;
+  private toolCallTracker: AgentToolCallTracker | undefined;
   private activeToolCalls: TrackedCallInfo[] = [];
   private log: (msg: string) => void;
 
@@ -44,7 +44,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     manager.onDidChange(() => this.refreshApprovalState());
   }
 
-  setToolCallTracker(tracker: ToolCallTracker): void {
+  setToolCallTracker(tracker: AgentToolCallTracker): void {
     this.toolCallTracker = tracker;
     tracker.on("change", () => this.refreshToolCalls());
   }
@@ -60,7 +60,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       type: "updateToolCalls",
       calls: this.activeToolCalls,
     });
-    // Auto-refresh feedback after tool calls complete (may have auto-recorded failures)
+    // Refresh feedback alongside tool activity in development builds.
     if (__DEV_BUILD__) {
       this.refreshFeedback();
     }

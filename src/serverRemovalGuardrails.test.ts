@@ -11,6 +11,8 @@ const root = path.join(__dirname, "..");
 const removedPaths = [
   "src/server/McpServerHost.ts",
   "src/server/registerTools.ts",
+  "src/server/ToolCallTracker.ts",
+  "src/server/ToolCallTracker.test.ts",
   "src/server/tools",
   "src/agents",
   "src/setup.ts",
@@ -22,7 +24,7 @@ const removedPaths = [
 ];
 
 const retainedPaths = [
-  "src/server/ToolCallTracker.ts",
+  "src/agent/AgentToolCallTracker.ts",
   "src/agent/McpClientHub.ts",
 ];
 
@@ -43,6 +45,13 @@ describe("external MCP server removal guardrails", () => {
         true,
       );
     }
+
+    const trackerSource = fs.readFileSync(
+      path.join(root, "src/agent/AgentToolCallTracker.ts"),
+      "utf8",
+    );
+    expect(trackerSource).not.toContain("@modelcontextprotocol/sdk");
+    expect(trackerSource).not.toContain('source: "mcp"');
 
     const extensionPackage = JSON.parse(
       fs.readFileSync(path.join(root, "package.json"), "utf8"),

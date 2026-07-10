@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 interface ExtensionPackage {
   contributes?: {
-    commands?: Array<{ command?: string }>;
+    commands?: Array<{ command?: string; title?: string }>;
     configuration?: {
       properties?: Record<string, unknown>;
     };
@@ -50,6 +50,22 @@ describe("extension package contributions", () => {
     for (const setting of removedServerSettings) {
       expect(Object.hasOwn(settings, setting), setting).toBe(false);
     }
+  });
+
+  it("scopes approval commands to built-in agent sessions", () => {
+    const commands = new Map(
+      extensionPackage.contributes?.commands?.map(({ command, title }) => [
+        command,
+        title,
+      ]),
+    );
+
+    expect(commands.get("agentlink.addTrustedCommand")).toBe(
+      "AgentLink: Add Built-In Agent Trusted Command Pattern",
+    );
+    expect(commands.get("agentlink.clearSessionApprovals")).toBe(
+      "AgentLink: Clear Built-In Agent Session Approvals",
+    );
   });
 
   it("retains browser gateway and MCP client package contracts", () => {

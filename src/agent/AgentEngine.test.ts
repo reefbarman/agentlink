@@ -17,7 +17,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentEngine } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
-import { ToolCallTracker } from "../server/ToolCallTracker.js";
+import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
 import type { AgentToolExecutionRequest } from "../core/tools/types.js";
 import {
   createAgentToolRuntime,
@@ -593,7 +593,7 @@ describe("AgentEngine", () => {
       const session = await makeSession();
       session.addUserMessage("read then write");
       const engine = new AgentEngine(makeRegistry(provider));
-      const tracker = new ToolCallTracker();
+      const tracker = new AgentToolCallTracker();
       const toolCtx: ToolDispatchContext = {
         approvalManager: {} as ToolDispatchContext["approvalManager"],
         approvalPanel: {} as ToolDispatchContext["approvalPanel"],
@@ -808,7 +808,7 @@ describe("AgentEngine", () => {
       const session = await makeSession();
       session.addUserMessage("read then stop");
       const engine = new AgentEngine(makeRegistry(provider));
-      const tracker = new ToolCallTracker();
+      const tracker = new AgentToolCallTracker();
       let toolSignal: AbortSignal | undefined;
       let toolStarted!: () => void;
       const started = new Promise<void>((resolve) => {
@@ -945,7 +945,7 @@ describe("AgentEngine", () => {
       const session = await makeSession();
       session.addUserMessage("read then stop");
       const engine = new AgentEngine(makeRegistry(provider));
-      const tracker = new ToolCallTracker();
+      const tracker = new AgentToolCallTracker();
       const toolCtx: ToolDispatchContext = {
         approvalManager: {} as ToolDispatchContext["approvalManager"],
         approvalPanel: {} as ToolDispatchContext["approvalPanel"],
@@ -1730,7 +1730,9 @@ describe("AgentEngine", () => {
           effectiveModel: "gpt-5.4-mini",
         },
       });
-      expect(events.find((event) => event.type === "api_request")).toMatchObject({
+      expect(
+        events.find((event) => event.type === "api_request"),
+      ).toMatchObject({
         model: "gpt-5.4-mini",
       });
     });

@@ -66,12 +66,9 @@ export interface TrackedCallInfo {
   displayArgs: string;
   params?: string;
   startedAt: number;
-  status: "active" | "completed" | "rejected";
+  status: "active" | "completed";
   completedAt?: number;
-  lastHeartbeatAt?: number;
   canContinueInBackground?: boolean;
-  /** Where this tool call originated — "mcp" for external agents, "agent" for the built-in agent. */
-  source: "mcp" | "agent";
 }
 
 export interface FeedbackEntry {

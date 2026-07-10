@@ -83,7 +83,7 @@ import type {
   DecisionMessage,
 } from "../approvals/webview/types.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
-import type { ToolCallTracker } from "../server/ToolCallTracker.js";
+import type { AgentToolCallTracker } from "./AgentToolCallTracker.js";
 import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 import { getRelativePath } from "../util/paths.js";
 import {
@@ -920,7 +920,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private streamDropLogTimer: ReturnType<typeof setTimeout> | null = null;
   private approvalManager: ApprovalManager | undefined;
   private approvalManagerListener: vscode.Disposable | undefined;
-  private toolCallTracker: ToolCallTracker | undefined;
+  private toolCallTracker: AgentToolCallTracker | undefined;
   private anthropicProvider: ModelProvider | undefined;
   private notifyBrowserModelsChanged: (() => void) | undefined;
   private anthropicModelsRefreshInFlight: Promise<void> | undefined;
@@ -1161,7 +1161,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  setToolCallTracker(tracker: ToolCallTracker): void {
+  setToolCallTracker(tracker: AgentToolCallTracker): void {
     this.toolCallTracker = tracker;
   }
 
