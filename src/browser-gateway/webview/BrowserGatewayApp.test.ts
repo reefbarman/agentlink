@@ -1,14 +1,15 @@
 /** @vitest-environment jsdom */
 
 import type { ChatMessage, TodoItem } from "../../agent/webview/types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/preact";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppState } from "../../shared/chatProjection";
 import type { ApprovalRequest } from "../../approvals/webview/types";
@@ -267,7 +268,6 @@ type TestSnapshot = {
       model: string;
       status: string;
       streaming: boolean;
-      messages: never[];
       projectedMessages: ChatMessage[];
       statusOverride: string | null;
       thinkingEnabled: boolean;
@@ -379,7 +379,6 @@ function createSnapshot(): TestSnapshot {
         model: "claude-sonnet-4-6",
         status: "idle",
         streaming: false,
-        messages: [],
         projectedMessages: [],
         statusOverride: null as string | null,
         thinkingEnabled: true,
@@ -490,6 +489,11 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     document.documentElement.removeAttribute("style");
 
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    globalThis.ResizeObserver = class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    } as unknown as typeof ResizeObserver;
 
     const snapshot = createSnapshot();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -2400,6 +2404,89 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     }
   });
 
+  it("isolates same-id approval cards and ignores late snapshots from the previous tab", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const firstSnapshot = createSnapshot();
+    firstSnapshot.ui.approval = {
+      kind: "command",
+      id: "shared-approval-id",
+      command: "echo workspace",
+    };
+    const secondSnapshot = createSnapshot();
+    secondSnapshot.ui.approval = {
+      kind: "command",
+      id: "shared-approval-id",
+      command: "echo worker",
+    };
+    let resolveLateWorkspace: ((response: Response) => void) | undefined;
+    let workspaceRequests = 0;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "awaiting_approval", label: "Approval" },
+            },
+            {
+              instanceId: "instance-2",
+              workspaceName: "Worker",
+              workspacePath: "/worker",
+              url: "http://127.0.0.1:3334",
+              status: { kind: "awaiting_approval", label: "Approval" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ask-agent/session")) {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (url.includes("/api/ui-state?instanceId=instance-1")) {
+        workspaceRequests += 1;
+        if (workspaceRequests === 1) return jsonResponse(firstSnapshot);
+        return await new Promise<Response>((resolve) => {
+          resolveLateWorkspace = resolve;
+        });
+      }
+      if (url.includes("/api/ui-state?instanceId=instance-2")) {
+        return jsonResponse(secondSnapshot);
+      }
+      return jsonResponse({});
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    const workspaceInput = await screen.findByDisplayValue("echo workspace");
+    fireEvent.input(workspaceInput, { target: { value: "edited workspace" } });
+    fireEvent.click(screen.getByRole("tab", { name: /Worker/ }));
+
+    expect(await screen.findByDisplayValue("echo worker")).toBeTruthy();
+    expect(screen.queryByDisplayValue("edited workspace")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Workspace/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Worker/ }));
+    resolveLateWorkspace?.(jsonResponse(firstSnapshot));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("echo worker")).toBeTruthy();
+      expect(screen.queryByDisplayValue("echo workspace")).toBeNull();
+    });
+  });
+
   it("switches realtime stream routing between workspace tabs and Ask Agent", async () => {
     render(
       h(BrowserGatewayApp, {
@@ -3181,23 +3268,79 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBe("true");
   });
 
+  it("aborts an in-flight HTTP snapshot when SSE delivers newer state", async () => {
+    vi.useFakeTimers();
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    let snapshotSignal: AbortSignal | undefined;
+
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/ui-state")) {
+          snapshotSignal = init?.signal as AbortSignal | undefined;
+          return await new Promise<Response>(() => undefined);
+        }
+        if (url.includes("/api/instances")) {
+          return jsonResponse({
+            currentInstanceId: "instance-1",
+            instances: [
+              {
+                instanceId: "instance-1",
+                workspaceName: "Workspace",
+                workspacePath: "/workspace",
+                url: "http://127.0.0.1:3333",
+                status: { kind: "working", label: "Working" },
+              },
+            ],
+          });
+        }
+        return jsonResponse({});
+      },
+    );
+
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "test-token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+        }),
+      );
+      await selectWorkspaceTab();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(snapshotSignal?.aborted).toBe(false);
+
+      const streamedSnapshot = createSnapshot();
+      streamedSnapshot.session.foreground.status = "streaming";
+      streamedSnapshot.session.foreground.streaming = true;
+      streamedSnapshot.session.foreground.statusOverride = "SSE is newest";
+      await act(async () => {
+        MockEventSource.instances
+          .at(-1)
+          ?.addEventListener.mock.calls.find(
+            ([eventName]) => eventName === "snapshot",
+          )?.[1]?.({ data: JSON.stringify(streamedSnapshot) });
+      });
+
+      expect(snapshotSignal?.aborted).toBe(true);
+      expect(screen.getByText("SSE is newest")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to snapshot polling when the realtime stream errors", async () => {
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-    const initialSnapshot = createSnapshot();
     const recoveredSnapshot = createSnapshot();
     recoveredSnapshot.session.foreground.status = "streaming";
     recoveredSnapshot.session.foreground.streaming = true;
     recoveredSnapshot.session.foreground.statusOverride =
       "Recovered via fallback";
-    let uiStateCalls = 0;
-
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/api/ui-state")) {
-        uiStateCalls += 1;
-        return jsonResponse(
-          uiStateCalls === 1 ? initialSnapshot : recoveredSnapshot,
-        );
+        return jsonResponse(recoveredSnapshot);
       }
       if (url.includes("/api/instances")) {
         return jsonResponse({

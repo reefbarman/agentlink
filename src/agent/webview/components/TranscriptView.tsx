@@ -18,6 +18,7 @@ export function TranscriptView({
   onClose,
 }: TranscriptViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
   const programmaticScroll = useRef(false);
 
@@ -67,23 +68,15 @@ export function TranscriptView({
     }
   }, [scrollKey, streaming, scrollToBottomAfterLayout]);
 
-  const lastScrollHeight = useRef(0);
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    let raf: number;
-    const check = () => {
-      if (el.scrollHeight !== lastScrollHeight.current) {
-        lastScrollHeight.current = el.scrollHeight;
-        if (shouldAutoScroll.current) {
-          scrollToBottom();
-        }
-      }
-      raf = requestAnimationFrame(check);
-    };
-    raf = requestAnimationFrame(check);
-    return () => cancelAnimationFrame(raf);
-  }, [scrollToBottom]);
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (shouldAutoScroll.current) scrollToBottom();
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [messages.length > 0, scrollToBottom]);
 
   const handleScroll = useCallback(() => {
     if (programmaticScroll.current) {
@@ -121,7 +114,9 @@ export function TranscriptView({
             No messages recorded.
           </EmptyState>
         ) : (
-          <TranscriptMessageList messages={messages} streaming={streaming} />
+          <div class="chat-message-list" ref={contentRef}>
+            <TranscriptMessageList messages={messages} streaming={streaming} />
+          </div>
         )}
       </div>
     </div>

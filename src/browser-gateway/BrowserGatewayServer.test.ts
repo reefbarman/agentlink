@@ -596,10 +596,6 @@ describe("BrowserGatewayServer", () => {
           model: "claude-sonnet-4-6",
           status: "idle",
           streaming: false,
-          messages: [
-            { role: "user", content: "hello" },
-            { role: "assistant", content: [{ type: "text", text: "world" }] },
-          ],
           projectedMessages: [
             {
               id: "chat-1",

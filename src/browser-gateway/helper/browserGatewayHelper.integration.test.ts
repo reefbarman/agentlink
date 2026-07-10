@@ -5097,6 +5097,15 @@ describe("BrowserGatewayHelper proxy routing", () => {
       sessionTitle: "Remote session",
     });
 
+    const missingInstance = await fetch(
+      `${helperBase}/api/ui-state?instanceId=missing-instance`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(missingInstance.status).toBe(404);
+    await expect(missingInstance.json()).resolves.toMatchObject({
+      error: "instance_not_found",
+    });
+
     const snapshot = await fetch(
       `${helperBase}/api/ui-state?instanceId=instance-a`,
       {

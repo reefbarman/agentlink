@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef } from "preact/hooks";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "preact/hooks";
 
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ChatMessage } from "../types";
@@ -39,6 +46,7 @@ interface ChatViewProps {
   onStopBackground?: (sessionId: string) => void;
   onOpenTranscript?: (sessionId: string) => void;
   onFinalMarkerContinue?: (prompt: string) => void;
+  initialMessageLimit?: number;
 }
 
 export function ChatView({
@@ -64,9 +72,28 @@ export function ChatView({
   onStopBackground,
   onOpenTranscript,
   onFinalMarkerContinue,
+  initialMessageLimit,
 }: ChatViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const normalizedInitialMessageLimit =
+    initialMessageLimit !== undefined && initialMessageLimit > 0
+      ? initialMessageLimit
+      : undefined;
+  const [visibleMessageLimit, setVisibleMessageLimit] = useState(
+    normalizedInitialMessageLimit ?? Number.POSITIVE_INFINITY,
+  );
+  const pendingHistoryAnchorRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
   const shouldAutoScroll = useRef(true);
+
+  useEffect(() => {
+    setVisibleMessageLimit(
+      normalizedInitialMessageLimit ?? Number.POSITIVE_INFINITY,
+    );
+  }, [normalizedInitialMessageLimit]);
   const programmaticScroll = useRef(false);
 
   // Helper: scroll to bottom, flagging it as programmatic so handleScroll ignores it
@@ -93,7 +120,17 @@ export function ChatView({
 
   // Derive a scroll key that changes whenever content grows —
   // new messages, new blocks, text/input deltas, tool results
-  const lastMsg = messages[messages.length - 1];
+  const visibleMessages = useMemo(
+    () =>
+      Number.isFinite(visibleMessageLimit) &&
+      messages.length > visibleMessageLimit
+        ? messages.slice(messages.length - visibleMessageLimit)
+        : messages,
+    [messages, visibleMessageLimit],
+  );
+  const hiddenMessageCount = messages.length - visibleMessages.length;
+  const hasMessages = messages.length > 0;
+  const lastMsg = visibleMessages[visibleMessages.length - 1];
   const lastBlock = lastMsg?.blocks[lastMsg.blocks.length - 1];
   const latestUserMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -138,25 +175,25 @@ export function ChatView({
     }
   }, [scrollKey, streaming, scrollToBottomAfterLayout]);
 
-  // Track scrollHeight changes (e.g. mermaid diagrams rendering async)
-  // and auto-scroll when content grows
-  const lastScrollHeight = useRef(0);
+  // Track content height changes (e.g. async diagrams) without forcing a
+  // scrollHeight read on every animation frame.
   useEffect(() => {
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (shouldAutoScroll.current) scrollToBottom();
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [hasMessages, scrollToBottom]);
+
+  useLayoutEffect(() => {
+    const anchor = pendingHistoryAnchorRef.current;
     const el = containerRef.current;
-    if (!el) return;
-    let raf: number;
-    const check = () => {
-      if (el.scrollHeight !== lastScrollHeight.current) {
-        lastScrollHeight.current = el.scrollHeight;
-        if (shouldAutoScroll.current) {
-          scrollToBottom();
-        }
-      }
-      raf = requestAnimationFrame(check);
-    };
-    raf = requestAnimationFrame(check);
-    return () => cancelAnimationFrame(raf);
-  }, []);
+    if (!anchor || !el) return;
+    pendingHistoryAnchorRef.current = null;
+    el.scrollTop = anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight);
+  }, [visibleMessageLimit]);
 
   const handleScroll = useCallback(() => {
     // Skip scroll events caused by our own programmatic scrolling
@@ -186,7 +223,7 @@ export function ChatView({
     el.scrollTop = 0;
   }, []);
 
-  if (messages.length === 0) {
+  if (!hasMessages) {
     return (
       <div class="chat-messages empty">
         <div class="empty-state">
@@ -199,7 +236,7 @@ export function ChatView({
 
   return (
     <>
-      {previewLabel && (
+      {previewLabel && hiddenMessageCount === 0 && (
         <button
           class="prompt-preview"
           onClick={scrollToTop}
@@ -210,30 +247,55 @@ export function ChatView({
         </button>
       )}
       <div class="chat-messages" ref={containerRef} onScroll={handleScroll}>
-        <TranscriptMessageList
-          messages={messages}
-          streaming={streaming}
-          sessionId={sessionId}
-          detectedQuestion={detectedQuestion}
-          onDetectedQuestionAnswer={onDetectedQuestionAnswer}
-          onDismissDetectedQuestion={onDismissDetectedQuestion}
-          onOpenFile={onOpenFile}
-          onContinueToolCallInBackground={onContinueToolCallInBackground}
-          onCompleteToolCall={onCompleteToolCall}
-          onCancelToolCall={onCancelToolCall}
-          onPromoteMcpToolApproval={onPromoteMcpToolApproval}
-          onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
-          onRetry={onRetry}
-          onSignIn={onSignIn}
-          onSignInAnotherAccount={onSignInAnotherAccount}
-          onCondense={onCondense}
-          bgSessions={bgSessions}
-          onStopBackground={onStopBackground}
-          onOpenTranscript={onOpenTranscript}
-          onFinalMarkerContinue={onFinalMarkerContinue}
-          onRevertCheckpoint={onRevertCheckpoint}
-          onViewCheckpointDiff={onViewCheckpointDiff}
-        />
+        <div class="chat-message-list" ref={contentRef}>
+          {hiddenMessageCount > 0 && normalizedInitialMessageLimit && (
+            <button
+              type="button"
+              class="load-earlier-messages"
+              onClick={() => {
+                const el = containerRef.current;
+                if (el) {
+                  pendingHistoryAnchorRef.current = {
+                    scrollHeight: el.scrollHeight,
+                    scrollTop: el.scrollTop,
+                  };
+                }
+                shouldAutoScroll.current = false;
+                setVisibleMessageLimit(
+                  (current) => current + normalizedInitialMessageLimit,
+                );
+              }}
+            >
+              Show {Math.min(normalizedInitialMessageLimit, hiddenMessageCount)}{" "}
+              earlier messages
+              <span>{hiddenMessageCount} hidden</span>
+            </button>
+          )}
+          <TranscriptMessageList
+            messages={visibleMessages}
+            streaming={streaming}
+            sessionId={sessionId}
+            detectedQuestion={detectedQuestion}
+            onDetectedQuestionAnswer={onDetectedQuestionAnswer}
+            onDismissDetectedQuestion={onDismissDetectedQuestion}
+            onOpenFile={onOpenFile}
+            onContinueToolCallInBackground={onContinueToolCallInBackground}
+            onCompleteToolCall={onCompleteToolCall}
+            onCancelToolCall={onCancelToolCall}
+            onPromoteMcpToolApproval={onPromoteMcpToolApproval}
+            onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
+            onRetry={onRetry}
+            onSignIn={onSignIn}
+            onSignInAnotherAccount={onSignInAnotherAccount}
+            onCondense={onCondense}
+            bgSessions={bgSessions}
+            onStopBackground={onStopBackground}
+            onOpenTranscript={onOpenTranscript}
+            onFinalMarkerContinue={onFinalMarkerContinue}
+            onRevertCheckpoint={onRevertCheckpoint}
+            onViewCheckpointDiff={onViewCheckpointDiff}
+          />
+        </div>
       </div>
     </>
   );

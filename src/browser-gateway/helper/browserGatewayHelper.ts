@@ -16,6 +16,9 @@ import {
 
 import {
   getBrowserGatewayRegistryPath,
+  invalidateBrowserGatewayInstanceHealth,
+  isBrowserGatewayInstanceProcessAlive,
+  listBrowserGatewayInstances,
   listCheckedBrowserGatewayInstances,
   listHealthyBrowserGatewayInstances,
   setBrowserGatewayRegistryLogger,
@@ -5113,16 +5116,24 @@ export class BrowserGatewayHelper {
     const requestedInstanceId = requestUrl.searchParams
       .get("instanceId")
       ?.trim();
-    const instances = await listHealthyBrowserGatewayInstances();
-    const instance = this.selectInstance(instances, requestedInstanceId);
+    const instances = requestedInstanceId
+      ? await listBrowserGatewayInstances()
+      : await listHealthyBrowserGatewayInstances();
+    const instance = requestedInstanceId
+      ? (instances.find(
+          (candidate) =>
+            candidate.instanceId === requestedInstanceId &&
+            isBrowserGatewayInstanceProcessAlive(candidate),
+        ) ?? null)
+      : this.selectInstance(instances);
 
     if (!instance) {
       this.writeInstancesJson(
         res,
         "",
         instances,
-        503,
-        "no_instances_available",
+        requestedInstanceId ? 404 : 503,
+        requestedInstanceId ? "instance_not_found" : "no_instances_available",
       );
       return;
     }
@@ -5250,6 +5261,7 @@ export class BrowserGatewayHelper {
       );
 
       proxyReq.on("error", (error) => {
+        invalidateBrowserGatewayInstanceHealth(instance.instanceId);
         if (!res.headersSent) {
           writeJson(res, 502, {
             error: "proxy_error",

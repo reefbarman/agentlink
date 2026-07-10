@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getBrowserGatewayRegistryPath,
+  invalidateBrowserGatewayInstanceHealth,
   listBrowserGatewayInstances,
   listCheckedBrowserGatewayInstances,
   listHealthyBrowserGatewayInstances,
@@ -90,6 +91,7 @@ describe("browserGatewayRegistry", () => {
     registryMock.files.clear();
     registryMock.beforeRead = undefined;
     registryMock.staleLock = false;
+    invalidateBrowserGatewayInstanceHealth();
     process.kill = vi.fn(() => true) as unknown as typeof process.kill;
     globalThis.fetch = vi.fn(async () => ({ ok: true }) as Response);
   });
@@ -183,6 +185,52 @@ describe("browserGatewayRegistry", () => {
     await expect(listBrowserGatewayInstances()).resolves.toEqual([
       transientlyUnreachable,
     ]);
+  });
+
+  it("coalesces concurrent health checks and reuses the short-lived result", async () => {
+    const record = makeRecord();
+    registryMock.files.set(registryPath, JSON.stringify([record]));
+    let resolveHealth: (() => void) | undefined;
+    globalThis.fetch = vi.fn(
+      async () =>
+        await new Promise<Response>((resolve) => {
+          resolveHealth = () => resolve({ ok: true } as Response);
+        }),
+    );
+
+    const first = listCheckedBrowserGatewayInstances();
+    const second = listCheckedBrowserGatewayInstances();
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    resolveHealth?.();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { healthy: [record], registered: [record] },
+      { healthy: [record], registered: [record] },
+    ]);
+    await listCheckedBrowserGatewayInstances();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse cached health after an instance re-registers", async () => {
+    const first = makeRecord();
+    const restarted = makeRecord({
+      pid: 101,
+      port: 4001,
+      url: "http://127.0.0.1:4001",
+      startedAt: "2026-01-01T00:00:05.000Z",
+    });
+    registryMock.files.set(registryPath, JSON.stringify([first]));
+
+    await listCheckedBrowserGatewayInstances();
+    registryMock.files.set(registryPath, JSON.stringify([restarted]));
+    await listCheckedBrowserGatewayInstances();
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:4001/health",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("does not delete a freshly registered replacement while pruning a stale record", async () => {

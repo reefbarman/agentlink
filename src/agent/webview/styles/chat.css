@@ -344,6 +344,41 @@ body {
   justify-content: center;
 }
 
+.chat-message-list {
+  min-width: 0;
+}
+
+.load-earlier-messages {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: calc(100% - 24px);
+  margin: 4px 12px 10px;
+  padding: 7px 10px;
+  border: 1px solid
+    color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+  border-radius: 6px;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editor-background) 88%,
+    var(--vscode-foreground)
+  );
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.load-earlier-messages:hover {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-focusBorder);
+}
+
+.load-earlier-messages > span {
+  opacity: 0.7;
+}
+
 .empty-state {
   text-align: center;
   opacity: 0.5;
@@ -375,6 +410,8 @@ body {
 .message {
   padding: 6px 12px;
   margin: 2px 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
 }
 
 .message-content {
@@ -469,7 +506,11 @@ body {
   border: 1px solid
     color-mix(in srgb, var(--vscode-foreground) 20%, transparent);
   border-radius: 5px;
-  background: color-mix(in srgb, var(--vscode-editor-background) 86%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editor-background) 86%,
+    transparent
+  );
   box-shadow: 0 2px 8px color-mix(in srgb, #000 28%, transparent);
   text-decoration: none;
 }
@@ -1844,9 +1885,17 @@ body {
   align-items: center;
   gap: 5px;
   color: var(--vscode-descriptionForeground);
-  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 10%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #cca700) 10%,
+    transparent
+  );
   border: 1px solid
-    color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 28%, transparent);
+    color-mix(
+      in srgb,
+      var(--vscode-editorWarning-foreground, #cca700) 28%,
+      transparent
+    );
   border-radius: 4px;
   padding: 3px 7px;
 }
@@ -1896,7 +1945,11 @@ body {
   opacity: 0.7;
   padding: 4px 8px;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--vscode-badge-background) 18%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--vscode-badge-background) 18%,
+    transparent
+  );
   color: var(--vscode-foreground);
   align-self: flex-start;
 }
@@ -2333,11 +2386,7 @@ body {
   margin-left: -6px;
   padding-left: 4px;
   border-left: 2px solid var(--vscode-focusBorder);
-  background: color-mix(
-    in srgb,
-    var(--vscode-focusBorder) 8%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--vscode-focusBorder) 8%, transparent);
 }
 
 .queue-item-text {
@@ -2584,11 +2633,15 @@ body {
   color: var(--vscode-button-foreground);
   background: var(--vscode-button-background);
   border-color: var(--vscode-focusBorder, var(--vscode-button-background));
-  box-shadow: 0 0 0 1px var(--vscode-focusBorder, var(--vscode-button-background));
+  box-shadow: 0 0 0 1px
+    var(--vscode-focusBorder, var(--vscode-button-background));
 }
 
 .auto-continue-toggle.active:hover:not(:disabled) {
-  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+  background: var(
+    --vscode-button-hoverBackground,
+    var(--vscode-button-background)
+  );
 }
 
 .auto-continue-toggle.active .codicon {
@@ -2662,7 +2715,6 @@ body {
   max-width: min(320px, calc(100vw - 16px));
   overflow: auto;
 }
-
 
 .toolbar-selector-option {
   display: flex;
@@ -4164,7 +4216,10 @@ body {
   flex-direction: column;
   gap: 4px;
   border: 1px solid var(--vscode-inputValidation-warningBorder, #cca700);
-  background: var(--vscode-inputValidation-warningBackground, rgba(204, 167, 0, 0.12));
+  background: var(
+    --vscode-inputValidation-warningBackground,
+    rgba(204, 167, 0, 0.12)
+  );
   color: var(--vscode-foreground);
   border-radius: 6px;
   padding: 10px;
@@ -4174,7 +4229,10 @@ body {
 
 .elicit-url-warning-danger {
   border-color: var(--vscode-inputValidation-errorBorder, #f14c4c);
-  background: var(--vscode-inputValidation-errorBackground, rgba(241, 76, 76, 0.12));
+  background: var(
+    --vscode-inputValidation-errorBackground,
+    rgba(241, 76, 76, 0.12)
+  );
 }
 
 .elicit-url-details {
@@ -4195,7 +4253,10 @@ body {
   border: 1px solid var(--vscode-panel-border);
   border-radius: 4px;
   padding: 6px;
-  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  background: var(
+    --vscode-textCodeBlock-background,
+    var(--vscode-editor-background)
+  );
   font-size: 11px;
 }
 
@@ -4437,7 +4498,10 @@ body.approval-resizing {
     --vscode-terminal-fontFamily,
     var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace)
   );
-  font-size: var(--vscode-terminal-fontSize, var(--vscode-editor-font-size, 13px));
+  font-size: var(
+    --vscode-terminal-fontSize,
+    var(--vscode-editor-font-size, 13px)
+  );
   line-height: 1.5;
   user-select: none;
   flex-shrink: 0;
@@ -4452,7 +4516,10 @@ body.approval-resizing {
     --vscode-terminal-fontFamily,
     var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace)
   );
-  font-size: var(--vscode-terminal-fontSize, var(--vscode-editor-font-size, 13px));
+  font-size: var(
+    --vscode-terminal-fontSize,
+    var(--vscode-editor-font-size, 13px)
+  );
   line-height: 1.5;
   resize: none;
   outline: none;
@@ -4768,11 +4835,7 @@ body.approval-resizing {
   padding: 10px;
   border: 1px solid color-mix(in srgb, #4ec9b0 26%, var(--vscode-panel-border));
   border-radius: 6px;
-  background: color-mix(
-    in srgb,
-    #4ec9b0 6%,
-    var(--vscode-editor-background)
-  );
+  background: color-mix(in srgb, #4ec9b0 6%, var(--vscode-editor-background));
 }
 .approval-panel-embed .rule-row-suggestion-header {
   display: flex;
@@ -5240,11 +5303,7 @@ body.approval-resizing {
     var(--vscode-errorForeground) 35%,
     transparent
   );
-  background: color-mix(
-    in srgb,
-    var(--vscode-errorForeground) 5%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--vscode-errorForeground) 5%, transparent);
 }
 
 .bg-agent-result-cancelled {

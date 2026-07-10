@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { AgentSessionManager } from "../agent/AgentSessionManager.js";
 import type { SessionSummary } from "../agent/SessionStore.js";
 import type { AgentMessage } from "../agent/types.js";
+
 import type {
   ChatMessage,
   ChatState,
@@ -127,7 +128,6 @@ export interface BrowserGatewayWireSessionState {
     model: string;
     status: string;
     streaming: boolean;
-    messages: AgentMessage[];
     projectedMessages: ChatMessage[];
     statusOverride: string | null;
     thinkingEnabled: boolean;
@@ -433,10 +433,8 @@ export class BrowserGatewayService implements vscode.Disposable {
 
   getSerializableSessionState(): BrowserGatewayWireSessionState {
     const sessionState = this.getSessionState();
-    // TODO: This wire shape is intentionally simple but unbounded. Before we
-    // build a richer browser UI, consider projecting AgentMessage[] into a
-    // lighter transcript format or throttling/session-delta updates so SSE does
-    // not resend large tool/image payloads on every change.
+    // The browser renders only the projected transcript. Do not also serialize
+    // raw AgentMessage[] here: long sessions otherwise cross the wire twice.
     return {
       sessions: sessionState.sessions,
       repository: sessionState.repository,
@@ -448,7 +446,6 @@ export class BrowserGatewayService implements vscode.Disposable {
             model: sessionState.foreground.model,
             status: sessionState.foreground.status,
             streaming: sessionState.foreground.streaming,
-            messages: sessionState.foreground.messages,
             projectedMessages: sessionState.foreground.projectedMessages,
             statusOverride: sessionState.foreground.statusOverride,
             thinkingEnabled: sessionState.foreground.thinkingEnabled,

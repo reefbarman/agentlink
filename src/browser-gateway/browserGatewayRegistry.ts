@@ -10,8 +10,14 @@ const REGISTRY_PATH = path.join(REGISTRY_DIR, "browser-gateways.json");
 const REGISTRY_LOCK_DIR = `${REGISTRY_PATH}.lock`;
 const REGISTRY_LOCK_TIMEOUT_MS = 20_000;
 const REGISTRY_STALE_LOCK_MS = 10_000;
+const INSTANCE_HEALTH_CACHE_TTL_MS = 2_500;
 
 let registryLog: ((message: string) => void) | undefined;
+const instanceHealthCache = new Map<
+  string,
+  { health: InstanceHealth; checkedAt: number }
+>();
+const instanceHealthChecks = new Map<string, Promise<InstanceHealth>>();
 
 export function setBrowserGatewayRegistryLogger(
   log: ((message: string) => void) | undefined,
@@ -206,6 +212,12 @@ export async function removeBrowserGatewayInstance(
   });
 }
 
+export function isBrowserGatewayInstanceProcessAlive(
+  instance: BrowserGatewayInstanceRecord,
+): boolean {
+  return isPidLikelyAlive(instance.pid);
+}
+
 function isPidLikelyAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -221,6 +233,33 @@ function isPidLikelyAlive(pid: number): boolean {
 }
 
 type InstanceHealth = "healthy" | "unreachable" | "dead";
+
+function instanceRegistrationKey(
+  instance: BrowserGatewayInstanceRecord,
+): string {
+  return JSON.stringify([
+    instance.instanceId,
+    instance.pid,
+    instance.port,
+    instance.url,
+    instance.startedAt,
+  ]);
+}
+
+export function invalidateBrowserGatewayInstanceHealth(
+  instanceId?: string,
+): void {
+  const matches = (key: string): boolean => {
+    const parsed = JSON.parse(key) as [string];
+    return !instanceId || parsed[0] === instanceId;
+  };
+  for (const key of instanceHealthCache.keys()) {
+    if (matches(key)) instanceHealthCache.delete(key);
+  }
+  for (const key of instanceHealthChecks.keys()) {
+    if (matches(key)) instanceHealthChecks.delete(key);
+  }
+}
 
 async function checkInstanceHealth(
   instance: BrowserGatewayInstanceRecord,
@@ -240,6 +279,34 @@ async function checkInstanceHealth(
   }
 }
 
+async function checkInstanceHealthCached(
+  instance: BrowserGatewayInstanceRecord,
+): Promise<InstanceHealth> {
+  const key = instanceRegistrationKey(instance);
+  const cached = instanceHealthCache.get(key);
+  if (cached && Date.now() - cached.checkedAt < INSTANCE_HEALTH_CACHE_TTL_MS) {
+    return cached.health;
+  }
+
+  const existing = instanceHealthChecks.get(key);
+  if (existing) return await existing;
+
+  const check = checkInstanceHealth(instance)
+    .then((health) => {
+      if (instanceHealthChecks.get(key) === check) {
+        instanceHealthCache.set(key, { health, checkedAt: Date.now() });
+      }
+      return health;
+    })
+    .finally(() => {
+      if (instanceHealthChecks.get(key) === check) {
+        instanceHealthChecks.delete(key);
+      }
+    });
+  instanceHealthChecks.set(key, check);
+  return await check;
+}
+
 export async function listBrowserGatewayInstances(): Promise<
   BrowserGatewayInstanceRecord[]
 > {
@@ -254,7 +321,7 @@ export async function listCheckedBrowserGatewayInstances(): Promise<{
   const checks = await Promise.all(
     records.map(async (record) => ({
       record,
-      health: await checkInstanceHealth(record),
+      health: await checkInstanceHealthCached(record),
     })),
   );
   const healthy = checks
@@ -264,6 +331,13 @@ export async function listCheckedBrowserGatewayInstances(): Promise<{
     .filter((c) => c.health !== "dead")
     .map((c) => c.record);
   const stale = checks.filter((c) => c.health === "dead").map((c) => c.record);
+  const currentKeys = new Set(records.map(instanceRegistrationKey));
+  for (const key of instanceHealthCache.keys()) {
+    if (!currentKeys.has(key)) instanceHealthCache.delete(key);
+  }
+  for (const key of instanceHealthChecks.keys()) {
+    if (!currentKeys.has(key)) instanceHealthChecks.delete(key);
+  }
   const summary = checks
     .map((c) => `${c.health}:${summarizeRecord(c.record)}`)
     .join(" | ");

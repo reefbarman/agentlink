@@ -296,7 +296,6 @@ type GatewaySnapshot = {
       model: string;
       status: string;
       streaming: boolean;
-      messages: unknown[];
       projectedMessages: ChatMessage[];
       statusOverride: string | null;
       thinkingEnabled?: boolean;
@@ -716,6 +715,14 @@ export function BrowserGatewayApp({
   const [selectedTabId, setSelectedTabId] =
     useState<string>(initialSelectedTabId);
   const selectedTabIdRef = useRef(initialSelectedTabId);
+  const selectedTabGenerationRef = useRef(0);
+  const snapshotCacheRef = useRef<
+    Map<string, { generation: number; snapshot: GatewaySnapshot }>
+  >(new Map());
+  const snapshotOriginRef = useRef({
+    tabId: initialSelectedTabId,
+    generation: 0,
+  });
   const touchTabPointerRef = useRef<{
     instanceId: string;
     pointerId: number;
@@ -743,7 +750,18 @@ export function BrowserGatewayApp({
 
   function selectTab(tabId: string): void {
     const previousTabId = selectedTabIdRef.current;
+    if (previousTabId === tabId) return;
+
+    const generation = selectedTabGenerationRef.current + 1;
+    selectedTabGenerationRef.current = generation;
     selectedTabIdRef.current = tabId;
+    snapshotOriginRef.current = { tabId, generation };
+    setSnapshot(snapshotCacheRef.current.get(tabId)?.snapshot ?? null);
+    setLocalDismissedApprovalId(null);
+    setLocalDismissedQuestionId(null);
+    setSelectedDiffId(null);
+    setTranscriptView(null);
+    forwardedFollowUpRef.current = "";
     setSelectedTabId(tabId);
     logAskAgentBrowserEvent("tab.select", {
       previousTabId,
@@ -767,6 +785,13 @@ export function BrowserGatewayApp({
       buildApiPathForInstance(pathname, instanceId),
     [buildApiPathForInstance, selectedInstanceId],
   );
+  const buildApiPathForTab = useCallback(
+    (pathname: string, tabId: string): string =>
+      tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+        ? pathname
+        : buildApiPathForInstance(pathname, tabId),
+    [buildApiPathForInstance],
+  );
   const buildSnapshotApiPath = useCallback(
     (
       instanceId = selectedInstanceId,
@@ -778,11 +803,30 @@ export function BrowserGatewayApp({
     [buildApiPathForInstance, isAskAgentSelected, selectedInstanceId],
   );
   const buildEventsApiPath = useCallback(
-    (instanceId: string): string =>
-      isAskAgentSelected
+    (instanceId: string, askAgentSelected = isAskAgentSelected): string =>
+      askAgentSelected
         ? "/api/ask-agent/events"
         : buildApiPathForInstance("/events", instanceId),
     [buildApiPathForInstance, isAskAgentSelected],
+  );
+
+  const commitSnapshot = useCallback(
+    (next: GatewaySnapshot, tabId: string, generation: number): boolean => {
+      const cached = snapshotCacheRef.current.get(tabId);
+      if (!cached || generation >= cached.generation) {
+        snapshotCacheRef.current.set(tabId, { generation, snapshot: next });
+      }
+      if (
+        selectedTabIdRef.current !== tabId ||
+        selectedTabGenerationRef.current !== generation
+      ) {
+        return false;
+      }
+      snapshotOriginRef.current = { tabId, generation };
+      setSnapshot(next);
+      return true;
+    },
+    [],
   );
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
   const [sendStatus, setSendStatus] = useState<string>("");
@@ -799,8 +843,16 @@ export function BrowserGatewayApp({
   >([]);
   const [askAgentModelCatalog, setAskAgentModelCatalog] =
     useState<AskAgentModelCatalogStatus | null>(null);
-  const [mobileLayout, setMobileLayout] = useState(false);
-  const [touchInput, setTouchInput] = useState(false);
+  const [mobileLayout, setMobileLayout] = useState(
+    () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia(MOBILE_LAYOUT_MEDIA_QUERY).matches,
+  );
+  const [touchInput, setTouchInput] = useState(
+    () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia(TOUCH_POINTER_MEDIA_QUERY).matches,
+  );
   const [mobilePane, setMobilePane] = useState<"review" | null>(null);
   const [sessionHistory, setSessionHistory] = useState<SessionSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -926,8 +978,19 @@ export function BrowserGatewayApp({
   useEffect(() => {
     let closed = false;
     let eventSource: EventSource | undefined;
+    let snapshotFetchController: AbortController | undefined;
+    const tabId = selectedTabId;
+    const generation = selectedTabGenerationRef.current;
+    const instanceId = isAskAgentSelected ? "" : selectedTabId;
     let instanceRefreshTimer: ReturnType<typeof setInterval> | undefined;
+    let initialSnapshotTimer: ReturnType<typeof setTimeout> | undefined;
     let fallbackSnapshotTimer: ReturnType<typeof setInterval> | undefined;
+
+    const stopInitialSnapshotFallback = () => {
+      if (!initialSnapshotTimer) return;
+      clearTimeout(initialSnapshotTimer);
+      initialSnapshotTimer = undefined;
+    };
 
     const stopFallbackSnapshotPolling = () => {
       if (!fallbackSnapshotTimer) return;
@@ -936,12 +999,16 @@ export function BrowserGatewayApp({
     };
 
     const fetchFallbackSnapshot = async () => {
+      snapshotFetchController?.abort();
+      const controller = new AbortController();
+      snapshotFetchController = controller;
       try {
         const response = await fetch(buildSnapshotApiPath(), {
           credentials: "same-origin",
           headers: {
             Authorization: `Bearer ${authToken}`,
           },
+          signal: controller.signal,
         });
         if (!response.ok) {
           if (!closed) {
@@ -952,18 +1019,21 @@ export function BrowserGatewayApp({
           return;
         }
         const data = await readGatewaySnapshotResponse(response);
-        if (!closed) {
-          setSnapshot(data.snapshot);
+        if (!closed && commitSnapshot(data.snapshot, tabId, generation)) {
           if (data.askAgentCapabilities) {
             setAskAgentCapabilities(data.askAgentCapabilities);
           }
           setStatus("Connected (fallback polling)");
         }
       } catch (err) {
-        if (!closed) {
+        if (!closed && !controller.signal.aborted) {
           setStatus(
             `Realtime stream disconnected — retrying… (${String(err)})`,
           );
+        }
+      } finally {
+        if (snapshotFetchController === controller) {
+          snapshotFetchController = undefined;
         }
       }
     };
@@ -976,13 +1046,16 @@ export function BrowserGatewayApp({
       }, 2_000);
     };
 
-    const startRealtimeStream = (instanceId: string) => {
-      eventSource = new EventSource(buildEventsApiPath(instanceId));
+    const startRealtimeStream = (streamInstanceId: string) => {
+      eventSource = new EventSource(
+        buildEventsApiPath(streamInstanceId, isAskAgentSelected),
+      );
       eventSource.onopen = () => {
         stopFallbackSnapshotPolling();
         setStatus("Connected");
       };
       eventSource.onerror = () => {
+        stopInitialSnapshotFallback();
         setStatus("Realtime stream disconnected — retrying…");
         startFallbackSnapshotPolling();
       };
@@ -993,61 +1066,42 @@ export function BrowserGatewayApp({
     const applySnapshotEvent = (event: MessageEvent<string>) => {
       try {
         const next = JSON.parse(event.data) as GatewaySnapshot;
+        if (!commitSnapshot(next, tabId, generation)) return;
+        snapshotFetchController?.abort();
+        snapshotFetchController = undefined;
+        stopInitialSnapshotFallback();
         stopFallbackSnapshotPolling();
-        setSnapshot(next);
         setStatus("Connected");
       } catch (err) {
         setStatus(`Stream parse error: ${String(err)}`);
       }
     };
 
-    void (async () => {
-      const resolvedInstanceId = await fetchInstances();
-      if (closed) return;
-
-      instanceRefreshTimer = setInterval(() => {
-        void fetchInstances();
-      }, 5_000);
-
-      const selectedInstanceForStream =
-        resolvedInstanceId ?? selectedInstanceId;
-      const askAgentForStream =
-        selectedInstanceForStream === BROWSER_GATEWAY_ASK_AGENT_TAB_ID ||
-        isAskAgentSelected;
-      if (
-        routeByInstance &&
-        !askAgentForStream &&
-        !resolvedInstanceId &&
-        selectedInstanceForStream
-      ) {
-        setStatus("Waiting for active VS Code session…");
-        return;
-      }
-      if (
-        routeByInstance &&
-        !askAgentForStream &&
-        selectedInstanceForStream &&
-        resolvedInstanceId !== selectedInstanceForStream
-      ) {
-        return;
-      }
-
-      void fetchSnapshot(selectedInstanceForStream, askAgentForStream);
-      void fetchModes(selectedInstanceForStream);
-      void fetchModels(selectedInstanceForStream, askAgentForStream);
-      void fetchSlashCommands(selectedInstanceForStream, askAgentForStream);
-      if (!askAgentForStream) {
-        void fetchSessions(selectedInstanceForStream, askAgentForStream);
-        void fetchDebugInfo(selectedInstanceForStream);
-      }
-      startRealtimeStream(selectedInstanceForStream);
-    })();
+    startRealtimeStream(instanceId);
+    initialSnapshotTimer = setTimeout(() => {
+      initialSnapshotTimer = undefined;
+      void fetchFallbackSnapshot();
+    }, 500);
+    void fetchModes(instanceId);
+    void fetchModels(instanceId, isAskAgentSelected);
+    void fetchSlashCommands(instanceId, isAskAgentSelected);
+    if (!isAskAgentSelected) {
+      void fetchSessions(instanceId, false);
+      void fetchDebugInfo(instanceId);
+    }
+    void fetchInstances({ commitSelection: false });
+    instanceRefreshTimer = setInterval(() => {
+      void fetchInstances();
+    }, 5_000);
 
     return () => {
       closed = true;
       if (instanceRefreshTimer) {
         clearInterval(instanceRefreshTimer);
       }
+      snapshotFetchController?.abort();
+      snapshotFetchController = undefined;
+      stopInitialSnapshotFallback();
       stopFallbackSnapshotPolling();
       eventSource?.removeEventListener("snapshot", applySnapshotEvent);
       eventSource?.removeEventListener("update", applySnapshotEvent);
@@ -1056,6 +1110,7 @@ export function BrowserGatewayApp({
   }, [
     buildEventsApiPath,
     buildSnapshotApiPath,
+    commitSnapshot,
     isAskAgentSelected,
     selectedTabId,
     routeByInstance,
@@ -1509,36 +1564,6 @@ export function BrowserGatewayApp({
     }
   }
 
-  async function fetchSnapshot(
-    instanceId = selectedInstanceId,
-    askAgentSelected = isAskAgentSelected,
-  ): Promise<boolean> {
-    try {
-      const response = await fetch(
-        buildSnapshotApiPath(instanceId, askAgentSelected),
-        {
-          credentials: "same-origin",
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-        },
-      );
-      if (!response.ok) {
-        setStatus(`Snapshot failed: ${response.status}`);
-        return false;
-      }
-      const data = await readGatewaySnapshotResponse(response);
-      setSnapshot(data.snapshot);
-      if (data.askAgentCapabilities) {
-        setAskAgentCapabilities(data.askAgentCapabilities);
-      }
-      return true;
-    } catch (err) {
-      setStatus(`Snapshot error: ${String(err)}`);
-      return false;
-    }
-  }
-
   async function postBrowserToast(
     message: string,
     level: "info" | "warning" | "error" = "info",
@@ -1551,6 +1576,8 @@ export function BrowserGatewayApp({
   async function fetchSlashCommands(
     instanceId = selectedInstanceId,
     askAgentSelected = isAskAgentSelected,
+    tabId = askAgentSelected ? BROWSER_GATEWAY_ASK_AGENT_TAB_ID : instanceId,
+    generation = selectedTabGenerationRef.current,
   ): Promise<void> {
     try {
       const response = await fetch(
@@ -1568,7 +1595,11 @@ export function BrowserGatewayApp({
         return;
       }
       const body = (await response.json()) as { commands?: SlashCommandInfo[] };
-      if (Array.isArray(body.commands)) {
+      if (
+        Array.isArray(body.commands) &&
+        selectedTabIdRef.current === tabId &&
+        selectedTabGenerationRef.current === generation
+      ) {
         setSlashCommands(body.commands);
       }
     } catch {
@@ -1576,7 +1607,11 @@ export function BrowserGatewayApp({
     }
   }
 
-  async function fetchModes(instanceId = selectedInstanceId): Promise<void> {
+  async function fetchModes(
+    instanceId = selectedInstanceId,
+    tabId = isAskAgentSelected ? BROWSER_GATEWAY_ASK_AGENT_TAB_ID : instanceId,
+    generation = selectedTabGenerationRef.current,
+  ): Promise<void> {
     try {
       const response = await fetch(buildApiPath("/api/modes", instanceId), {
         headers: {
@@ -1588,7 +1623,12 @@ export function BrowserGatewayApp({
         return;
       }
       const body = (await response.json()) as { modes?: ModeInfo[] };
-      if (Array.isArray(body.modes) && body.modes.length > 0) {
+      if (
+        Array.isArray(body.modes) &&
+        body.modes.length > 0 &&
+        selectedTabIdRef.current === tabId &&
+        selectedTabGenerationRef.current === generation
+      ) {
         setModes(body.modes);
       }
     } catch {
@@ -1599,6 +1639,8 @@ export function BrowserGatewayApp({
   async function fetchModels(
     instanceId = selectedInstanceId,
     askAgentSelected = isAskAgentSelected,
+    tabId = askAgentSelected ? BROWSER_GATEWAY_ASK_AGENT_TAB_ID : instanceId,
+    generation = selectedTabGenerationRef.current,
   ): Promise<void> {
     try {
       const response = await fetch(
@@ -1622,6 +1664,12 @@ export function BrowserGatewayApp({
         publishedAt?: number;
         source?: "cached" | "fallback";
       };
+      if (
+        selectedTabIdRef.current !== tabId ||
+        selectedTabGenerationRef.current !== generation
+      ) {
+        return;
+      }
       if (!askAgentSelected) {
         setAskAgentCapabilities([]);
         setAskAgentModelCatalog(null);
@@ -1649,6 +1697,8 @@ export function BrowserGatewayApp({
   async function fetchSessions(
     instanceId = selectedInstanceId,
     askAgentSelected = isAskAgentSelected,
+    tabId = askAgentSelected ? BROWSER_GATEWAY_ASK_AGENT_TAB_ID : instanceId,
+    generation = selectedTabGenerationRef.current,
   ): Promise<void> {
     try {
       const response = await fetch(
@@ -1666,7 +1716,11 @@ export function BrowserGatewayApp({
         return;
       }
       const body = (await response.json()) as { sessions?: SessionSummary[] };
-      if (Array.isArray(body.sessions)) {
+      if (
+        Array.isArray(body.sessions) &&
+        selectedTabIdRef.current === tabId &&
+        selectedTabGenerationRef.current === generation
+      ) {
         setSessionHistory(body.sessions);
       }
     } catch {
@@ -2961,16 +3015,19 @@ export function BrowserGatewayApp({
     data: Omit<DecisionMessage, "type">,
   ): void => {
     const submittedApprovalId = data.id;
+    const origin = { ...snapshotOriginRef.current };
+    const approval = visibleApproval;
     const followUp =
       data.followUp?.trim() || forwardedFollowUpRef.current.trim();
     forwardedFollowUpRef.current = "";
     setLocalDismissedApprovalId(submittedApprovalId);
     void (async () => {
-      const approvalPath = isAskAgentSelected
-        ? visibleApproval?.kind === "memory"
-          ? "/api/ask-agent/memory/approval"
-          : "/api/ask-agent/approval"
-        : buildApiPath("/api/approval");
+      const approvalPath =
+        origin.tabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+          ? approval?.kind === "memory"
+            ? "/api/ask-agent/memory/approval"
+            : "/api/ask-agent/approval"
+          : buildApiPathForTab("/api/approval", origin.tabId);
       const response = await fetch(approvalPath, {
         method: "POST",
         credentials: "same-origin",
@@ -2989,9 +3046,9 @@ export function BrowserGatewayApp({
         snapshot?: GatewaySnapshot;
       };
       if (body.ok && body.snapshot) {
-        setSnapshot(body.snapshot);
+        commitSnapshot(body.snapshot, origin.tabId, origin.generation);
       }
-      if (!body.ok) {
+      if (!body.ok && selectedTabIdRef.current === origin.tabId) {
         setLocalDismissedApprovalId(null);
         setModeStatus(
           `Approval action failed: ${body.error ?? response.status}`,
@@ -3657,6 +3714,9 @@ export function BrowserGatewayApp({
 
       if (command === "agentQuestionResponse") {
         const id = String(data.id ?? "").trim();
+        const originTabId = String(
+          data.originTabId ?? snapshotOriginRef.current.tabId,
+        );
         const answers =
           data.answers && typeof data.answers === "object"
             ? (data.answers as Record<
@@ -3670,8 +3730,11 @@ export function BrowserGatewayApp({
             : {};
         if (id) {
           void fetch(
-            buildApiPath(
-              isAskAgentSelected ? "/api/ask-agent/question" : "/api/question",
+            buildApiPathForTab(
+              originTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
+                ? "/api/ask-agent/question"
+                : "/api/question",
+              originTabId,
             ),
             {
               method: "POST",
@@ -3689,11 +3752,14 @@ export function BrowserGatewayApp({
       if (command === "agentUrlElicitationResponse") {
         const id = String(data.id ?? "").trim();
         const action = String(data.action ?? "");
+        const originTabId = String(
+          data.originTabId ?? snapshotOriginRef.current.tabId,
+        );
         if (
           id &&
           (action === "accept" || action === "cancel" || action === "decline")
         ) {
-          void fetch(buildApiPath("/api/url-elicitation"), {
+          void fetch(buildApiPathForTab("/api/url-elicitation", originTabId), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -3708,6 +3774,9 @@ export function BrowserGatewayApp({
       if (command === "agentQuestionProgress") {
         const id = String(data.id ?? "").trim();
         const step = Number(data.step ?? 0);
+        const originTabId = String(
+          data.originTabId ?? snapshotOriginRef.current.tabId,
+        );
         const answers =
           data.answers && typeof data.answers === "object"
             ? (data.answers as Record<
@@ -3722,10 +3791,11 @@ export function BrowserGatewayApp({
         const origin = String(data.origin ?? questionProgressOriginRef.current);
         if (id) {
           void fetch(
-            buildApiPath(
-              isAskAgentSelected
+            buildApiPathForTab(
+              originTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
                 ? "/api/ask-agent/question-progress"
                 : "/api/question-progress",
+              originTabId,
             ),
             {
               method: "POST",
@@ -4536,8 +4606,12 @@ export function BrowserGatewayApp({
                   </EmptyState>
                 ) : (
                   <ChatView
+                    key={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "empty"}`}
                     messages={messages}
                     streaming={Boolean(streaming)}
+                    initialMessageLimit={
+                      mobileLayout || touchInput ? 20 : undefined
+                    }
                     sessionId={foreground?.sessionId ?? null}
                     detectedQuestion={foreground?.detectedQuestion ?? null}
                     onDetectedQuestionAnswer={(payload) => {
@@ -4743,6 +4817,7 @@ export function BrowserGatewayApp({
                         command: "agentUrlElicitationResponse",
                         id,
                         action: "accept",
+                        originTabId: snapshotOriginRef.current.tabId,
                       });
                     }}
                     onDecline={(id) => {
@@ -4750,6 +4825,7 @@ export function BrowserGatewayApp({
                         command: "agentUrlElicitationResponse",
                         id,
                         action: "decline",
+                        originTabId: snapshotOriginRef.current.tabId,
                       });
                     }}
                     onCancel={(id) => {
@@ -4757,13 +4833,14 @@ export function BrowserGatewayApp({
                         command: "agentUrlElicitationResponse",
                         id,
                         action: "cancel",
+                        originTabId: snapshotOriginRef.current.tabId,
                       });
                     }}
                   />
                 )}
               {visibleQuestion && !mobileReviewOpen && (
                 <QuestionCard
-                  key={visibleQuestion.id}
+                  key={`${snapshotOriginRef.current.tabId}:${visibleQuestion.id}`}
                   id={visibleQuestion.id}
                   context={visibleQuestion.context}
                   questions={visibleQuestion.questions}
@@ -4787,6 +4864,7 @@ export function BrowserGatewayApp({
                       answers: progress.answers,
                       notes: progress.notes,
                       origin: questionProgressOriginRef.current,
+                      originTabId: snapshotOriginRef.current.tabId,
                     });
                   }}
                   onSubmit={(id, answers, notes) => {
@@ -4796,12 +4874,14 @@ export function BrowserGatewayApp({
                       id,
                       answers,
                       notes,
+                      originTabId: snapshotOriginRef.current.tabId,
                     });
                   }}
                 />
               )}
               {visibleApproval && (
                 <ApprovalPanelEmbed
+                  key={`${snapshotOriginRef.current.tabId}:${visibleApproval.id}`}
                   request={visibleApproval}
                   height={approvalPanelHeight}
                   resizing={approvalResizing}
