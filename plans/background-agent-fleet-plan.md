@@ -1,7 +1,7 @@
 # Background Agent Parity and Fleet Plan
 
 **Updated:** 2026-07-10
-**Status:** Core program implemented; higher-autonomy Phase 6 workflows remain independent follow-ons
+**Status:** Implemented and validated
 **Related roadmap:** [`harness-feature-landscape-2026-top-20.md`](./harness-feature-landscape-2026-top-20.md)
 
 ## Objective
@@ -376,3 +376,18 @@ This slice directly improves the reported failure, makes background reviews mate
 ## Definition of done
 
 The program is complete when a native agent moved between foreground and background placement retains the same effective capability for its mode and permission profile; can independently manage its session; can participate safely in a persisted parent/child fleet; and is observable, interruptible, budgeted, and recoverable from both VS Code and the browser.
+
+## Implementation outcome
+
+Completed on 2026-07-10:
+
+- native foreground/background prompt, tool, mode, MCP, routing, recovery, and session-control parity;
+- extracted scheduler policy with structured admission, global/root fairness, queueing, recursion, subtree authorization, cancellation, steering, detachment, pause/resume, and retry;
+- durable ancestry, lifecycle, results, capability descriptors, policy audits, sequenced attention events, read state, notifications, and lifecycle hooks;
+- session/subtree/goal budgets covering tokens, tool calls, API turns, elapsed time, and optional estimated cost, including warnings and child reservations;
+- shared VS Code/browser Agent HQ with persistent history, tree/flat views, active/attention/completed/archived filters, provider/workspace/goal filters, transcript access, and management actions;
+- approval-backed isolated-worktree delegation and deterministic shared-workspace ownership-conflict admission;
+- structured diff-review, browser-verification, isolated best-of-N, persistent-goal, and persisted scheduled/event-triggered fleet workflows;
+- parity, scheduler, persistence, worktree, automation, workflow, browser, and full-repository validation.
+
+Automated release gate: `npm run lint` and `npm test` pass (182 files, 2,268 tests). Credential-dependent provider smoke testing remains an operational release checklist in [`background-agent-fleet-smoke.md`](./background-agent-fleet-smoke.md), not unfinished implementation.
