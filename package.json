@@ -64,18 +64,6 @@
     },
     "commands": [
       {
-        "command": "agentlink.startServer",
-        "title": "AgentLink: Start MCP Server"
-      },
-      {
-        "command": "agentlink.stopServer",
-        "title": "AgentLink: Stop MCP Server"
-      },
-      {
-        "command": "agentlink.showStatus",
-        "title": "AgentLink: Show Server Status"
-      },
-      {
         "command": "agentlink.acceptDiff",
         "title": "Accept Changes",
         "icon": "$(check)"
@@ -137,10 +125,6 @@
       {
         "command": "agentlink.setAnthropicApiKey",
         "title": "AgentLink: Set Anthropic API Key"
-      },
-      {
-        "command": "agentlink.configureAgents",
-        "title": "AgentLink: Configure Agents"
       },
       {
         "command": "agentlink.rebuildIndex",
@@ -243,11 +227,6 @@
     "configuration": {
       "title": "AgentLink",
       "properties": {
-        "agentlink.port": {
-          "type": "number",
-          "default": 0,
-          "description": "HTTP port for the MCP server. Use 0 (default) for an OS-assigned port — required for multi-window support. Set a fixed port only if you need a stable URL."
-        },
         "agentlink.browserGatewayPort": {
           "type": "number",
           "default": 47137,
@@ -265,11 +244,6 @@
           "default": "agentlink",
           "description": "Hostname to advertise over mDNS when LAN access is enabled (resolves as <name>.local on the same network). If the name collides on the network, a short suffix is appended automatically."
         },
-        "agentlink.autoStart": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically start the MCP server on extension activation"
-        },
         "agentlink.masterBypass": {
           "type": "boolean",
           "default": false,
@@ -279,37 +253,6 @@
           "type": "number",
           "default": 1500,
           "description": "Max milliseconds to wait after file save for diagnostics to settle"
-        },
-        "agentlink.agents": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "claude-code",
-              "copilot",
-              "roo-code",
-              "cline",
-              "kilo-code",
-              "codex"
-            ]
-          },
-          "default": [],
-          "description": "Which AI agents to auto-configure MCP for. Leave empty to use only the built-in AgentLink agent. Each selected agent's config file is written on server start and cleaned up on stop."
-        },
-        "agentlink.autoUpdateInstructions": {
-          "type": "boolean",
-          "default": false,
-          "description": "Automatically update agent instruction files on startup. Enabled when you set up instructions during onboarding."
-        },
-        "agentlink.autoUpdateHooks": {
-          "type": "boolean",
-          "default": false,
-          "description": "Automatically update PreToolUse hooks on startup. Enabled when you install hooks during onboarding."
-        },
-        "agentlink.requireAuth": {
-          "type": "boolean",
-          "default": true,
-          "description": "Require auth token on the MCP endpoint (recommended)"
         },
         "agentlink.semanticSearchEnabled": {
           "type": "boolean",
