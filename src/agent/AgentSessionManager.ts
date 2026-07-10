@@ -218,6 +218,7 @@ export class AgentSessionManager {
     log?: (msg: string) => void,
     private readonly bgDefaults: {
       maxConcurrent: number;
+      maxConcurrentPerRoot?: number;
       maxDepth?: number;
       maxChildrenPerParent?: number;
     } = {
@@ -2574,6 +2575,30 @@ export class AgentSessionManager {
     ).length;
   }
 
+  private activeBackgroundCountForRoot(rootSessionId: string): number {
+    return Array.from(this.sessions.values()).filter(
+      (session) =>
+        session.background &&
+        session.fleetMetadata?.rootSessionId === rootSessionId &&
+        session.status !== "queued" &&
+        (session.status === "streaming" ||
+          session.status === "tool_executing" ||
+          session.status === "awaiting_approval"),
+    ).length;
+  }
+
+  private canStartBackground(session: AgentSession): boolean {
+    if (this.activeBackgroundCount() >= this.bgDefaults.maxConcurrent) {
+      return false;
+    }
+    const root = session.fleetMetadata?.rootSessionId;
+    if (!root) return true;
+    return (
+      this.activeBackgroundCountForRoot(root) <
+      (this.bgDefaults.maxConcurrentPerRoot ?? 2)
+    );
+  }
+
   private scheduleBackgroundLaunch(
     session: AgentSession,
     start: () => Promise<void>,
@@ -2592,7 +2617,7 @@ export class AgentSessionManager {
       }
       await start();
     };
-    if (this.activeBackgroundCount() >= this.bgDefaults.maxConcurrent) {
+    if (!this.canStartBackground(session)) {
       session.status = "queued";
       if (session.fleetMetadata) session.fleetMetadata.lifecycle = "queued";
       this.bgLaunchQueue.push({ sessionId: session.id, start: launch });
@@ -2606,11 +2631,13 @@ export class AgentSessionManager {
   }
 
   private drainBackgroundQueue(): void {
-    while (
-      this.bgLaunchQueue.length > 0 &&
-      this.activeBackgroundCount() < this.bgDefaults.maxConcurrent
-    ) {
-      const queued = this.bgLaunchQueue.shift()!;
+    while (this.bgLaunchQueue.length > 0) {
+      const nextIndex = this.bgLaunchQueue.findIndex((candidate) => {
+        const candidateSession = this.sessions.get(candidate.sessionId);
+        return Boolean(candidateSession && this.canStartBackground(candidateSession));
+      });
+      if (nextIndex < 0) break;
+      const [queued] = this.bgLaunchQueue.splice(nextIndex, 1);
       const session = this.sessions.get(queued.sessionId);
       if (!session || this.bgCancelled.has(queued.sessionId)) continue;
       session.status = "streaming";
@@ -2852,6 +2879,7 @@ export class AgentSessionManager {
             ? `ACP background agent stopped: ${this.bgErrors.get(session.id)}`
             : "(ACP background agent completed without output)";
           const resultText = session.getLastAssistantText() ?? fallbackMsg;
+          this.cancelOwnedChildrenOnCompletion(session.id);
           this.finalizeFleetMetadata(session, resultText);
           this.saveSession(session.id);
           this.bgFinalResults.set(session.id, resultText);
@@ -3109,6 +3137,7 @@ export class AgentSessionManager {
         ? `Background agent stopped: ${this.bgErrors.get(session.id)}`
         : "(background agent completed without output)";
       const resultText = session.getLastAssistantText() ?? fallbackMsg;
+      this.cancelOwnedChildrenOnCompletion(session.id);
       this.finalizeFleetMetadata(session, resultText);
       this.saveSession(session.id);
 
@@ -3986,6 +4015,26 @@ export class AgentSessionManager {
     return true;
   }
 
+  private cancelOwnedChildrenOnCompletion(parentSessionId: string): void {
+    for (const child of this.sessions.values()) {
+      const fleet = child.fleetMetadata;
+      if (
+        fleet?.parentSessionId !== parentSessionId ||
+        fleet.lifecycle === "completed" ||
+        fleet.lifecycle === "failed" ||
+        fleet.lifecycle === "cancelled" ||
+        fleet.lifecycle === "budget_exhausted" ||
+        fleet.lifecycle === "interrupted"
+      ) {
+        continue;
+      }
+      this.stopSession(child.id);
+      if (child.fleetMetadata) {
+        child.fleetMetadata.terminalReason = "parent_completed_without_join";
+      }
+    }
+  }
+
   getBackgroundResultSummary(sessionId: string): string | undefined {
     const summary = this.bgSummary.get(sessionId)?.shortStatus?.trim();
     if (summary) return summary;
@@ -4092,6 +4141,14 @@ export class AgentSessionManager {
           toolCalls: meta?.toolCalls,
           apiTurns: meta?.apiTurns,
           budget: s.fleetMetadata?.budget,
+          attention:
+            status === "awaiting_approval"
+              ? "approval"
+              : s.fleetMetadata?.lifecycle === "interrupted"
+                ? "interrupted"
+                : status === "error"
+                  ? "failed"
+                  : undefined,
           streamingText,
           resultText,
           errorMessage,

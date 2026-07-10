@@ -47,6 +47,7 @@ export interface BgSessionInfoProps {
     maxApiTurns?: number;
     maxElapsedMs?: number;
   };
+  attention?: "approval" | "failed" | "interrupted";
   streamingText?: string;
   resultText?: string;
   resultSummary?: string;
@@ -135,6 +136,9 @@ export function BackgroundSessionStrip({
   onOpenTranscript,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
+  const [filter, setFilter] = useState<
+    "all" | "active" | "attention" | "completed"
+  >("all");
   const [startedAt, setStartedAt] = useState<Map<string, number>>(new Map());
   const [now, setNow] = useState(Date.now());
 
@@ -174,8 +178,15 @@ export function BackgroundSessionStrip({
     return () => clearInterval(interval);
   }, [hasActive]);
 
-  const visibleSessions = sessions;
-  if (visibleSessions.length === 0) return null;
+  const visibleSessions = sessions.filter((session) => {
+    if (filter === "active") return ACTIVE_STATUSES.has(session.status);
+    if (filter === "attention") return Boolean(session.attention);
+    if (filter === "completed") {
+      return !ACTIVE_STATUSES.has(session.status);
+    }
+    return true;
+  });
+  if (sessions.length === 0) return null;
 
   const runningCount = visibleSessions.filter(
     (s) => s.status === "streaming" || s.status === "tool_executing",
@@ -204,10 +215,27 @@ export function BackgroundSessionStrip({
       </button>
       {!collapsed && (
         <div class="bg-session-strip-body">
+          <div class="bg-session-filters" role="group" aria-label="Fleet filters">
+            {(["all", "active", "attention", "completed"] as const).map(
+              (value) => (
+                <button
+                  key={value}
+                  class={`bg-session-filter${filter === value ? " active" : ""}`}
+                  onClick={() => setFilter(value)}
+                >
+                  {value}
+                </button>
+              ),
+            )}
+          </div>
+          {visibleSessions.length === 0 && (
+            <div class="bg-session-empty">No agents match this filter.</div>
+          )}
           {visibleSessions.map((s) => (
             <div
               key={s.id}
               class={`bg-session-card bg-session-${s.status}`}
+              data-attention={s.attention}
               style={{ paddingLeft: `${6 + Math.max(0, s.depth ?? 1) * 10}px` }}
               title={[
                 s.parentSessionId ? `parent: ${s.parentSessionId}` : null,
