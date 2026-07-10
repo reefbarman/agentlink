@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import type { AgentBudget, SpawnBackgroundRequest } from "../core/capabilities/background.js";
 
 export type FleetWorkflowKind =
@@ -39,7 +38,7 @@ export interface FleetWorkflowOutcome {
 
 /** Builds higher-autonomy workflows exclusively from normal fleet delegations. */
 export function planFleetWorkflow(request: FleetWorkflowRequest): FleetWorkflowPlan {
-  const workflowId = randomUUID();
+  const workflowId = globalThis.crypto.randomUUID();
   const goalId =
     request.kind === "persistent_goal"
       ? request.goalId?.trim() || `goal:${workflowId}`
@@ -141,13 +140,72 @@ export function parseFleetResultEnvelope(
 ): FleetResultEnvelope {
   if (expected && expected !== "text") {
     try {
-      const parsed = JSON.parse(text) as FleetResultEnvelope;
-      if (parsed.type === expected) return parsed;
+      const parsed = JSON.parse(text) as unknown;
+      if (isFleetResultEnvelope(parsed) && parsed.type === expected) return parsed;
     } catch {
       // Preserve useful evidence as text if the backend did not emit JSON.
     }
   }
   return { type: "text", text };
+}
+
+export function isFleetResultEnvelope(value: unknown): value is FleetResultEnvelope {
+  if (!value || typeof value !== "object") return false;
+  const result = value as Record<string, unknown>;
+  if (result.type === "text") return typeof result.text === "string";
+  if (result.type === "patch") {
+    return (
+      typeof result.summary === "string" &&
+      isStringArray(result.files) &&
+      result.files.every(isWorkspaceRelativeArtifact) &&
+      (result.verification === undefined || typeof result.verification === "string")
+    );
+  }
+  if (result.type === "verification") {
+    return (
+      typeof result.passed === "boolean" &&
+      typeof result.summary === "string" &&
+      (result.screenshots === undefined ||
+        (isStringArray(result.screenshots) &&
+          result.screenshots.every(isWorkspaceRelativeArtifact))) &&
+      (result.logs === undefined || isStringArray(result.logs))
+    );
+  }
+  if (result.type === "review_findings") {
+    return (
+      Array.isArray(result.findings) &&
+      result.findings.every((finding) => {
+        if (!finding || typeof finding !== "object") return false;
+        const item = finding as Record<string, unknown>;
+        return (
+          ["critical", "high", "medium", "low"].includes(String(item.severity)) &&
+          typeof item.message === "string" &&
+          (item.path === undefined ||
+            (typeof item.path === "string" &&
+              isWorkspaceRelativeArtifact(item.path))) &&
+          (item.line === undefined ||
+            (typeof item.line === "number" &&
+              Number.isInteger(item.line) &&
+              item.line > 0))
+        );
+      })
+    );
+  }
+  return false;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isWorkspaceRelativeArtifact(value: string): boolean {
+  const normalized = value.replaceAll("\\", "/");
+  return (
+    normalized.length > 0 &&
+    !normalized.startsWith("/") &&
+    !/^[a-zA-Z]:\//.test(normalized) &&
+    !normalized.split("/").includes("..")
+  );
 }
 
 export function scoreFleetCandidate(result: FleetResultEnvelope): number {

@@ -476,7 +476,7 @@ export function BackgroundSessionStrip({
                 <button
                   class="icon-button bg-session-action"
                   onClick={() => onResume(s.id)}
-                  title="Resume agent"
+                  title="Restart agent from its saved task and transcript"
                 >
                   <i class="codicon codicon-debug-start" />
                 </button>

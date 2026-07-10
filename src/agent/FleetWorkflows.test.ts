@@ -73,4 +73,26 @@ describe("fleet workflows", () => {
       '"type":"verification"',
     );
   });
+
+  it("rejects malformed envelopes and artifact paths outside the workspace", () => {
+    const raw = JSON.stringify({
+      type: "verification",
+      passed: true,
+      summary: "ok",
+      screenshots: ["../../outside.png"],
+    });
+    expect(parseFleetResultEnvelope("verification", raw)).toEqual({
+      type: "text",
+      text: raw,
+    });
+    expect(
+      parseFleetResultEnvelope(
+        "review_findings",
+        JSON.stringify({
+          type: "review_findings",
+          findings: [{ severity: "urgent", message: "bad" }],
+        }),
+      ).type,
+    ).toBe("text");
+  });
 });

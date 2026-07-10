@@ -26,7 +26,7 @@ This plan supports roadmap candidates 1 (Agent HQ), 2 (notifications), 5 (budget
 2. **Mode defines capability.** Review, architect, ask, debug, and code modes retain their intended tool policies regardless of where an agent runs.
 3. **Delegation defines scope.** A parent may constrain owned paths, forbidden paths, expected result, budget, and permission profile. "Background" itself is not a permission profile.
 4. **Controls are session-scoped.** Switching mode, updating task state, asking a question, or approving an operation must target the originating session rather than implicitly mutating the foreground session.
-5. **Safety lives in policy and containment.** Named permission profiles, parameter-aware authorization, approval routing, budgets, worktrees, and future sandboxing protect autonomous work. Capability should not be removed ad hoc.
+5. **Safety lives in policy and containment.** Named permission profiles, parameter-aware authorization, approval routing, budgets, and worktrees protect autonomous work today. OS-level sandboxing remains a separate future containment layer. Capability should not be removed ad hoc.
 6. **Fleet limits are scheduler concerns.** Concurrency, depth, cost, and fairness are enforced centrally and reported explicitly.
 7. **Every terminal state is explainable.** Completion, failure, cancellation, budget exhaustion, provider stall, and parent shutdown produce durable results and visible reason codes.
 
@@ -382,12 +382,14 @@ The program is complete when a native agent moved between foreground and backgro
 Completed on 2026-07-10:
 
 - native foreground/background prompt, tool, mode, MCP, routing, recovery, and session-control parity;
-- extracted scheduler policy with structured admission, global/root fairness, queueing, recursion, subtree authorization, cancellation, steering, detachment, pause/resume, and retry;
+- extracted scheduler policy with structured admission, global/root/provider capacity, queueing, recursion, subtree authorization, cancellation, steering, detachment, durable pause, linked restart, and retry;
 - durable ancestry, lifecycle, results, capability descriptors, policy audits, sequenced attention events, read state, notifications, and lifecycle hooks;
 - session/subtree/goal budgets covering tokens, tool calls, API turns, elapsed time, and optional estimated cost, including warnings and child reservations;
 - shared VS Code/browser Agent HQ with persistent history, tree/flat views, active/attention/completed/archived filters, provider/workspace/goal filters, transcript access, and management actions;
 - approval-backed isolated-worktree delegation and deterministic shared-workspace ownership-conflict admission;
-- structured diff-review, browser-verification, isolated best-of-N, persistent-goal, and persisted scheduled/event-triggered fleet workflows;
+- structured diff-review, browser-verification evidence, isolated best-of-N collection/selection, persistent-goal, and persisted scheduled/event-triggered fleet workflows with history, management, recursion guards, and retry backoff;
 - parity, scheduler, persistence, worktree, automation, workflow, browser, and full-repository validation.
 
-Automated release gate: `npm run lint` and `npm test` pass (182 files, 2,268 tests). Credential-dependent provider smoke testing remains an operational release checklist in [`background-agent-fleet-smoke.md`](./background-agent-fleet-smoke.md), not unfinished implementation.
+Provider streams generally cannot be resumed at an exact transport cursor. AgentLink's background pause therefore persists the original session and restarts a linked replacement from its saved task/transcript; the UI describes this as a restart. Policy enforcement and isolated worktrees are implemented, but OS-level process sandboxing is not yet provided by AgentLink.
+
+The release gate must be rerun at the final integration head. Credential-dependent provider smoke testing remains an operational release checklist in [`background-agent-fleet-smoke.md`](./background-agent-fleet-smoke.md).
