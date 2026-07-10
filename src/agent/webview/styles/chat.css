@@ -5238,18 +5238,8 @@ body.approval-resizing {
   opacity: 0.6;
 }
 
-.bg-session-fading {
-  animation: bgSessionFadeOut 2s ease-in forwards;
-  animation-delay: 8s;
-}
-
-@keyframes bgSessionFadeOut {
-  from {
-    opacity: 0.6;
-  }
-  to {
-    opacity: 0;
-  }
+.bg-session-parent-link {
+  opacity: 0.45;
 }
 
 /* ── Background Agent Block & Result ── */

@@ -21,6 +21,24 @@ export interface BgSessionInfoProps {
   taskClass?: string;
   routingReason?: string;
   fallbackUsed?: boolean;
+  parentSessionId?: string;
+  rootSessionId?: string;
+  depth?: number;
+  placement?: "background" | "worktree" | "remote";
+  backend?: string;
+  lifecycle?:
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
+  terminalReason?: string;
+  createdAt?: number;
+  lastActiveAt?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  toolCalls?: number;
   streamingText?: string;
   resultText?: string;
   resultSummary?: string;
@@ -46,6 +64,7 @@ interface Props {
 }
 
 const ACTIVE_STATUSES = new Set<BgSessionInfoProps["status"]>([
+  "queued",
   "pending",
   "streaming",
   "tool_executing",
@@ -108,38 +127,8 @@ export function BackgroundSessionStrip({
   onOpenTranscript,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
-  // Auto-dismiss: hide completed sessions 10 seconds after completion
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [startedAt, setStartedAt] = useState<Map<string, number>>(new Map());
   const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    const now = Date.now();
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    for (const s of sessions) {
-      if (
-        (s.status === "idle" ||
-          s.status === "error" ||
-          s.status === "cancelled") &&
-        s.completedAt &&
-        !dismissed.has(s.id)
-      ) {
-        const elapsed = now - s.completedAt;
-        const remaining = Math.max(0, 10_000 - elapsed);
-        if (remaining === 0) {
-          // Already past 10s — dismiss immediately
-          setDismissed((prev) => new Set(prev).add(s.id));
-        } else {
-          timers.push(
-            setTimeout(() => {
-              setDismissed((prev) => new Set(prev).add(s.id));
-            }, remaining),
-          );
-        }
-      }
-    }
-    return () => timers.forEach(clearTimeout);
-  }, [sessions, dismissed]);
 
   // Record start time the first time we see each active session
   useEffect(() => {
@@ -177,7 +166,7 @@ export function BackgroundSessionStrip({
     return () => clearInterval(interval);
   }, [hasActive]);
 
-  const visibleSessions = sessions.filter((s) => !dismissed.has(s.id));
+  const visibleSessions = sessions;
   if (visibleSessions.length === 0) return null;
 
   const runningCount = visibleSessions.filter(
@@ -196,7 +185,7 @@ export function BackgroundSessionStrip({
       >
         <i class="codicon codicon-server-process" />
         <span class="bg-session-strip-title">
-          Background Agents {doneCount}/{visibleSessions.length}
+          Agent Fleet {doneCount}/{visibleSessions.length}
         </span>
         {runningCount > 0 && (
           <span class="bg-session-strip-active">{runningCount} running</span>
@@ -210,10 +199,23 @@ export function BackgroundSessionStrip({
           {visibleSessions.map((s) => (
             <div
               key={s.id}
-              class={`bg-session-card bg-session-${s.status}${
-                s.completedAt ? " bg-session-fading" : ""
-              }`}
+              class={`bg-session-card bg-session-${s.status}`}
+              style={{ paddingLeft: `${6 + Math.max(0, s.depth ?? 1) * 10}px` }}
+              title={[
+                s.parentSessionId ? `parent: ${s.parentSessionId}` : null,
+                s.resolvedMode ? `mode: ${s.resolvedMode}` : null,
+                s.backend ? `backend: ${s.backend}` : null,
+                s.resolvedProvider ? `provider: ${s.resolvedProvider}` : null,
+                s.resolvedModel ? `model: ${s.resolvedModel}` : null,
+                s.lifecycle ? `lifecycle: ${s.lifecycle}` : null,
+                s.terminalReason ? `reason: ${s.terminalReason}` : null,
+                `tokens: ${(s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0)}`,
+                s.toolCalls !== undefined ? `tools: ${s.toolCalls}` : null,
+              ].filter((value): value is string => Boolean(value)).join("\n")}
             >
+              {(s.depth ?? 1) > 1 && (
+                <i class="codicon codicon-debug-step-into bg-session-parent-link" />
+              )}
               <i class={`codicon ${statusIcon(s.status)} bg-session-icon`} />
               <span class="bg-session-task" title={s.task}>
                 {s.task}

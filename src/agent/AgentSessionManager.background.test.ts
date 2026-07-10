@@ -559,6 +559,39 @@ describe("AgentSessionManager background agents", () => {
     expect(summaries[0]).toContain("model=");
   });
 
+  it("projects durable fleet ancestry, backend, lifecycle, and usage in tree order", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "coordinate",
+    });
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "inspect" },
+      parent.sessionId,
+    );
+
+    const infos = mgr.getBgSessionInfos();
+    expect(infos.map((info) => info.id)).toEqual([
+      parent.sessionId,
+      child.sessionId,
+    ]);
+    expect(infos[1]).toEqual(
+      expect.objectContaining({
+        parentSessionId: parent.sessionId,
+        rootSessionId: expect.any(String),
+        depth: 2,
+        placement: "background",
+        backend: "native",
+        lifecycle: expect.stringMatching(/running|completed/),
+        totalInputTokens: expect.any(Number),
+        totalOutputTokens: expect.any(Number),
+        toolCalls: expect.any(Number),
+      }),
+    );
+  });
+
   it("wraps background questions with context, session id, and task attribution", async () => {
     const onQuestion = vi.fn().mockResolvedValue({ answers: {}, notes: {} });
     const mgr = new AgentSessionManager(config, "/tmp");

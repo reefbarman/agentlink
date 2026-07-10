@@ -181,6 +181,25 @@ export interface BgSessionInfo {
   routingReason?: string;
   /** True when route fallback behavior was used. */
   fallbackUsed?: boolean;
+  /** Durable fleet ancestry and execution identity. */
+  parentSessionId?: string;
+  rootSessionId?: string;
+  depth?: number;
+  placement?: "background" | "worktree" | "remote";
+  backend?: string;
+  lifecycle?:
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
+  terminalReason?: string;
+  createdAt?: number;
+  lastActiveAt?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  toolCalls?: number;
   /** Accumulated streaming text from the bg agent (last ~500 chars for preview). */
   streamingText?: string;
   /** Final result text when agent is done. */

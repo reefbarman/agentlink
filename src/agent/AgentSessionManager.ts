@@ -3933,7 +3933,7 @@ export class AgentSessionManager {
    * Return status info for all background sessions (for the UI strip).
    */
   getBgSessionInfos(): BgSessionInfo[] {
-    return Array.from(this.sessions.values())
+    const infos = Array.from(this.sessions.values())
       .filter((s) => s.background)
       .map((s) => {
         const { status, done: isDone } = this.getProjectedBgStatus(s);
@@ -3969,6 +3969,18 @@ export class AgentSessionManager {
           taskClass: meta?.taskClass,
           routingReason: meta?.routingReason,
           fallbackUsed: meta?.fallbackUsed,
+          parentSessionId: s.fleetMetadata?.parentSessionId,
+          rootSessionId: s.fleetMetadata?.rootSessionId,
+          depth: s.fleetMetadata?.depth,
+          placement: s.fleetMetadata?.placement,
+          backend: s.fleetMetadata?.backend,
+          lifecycle: s.fleetMetadata?.lifecycle,
+          terminalReason: s.fleetMetadata?.terminalReason,
+          createdAt: s.createdAt,
+          lastActiveAt: s.lastActiveAt,
+          totalInputTokens: s.totalInputTokens,
+          totalOutputTokens: s.totalOutputTokens,
+          toolCalls: meta?.toolCalls,
           streamingText,
           resultText,
           errorMessage,
@@ -3987,6 +3999,43 @@ export class AgentSessionManager {
           },
         };
       });
+
+    // Keep each subtree contiguous and parents ahead of descendants. Orphaned
+    // restored nodes remain visible as roots instead of disappearing.
+    const byParent = new Map<string | undefined, BgSessionInfo[]>();
+    const ids = new Set(infos.map((info) => info.id));
+    for (const info of infos) {
+      const parent =
+        info.parentSessionId && ids.has(info.parentSessionId)
+          ? info.parentSessionId
+          : undefined;
+      const children = byParent.get(parent) ?? [];
+      children.push(info);
+      byParent.set(parent, children);
+    }
+    for (const children of byParent.values()) {
+      children.sort(
+        (a, b) =>
+          (a.createdAt ?? 0) - (b.createdAt ?? 0) ||
+          a.id.localeCompare(b.id),
+      );
+    }
+    const ordered: BgSessionInfo[] = [];
+    const visited = new Set<string>();
+    const visit = (parent: string | undefined): void => {
+      for (const info of byParent.get(parent) ?? []) {
+        if (visited.has(info.id)) continue;
+        visited.add(info.id);
+        ordered.push(info);
+        visit(info.id);
+      }
+    };
+    visit(undefined);
+    // Defensive fallback for corrupt cyclic ancestry in older persisted data.
+    for (const info of infos) {
+      if (!visited.has(info.id)) ordered.push(info);
+    }
+    return ordered;
   }
 
   /**
