@@ -1,11 +1,9 @@
 /**
- * Single source of truth for all AgentLink tools.
+ * Single source of truth for built-in AgentLink tool metadata.
  *
- * Used by:
- * - registerTools.ts — registers schemas / handlers, looks up descriptions here
- * - AvailableTools.tsx — sidebar renders this list with hover descriptions
- *
- * When adding a new tool, add it here FIRST, then add its handler in registerTools.ts.
+ * Used by the agent tool adapter and the sidebar's available-tools list.
+ * When adding a tool, add its metadata here and wire its schema and handler in
+ * src/agent/toolAdapter.ts.
  */
 
 export interface ToolMeta {
@@ -22,14 +20,6 @@ export interface ToolMeta {
  * only here and nowhere else.
  */
 export const TOOL_REGISTRY: Record<string, ToolMeta> = {
-  // --- Session lifecycle ---
-
-  handshake: {
-    label: "Workspace handshake",
-    description:
-      "Establish a trusted connection by verifying workspace identity. Must be called before any other tool. Pass all your known working directories — the server validates that its workspace folders are present in your list. Returns { status: 'trusted' } on success or { status: 'rejected' } on failure.",
-  },
-
   // --- File operations ---
 
   read_file: {

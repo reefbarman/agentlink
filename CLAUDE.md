@@ -38,10 +38,11 @@ When full verification is skipped, explicitly state:
 
 When adding a new tool or changing tool parameters:
 
-1. Register the tool in `src/server/registerTools.ts`
-2. Update `resources/claude-instructions.md` — add to the "Additional tools" list with a description
-3. Update `README.md` — add a full tool section with parameter table and response details
-4. Run `npm run release -- --install` to rebuild, reinstall, and re-inject the CLAUDE.md instructions. (Not when developing the agent, though)
+1. Add or update its metadata in `src/shared/toolRegistry.ts`
+2. Add or update its input schema in `src/shared/toolSchemas.ts`
+3. Wire the tool definition and dispatch path in `src/agent/toolAdapter.ts`
+4. Update `README.md` — add a full tool section with parameter table and response details
+5. Run `npm run release -- --install` to rebuild and reinstall the extension. (Not when developing the agent, though)
 
 ## Project Structure Boundaries
 

@@ -1,12 +1,8 @@
 /**
- * Single source of truth for all tool input schemas.
+ * Single source of truth for built-in agent tool input schemas.
  *
- * Used by:
- * - src/server/tools/*.ts — MCP tool registration (zod schemas)
- * - src/agent/toolAdapter.ts — Claude SDK tool definitions (converted to JSON Schema)
- *
- * Each tool's schema is exported as a record of zod types, matching the format
- * expected by McpServer.registerTool's inputSchema parameter.
+ * The agent tool adapter converts these zod schema records to JSON Schema for
+ * provider tool definitions.
  */
 
 import { z } from "zod";
@@ -825,15 +821,5 @@ export const codebaseSearchSchema = {
     .optional()
     .describe(
       "Glob patterns to exclude from semantic results after retrieval (e.g. ['**/.agentlink/**', '**/dist/**']). Useful for suppressing noisy indexed paths without rebuilding the index.",
-    ),
-};
-
-// ─── Session tools ───────────────────────────────────────────────────────────
-
-export const handshakeSchema = {
-  working_directories: z
-    .array(z.string())
-    .describe(
-      "All working directories known to the agent (primary + additional)",
     ),
 };
