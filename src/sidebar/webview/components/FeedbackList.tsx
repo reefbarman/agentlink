@@ -1,4 +1,5 @@
 import type { FeedbackEntry, PostCommand } from "../types.js";
+
 import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
@@ -87,15 +88,11 @@ export function FeedbackList({ entries, postCommand }: Props) {
           <div class="feedback-meta">
             <span title="Extension version">v{entry.extension_version}</span>
             {entry.session_id && (
-              <span title="Session ID">
-                {entry.session_id.slice(0, 8)}
-              </span>
+              <span title="Session ID">{entry.session_id.slice(0, 8)}</span>
             )}
             <button
               class="btn-inline btn-cancel"
-              onClick={() =>
-                postCommand("deleteFeedbackEntry", { index: String(i) })
-              }
+              onClick={() => postCommand("deleteFeedbackEntry", { index: i })}
             >
               Delete
             </button>

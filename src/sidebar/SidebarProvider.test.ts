@@ -90,6 +90,7 @@ function makeApprovalManager() {
 
 function makeWebviewView() {
   let onDidReceiveMessage: MessageHandler | undefined;
+  let onDidChangeVisibility: (() => void) | undefined;
   const postMessage = vi.fn();
   const view = {
     webview: {
@@ -104,13 +105,17 @@ function makeWebviewView() {
       asWebviewUri: (uri: unknown) => uri,
     },
     visible: true,
-    onDidChangeVisibility: vi.fn(),
+    onDidChangeVisibility: (cb: () => void) => {
+      onDidChangeVisibility = cb;
+      return { dispose: vi.fn() };
+    },
     onDidDispose: vi.fn(),
   };
   return {
     view,
     postMessage,
     getMessageHandler: () => onDidReceiveMessage,
+    getVisibilityHandler: () => onDidChangeVisibility,
   };
 }
 
@@ -231,7 +236,6 @@ describe("SidebarProvider retained activity behavior", () => {
         startedAt: 1,
         status: "active" as const,
         canContinueInBackground: true,
-        source: "agent" as const,
       },
     ];
     provider.setToolCallTracker({
@@ -282,9 +286,50 @@ describe("SidebarProvider retained activity behavior", () => {
     });
   });
 
+  it("refreshes retained state when the Activity view becomes visible again", async () => {
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const provider = new SidebarProvider({ path: "/ext" } as never);
+    provider.setApprovalManager(makeApprovalManager() as never);
+    const toolCalls = [
+      {
+        id: "tool-visible",
+        toolName: "read_file",
+        displayArgs: "src/index.ts",
+        startedAt: 1,
+        status: "active" as const,
+      },
+    ];
+    provider.setToolCallTracker({
+      on: vi.fn(),
+      getActiveCalls: () => toolCalls,
+    } as never);
+    const webview = makeWebviewView();
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+    webview.postMessage.mockClear();
+
+    webview.getVisibilityHandler()?.();
+
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: "stateUpdate",
+      state: expect.objectContaining({
+        writeApproval: "session",
+        activeSessions: [expect.objectContaining({ id: "session-a" })],
+      }),
+    });
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: "updateToolCalls",
+      calls: toolCalls,
+    });
+  });
+
   it.each([
     ["openSettings", ["workbench.action.openSettings", "agentlink"]],
     ["openOutput", ["workbench.action.output.show", "AgentLink"]],
+    ["openBrowserGateway", ["agentlink.openBrowserGateway"]],
     ["rebuildIndex", ["agentlink.rebuildIndex"]],
     ["cancelIndex", ["agentlink.cancelIndex"]],
     ["resumeIndex", ["agentlink.resumeIndex"]],

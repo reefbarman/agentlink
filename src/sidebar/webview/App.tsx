@@ -9,7 +9,7 @@ import type {
 import { useEffect, useReducer } from "preact/hooks";
 
 import { ActiveToolCalls } from "./components/ActiveToolCalls.js";
-import { AvailableTools } from "./components/AvailableTools.js";
+import { ActivityShortcuts } from "./components/ActivityShortcuts.js";
 import { FeedbackList } from "./components/FeedbackList.js";
 import { IndexStatus } from "./components/IndexStatus.js";
 import { TrustedCommands } from "./components/TrustedCommands.js";
@@ -68,9 +68,9 @@ function reducer(state: State, action: Action): State {
 export function App({ vscodeApi }: AppProps) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  const postCommand: PostCommand = (command, data) => {
+  const postCommand = ((command: string, data?: object) => {
     vscodeApi.postMessage({ command, ...data });
-  };
+  }) as PostCommand;
 
   useEffect(() => {
     const handler = (event: MessageEvent<ExtensionMessage>) => {
@@ -97,7 +97,7 @@ export function App({ vscodeApi }: AppProps) {
       <WriteApproval state={state.sidebar} postCommand={postCommand} />
       <TrustedPaths state={state.sidebar} postCommand={postCommand} />
       <TrustedCommands state={state.sidebar} postCommand={postCommand} />
-      <AvailableTools />
+      <ActivityShortcuts postCommand={postCommand} />
       {__DEV_BUILD__ && (
         <FeedbackList
           entries={state.feedbackEntries}

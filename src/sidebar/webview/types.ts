@@ -20,9 +20,6 @@ export interface SessionInfo {
   commandRules: CommandRule[];
   pathRules: PathRule[];
   writeRules: PathRule[];
-  clientName?: string;
-  clientVersion?: string;
-  agentId?: string;
 }
 
 export interface IndexStatusInfo {
@@ -45,10 +42,12 @@ export interface IndexStatusInfo {
   readinessMessage?: string;
 }
 
+export type WriteApprovalMode = "prompt" | "session" | "project" | "global";
+
 export interface SidebarState {
   masterBypass: boolean;
   hasWorkspace: boolean;
-  writeApproval?: "prompt" | "session" | "project" | "global";
+  writeApproval?: WriteApprovalMode;
   globalCommandRules?: CommandRule[];
   projectCommandRules?: CommandRule[];
   globalPathRules?: PathRule[];
@@ -89,26 +88,115 @@ export type ExtensionMessage =
   | { type: "updateFeedback"; entries: FeedbackEntry[] }
   | { type: "updateIndexStatus"; status: IndexStatusInfo };
 
+export type RuleEditCommand =
+  | "editGlobalRule"
+  | "editProjectRule"
+  | "editSessionRule"
+  | "editGlobalPathRule"
+  | "editProjectPathRule"
+  | "editGlobalWriteRule"
+  | "editProjectWriteRule";
+
+export type RuleRemoveCommand =
+  | "removeGlobalRule"
+  | "removeProjectRule"
+  | "removeSessionRule"
+  | "removeGlobalPathRule"
+  | "removeProjectPathRule"
+  | "removeSessionPathRule"
+  | "removeGlobalWriteRule"
+  | "removeProjectWriteRule"
+  | "removeSessionWriteRule";
+
+type SimpleWebviewCommand =
+  | "webviewReady"
+  | "openSettings"
+  | "openOutput"
+  | "openBrowserGateway"
+  | "addGlobalRule"
+  | "clearAllSessions"
+  | "refreshFeedback"
+  | "clearAllFeedback"
+  | "openFeedbackFile"
+  | "rebuildIndex"
+  | "cancelIndex"
+  | "resumeIndex"
+  | "setOpenaiApiKey"
+  | "setOpenaiModelsAndEmbeddingsApiKey";
+
+type SessionRuleEditCommand = "editSessionRule";
+type NonSessionRuleEditCommand = Exclude<
+  RuleEditCommand,
+  SessionRuleEditCommand
+>;
+type RuleEditMessage =
+  | {
+      [C in NonSessionRuleEditCommand]: {
+        command: C;
+        pattern: string;
+        mode: string;
+      };
+    }[NonSessionRuleEditCommand]
+  | {
+      command: SessionRuleEditCommand;
+      pattern: string;
+      mode: string;
+      sessionId: string;
+    };
+
+type SessionRuleRemoveCommand =
+  | "removeSessionRule"
+  | "removeSessionPathRule"
+  | "removeSessionWriteRule";
+type NonSessionRuleRemoveCommand = Exclude<
+  RuleRemoveCommand,
+  SessionRuleRemoveCommand
+>;
+type RuleRemoveMessage =
+  | {
+      [C in NonSessionRuleRemoveCommand]: {
+        command: C;
+        pattern: string;
+      };
+    }[NonSessionRuleRemoveCommand]
+  | {
+      [C in SessionRuleRemoveCommand]: {
+        command: C;
+        pattern: string;
+        sessionId: string;
+      };
+    }[SessionRuleRemoveCommand];
+
+type ToolCallControlCommand =
+  | "cancelToolCall"
+  | "completeToolCall"
+  | "continueToolCallInBackground";
+
+type ToolCallControlMessage = {
+  [C in ToolCallControlCommand]: { command: C; id: string };
+}[ToolCallControlCommand];
+
 // Webview → Extension messages
 export type WebviewCommand =
-  | { command: "openSettings" }
-  | { command: "openOutput" }
-  | { command: "clearSessionApprovals" }
-  | { command: "rebuildIndex" }
-  | { command: "cancelIndex" }
-  | { command: "resumeIndex" }
-  | { command: "setOpenaiApiKey" }
-  | { command: "setOpenaiModelsAndEmbeddingsApiKey" }
-  | { command: "setupSemanticSearch"; reason?: string }
-  | { command: "addTrustedCommand" }
-  | { command: "cancelToolCall"; id: string }
-  | { command: "completeToolCall"; id: string }
-  | { command: "deleteRule"; ruleType: string; index: number; scope: string }
-  | { command: "editRule"; ruleType: string; index: number; scope: string }
-  | { command: string; [key: string]: unknown };
+  | { command: SimpleWebviewCommand }
+  | { command: "setWriteApproval"; mode: WriteApprovalMode }
+  | RuleEditMessage
+  | RuleRemoveMessage
+  | { command: "clearSessionRules"; sessionId: string }
+  | ToolCallControlMessage
+  | { command: "deleteFeedbackEntry"; index: number }
+  | { command: "setupSemanticSearch"; reason?: string };
 
-// Helper type for the postCommand function passed via props
-export type PostCommand = (
-  command: string,
-  data?: Record<string, string>,
-) => void;
+type DataWebviewCommand = Exclude<
+  WebviewCommand,
+  { command: SimpleWebviewCommand }
+>;
+type DataWebviewCommandName = DataWebviewCommand["command"];
+
+export interface PostCommand {
+  (command: SimpleWebviewCommand): void;
+  <C extends DataWebviewCommandName>(
+    command: C,
+    data: Omit<Extract<DataWebviewCommand, { command: C }>, "command">,
+  ): void;
+}

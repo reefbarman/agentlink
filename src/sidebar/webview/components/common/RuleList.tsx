@@ -1,9 +1,15 @@
-import type { CommandRule, PathRule, PostCommand } from "../../types.js";
+import type {
+  CommandRule,
+  PathRule,
+  PostCommand,
+  RuleEditCommand,
+  RuleRemoveCommand,
+} from "../../types.js";
 
 interface Props {
   rules: (CommandRule | PathRule)[];
-  editCommand?: string;
-  removeCommand: string;
+  editCommand?: RuleEditCommand;
+  removeCommand: RuleRemoveCommand;
   postCommand: PostCommand;
   sessionId?: string;
 }

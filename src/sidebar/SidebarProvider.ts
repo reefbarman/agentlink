@@ -10,7 +10,11 @@ import type {
   ApprovalManager,
   RuleScope,
 } from "../approvals/ApprovalManager.js";
-import type { IndexStatusInfo, SidebarState } from "./webview/types.js";
+import type {
+  IndexStatusInfo,
+  SidebarState,
+  WebviewCommand,
+} from "./webview/types.js";
 import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
 
 import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
@@ -106,7 +110,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     // are silently dropped while the webview is hidden (no retainContextWhenHidden).
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
-        this.refreshApprovalState();
+        this.restoreVisibleState();
       }
     });
 
@@ -114,15 +118,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.view = undefined;
     });
 
-    webviewView.webview.onDidReceiveMessage((message) => {
+    webviewView.webview.onDidReceiveMessage((message: WebviewCommand) => {
       switch (message.command) {
         case "webviewReady":
           this.log("Received webviewReady from Preact app");
-          this.refreshApprovalState();
-          this.refreshToolCalls();
-          if (__DEV_BUILD__) {
-            this.refreshFeedback();
-          }
+          this.restoreVisibleState();
           break;
         case "openSettings":
           vscode.commands.executeCommand(
@@ -136,21 +136,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             "AgentLink",
           );
           break;
-        case "openGlobalConfig":
-          this.openConfigFile("global");
-          break;
-        case "openProjectConfig":
-          this.openConfigFile("project");
-          break;
-        case "resetWriteApproval":
-          // Reset both legacy and agent write approval tracks so sidebar control
-          // remains authoritative regardless of which track was previously used.
-          this.approvalManager?.resetWriteApproval();
-          this.approvalManager?.resetAgentWriteApproval();
+        case "openBrowserGateway":
+          vscode.commands.executeCommand("agentlink.openBrowserGateway");
           break;
         case "setWriteApproval":
-          if (this.approvalManager && message.mode) {
-            const mode = message.mode as string;
+          if (this.approvalManager) {
+            const mode = message.mode;
             // Reset everything first, then set the new level.
             // Keep legacy + agent tracks in sync for compatibility.
             this.approvalManager.resetWriteApproval();
@@ -163,14 +154,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                   this.approvalManager.setAgentWriteApproval(s.id, "session");
                 }
               } else {
-                this.approvalManager.setWriteApproval(
-                  "_sidebar",
-                  mode as "project" | "global",
-                );
-                this.approvalManager.setAgentWriteApproval(
-                  "_sidebar",
-                  mode as "project" | "global",
-                );
+                this.approvalManager.setWriteApproval("_sidebar", mode);
+                this.approvalManager.setAgentWriteApproval("_sidebar", mode);
               }
             }
           }
@@ -316,8 +301,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
           break;
         case "deleteFeedbackEntry":
-          if (__DEV_BUILD__ && message.index != null) {
-            deleteFeedback([Number(message.index)]);
+          if (__DEV_BUILD__) {
+            deleteFeedback([message.index]);
             this.refreshFeedback();
           }
           break;
@@ -476,6 +461,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private restoreVisibleState(): void {
+    this.refreshApprovalState();
+    this.refreshToolCalls();
+  }
+
   private refreshApprovalState(): void {
     // Always sync tool call state before full re-render to avoid races
     // where a postMessage update is lost during webview reload.
@@ -530,28 +520,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.state.masterBypass = this.getMasterBypass();
     // Send state via postMessage instead of full HTML replacement
     this.view?.webview.postMessage({ type: "stateUpdate", state: this.state });
-  }
-
-  private openConfigFile(scope: "global" | "project"): void {
-    let filePath: string;
-    if (scope === "global") {
-      filePath = path.join(os.homedir(), ".agentlink", "agentlink.json");
-    } else {
-      const folders = vscode.workspace.workspaceFolders;
-      if (!folders || folders.length === 0) {
-        vscode.window.showWarningMessage("No workspace folder open.");
-        return;
-      }
-      filePath = path.join(
-        folders[0].uri.fsPath,
-        ".agentlink",
-        "agentlink.json",
-      );
-    }
-    vscode.window.showTextDocument(
-      vscode.Uri.file(filePath),
-      withPrimaryEditorColumn(),
-    );
   }
 
   private getMasterBypass(): boolean {

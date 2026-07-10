@@ -44,7 +44,7 @@
           "icon": "media/agentlink.svg",
           "type": "webview",
           "id": "agentLink.statusView",
-          "name": "Status"
+          "name": "Activity"
         },
         {
           "icon": "media/agentlink.svg",

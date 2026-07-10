@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 interface ExtensionPackage {
   contributes?: {
     commands?: Array<{ command?: string; title?: string }>;
+    views?: Record<string, Array<{ id?: string; name?: string }>>;
     configuration?: {
       properties?: Record<string, unknown>;
     };
@@ -50,6 +51,14 @@ describe("extension package contributions", () => {
     for (const setting of removedServerSettings) {
       expect(Object.hasOwn(settings, setting), setting).toBe(false);
     }
+  });
+
+  it("labels the retained sidebar view as Activity", () => {
+    const activityView = extensionPackage.contributes?.views?.agentLink?.find(
+      ({ id }) => id === "agentLink.statusView",
+    );
+
+    expect(activityView?.name).toBe("Activity");
   });
 
   it("scopes approval commands to built-in agent sessions", () => {

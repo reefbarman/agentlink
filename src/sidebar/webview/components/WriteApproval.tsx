@@ -1,7 +1,8 @@
-import type { SidebarState, PostCommand } from "../types.js";
+import type { PostCommand, SidebarState, WriteApprovalMode } from "../types.js";
+
+import { CollapsibleSection } from "./common/CollapsibleSection.js";
 import { RuleList } from "./common/RuleList.js";
 import { SessionBlock } from "./common/SessionBlock.js";
-import { CollapsibleSection } from "./common/CollapsibleSection.js";
 
 interface Props {
   state: SidebarState;
@@ -30,7 +31,7 @@ export function WriteApproval({ state, postCommand }: Props) {
     );
 
   const handleModeChange = (e: Event) => {
-    const value = (e.target as HTMLSelectElement).value;
+    const value = (e.target as HTMLSelectElement).value as WriteApprovalMode;
     postCommand("setWriteApproval", { mode: value });
   };
 
@@ -102,13 +103,7 @@ export function WriteApproval({ state, postCommand }: Props) {
             <div style={{ marginTop: "10px" }}>
               <div class="subsection-label">Session Rules</div>
               {sessionsWithWriteRules.map((s) => (
-                <SessionBlock
-                  key={s.id}
-                  sessionId={s.id}
-                  clientName={s.clientName}
-                  clientVersion={s.clientVersion}
-                  agentId={s.agentId}
-                >
+                <SessionBlock key={s.id} sessionId={s.id}>
                   <RuleList
                     rules={s.writeRules}
                     removeCommand="removeSessionWriteRule"

@@ -146,24 +146,6 @@ h3 {
   margin: 6px 0;
 }
 
-.tools-list {
-  list-style: none;
-  padding: 0;
-}
-.tools-list li {
-  font-size: 12px;
-  padding: 3px 0;
-  color: var(--vscode-descriptionForeground);
-}
-.tools-list code {
-  font-family: var(--vscode-editor-font-family);
-  font-size: 11px;
-  color: var(--vscode-foreground);
-  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-
 
 .subsection-label {
   font-size: 11px;
