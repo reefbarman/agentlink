@@ -1425,6 +1425,15 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     onCollectFleetWorkflow: (workflowId, kind) =>
       agentSessionManager.collectFleetWorkflow(workflowId, kind),
+    onManageFleetAutomations: async ({ action, id }) => {
+      await fleetAutomationReady;
+      if (action === "list") return fleetAutomationStore.list();
+      if (action === "history") return fleetAutomationStore.history(id);
+      if (!id) throw new Error(`${action} requires an automation id`);
+      if (action === "enable") return fleetAutomationStore.setEnabled(id, true);
+      if (action === "disable") return fleetAutomationStore.setEnabled(id, false);
+      return { removed: await fleetAutomationStore.remove(id) };
+    },
     worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
       globalStorageUri: context.globalStorageUri,
       onApprovalRequest: (request, sessionId) =>

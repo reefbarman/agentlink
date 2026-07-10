@@ -268,6 +268,7 @@ export class AgentSessionManager {
     private readonly bgDefaults: {
       maxConcurrent: number;
       maxConcurrentPerRoot?: number;
+      maxConcurrentPerProvider?: number;
       maxDepth?: number;
       maxChildrenPerParent?: number;
     } = {
@@ -293,6 +294,8 @@ export class AgentSessionManager {
     this.fleetScheduler = new FleetScheduler({
       maxConcurrent: this.bgDefaults.maxConcurrent,
       maxConcurrentPerRoot: this.bgDefaults.maxConcurrentPerRoot ?? 2,
+      maxConcurrentPerProvider:
+        this.bgDefaults.maxConcurrentPerProvider ?? 2,
       maxDepth: this.bgDefaults.maxDepth ?? 2,
       maxChildrenPerParent: this.bgDefaults.maxChildrenPerParent ?? 2,
     });
@@ -2657,11 +2660,25 @@ export class AgentSessionManager {
     ).length;
   }
 
+  private activeBackgroundCountForProvider(provider: string): number {
+    return Array.from(this.sessions.values()).filter(
+      (session) =>
+        session.background &&
+        this.bgMeta.get(session.id)?.resolvedProvider === provider &&
+        session.status !== "queued" &&
+        (session.status === "streaming" ||
+          session.status === "tool_executing" ||
+          session.status === "awaiting_approval"),
+    ).length;
+  }
+
   private canStartBackground(session: AgentSession): boolean {
     const root = session.fleetMetadata?.rootSessionId;
+    const provider = this.bgMeta.get(session.id)?.resolvedProvider ?? "native";
     return this.fleetScheduler.canStart({
       activeGlobal: this.activeBackgroundCount(),
       activeForRoot: root ? this.activeBackgroundCountForRoot(root) : 0,
+      activeForProvider: this.activeBackgroundCountForProvider(provider),
     });
   }
 

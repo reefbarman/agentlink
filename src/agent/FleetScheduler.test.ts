@@ -4,6 +4,7 @@ import { FleetAdmissionError, FleetScheduler } from "./FleetScheduler.js";
 const scheduler = new FleetScheduler({
   maxConcurrent: 3,
   maxConcurrentPerRoot: 2,
+  maxConcurrentPerProvider: 2,
   maxDepth: 2,
   maxChildrenPerParent: 2,
 });
@@ -39,8 +40,27 @@ describe("FleetScheduler", () => {
   });
 
   it("enforces global/root capacity and skips blocked queue roots", () => {
-    expect(scheduler.canStart({ activeGlobal: 2, activeForRoot: 2 })).toBe(false);
-    expect(scheduler.canStart({ activeGlobal: 2, activeForRoot: 1 })).toBe(true);
+    expect(
+      scheduler.canStart({
+        activeGlobal: 2,
+        activeForRoot: 2,
+        activeForProvider: 1,
+      }),
+    ).toBe(false);
+    expect(
+      scheduler.canStart({
+        activeGlobal: 2,
+        activeForRoot: 1,
+        activeForProvider: 2,
+      }),
+    ).toBe(false);
+    expect(
+      scheduler.canStart({
+        activeGlobal: 2,
+        activeForRoot: 1,
+        activeForProvider: 1,
+      }),
+    ).toBe(true);
     expect(
       scheduler.findNextRunnable(
         [{ root: "busy" }, { root: "free" }],

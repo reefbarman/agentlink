@@ -25,6 +25,7 @@ export type FleetAdmissionResult =
 export interface FleetSchedulerPolicy {
   maxConcurrent: number;
   maxConcurrentPerRoot: number;
+  maxConcurrentPerProvider: number;
   maxDepth: number;
   maxChildrenPerParent: number;
 }
@@ -80,10 +81,15 @@ export class FleetScheduler {
     return { ok: true, depth: args.parentDepth + 1 };
   }
 
-  canStart(args: { activeGlobal: number; activeForRoot: number }): boolean {
+  canStart(args: {
+    activeGlobal: number;
+    activeForRoot: number;
+    activeForProvider: number;
+  }): boolean {
     return (
       args.activeGlobal < this.policy.maxConcurrent &&
-      args.activeForRoot < this.policy.maxConcurrentPerRoot
+      args.activeForRoot < this.policy.maxConcurrentPerRoot &&
+      args.activeForProvider < this.policy.maxConcurrentPerProvider
     );
   }
 

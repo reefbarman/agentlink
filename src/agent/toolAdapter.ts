@@ -686,6 +686,22 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
       required: ["workflowId", "kind"],
     },
   },
+  {
+    name: "manage_fleet_automations",
+    description:
+      "List, inspect history, enable, disable, or delete persisted fleet automations.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "history", "enable", "disable", "delete"],
+        },
+        id: { type: "string" },
+      },
+      required: ["action"],
+    },
+  },
 ];
 
 /** Return value of get_background_status — non-blocking snapshot. */
@@ -1381,6 +1397,10 @@ export interface ToolDispatchContext {
     workflowId: string,
     kind: FleetWorkflowKind,
   ) => Promise<FleetWorkflowOutcome>;
+  onManageFleetAutomations?: (input: {
+    action: "list" | "history" | "enable" | "disable" | "delete";
+    id?: string;
+  }) => Promise<unknown>;
   /** Active skill tool allowlist, enforced for direct and deferred MCP dispatch. */
   skillAllowedTools?: string[];
   /** Abort signal for the current tool call, used to cancel in-flight MCP SDK requests. */
@@ -2874,6 +2894,35 @@ export async function dispatchToolCall(
         String(params.workflowId ?? ""),
         String(params.kind ?? "") as FleetWorkflowKind,
       );
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
+    case "manage_fleet_automations": {
+      if (!ctx.onManageFleetAutomations) {
+        return errorResult("Fleet automation management not available");
+      }
+      const action = String(params.action ?? "");
+      if (![
+        "list",
+        "history",
+        "enable",
+        "disable",
+        "delete",
+      ].includes(action)) {
+        return errorResult(`Invalid fleet automation action: ${action}`);
+      }
+      if (["enable", "disable", "delete"].includes(action) && !params.id) {
+        return errorResult(`${action} requires an automation id`);
+      }
+      const result = await ctx.onManageFleetAutomations({
+        action: action as
+          | "list"
+          | "history"
+          | "enable"
+          | "disable"
+          | "delete",
+        id: typeof params.id === "string" ? params.id : undefined,
+      });
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
 

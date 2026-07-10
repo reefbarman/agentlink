@@ -3149,6 +3149,31 @@ describe("dispatchToolCall", () => {
     );
   });
 
+  it("validates and dispatches fleet automation management", async () => {
+    const onManageFleetAutomations = vi.fn().mockResolvedValue([{ id: "a1" }]);
+    const result = await dispatchToolCall(
+      "manage_fleet_automations",
+      { action: "history", id: "a1" },
+      { ...mockCtx, onManageFleetAutomations },
+    );
+
+    expect(onManageFleetAutomations).toHaveBeenCalledWith({
+      action: "history",
+      id: "a1",
+    });
+    expect((result.content[0] as { text: string }).text).toContain("a1");
+
+    const invalid = await dispatchToolCall(
+      "manage_fleet_automations",
+      { action: "destroy" },
+      { ...mockCtx, onManageFleetAutomations },
+    );
+    expect((invalid.content[0] as { text: string }).text).toContain(
+      "Invalid fleet automation action",
+    );
+    expect(onManageFleetAutomations).toHaveBeenCalledTimes(1);
+  });
+
   it("attaches MCP approval promotion metadata after allow-once approvals", async () => {
     const onApprovalRequest = vi.fn().mockResolvedValue("allow-once");
     const approveMcpTool = vi.fn();
