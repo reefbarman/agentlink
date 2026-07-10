@@ -23,8 +23,17 @@ export interface BgSessionInfoProps {
   fallbackUsed?: boolean;
   parentSessionId?: string;
   rootSessionId?: string;
+  goalId?: string;
+  workspace?: string;
   depth?: number;
   placement?: "background" | "worktree" | "remote";
+  delegation?: {
+    ownedPaths?: string[];
+    forbiddenPaths?: string[];
+    permissionProfile?: string;
+    worktree?: "shared" | "isolated";
+    expectedResult?: string;
+  };
   backend?: string;
   capabilities?: {
     canRead: boolean;
@@ -193,6 +202,10 @@ export function BackgroundSessionStrip({
   const [filter, setFilter] = useState<
     "all" | "active" | "attention" | "completed" | "archived"
   >("all");
+  const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
+  const [providerFilter, setProviderFilter] = useState("");
+  const [workspaceFilter, setWorkspaceFilter] = useState("");
+  const [goalFilter, setGoalFilter] = useState("");
   const [startedAt, setStartedAt] = useState<Map<string, number>>(new Map());
   const [now, setNow] = useState(Date.now());
 
@@ -233,6 +246,9 @@ export function BackgroundSessionStrip({
   }, [hasActive]);
 
   const visibleSessions = sessions.filter((session) => {
+    if (providerFilter && session.resolvedProvider !== providerFilter) return false;
+    if (workspaceFilter && session.workspace !== workspaceFilter) return false;
+    if (goalFilter && session.goalId !== goalFilter) return false;
     if (filter === "active") return ACTIVE_STATUSES.has(session.status);
     if (filter === "attention") return Boolean(session.attention);
     if (filter === "completed") {
@@ -282,6 +298,52 @@ export function BackgroundSessionStrip({
                 </button>
               ),
             )}
+            <button
+              class="bg-session-filter"
+              onClick={() => setViewMode(viewMode === "tree" ? "flat" : "tree")}
+              title="Toggle tree or flat view"
+            >
+              {viewMode}
+            </button>
+            <select
+              class="bg-session-select"
+              value={providerFilter}
+              onChange={(event) =>
+                setProviderFilter((event.currentTarget as HTMLSelectElement).value)
+              }
+              aria-label="Filter by provider"
+            >
+              <option value="">All providers</option>
+              {[...new Set(sessions.map((item) => item.resolvedProvider).filter((value): value is string => Boolean(value)))].map(
+                (value) => <option value={value}>{value}</option>,
+              )}
+            </select>
+            <select
+              class="bg-session-select"
+              value={workspaceFilter}
+              onChange={(event) =>
+                setWorkspaceFilter((event.currentTarget as HTMLSelectElement).value)
+              }
+              aria-label="Filter by workspace"
+            >
+              <option value="">All workspaces</option>
+              {[...new Set(sessions.map((item) => item.workspace).filter((value): value is string => Boolean(value)))].map(
+                (value) => <option value={value}>{value}</option>,
+              )}
+            </select>
+            <select
+              class="bg-session-select"
+              value={goalFilter}
+              onChange={(event) =>
+                setGoalFilter((event.currentTarget as HTMLSelectElement).value)
+              }
+              aria-label="Filter by goal"
+            >
+              <option value="">All goals</option>
+              {[...new Set(sessions.map((item) => item.goalId).filter((value): value is string => Boolean(value)))].map(
+                (value) => <option value={value}>{value}</option>,
+              )}
+            </select>
           </div>
           {visibleSessions.length === 0 && (
             <div class="bg-session-empty">No agents match this filter.</div>
@@ -291,7 +353,12 @@ export function BackgroundSessionStrip({
               key={s.id}
               class={`bg-session-card bg-session-${s.status}`}
               data-attention={s.attention}
-              style={{ paddingLeft: `${6 + Math.max(0, s.depth ?? 1) * 10}px` }}
+              style={{
+                paddingLeft:
+                  viewMode === "tree"
+                    ? `${6 + Math.max(0, s.depth ?? 1) * 10}px`
+                    : "6px",
+              }}
               title={[
                 s.parentSessionId ? `parent: ${s.parentSessionId}` : null,
                 s.resolvedMode ? `mode: ${s.resolvedMode}` : null,
@@ -302,6 +369,9 @@ export function BackgroundSessionStrip({
                 s.resolvedProvider ? `provider: ${s.resolvedProvider}` : null,
                 s.resolvedModel ? `model: ${s.resolvedModel}` : null,
                 s.lifecycle ? `lifecycle: ${s.lifecycle}` : null,
+                s.goalId ? `goal: ${s.goalId}` : null,
+                s.workspace ? `workspace: ${s.workspace}` : null,
+                s.delegation ? `delegation: ${JSON.stringify(s.delegation)}` : null,
                 s.terminalReason ? `reason: ${s.terminalReason}` : null,
                 `tokens: ${(s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0)}`,
                 s.toolCalls !== undefined ? `tools: ${s.toolCalls}` : null,

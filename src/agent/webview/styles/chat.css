@@ -5180,6 +5180,16 @@ body.approval-resizing {
   background: var(--vscode-badge-background);
 }
 
+.bg-session-select {
+  min-width: 92px;
+  max-width: 150px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 3px;
+  color: var(--vscode-dropdown-foreground);
+  background: var(--vscode-dropdown-background);
+  font: inherit;
+}
+
 .bg-session-empty {
   padding: 6px;
   color: var(--vscode-descriptionForeground);

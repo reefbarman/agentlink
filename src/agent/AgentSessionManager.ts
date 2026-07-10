@@ -4755,8 +4755,11 @@ export class AgentSessionManager {
           fallbackUsed: meta?.fallbackUsed,
           parentSessionId: s.fleetMetadata?.parentSessionId,
           rootSessionId: s.fleetMetadata?.rootSessionId,
+          goalId: s.fleetMetadata?.goalId,
+          workspace: s.cwd,
           depth: s.fleetMetadata?.depth,
           placement: s.fleetMetadata?.placement,
+          delegation: s.fleetMetadata?.delegation,
           backend: s.fleetMetadata?.backend,
           capabilities: s.fleetMetadata
             ? s.fleetMetadata.backend === "native"

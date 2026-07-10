@@ -184,8 +184,17 @@ export interface BgSessionInfo {
   /** Durable fleet ancestry and execution identity. */
   parentSessionId?: string;
   rootSessionId?: string;
+  goalId?: string;
+  workspace?: string;
   depth?: number;
   placement?: "background" | "worktree" | "remote";
+  delegation?: {
+    ownedPaths?: string[];
+    forbiddenPaths?: string[];
+    permissionProfile?: string;
+    worktree?: "shared" | "isolated";
+    expectedResult?: string;
+  };
   backend?: string;
   capabilities?: {
     canRead: boolean;

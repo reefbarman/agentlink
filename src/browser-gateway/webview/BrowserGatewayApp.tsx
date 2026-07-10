@@ -924,6 +924,7 @@ export function BrowserGatewayApp({
   const questionProgressOriginRef = useRef<string>(
     `br-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`,
   );
+  const seenFleetEventIdsRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
     return () => {
@@ -1174,6 +1175,25 @@ export function BrowserGatewayApp({
     () => dedupeBackgroundSessions(snapshotBackground ?? []),
     [snapshotBackground],
   );
+  useEffect(() => {
+    const currentIds = new Set(
+      background.flatMap((session) => session.events?.map((event) => event.id) ?? []),
+    );
+    if (seenFleetEventIdsRef.current === null) {
+      seenFleetEventIdsRef.current = currentIds;
+      return;
+    }
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      for (const session of background) {
+        for (const event of session.events ?? []) {
+          if (!seenFleetEventIdsRef.current.has(event.id) && !event.readAt) {
+            new Notification(session.task, { body: event.summary });
+          }
+        }
+      }
+    }
+    seenFleetEventIdsRef.current = currentIds;
+  }, [background]);
   const pendingApproval = snapshot?.ui.approval ?? null;
   const pendingQuestion =
     foreground?.questionRequest ?? snapshot?.ui.question ?? null;
