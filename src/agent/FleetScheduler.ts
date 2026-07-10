@@ -3,6 +3,7 @@ export type FleetAdmissionCode =
   | "max_depth"
   | "max_children"
   | "budget_reservation"
+  | "workspace_conflict"
   | "invalid_ancestry";
 
 export interface FleetAdmissionFailure {

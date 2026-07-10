@@ -2684,11 +2684,6 @@ export class AgentSessionManager {
         "spawn_background_agent requires non-empty task and message",
       );
     }
-    if (request.worktree === "isolated") {
-      throw new Error(
-        "Background spawn rejected: isolated execution must use start_worktree_agent so AgentLink can create and verify the worktree before launching.",
-      );
-    }
 
     const parent = parentSessionId
       ? this.sessions.get(parentSessionId)
@@ -2715,6 +2710,11 @@ export class AgentSessionManager {
       throw new FleetAdmissionError(admission);
     }
     this.ensureChildBudgetAdmission(parent, request);
+    this.ensureSharedWorkspaceScopeAvailable(request);
+
+    if (request.worktree === "isolated") {
+      return this.spawnIsolatedWorktree(request, parent);
+    }
 
     const backendRoute = resolveBackgroundBackendRoute(
       this.getBackgroundAgentSettings(),
@@ -4354,6 +4354,126 @@ export class AgentSessionManager {
         });
       }
     }
+  }
+
+  private ensureSharedWorkspaceScopeAvailable(
+    request: SpawnBackgroundRequest,
+  ): void {
+    if (request.worktree === "isolated" || !request.ownedPaths?.length) return;
+    const normalize = (value: string) =>
+      value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+    const overlaps = (left: string, right: string) => {
+      const a = normalize(left);
+      const b = normalize(right);
+      return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+    };
+    for (const session of this.sessions.values()) {
+      const fleet = session.fleetMetadata;
+      if (
+        !session.background ||
+        fleet?.placement !== "background" ||
+        (fleet.lifecycle !== "queued" && fleet.lifecycle !== "running")
+      ) {
+        continue;
+      }
+      const conflicting = request.ownedPaths.find((requested) =>
+        fleet.delegation?.ownedPaths?.some((owned) => overlaps(requested, owned)),
+      );
+      if (conflicting) {
+        throw new FleetAdmissionError({
+          ok: false,
+          code: "workspace_conflict",
+          message: `Background spawn rejected: shared-workspace ownership overlaps active agent ${session.id} at ${conflicting}. Use worktree: \"isolated\" or choose a disjoint scope.`,
+        });
+      }
+    }
+  }
+
+  private async spawnIsolatedWorktree(
+    request: SpawnBackgroundRequest,
+    parent: AgentSession | undefined,
+  ): Promise<SpawnBackgroundResult> {
+    const provider = this.toolCtx?.worktreeAgentLaunchProvider;
+    if (!provider) {
+      throw new Error("Isolated worktree launcher is unavailable");
+    }
+    const result = await provider.start({
+      task: request.task,
+      prompt: request.message,
+      sourcePath: this.cwd,
+      mode: request.mode,
+      autoSubmit: true,
+    });
+    const text = result.content.find((item) => item.type === "text")?.text ?? "{}";
+    const payload = JSON.parse(text) as Record<string, unknown>;
+    if (payload.error || payload.status === "rejected") {
+      throw new Error(String(payload.error ?? "Worktree launch rejected"));
+    }
+    const mode = request.mode?.trim() || parent?.mode || "code";
+    const model = request.model?.trim() || parent?.model || this.config.model;
+    const session = await this.host.createSession({
+      mode,
+      config: { ...this.config, model },
+      cwd: this.cwd,
+      workspaceFolders: this.getWorkspaceFolders(),
+      devMode: this.devMode,
+      background: true,
+      isBackground: true,
+      providerId: "worktree",
+    });
+    session.title = request.task.slice(0, 80);
+    session.addUserMessage(request.message);
+    session.status = "idle";
+    this.sessions.set(session.id, session);
+    this.bgMeta.set(session.id, {
+      resolvedMode: mode,
+      resolvedModel: model,
+      resolvedProvider: "worktree",
+      taskClass: request.taskClass ?? "general",
+      routingReason: "isolated worktree delegation",
+      fallbackUsed: false,
+      toolCalls: 0,
+      tokenUsage: 0,
+      apiTurns: 0,
+      startedAt: Date.now(),
+    });
+    session.fleetMetadata = this.createFleetMetadata(session, {
+      task: request.task,
+      parentSessionId: parent?.id,
+      backend: "native",
+      resolvedMode: mode,
+      resolvedModel: model,
+      resolvedProvider: "worktree",
+      taskClass: request.taskClass ?? "general",
+      routingReason: "isolated worktree delegation",
+      fallbackUsed: false,
+      delegation: {
+        ownedPaths: request.ownedPaths,
+        forbiddenPaths: request.forbiddenPaths,
+        permissionProfile: request.permissionProfile,
+        worktree: "isolated",
+        expectedResult: request.expectedResult,
+      },
+      budget: request.budget,
+      goalId: request.goalId,
+    });
+    session.fleetMetadata.placement = "worktree";
+    session.fleetMetadata.lifecycle = "completed";
+    session.fleetMetadata.terminalReason = "delegated_to_worktree_window";
+    session.fleetMetadata.completedAt = Date.now();
+    session.fleetMetadata.finalResult = text;
+    this.appendFleetEvent(session, "completed", "Worktree agent launched");
+    this.saveSession(session.id);
+    this.onSessionsChanged?.();
+    return {
+      sessionId: session.id,
+      resolvedMode: mode,
+      resolvedModel: model,
+      resolvedProvider: "worktree",
+      taskClass: request.taskClass ?? "general",
+      routingReason: "isolated worktree delegation",
+      fallbackUsed: false,
+    };
   }
 
   private isFleetDescendant(sessionId: string, ancestorId: string): boolean {

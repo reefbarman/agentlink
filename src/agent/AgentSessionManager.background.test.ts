@@ -190,16 +190,64 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("does not claim isolated execution without the worktree launcher", async () => {
+  it("launches isolated delegation through the worktree provider and records it", async () => {
+    const start = vi.fn().mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "opened",
+            worktreePath: "/tmp/repo-worktrees/task",
+            intentId: "intent-1",
+          }),
+        },
+      ],
+    });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({
+      ...toolCtx,
+      worktreeAgentLaunchProvider: { start },
+    });
+    const result = await mgr.spawnBackground({
+      task: "isolated",
+      message: "edit safely",
+      worktree: "isolated",
+    });
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({ task: "isolated", autoSubmit: true }),
+    );
+    expect((mgr as any).sessions.get(result.sessionId).fleetMetadata).toEqual(
+      expect.objectContaining({
+        placement: "worktree",
+        lifecycle: "completed",
+        terminalReason: "delegated_to_worktree_window",
+      }),
+    );
+  });
+
+  it("rejects overlapping shared-workspace ownership", async () => {
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
+    await mgr.spawnBackground({
+      task: "owner",
+      message: "work",
+      ownedPaths: ["src/agent"],
+    });
     await expect(
       mgr.spawnBackground({
-        task: "isolated",
-        message: "edit safely",
-        worktree: "isolated",
+        task: "conflict",
+        message: "work",
+        ownedPaths: ["src/agent/tools"],
       }),
-    ).rejects.toThrow(/must use start_worktree_agent/);
+    ).rejects.toMatchObject({
+      result: expect.objectContaining({ code: "workspace_conflict" }),
+    });
   });
 
   it("starts the next queued agent when capacity becomes available", async () => {

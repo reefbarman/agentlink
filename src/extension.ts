@@ -70,6 +70,7 @@ import type { CoreModelCatalogEntry } from "./core/modelCatalog.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browser-gateway/browserGatewayModelProviderIds.js";
 import { setBrowserGatewayRegistryLogger } from "./browser-gateway/browserGatewayRegistry.js";
 import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js";
+import { createVscodeWorktreeAgentLaunchProvider } from "./adapters/vscode/worktreeAgentLaunchCapabilities.js";
 import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
 import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
 import {
@@ -1320,6 +1321,12 @@ export function activate(context: vscode.ExtensionContext): void {
         callerSessionId,
         sessionId,
       ),
+    worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
+      globalStorageUri: context.globalStorageUri,
+      onApprovalRequest: (request, sessionId) =>
+        chatViewProvider.requestApproval(request, sessionId),
+      sessionId: () => agentSessionManager.getForegroundSession()?.id ?? "agent",
+    }),
     toolCallTracker,
     toolUsageTelemetry: toolUsageTelemetry ?? undefined,
   });
