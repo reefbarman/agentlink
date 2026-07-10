@@ -16,11 +16,24 @@ describe("foreground/background capability parity contract", () => {
       const foreground = getAgentTools(mode, mcpTools, false).map((tool) => tool.name);
       const background = getAgentTools(mode, mcpTools, true).map((tool) => tool.name);
       expect(background).toEqual(foreground);
-      expect(background).toContain("example__lookup");
-      expect(background).toContain("switch_mode");
-      expect(background).toContain("set_task_status");
     });
   }
+
+  it("preserves full code-mode MCP and session controls", () => {
+    const code = getAgentTools(
+      BUILT_IN_MODES.find((mode) => mode.slug === "code"),
+      mcpTools,
+      true,
+    ).map((tool) => tool.name);
+    expect(code).toEqual(
+      expect.arrayContaining([
+        "example__lookup",
+        "switch_mode",
+        "set_task_status",
+        "spawn_background_agent",
+      ]),
+    );
+  });
 
   it("applies review-only restrictions explicitly rather than by placement", () => {
     const unrestricted = getAgentTools(

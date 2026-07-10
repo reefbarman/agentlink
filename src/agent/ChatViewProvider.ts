@@ -224,6 +224,7 @@ function formatInstructionDebugInfo(
  */
 export type ExtensionToWebview =
   | { type: "stateUpdate"; state: ChatState }
+  | { type: "agentFleetEvent"; sessionId: string; event: unknown }
   | { type: "agentThinkingStart"; sessionId: string; thinkingId: string }
   | {
       type: "agentThinkingDelta";

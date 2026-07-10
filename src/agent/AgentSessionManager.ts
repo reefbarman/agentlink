@@ -2917,9 +2917,8 @@ export class AgentSessionManager {
           if (session.fleetMetadata?.lifecycle === "paused") {
             this.saveSession(session.id);
             this.onSessionsChanged?.();
-            return;
-          }
-          this.bgStatusDetail.delete(session.id);
+          } else {
+            this.bgStatusDetail.delete(session.id);
           this.markBgCompleted(session.id);
           const fallbackMsg = this.bgErrors.get(session.id)
             ? `ACP background agent stopped: ${this.bgErrors.get(session.id)}`
@@ -2950,6 +2949,7 @@ export class AgentSessionManager {
             },
             5 * 60 * 1000,
           );
+          }
         }
       };
       this.scheduleBackgroundLaunch(session, runAcpBackground);
@@ -4353,7 +4353,7 @@ export class AgentSessionManager {
       (!owner.fleetMetadata?.budget ||
         owner.fleetMetadata.budget.scope === "session")
     ) {
-      const parentId = owner.fleetMetadata?.parentSessionId;
+      const parentId: string | undefined = owner.fleetMetadata?.parentSessionId;
       owner = parentId ? this.sessions.get(parentId) : undefined;
     }
     const envelope = owner?.fleetMetadata?.budget;
@@ -4426,7 +4426,7 @@ export class AgentSessionManager {
         throw new FleetAdmissionError({
           ok: false,
           code: "workspace_conflict",
-          message: `Background spawn rejected: shared-workspace ownership overlaps active agent ${session.id} at ${conflicting}. Use worktree: \"isolated\" or choose a disjoint scope.`,
+          message: `Background spawn rejected: shared-workspace ownership overlaps active agent ${session.id} at ${conflicting}. Use worktree: 'isolated' or choose a disjoint scope.`,
         });
       }
     }
@@ -4608,10 +4608,10 @@ export class AgentSessionManager {
     for (const candidate of this.sessions.values()) {
       if (
         this.isFleetDescendant(candidate.id, owner.id) &&
-        candidate.fleetMetadata.lifecycle !== "completed" &&
-        candidate.fleetMetadata.lifecycle !== "failed" &&
-        candidate.fleetMetadata.lifecycle !== "cancelled" &&
-        candidate.fleetMetadata.lifecycle !== "budget_exhausted"
+        candidate.fleetMetadata?.lifecycle !== "completed" &&
+        candidate.fleetMetadata?.lifecycle !== "failed" &&
+        candidate.fleetMetadata?.lifecycle !== "cancelled" &&
+        candidate.fleetMetadata?.lifecycle !== "budget_exhausted"
       ) {
         this.stopSession(candidate.id);
         if (candidate.fleetMetadata) {

@@ -42,7 +42,11 @@ import {
   MCP_META_TOOL_DEFINITIONS,
 } from "../shared/mcpToolDefinitions.js";
 import type { TodoItem } from "./todoTool.js";
-import { handleToolError, type ToolResult } from "../shared/types.js";
+import {
+  errorResult,
+  handleToolError,
+  type ToolResult,
+} from "../shared/types.js";
 import { getToolsForMode } from "./toolPermissions.js";
 import { handleApplyDiff } from "../tools/applyDiff.js";
 import { handleCloseTerminals } from "../tools/closeTerminals.js";
@@ -2789,10 +2793,10 @@ export async function dispatchToolCall(
       const candidates = Array.isArray(params.candidates)
         ? params.candidates
             .filter(
-              (item): item is Record<string, unknown> =>
+              (item: unknown): item is Record<string, unknown> =>
                 typeof item === "object" && item !== null,
             )
-            .map((item) => ({
+            .map((item: Record<string, unknown>) => ({
               model: typeof item.model === "string" ? item.model : undefined,
               provider:
                 typeof item.provider === "string" ? item.provider : undefined,

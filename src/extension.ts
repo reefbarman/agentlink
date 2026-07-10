@@ -1275,18 +1275,22 @@ export function activate(context: vscode.ExtensionContext): void {
     path.join(context.globalStorageUri.fsPath, "fleet-automations.json"),
     (workflow) => agentSessionManager.startFleetWorkflow(workflow),
   );
-  await fleetAutomationStore.load();
+  const fleetAutomationReady = fleetAutomationStore.load();
   const removeFleetAutomationListener = agentSessionManager.addFleetEventListener(
     (_sessionId, event) => {
-      void fleetAutomationStore.trigger(event.type).catch((error) =>
-        log(`[fleet-automation] event trigger failed: ${String(error)}`),
-      );
+      void fleetAutomationReady
+        .then(() => fleetAutomationStore.trigger(event.type))
+        .catch((error) =>
+          log(`[fleet-automation] event trigger failed: ${String(error)}`),
+        );
     },
   );
   const fleetAutomationTimer = setInterval(() => {
-    void fleetAutomationStore.runDue().catch((error) =>
-      log(`[fleet-automation] scheduled run failed: ${String(error)}`),
-    );
+    void fleetAutomationReady
+      .then(() => fleetAutomationStore.runDue())
+      .catch((error) =>
+        log(`[fleet-automation] scheduled run failed: ${String(error)}`),
+      );
   }, 30_000);
   context.subscriptions.push({
     dispose: () => {
@@ -1348,7 +1352,10 @@ export function activate(context: vscode.ExtensionContext): void {
       ),
     onStartFleetWorkflow: (callerSessionId, request) =>
       agentSessionManager.startFleetWorkflow(request, callerSessionId),
-    onScheduleFleetAutomation: (input) => fleetAutomationStore.schedule(input),
+    onScheduleFleetAutomation: async (input) => {
+      await fleetAutomationReady;
+      return fleetAutomationStore.schedule(input);
+    },
     worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
       globalStorageUri: context.globalStorageUri,
       onApprovalRequest: (request, sessionId) =>

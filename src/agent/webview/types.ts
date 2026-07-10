@@ -495,6 +495,11 @@ export type ExtensionMessage =
         };
       }>;
     }
+  | {
+      type: "agentFleetEvent";
+      sessionId: string;
+      event: unknown;
+    }
   | { type: "agentBgThinkingStart"; sessionId: string; thinkingId: string }
   | {
       type: "agentBgThinkingDelta";
