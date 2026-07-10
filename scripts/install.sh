@@ -30,5 +30,4 @@ echo "Installing extension..."
 code --install-extension "$TMPDIR/$FILENAME" --force
 
 echo ""
-echo "Done! Reload VS Code to activate AgentLink."
-echo "Use 'AgentLink: Configure Agents' in the command palette to set up your agents."
+echo "Done! Reload VS Code, then open the AgentLink activity bar to start coding."

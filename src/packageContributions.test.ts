@@ -4,6 +4,7 @@ import * as path from "path";
 import { describe, expect, it } from "vitest";
 
 interface ExtensionPackage {
+  description?: string;
   contributes?: {
     commands?: Array<{ command?: string; title?: string }>;
     views?: Record<string, Array<{ id?: string; name?: string }>>;
@@ -14,9 +15,20 @@ interface ExtensionPackage {
   dependencies?: Record<string, string>;
 }
 
+const root = path.join(__dirname, "..");
 const extensionPackage = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
+  fs.readFileSync(path.join(root, "package.json"), "utf8"),
 ) as ExtensionPackage;
+const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+const changelog = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+const installScript = fs.readFileSync(
+  path.join(root, "scripts", "install.sh"),
+  "utf8",
+);
+const contributorInstructions = fs.readFileSync(
+  path.join(root, "CLAUDE.md"),
+  "utf8",
+);
 
 const removedServerCommands = [
   "agentlink.startServer",
@@ -38,6 +50,26 @@ const removedServerSettings = [
 ];
 
 describe("extension package contributions", () => {
+  it("describes the retained built-in agent product", () => {
+    expect(extensionPackage.description).toBe(
+      "AI coding agent for VS Code with browser remote control",
+    );
+  });
+
+  it("does not document retired external MCP server setup workflows", () => {
+    const currentDocs = `${readme}\n${changelog}\n${installScript}\n${contributorInstructions}`;
+    for (const staleInstruction of [
+      "AgentLink: Start MCP Server",
+      "AgentLink: Stop MCP Server",
+      "AgentLink: Show Server Status",
+      "AgentLink: Configure Agents",
+      "resources/enforce-agentlink.sh",
+      "http://localhost:<port>/mcp",
+    ]) {
+      expect(currentDocs, staleInstruction).not.toContain(staleInstruction);
+    }
+  });
+
   it("does not expose removed external MCP server commands or settings", () => {
     const commands = new Set(
       extensionPackage.contributes?.commands?.map(({ command }) => command),

@@ -41,8 +41,10 @@ When adding a new tool or changing tool parameters:
 1. Add or update its metadata in `src/shared/toolRegistry.ts`
 2. Add or update its input schema in `src/shared/toolSchemas.ts`
 3. Wire the tool definition and dispatch path in `src/agent/toolAdapter.ts`
-4. Update `README.md` — add a full tool section with parameter table and response details
-5. Run `npm run release -- --install` to rebuild and reinstall the extension. (Not when developing the agent, though)
+4. Add or update handler/unit tests for definitions, dispatch, and result behavior
+5. Keep the VS Code and browser surfaces in parity when the tool affects shared session state or user-visible events
+6. Update `README.md` — add a full tool section with parameter table and response details
+7. Run `npm run release -- --install` to rebuild and reinstall the extension. (Not when developing the agent, though)
 
 ## Project Structure Boundaries
 

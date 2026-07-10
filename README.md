@@ -1,11 +1,8 @@
 # AgentLink
 
-A VS Code extension with two roles:
+An AI coding agent for VS Code with browser remote control.
 
-1. a built-in coding agent that runs inside VS Code
-2. an [MCP](https://modelcontextprotocol.io/) server that gives external agents native VS Code capabilities
-
-The built-in agent is the main experience: chat in the sidebar, switch modes, run tools through VS Code, review diffs inline, approve terminal commands, spawn background review agents, and use semantic code search. If you already use Claude Code, Copilot, Roo Code, Codex, or another MCP client, AgentLink can also expose the same editor-native tools to them.
+AgentLink runs a built-in coding agent inside VS Code: chat in the sidebar, switch modes, run editor-native tools, review diffs inline, approve terminal commands, spawn background agents, search code semantically, and continue the same session from a browser. The built-in agent can also connect out to [MCP](https://modelcontextprotocol.io/) servers configured for your user or project.
 
 ## Why?
 
@@ -27,7 +24,7 @@ Most AI coding agents operate at the filesystem level — they read and write fi
 
 ## Built-in Agent
 
-The **Agent** view in the AgentLink activity bar is a built-in coding agent, not just a wrapper around external MCP clients.
+The **Agent** view in the AgentLink activity bar is the primary coding experience.
 
 ### What the built-in agent does
 
@@ -68,7 +65,7 @@ flowchart LR
 
 ### Core built-in agent features
 
-- **Inline approvals in chat** — command, write, rename, MCP, and mode-switch approvals render in the built-in chat UI. The separate approval panel is mainly for external MCP agents.
+- **Inline approvals in chat** — command, write, rename, MCP, and mode-switch approvals render in the built-in chat UI. The separate approval panel provides a focused review surface for pending operations.
 - **Session history and restore** — chat sessions are persisted and restored across VS Code reloads/startup.
 - **Checkpoints and revert** — create workspace checkpoints and revert later. Checkpoints are stored in AgentLink’s own shadow git repo under `.agentlink/checkpoints/`, separate from your project’s real git history.
 - **Slash commands** — built-ins include `/new`, `/mode`, `/model`, `/condense`, `/checkpoint`, `/revert`, `/help`, `/skills`, `/mcp`, `/mcp-config`, `/mcp-refresh`, `/btw`, and `/pair`. Custom commands and detected skills appear in the same picker.
@@ -76,32 +73,11 @@ flowchart LR
 - **Auto-condense** — when context fills up, AgentLink can condense the conversation and continue without losing task continuity.
 - **Model picker + auth-aware UX** — model selection is built into the chat UI and can prompt for Anthropic or OpenAI/Codex auth as needed. For Anthropic, model metadata (available models, context window, output tokens, reasoning-effort options) is refreshed from the Anthropic API and merged over built-in defaults; the refresh is lazy (never on activation) and falls back to built-in static metadata when offline. Toggle with `agentlink.anthropic.dynamicModelCapabilities` (default on).
 
-### Built-in agent vs external MCP clients
+### Remote control and MCP integrations
 
-| Capability                      | Built-in Agent                                           | External MCP client via AgentLink                            |
-| ------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------ |
-| Chat UI                         | Built into AgentLink sidebar                             | Provided by the external client                              |
-| Modes                           | Built-in (`code`, `architect`, `ask`, `debug`, `review`) | Depends on the client                                        |
-| Approvals                       | Inline in chat                                           | AgentLink approval panel / diff flows                        |
-| Background agents               | Built-in feature                                         | Only if the external client supports and invokes those tools |
-| MCP access                      | Can consume MCP servers itself                           | Connects to AgentLink as an MCP server                       |
-| VS Code-native editing/commands | Yes                                                      | Yes, through AgentLink tools                                 |
-
-## Supported External Agents
-
-AgentLink works with any MCP-capable AI agent running inside VS Code:
-
-| Agent                                                                 | Auto-configured | Config location                                  |
-| --------------------------------------------------------------------- | --------------- | ------------------------------------------------ |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code)         | Yes             | `~/.claude.json`                                 |
-| [GitHub Copilot](https://code.visualstudio.com/docs/copilot/overview) | Yes             | `.vscode/mcp.json`                               |
-| [Roo Code](https://github.com/RooVetGit/Roo-Code)                     | Yes             | `.roo/mcp.json`                                  |
-| [Cline](https://github.com/cline/cline)                               | Yes             | `~/.cline/data/settings/cline_mcp_settings.json` |
-| [Kilo Code](https://kilocode.ai/)                                     | Yes             | `.kilocode/mcp.json`                             |
-| [Codex](https://github.com/openai/codex)                              | Yes             | `~/.codex/config.toml`                           |
-| Generic MCP client                                                    | Manual          | See [Manual Setup](#manual-setup)                |
-
-You can use **multiple agents simultaneously** — AgentLink writes config for all selected agents at once.
+- **Browser remote control** mirrors built-in agent sessions, approvals, questions, background activity, and read-only diff review through a stable local gateway URL.
+- **Outbound MCP client** support lets the built-in agent discover and call tools, resources, and prompts from configured MCP servers.
+- **Layered MCP configuration** supports user and project files under `.agents`, `.claude`, and `.agentlink`, with project configuration taking precedence.
 
 ## Installation
 
@@ -139,7 +115,7 @@ npx @vscode/vsce package --no-dependencies --allow-star-activation
 code --install-extension agentlink-*.vsix --force
 ```
 
-After installing, reload VS Code. The MCP server starts automatically.
+After installing, reload VS Code and open the AgentLink activity bar.
 
 ## Quick Start
 
@@ -167,9 +143,6 @@ Useful built-in workflows:
 
 Useful command-palette entries include:
 
-- **AgentLink: Start MCP Server** / **AgentLink: Stop MCP Server**
-- **AgentLink: Show Server Status**
-- **AgentLink: Configure Agents**
 - **AgentLink: Sign In to OpenAI/Codex**
 - **AgentLink: Manage OpenAI/Codex Authentication**
 - **AgentLink: Manage ChatGPT/Codex Accounts**
@@ -178,11 +151,9 @@ Useful command-palette entries include:
 - **AgentLink: Re-sign In / Replace ChatGPT/Codex Account**
 - **AgentLink: Set OpenAI API Key**
 - **AgentLink: Rebuild Codebase Index** / **AgentLink: Cancel Indexing**
-- **AgentLink: Clear Session Approvals**
-- **AgentLink: Add Trusted Command Pattern**
+- **AgentLink: Clear Built-In Agent Session Approvals**
+- **AgentLink: Add Built-In Agent Trusted Command Pattern**
 - **AgentLink: Complete Tool Call** / **AgentLink: Cancel Tool Call**
-
-`Set Up Instructions`, `Install Hooks`, and `Set Anthropic API Key` are implemented as internal extension commands and setup flows. You can trigger them from AgentLink’s onboarding/sidebar UI, and they may also be invokable after the extension is active, but they are not guaranteed to appear as top-level contributed command-palette entries in every build.
 
 ### Built-in chat entry points
 
@@ -218,21 +189,34 @@ This lets you define reusable prompts/workflows for the built-in agent while kee
 
 Detected skills are also exposed as slash commands in the built-in chat. Skills loaded from `~/.agents/skills/`, `~/.claude/skills/`, `~/.agentlink/skills/`, `.agents/skills/`, `.claude/skills/`, `.agentlink/skills/`, and their `skills-<mode>/` variants appear as `/<name>` with a `Skill` badge. Selecting one sends a prompt that asks the agent to load that skill with `load_skill` and follow its instructions. Use `/skills` to open the AgentLink output channel with the skills detected for the current mode, including their resolved `SKILL.md` paths.
 
-### Use AgentLink with external MCP agents
+### Connect the built-in agent to MCP servers
 
-1. On first launch, the sidebar shows an **agent picker** — select which external agents you use
-2. The MCP server starts automatically and writes config for your selected agents
-3. On the setup screen, optionally click:
-   - **Set Up Instructions** — writes instruction files that teach your agents how to use AgentLink tools (e.g. `~/.claude/CLAUDE.md`, `.github/copilot-instructions.md`)
-   - **Install Hooks** — installs PreToolUse hooks that block built-in tools and force agents to use AgentLink equivalents (for agents that support hooks: Claude Code, Copilot)
-4. Verify your external agent can see the MCP server using the per-agent instructions shown
-5. Start the external agent — it will discover the AgentLink MCP server
+Use `/mcp-config` in the built-in chat to inspect and edit AgentLink-owned MCP configuration, `/mcp` to inspect connected servers, and `/mcp-refresh` after changing configuration.
 
-Both setup steps are optional but recommended. If you click them during onboarding, the corresponding auto-update settings are enabled so instruction files and hooks stay current on future startups.
+The main agent merges MCP server definitions from these files, in ascending priority:
 
-To change your external agent selection later, run **AgentLink: Configure Agents** from the command palette. For setup maintenance, use the AgentLink sidebar/onboarding flows for **Set Up Instructions** and **Install Hooks**; those internal commands may also be invokable after activation, but they are not guaranteed top-level command-palette entries.
+1. `~/.agents/mcp.json`
+2. `~/.claude/mcp.json`
+3. `~/.agentlink/mcp.json`
+4. `<workspace>/.agents/mcp.json`
+5. `<workspace>/.claude/mcp.json`
+6. `<workspace>/.agentlink/mcp.json`
 
-The sidebar shows server status, active tool calls, MCP/index status, and approval rules. The approval panel (bottom panel by default, configurable with `agentlink.approvalPosition`) is used for external-agent approval flows.
+Each file uses an `mcpServers` object. For example:
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "command": "example-mcp-server",
+      "args": ["--stdio"],
+      "toolPolicy": "ask"
+    }
+  }
+}
+```
+
+AgentLink can progressively disclose large MCP catalogs and applies the same session/project/global approval model to connected servers and tools.
 
 ## Semantic Codebase Search Setup
 
@@ -309,103 +293,34 @@ After indexing completes, agents can use:
 - `agentlink.chunkGranularity` controls indexing detail: `standard` is cheaper, `fine` gives better granularity.
 - If you are following Roo Code's Qdrant docs, the same Qdrant setup applies here; the AgentLink-specific pieces are enabling `agentlink.semanticSearchEnabled` and configuring OpenAI auth inside AgentLink.
 
-## Agent-Specific Setup
+## Upgrading from the retired external-agent integration
 
-### Claude Code
+Current AgentLink releases no longer run an inbound MCP server, auto-configure external agents, inject instruction blocks, or install enforcement hooks. On activation, AgentLink performs a conservative one-time cleanup of artifacts it can identify as AgentLink-owned:
 
-AgentLink auto-configures `~/.claude.json` with per-project MCP entries.
+- AgentLink MCP entries in supported external-agent configuration files
+- AgentLink-managed instruction blocks delimited by `<!-- BEGIN agentlink -->` and `<!-- END agentlink -->`
+- AgentLink-owned `enforce-agentlink.sh` / `enforce-agentlink.ps1` hook references and scripts
 
-**Instructions:** Click **Set Up Instructions** during onboarding (or run `AgentLink: Set Up Instructions` from the command palette) to inject AgentLink tool usage instructions into `~/.claude/CLAUDE.md`. This uses boundary markers (`<!-- BEGIN agentlink -->` / `<!-- END agentlink -->`) so it can be safely re-run without duplicating content.
+Cleanup preserves unrelated servers, instructions, hooks, and user-owned same-name scripts. If a target cannot be updated, AgentLink reports the failing target and error in the AgentLink output channel; use the manual fallback below.
 
-**Hooks:** Click **Install Hooks** during onboarding (or run `AgentLink: Install Hooks`) to install a [PreToolUse hook](https://docs.anthropic.com/en/docs/claude-code/hooks) that blocks built-in tools (`Read`, `Edit`, `Write`, `Bash`, `Glob`, `Grep`) and forces Claude to use AgentLink equivalents. The hook script is installed to `~/.claude/hooks/` and configured in `~/.claude/settings.json`. For Claude Code CLI sessions, enforcement is skipped when `CLAUDE_CODE_ENTRYPOINT` is unset or set to `cli`.
+Manual fallback:
 
-> **macOS/Linux:** Hooks require `jq` — install with `brew install jq`, `apt install jq`, etc.
-> **Windows:** A PowerShell script is installed automatically (no extra dependencies).
+1. Remove only the `agentlink` MCP server entry from the reported external-agent config file.
+2. Remove only the AgentLink-delimited instruction block; keep surrounding user content.
+3. Remove AgentLink hook entries that invoke `enforce-agentlink.sh` or `enforce-agentlink.ps1`.
+4. Delete a hook script only when its contents identify it as AgentLink-owned.
 
-<!-- markdownlint-disable MD033 -->
-<details>
-<summary>Manual hook setup</summary>
-<!-- markdownlint-enable MD033 -->
+Do not add those retired entries back. To connect the built-in agent to third-party MCP servers, use the layered `mcp.json` configuration described in [Connect the built-in agent to MCP servers](#connect-the-built-in-agent-to-mcp-servers).
 
-If you prefer to set up hooks manually instead of using the extension command:
+## Tool runtime model
 
-1. Copy the script from the extension's `resources/enforce-agentlink.sh` to `~/.claude/hooks/`
-2. Add the hook to `~/.claude/settings.json`:
+The built-in agent uses AgentLink's editor-native tools for file access, diff-based edits, terminals, diagnostics, language intelligence, semantic search, approvals, and orchestration. MCP meta tools separately let the built-in agent consume tools, resources, and prompts from connected third-party MCP servers.
 
-   ```jsonc
-   {
-     "hooks": {
-       "PreToolUse": [
-         {
-           "matcher": "^(Read|Edit|Write|Bash|Glob|Grep)$",
-           "hooks": [
-             {
-               "type": "command",
-               "command": "$HOME/.claude/hooks/enforce-agentlink.sh"
-             }
-           ]
-         }
-       ]
-     }
-   }
-   ```
-
-</details>
-
-### GitHub Copilot
-
-AgentLink auto-creates `.vscode/mcp.json` in your workspace with the server config. Copilot discovers MCP servers from this file automatically.
-
-**Instructions:** Click **Set Up Instructions** during onboarding to inject instructions into `.github/copilot-instructions.md`.
-
-**Hooks:** Copilot supports the same [PreToolUse hooks](https://code.visualstudio.com/docs/copilot/customization/hooks) as Claude Code and reads from the same `~/.claude/settings.json` hook config. Click **Install Hooks** during onboarding to install the enforcement hook — it auto-detects which agent is calling and outputs the correct format. Copilot's built-in tools (`editFiles`, `readFile`, `runInTerminal`, etc.) are blocked just like Claude's.
-
-> **Tip:** Add `.vscode/mcp.json` to your `.gitignore` if you don't want the auto-generated config committed.
-
-### Roo Code
-
-AgentLink auto-creates `.roo/mcp.json` in your workspace. Click **Set Up Instructions** during onboarding to write instructions to `.roo/rules/agentlink.md`.
-
-### Cline
-
-AgentLink auto-configures `~/.cline/data/settings/cline_mcp_settings.json`. Click **Set Up Instructions** during onboarding to write instructions to `.clinerules`.
-
-### Kilo Code
-
-AgentLink auto-creates `.kilocode/mcp.json` in your workspace. Click **Set Up Instructions** during onboarding to write instructions to `.kilocode/rules/agentlink.md`.
-
-### Codex
-
-AgentLink auto-configures `~/.codex/config.toml` with the `[mcp_servers.agentlink]` section. Click **Set Up Instructions** during onboarding to write instructions to `AGENTS.md`.
-
-### Manual Setup
-
-For any MCP client not listed above, configure it to connect to:
-
-```text
-http://localhost:<port>/mcp
-```
-
-The port is shown in the status bar. If auth is enabled (default), include the Bearer token in the `Authorization` header. Use the sidebar's **Copy JSON Config** button to get the full config.
-
-### Using Multiple Agents
-
-You can use AgentLink with multiple agents simultaneously (e.g., Claude Code + Roo Code). Select all the agents you use in the agent picker — AgentLink writes config for all of them on server start and cleans up on stop.
-
-Each agent connects to the same MCP server, so they share the same approval rules and tool capabilities. Note that concurrent use by multiple agents may cause conflicts (e.g., overlapping diff views).
-
-## MCP Tooling Model
-
-For external MCP clients, AgentLink establishes a trusted workspace session first and then exposes the tool surface. Supported clients handle this automatically.
-
-- **Handshake/trust** — a session must establish workspace trust before other tools can be used
-- **Native tools** — file, terminal, search, diagnostics, and language-server-backed tools
-- **MCP meta tools** — built-in tools for exploring connected MCP resources and prompts from inside the built-in agent
-- **MCP URL elicitation** — when the built-in AgentLink chat connects out to an MCP server that asks the user to complete a browser flow, AgentLink shows an explicit URL prompt in both the VS Code chat and browser gateway. URLs are never auto-opened; only `http`/`https` URLs are accepted, and local/private network targets are called out before the user proceeds.
+When a connected MCP server requests URL elicitation, AgentLink shows an explicit browser-flow prompt in both the VS Code chat and browser gateway. URLs are never auto-opened; only `http` and `https` URLs are accepted, and local/private network targets are called out before the user proceeds.
 
 ## Tools
 
-The tools below are available through the local AgentLink MCP server for external MCP clients after `handshake`, and most are also available to the built-in agent. A later section calls out built-in-agent-only orchestration tools.
+The tools below are available to the built-in agent according to its active mode and capability profile. Some development or orchestration tools are intentionally exposed only in specific modes.
 
 ### read_file
 
@@ -594,7 +509,7 @@ Response fields may include `user_edits` (proposed content → reviewer-edited c
 
 ### generate_image
 
-Generate PNG images through OpenAI/Codex auth and show them inline in chat. With ChatGPT/Codex OAuth, usage consumes the active account's image-generation quota; with an OpenAI API key, usage is billed to the API key. The tool always shows an approval prompt before generation because quota/billing is consumed before images are returned. In VS Code, pass `output_path` to also save generated PNGs into the workspace; browser Ask Agent generation is display-only.
+Generate PNG images through OpenAI/Codex auth and show them inline in chat. With ChatGPT/Codex OAuth, usage consumes the active account's image-generation quota; with an OpenAI API key, usage is billed to the API key. The tool always shows an approval prompt before generation because quota/billing is consumed before images are returned. In VS Code, pass `output_path` to also save generated PNGs into the workspace; browser-initiated generation is display-only.
 
 | Parameter               | Type               | Description                                                                                                                                                                                                          |
 | ----------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -934,7 +849,7 @@ Example:
 
 ## Built-in agent orchestration tools
 
-These tools are available inside AgentLink's built-in agent runtime. They are not registered on the external MCP server, so external clients such as Claude Code, Copilot, Roo Code, Cline, Kilo Code, and Codex should not rely on them unless they are also running inside the built-in AgentLink chat.
+These orchestration tools are available inside AgentLink's built-in agent runtime when the active mode and capability profile allow them.
 
 ### spawn_background_agent
 
@@ -1117,12 +1032,6 @@ Fetch a specific prompt template from an MCP server.
 | `name`      | string  | Prompt/template name          |
 | `arguments` | object? | Optional prompt template args |
 
-### handshake
-
-Establish a trusted MCP session by verifying workspace identity before other tools are used.
-
-Supported clients do this automatically; it mainly matters when integrating AgentLink with custom/manual MCP clients.
-
 ### Background routing and review mode
 
 AgentLink includes static routing policy for background agents (`src/agent/backgroundModelRouting.config.json`) with explainable outcomes.
@@ -1257,23 +1166,23 @@ When a command is still running and the captured tail appears to include an inte
 
 AgentLink contributes three main UI surfaces in VS Code:
 
-- **Status** view in the AgentLink activity bar — server status, configured agents, approval rules, indexing status, and active tool calls
+- **Activity** view in the AgentLink activity bar — active/recent tool calls, indexing status, approval rules, and shortcuts
 - **Agent** view in the AgentLink activity bar — built-in chat agent, sessions, slash commands, models, approvals, and background-agent activity
-- **Approvals** panel view — dedicated approval surface used primarily for external MCP agents and diff/command review workflows
+- **Approvals** panel view — focused approval and diff/command review surface
 
 ## Sidebar & Approval Panel
 
 The extension provides two webview panels:
 
-- **Sidebar** (AgentLink icon in the activity bar) — live status overview, agent configuration, rule management, and tool call tracking
+- **Activity view** (AgentLink icon in the activity bar) — built-in tool-call activity, index status, rule management, and settings/output/browser shortcuts
 - **Approval Panel** (bottom panel by default, or split editor — configurable via `agentlink.approvalPosition`) — interactive approval dialogs for commands, file writes, path access, and renames. Each dialog includes a follow-up message field returned to the agent.
 
 ### Tool Call Tracking
 
-Every MCP tool call is tracked from start to finish. The sidebar's Tool Calls section lets you intervene in long-running operations:
+Built-in agent tool calls are tracked from start to finish. The Activity view's Tool Calls section lets you intervene in long-running operations:
 
 - **Complete** — For `execute_command`: captures current terminal output, sends Ctrl+C, and returns partial results. For `write_file`/`apply_diff`: auto-accepts the pending diff view. For other tools: force-resolves immediately.
-- **Cancel** — Sends Ctrl+C to any linked terminal, cancels any pending approval dialog, rejects any pending diff view, and returns a cancellation result.
+- **Cancel** — Sends Ctrl+C to any linked terminal, rejects any pending diff view, and returns a cancellation result.
 
 ## Approval System
 
@@ -1343,7 +1252,7 @@ Configure with `agentlink.recentApprovalTtl` (seconds). Set to `0` to disable.
 
 AgentLink can be driven from a browser for remote interaction with a running built-in agent session. Open the UI with **AgentLink: Open Browser Gateway** from the command palette.
 
-A shared local helper process serves the browser UI on a stable configured port (`agentlink.browserGatewayPort`, default `47137`) so the URL is bookmarkable. In the default loopback-only mode it is available only on the same machine. If `agentlink.browserGatewayLanAccess` is enabled, the helper binds on the LAN, advertises an mDNS hostname (`agentlink.browserGatewayMdnsName`, default `agentlink.local`), and requires each non-loopback browser device to pair before it can control a session. Pair from `/pair` in chat or **AgentLink: Pair Browser Device**, and revoke devices with `/pair list` or **AgentLink: Manage Paired Browser Devices**.
+A shared local helper process serves the browser UI on a stable configured port (`agentlink.browserGatewayPort`, default `47137`) so the URL is bookmarkable. In the default loopback-only mode it is available only on the same machine. If `agentlink.browserGatewayLanAccess` is enabled, the helper binds on the LAN, advertises `agentlink.browserGatewayMdnsName` (default `agentlink`) as `<name>.local`, and requires each non-loopback browser device to pair before it can control a session. Pair from `/pair` in chat or **AgentLink: Pair Browser Device**, and revoke devices with `/pair list` or **AgentLink: Manage Paired Browser Devices**.
 
 When multiple VS Code windows are open, each registers a per-window API/SSE bridge and the browser can switch between them by instance from a single URL.
 
@@ -1364,88 +1273,75 @@ It is **not** a full browser IDE — diff editing/apply and terminal interaction
 
 ## Multi-Window Support
 
-Each VS Code window runs its own independent MCP server on its own port. The extension writes config to each workspace folder root so that agent instances running in that directory connect to the correct window.
+Each VS Code window owns its own built-in agent sessions, approvals, terminals, diffs, and workspace state. The shared browser gateway helper registers each window under a distinct instance ID so one stable browser URL can switch between them.
 
-- **No port conflicts** — if the configured port is in use, the extension falls back to an OS-assigned port automatically.
-- **Correct window routing** — diffs, approvals, and command execution happen in the window that owns the workspace.
-- **Automatic lifecycle** — config files are created on server start and cleaned up on stop/window close. Existing entries in those files are preserved.
+- **Correct window routing** — diffs, approvals, command execution, and file access happen in the window that owns the workspace.
+- **Workspace-scoped identity** — instance IDs are persisted per workspace window so multiple open windows remain distinct.
+- **Shared browser entry point** — the helper routes browser actions to the selected healthy VS Code instance.
 
 ## Settings
 
-| Setting                                | Default                    | Description                                                                                                      |
-| -------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `agentlink.agents`                     | `[]`                       | Which agents to auto-configure (claude-code, copilot, roo-code, cline, kilo-code, codex)                         |
-| `agentlink.port`                       | `0`                        | HTTP port for the MCP server (`0` = OS-assigned, recommended for multi-window)                                   |
-| `agentlink.autoStart`                  | `true`                     | Auto-start server on activation                                                                                  |
-| `agentlink.browserGatewayPort`         | `47137`                    | Stable port for the shared browser gateway helper                                                                |
-| `agentlink.browserGatewayLanAccess`    | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                      |
-| `agentlink.browserGatewayMdnsName`     | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                            |
-| `agentlink.autoUpdateInstructions`     | `false`                    | Auto-update agent instruction files on startup (enabled when you click Set Up Instructions during onboarding)    |
-| `agentlink.autoUpdateHooks`            | `false`                    | Auto-update enforcement hooks on startup (enabled when you click Install Hooks during onboarding)                |
-| `agentlink.requireAuth`                | `true`                     | Require Bearer token auth                                                                                        |
-| `agentlink.defaultMode`                | `code`                     | Default mode for new built-in agent sessions                                                                     |
-| `agentlink.agentModel`                 | `claude-sonnet-4-6`        | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`            |
-| `agentlink.modeModelPreferences`       | per-mode defaults          | Default model by mode slug; changing the picker in a mode updates that mode's preference                         |
-| `agentlink.agentMaxTokens`             | `8192`                     | Maximum output tokens per built-in agent response                                                                |
-| `agentlink.thinkingBudget`             | `10000`                    | Extended thinking budget for thinking-capable models                                                             |
-| `agentlink.showThinking`               | `true`                     | Show thinking blocks in the built-in agent chat UI                                                               |
-| `agentlink.autoCondense`               | `true`                     | Automatically condense built-in agent conversation context when it fills up                                      |
-| `agentlink.autoCondenseThreshold`      | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`              |
-| `agentlink.modelCondenseThresholds`    | `{}`                       | Per-model condense thresholds for the built-in agent                                                             |
-| `agentlink.codexStatefulResponses`     | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                |
-| `agentlink.codexStoreResponses`        | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                 |
-| `agentlink.openaiCompatible.baseUrl`   | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                           |
-| `agentlink.openaiCompatible.model`     | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                             |
-| `agentlink.openaiCompatible.apiKey`    | `""`                       | Optional helper endpoint Bearer token                                                                            |
-| `agentlink.openaiCompatible.timeoutMs` | `5000`                     | Timeout for helper endpoint calls before falling back                                                            |
-| `agentlink.questionDetection.mode`     | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)         |
-| `agentlink.bgSummary.mode`             | `agent`                    | How background-agent status snippets are summarized (`agent`, `openai`, `heuristic`)                             |
-| `agentlink.background.defaultAgent`    | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                      |
-| `agentlink.background.acpAgents`       | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                    |
-| `agentlink.semanticSearchEnabled`      | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                      |
-| `agentlink.qdrantUrl`                  | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                 |
-| `agentlink.autoIndex`                  | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                     |
-| `agentlink.chunkGranularity`           | `fine`                     | Index chunking mode: `standard` or `fine`                                                                        |
-| `agentlink.indexExclusions`            | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                         |
-| `agentlink.masterBypass`               | `false`                    | Skip all approval prompts                                                                                        |
-| `agentlink.approvalPosition`           | `panel`                    | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                |
-| `agentlink.diagnosticDelay`            | `1500`                     | Max ms to wait for diagnostics after save                                                                        |
-| `agentlink.recentApprovalTtl`          | `60`                       | Seconds to remember single-use approvals. Repeat identical operations auto-approve within this window. `0` = off |
-| `agentlink.worktreeDirectorySuffix`    | `-worktrees`               | Suffix for sibling worktree containers used by `start_worktree_agent` default paths                              |
-| `agentlink.writeRules`                 | `[]`                       | Glob patterns for auto-approved file writes (settings-level)                                                     |
+| Setting                                        | Default                    | Description                                                                                                      |
+| ---------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `agentlink.browserGatewayPort`                 | `47137`                    | Stable port for the shared browser gateway helper                                                                |
+| `agentlink.browserGatewayLanAccess`            | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                      |
+| `agentlink.browserGatewayMdnsName`             | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                            |
+| `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                     |
+| `agentlink.agentModel`                         | `claude-sonnet-4-6`        | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`            |
+| `agentlink.modeModelPreferences`               | per-mode defaults          | Default model by mode slug; changing the picker in a mode updates that mode's preference                         |
+| `agentlink.agentMaxTokens`                     | `8192`                     | Maximum output tokens per built-in agent response                                                                |
+| `agentlink.thinkingBudget`                     | `10000`                    | Extended thinking budget for thinking-capable models                                                             |
+| `agentlink.showThinking`                       | `true`                     | Show thinking blocks in the built-in agent chat UI                                                               |
+| `agentlink.anthropic.dynamicModelCapabilities` | `true`                     | Lazily refresh Anthropic model capabilities and merge them over built-in defaults                                |
+| `agentlink.autoCondense`                       | `true`                     | Automatically condense built-in agent conversation context when it fills up                                      |
+| `agentlink.autoCondenseThreshold`              | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`              |
+| `agentlink.modelCondenseThresholds`            | `{}`                       | Per-model condense thresholds for the built-in agent                                                             |
+| `agentlink.codexStatefulResponses`             | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                |
+| `agentlink.codexStoreResponses`                | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                 |
+| `agentlink.openaiCompatible.baseUrl`           | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                           |
+| `agentlink.openaiCompatible.model`             | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                             |
+| `agentlink.openaiCompatible.apiKey`            | `""`                       | Optional helper endpoint Bearer token                                                                            |
+| `agentlink.openaiCompatible.timeoutMs`         | `5000`                     | Timeout for helper endpoint calls before falling back                                                            |
+| `agentlink.questionDetection.mode`             | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)         |
+| `agentlink.bgSummary.mode`                     | `agent`                    | How background-agent status snippets are summarized (`agent`, `openai`, `heuristic`)                             |
+| `agentlink.background.defaultAgent`            | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                      |
+| `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                    |
+| `agentlink.semanticSearchEnabled`              | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                      |
+| `agentlink.qdrantUrl`                          | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                 |
+| `agentlink.autoIndex`                          | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                     |
+| `agentlink.chunkGranularity`                   | `fine`                     | Index chunking mode: `standard` or `fine`                                                                        |
+| `agentlink.indexExclusions`                    | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                         |
+| `agentlink.masterBypass`                       | `false`                    | Skip all approval prompts                                                                                        |
+| `agentlink.approvalPosition`                   | `panel`                    | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                |
+| `agentlink.diagnosticDelay`                    | `1500`                     | Max ms to wait for diagnostics after save                                                                        |
+| `agentlink.recentApprovalTtl`                  | `60`                       | Seconds to remember single-use approvals. Repeat identical operations auto-approve within this window. `0` = off |
+| `agentlink.commandAutoApproveTier`             | `safe`                     | Static command safety tier auto-approved when no explicit rule applies (`off`, `safe`, or `sensitive`)           |
+| `agentlink.worktreeDirectorySuffix`            | `-worktrees`               | Suffix for sibling worktree containers used by `start_worktree_agent` default paths                              |
+| `agentlink.writeRules`                         | `[]`                       | Glob patterns for auto-approved file writes (settings-level)                                                     |
 
 ## Platform Notes
 
 ### Windows
 
-All core features work on Windows: diff views, integrated terminal, diagnostics, language server tools, file operations, and the approval system.
-
-**Hooks:** The PreToolUse enforcement hook installs a PowerShell script (`.ps1`) on Windows instead of the bash (`.sh`) script used on macOS/Linux. This is handled automatically — just click **Install Hooks** as usual. The PowerShell script has the same logic: it blocks built-in tools and forces agents to use AgentLink equivalents, except Claude Code CLI sessions where enforcement is skipped when `CLAUDE_CODE_ENTRYPOINT` is unset or `cli`.
+All core features work on Windows: diff views, integrated terminal, diagnostics, language server tools, file operations, browser remote control, and the approval system.
 
 **Building from source:** `npm install && npm run build` works on all platforms. The release script (`npm run release`) requires bash — use Git Bash, WSL, or macOS/Linux.
 
 ### macOS / Linux
 
-Fully supported. The enforcement hook requires `jq` — install with `brew install jq` (macOS) or `apt install jq` (Ubuntu/Debian).
+Fully supported. Browser remote control, integrated terminals, diff review, and semantic indexing use the same extension workflows as Windows.
 
 ## Troubleshooting
 
 ### Tool calls hanging / timing out
 
-MCP clients may have HTTP connection timeouts. For tools that require user interaction — like `apply_diff` waiting for you to review a diff — the connection can time out before you respond.
+If a built-in tool call is waiting on a long-running terminal, approval, or diff review, use the **Activity** view to inspect it. **Complete** returns the best available partial result; **Cancel** interrupts linked terminal work, rejects a pending diff, and returns a cancellation result.
 
-**What AgentLink does automatically:**
+For background terminals, use `get_terminal_output` with `wait_seconds` for bounded polling or `kill: true` to send Ctrl+C.
 
-- **SSE heartbeat notifications** — sends periodic keep-alive messages to prevent idle timeout disconnects
-- **Event store resumability** — tool responses are persisted in-memory so they can be replayed if the client reconnects
-- **Tool call sidebar** — if a tool call gets stuck, you can **Complete** or **Cancel** it from the sidebar
+### Browser gateway not opening
 
-### Server not starting
-
-Check the Output panel (View > Output > "AgentLink") for error logs. Common causes:
-
-- **Port conflict** — set `agentlink.port` to `0` (default) for OS-assigned ports
-- **Auth mismatch** — the token in the agent's config may be stale; restart the extension to regenerate it
+Check **View > Output > AgentLink** for helper startup and registry logs. Use **AgentLink: Restart Browser Gateway** after rebuilding/reinstalling the extension, and refresh the browser tab so it loads the current assets. For LAN access, confirm the device is paired and `agentlink.browserGatewayLanAccess` is enabled.
 
 ### Built-in agent issues
 
@@ -1471,13 +1367,12 @@ If Qdrant is reachable but returns no collection, AgentLink will report that no 
 
 ## Architecture
 
-- **Transport**: Streamable HTTP on `127.0.0.1` (localhost only, no network exposure)
-- **Per-session isolation**: Each MCP session gets its own `McpServer` + `StreamableHTTPServerTransport` pair
-- **Session recovery**: Stale session IDs are transparently reused instead of returning 404 errors
-- **SSE resumability**: Each transport is configured with an in-memory event store for client reconnection
-- **Auth**: Optional Bearer token stored in VS Code's `globalState`, auto-written to agent config files with atomic writes
-- **Webviews**: Preact-based VS Code webviews for status/sidebar, built-in agent chat, approvals, plus the browser gateway web app
-- **Bundled**: esbuild targets for the extension host and each webview/browser surface; new bundle outputs must be added to the packaging allowlist
+- **Extension runtime**: the built-in agent, approvals, editor/language capabilities, terminal integration, indexer, and per-window browser bridge run in the VS Code extension host.
+- **Agent runtime**: provider-neutral session/tool contracts support Anthropic and OpenAI/Codex providers, mode-specific capabilities, persistence, checkpoints, and background-agent orchestration.
+- **Outbound MCP client**: layered user/project `mcp.json` files feed the built-in MCP client; tool/resource/prompt discovery and approvals stay inside the agent runtime.
+- **Browser gateway**: a shared helper serves the browser web app on a stable port and routes API/SSE traffic to workspace-scoped VS Code window instances.
+- **Webviews**: Preact-based VS Code webviews render Activity, built-in chat, and approvals; shared UI primitives are reused by the browser surface where practical.
+- **Bundling**: esbuild targets the extension host, helper, workers, and each webview/browser surface. New bundle outputs must be added to `.vscodeignore`'s packaging allowlist.
 
 ## Development
 
