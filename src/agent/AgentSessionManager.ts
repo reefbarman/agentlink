@@ -67,6 +67,10 @@ import {
   type AgentSessionManagerOptions,
   type CheckpointManagerLike,
 } from "./AgentSessionManagerHost.js";
+import {
+  FleetAdmissionError,
+  FleetScheduler,
+} from "./FleetScheduler.js";
 
 export interface BtwQuestionResult {
   answer: string;
@@ -183,6 +187,7 @@ export class AgentSessionManager {
     sessionId: string;
     start: () => Promise<void>;
   }> = [];
+  private readonly fleetScheduler: FleetScheduler;
   /** True while a transient /btw side question is running. */
   private btwInFlight = false;
   /** Background summary state keyed by session id. */
@@ -240,6 +245,12 @@ export class AgentSessionManager {
     this.persistence = this.host.persistence;
     this.activityTraceRecorder = this.host.createActivityTraceRecorder({
       workspaceDir: cwd,
+    });
+    this.fleetScheduler = new FleetScheduler({
+      maxConcurrent: this.bgDefaults.maxConcurrent,
+      maxConcurrentPerRoot: this.bgDefaults.maxConcurrentPerRoot ?? 2,
+      maxDepth: this.bgDefaults.maxDepth ?? 2,
+      maxChildrenPerParent: this.bgDefaults.maxChildrenPerParent ?? 2,
     });
 
     // Initialize checkpoint manager asynchronously — failures are non-fatal
@@ -2588,15 +2599,11 @@ export class AgentSessionManager {
   }
 
   private canStartBackground(session: AgentSession): boolean {
-    if (this.activeBackgroundCount() >= this.bgDefaults.maxConcurrent) {
-      return false;
-    }
     const root = session.fleetMetadata?.rootSessionId;
-    if (!root) return true;
-    return (
-      this.activeBackgroundCountForRoot(root) <
-      (this.bgDefaults.maxConcurrentPerRoot ?? 2)
-    );
+    return this.fleetScheduler.canStart({
+      activeGlobal: this.activeBackgroundCount(),
+      activeForRoot: root ? this.activeBackgroundCountForRoot(root) : 0,
+    });
   }
 
   private scheduleBackgroundLaunch(
@@ -2632,10 +2639,13 @@ export class AgentSessionManager {
 
   private drainBackgroundQueue(): void {
     while (this.bgLaunchQueue.length > 0) {
-      const nextIndex = this.bgLaunchQueue.findIndex((candidate) => {
+      const nextIndex = this.fleetScheduler.findNextRunnable(
+        this.bgLaunchQueue,
+        (candidate) => {
         const candidateSession = this.sessions.get(candidate.sessionId);
         return Boolean(candidateSession && this.canStartBackground(candidateSession));
-      });
+        },
+      );
       if (nextIndex < 0) break;
       const [queued] = this.bgLaunchQueue.splice(nextIndex, 1);
       const session = this.sessions.get(queued.sessionId);
@@ -2675,18 +2685,9 @@ export class AgentSessionManager {
     const parent = parentSessionId
       ? this.sessions.get(parentSessionId)
       : this.getForegroundSession();
-    if (parentSessionId && !parent) {
-      throw new Error(`Background spawn rejected: parent session not found.`);
-    }
     const parentDepth = parent?.fleetMetadata?.depth ?? 0;
-    const maxDepth = this.bgDefaults.maxDepth ?? 2;
-    if (parentDepth >= maxDepth) {
-      throw new Error(
-        `Background spawn rejected: maximum fleet depth reached (${maxDepth}).`,
-      );
-    }
-    if (parent) {
-      const childCount = Array.from(this.sessions.values()).filter(
+    const childCount = parent
+      ? Array.from(this.sessions.values()).filter(
         (candidate) =>
           candidate.fleetMetadata?.parentSessionId === parent.id &&
           candidate.fleetMetadata.lifecycle !== "completed" &&
@@ -2694,13 +2695,16 @@ export class AgentSessionManager {
           candidate.fleetMetadata.lifecycle !== "cancelled" &&
           candidate.fleetMetadata.lifecycle !== "budget_exhausted" &&
           candidate.fleetMetadata.lifecycle !== "interrupted",
-      ).length;
-      const maxChildren = this.bgDefaults.maxChildrenPerParent ?? 2;
-      if (childCount >= maxChildren) {
-        throw new Error(
-          `Background spawn rejected: per-parent child limit reached (${maxChildren}).`,
-        );
-      }
+        ).length
+      : 0;
+    const admission = this.fleetScheduler.evaluateSpawn({
+      parentRequested: Boolean(parentSessionId),
+      parentFound: Boolean(parent),
+      parentDepth,
+      activeChildren: childCount,
+    });
+    if (!admission.ok) {
+      throw new FleetAdmissionError(admission);
     }
 
     const backendRoute = resolveBackgroundBackendRoute(
