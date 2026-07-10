@@ -583,6 +583,63 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("reserves child capacity from a subtree budget", async () => {
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const parent = await mgr.spawnBackground({
+      task: "budget owner",
+      message: "coordinate",
+      budget: { maxTokens: 100, scope: "subtree" },
+    });
+    await mgr.spawnBackground(
+      {
+        task: "first child",
+        message: "work",
+        budget: { maxTokens: 60 },
+      },
+      parent.sessionId,
+    );
+
+    await expect(
+      mgr.spawnBackground(
+        {
+          task: "second child",
+          message: "work",
+          budget: { maxTokens: 50 },
+        },
+        parent.sessionId,
+      ),
+    ).rejects.toMatchObject({
+      result: expect.objectContaining({ code: "budget_reservation", limit: 100 }),
+    });
+    mgr.stopSession(parent.sessionId);
+  });
+
+  it("emits a durable warning before a session budget is exhausted", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const spawned = await mgr.spawnBackground({
+      task: "warning",
+      message: "work",
+      budget: { maxTokens: 100, warningThresholdRatio: 0.8 },
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+    meta.tokenUsage = 80;
+
+    expect((mgr as any).enforceBackgroundBudget(session)).toBe(false);
+    expect(session.fleetMetadata.budgetWarning).toEqual(
+      expect.objectContaining({ kind: "tokens", ratio: 0.8 }),
+    );
+  });
+
   it("exposes route summaries for debug payloads", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);

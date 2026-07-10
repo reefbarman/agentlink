@@ -2706,6 +2706,7 @@ export class AgentSessionManager {
     if (!admission.ok) {
       throw new FleetAdmissionError(admission);
     }
+    this.ensureChildBudgetAdmission(parent, request);
 
     const backendRoute = resolveBackgroundBackendRoute(
       this.getBackgroundAgentSettings(),
@@ -2778,6 +2779,7 @@ export class AgentSessionManager {
           expectedResult: request.expectedResult,
         },
         budget: request.budget,
+        goalId: request.goalId,
       });
       this.saveSession(session.id);
       this.onSessionsChanged?.();
@@ -3013,6 +3015,7 @@ export class AgentSessionManager {
         expectedResult: request.expectedResult,
       },
       budget: request.budget,
+      goalId: request.goalId,
     });
     this.saveSession(session.id);
     this.onSessionsChanged?.();
@@ -4032,6 +4035,11 @@ export class AgentSessionManager {
         toolCalls: meta.toolCalls,
         apiTurns: meta.apiTurns,
         elapsedMs: Math.max(0, Date.now() - meta.startedAt),
+        estimatedCostUsd: fleet.budget?.estimatedCostPerMillionTokens
+          ? (meta.tokenUsage /
+              1_000_000) *
+            fleet.budget.estimatedCostPerMillionTokens
+          : undefined,
       };
     }
     if (this.bgCancelled.has(session.id)) {
@@ -4049,16 +4057,154 @@ export class AgentSessionManager {
   }
 
   private enforceBackgroundBudget(session: AgentSession): boolean {
-    const fleet = session.fleetMetadata;
-    const meta = this.bgMeta.get(session.id);
-    if (!fleet?.budget || !meta) return false;
-    const elapsedMs = Math.max(0, Date.now() - meta.startedAt);
-    const checks: Array<[number | undefined, number, string]> = [
-      [fleet.budget.maxTokens, meta.tokenUsage, "tokens"],
-      [fleet.budget.maxToolCalls, meta.toolCalls, "tool_calls"],
-      [fleet.budget.maxApiTurns, meta.apiTurns, "api_turns"],
-      [fleet.budget.maxElapsedMs, elapsedMs, "elapsed_time"],
+    const owners = Array.from(this.sessions.values()).filter((candidate) => {
+      const budget = candidate.fleetMetadata?.budget;
+      if (!budget) return false;
+      if (candidate.id === session.id) return true;
+      if (budget.scope === "goal") {
+        return (
+          Boolean(candidate.fleetMetadata?.goalId) &&
+          candidate.fleetMetadata?.goalId === session.fleetMetadata?.goalId
+        );
+      }
+      return (
+        budget.scope === "subtree" &&
+        this.isFleetDescendant(session.id, candidate.id)
+      );
+    });
+    for (const owner of owners) {
+      if (this.enforceBudgetOwner(owner)) return true;
+    }
+    return false;
+  }
+
+  private ensureChildBudgetAdmission(
+    parent: AgentSession | undefined,
+    request: SpawnBackgroundRequest,
+  ): void {
+    if (!parent || !request.budget) return;
+    let owner: AgentSession | undefined = parent;
+    while (
+      owner &&
+      (!owner.fleetMetadata?.budget ||
+        owner.fleetMetadata.budget.scope === "session")
+    ) {
+      const parentId = owner.fleetMetadata?.parentSessionId;
+      owner = parentId ? this.sessions.get(parentId) : undefined;
+    }
+    const envelope = owner?.fleetMetadata?.budget;
+    if (!owner || !envelope) return;
+    const activeMembers = Array.from(this.sessions.values()).filter(
+      (candidate) =>
+        candidate.id !== owner!.id &&
+        (candidate.fleetMetadata?.lifecycle === "queued" ||
+          candidate.fleetMetadata?.lifecycle === "running") &&
+        (envelope.scope === "goal"
+          ? Boolean(owner!.fleetMetadata?.goalId) &&
+            candidate.fleetMetadata?.goalId === owner!.fleetMetadata?.goalId
+          : this.isFleetDescendant(candidate.id, owner!.id)),
+    );
+    const fields: Array<
+      [
+        keyof NonNullable<PersistedFleetMetadata["budget"]>,
+        string,
+      ]
+    > = [
+      ["maxTokens", "tokens"],
+      ["maxToolCalls", "tool calls"],
+      ["maxApiTurns", "API turns"],
+      ["maxElapsedMs", "elapsed time"],
+      ["maxEstimatedCostUsd", "estimated cost"],
     ];
+    for (const [field, label] of fields) {
+      const limit = envelope[field];
+      const requested = request.budget[field];
+      if (typeof limit !== "number" || typeof requested !== "number") continue;
+      const reserved = activeMembers.reduce((sum, member) => {
+        const value = member.fleetMetadata?.budget?.[field];
+        return sum + (typeof value === "number" ? value : 0);
+      }, 0);
+      if (reserved + requested > limit) {
+        throw new FleetAdmissionError({
+          ok: false,
+          code: "budget_reservation",
+          message: `Background spawn rejected: ${label} reservation exceeds the parent ${envelope.scope ?? "subtree"} budget.`,
+          limit,
+        });
+      }
+    }
+  }
+
+  private isFleetDescendant(sessionId: string, ancestorId: string): boolean {
+    let parentId = this.sessions.get(sessionId)?.fleetMetadata?.parentSessionId;
+    const visited = new Set<string>();
+    while (parentId && !visited.has(parentId)) {
+      if (parentId === ancestorId) return true;
+      visited.add(parentId);
+      parentId = this.sessions.get(parentId)?.fleetMetadata?.parentSessionId;
+    }
+    return false;
+  }
+
+  private enforceBudgetOwner(owner: AgentSession): boolean {
+    const fleet = owner.fleetMetadata;
+    const budget = fleet?.budget;
+    if (!fleet || !budget) return false;
+    const members = Array.from(this.sessions.values()).filter((candidate) => {
+      if (budget.scope === "goal") {
+        return (
+          Boolean(fleet.goalId) &&
+          candidate.fleetMetadata?.goalId === fleet.goalId
+        );
+      }
+      if (budget.scope === "subtree") {
+        return (
+          candidate.id === owner.id ||
+          this.isFleetDescendant(candidate.id, owner.id)
+        );
+      }
+      return candidate.id === owner.id;
+    });
+    const usage = members.reduce(
+      (total, member) => {
+        const meta = this.bgMeta.get(member.id);
+        if (!meta) return total;
+        total.tokens += meta.tokenUsage;
+        total.toolCalls += meta.toolCalls;
+        total.apiTurns += meta.apiTurns;
+        total.elapsedMs += Math.max(0, Date.now() - meta.startedAt);
+        return total;
+      },
+      { tokens: 0, toolCalls: 0, apiTurns: 0, elapsedMs: 0 },
+    );
+    const estimatedCostUsd = budget.estimatedCostPerMillionTokens
+      ? (usage.tokens / 1_000_000) * budget.estimatedCostPerMillionTokens
+      : 0;
+    const checks: Array<[number | undefined, number, string]> = [
+      [budget.maxTokens, usage.tokens, "tokens"],
+      [budget.maxToolCalls, usage.toolCalls, "tool_calls"],
+      [budget.maxApiTurns, usage.apiTurns, "api_turns"],
+      [budget.maxElapsedMs, usage.elapsedMs, "elapsed_time"],
+      [budget.maxEstimatedCostUsd, estimatedCostUsd, "estimated_cost"],
+    ];
+    const warningThreshold = Math.min(
+      0.99,
+      Math.max(0, budget.warningThresholdRatio ?? 0.8),
+    );
+    const warning = checks
+      .map(([limit, used, kind]) => ({
+        kind,
+        ratio: limit && limit > 0 ? used / limit : 0,
+      }))
+      .find(({ ratio }) => ratio >= warningThreshold);
+    if (warning && warning.ratio < 1 && !fleet.budgetWarning) {
+      fleet.budgetWarning = {
+        ...warning,
+        emittedAt: Date.now(),
+      };
+      this.saveSession(owner.id);
+      this.onSessionsChanged?.();
+    }
     const exhausted = checks.find(
       ([limit, used]) => limit !== undefined && limit >= 0 && used >= limit,
     );
@@ -4066,13 +4212,13 @@ export class AgentSessionManager {
     const [, , kind] = exhausted;
     const reason = `budget_exhausted:${kind}`;
     fleet.terminalReason = reason;
-    session.status = "error";
-    this.setBgError(session.id, reason);
-    session.abort();
+    owner.status = "error";
+    this.setBgError(owner.id, reason);
+    owner.abort();
     // Budget exhaustion owns the subtree just like explicit cancellation.
     for (const candidate of this.sessions.values()) {
       if (
-        candidate.fleetMetadata?.parentSessionId === session.id &&
+        this.isFleetDescendant(candidate.id, owner.id) &&
         candidate.fleetMetadata.lifecycle !== "completed" &&
         candidate.fleetMetadata.lifecycle !== "failed" &&
         candidate.fleetMetadata.lifecycle !== "cancelled" &&
@@ -4188,6 +4334,8 @@ export class AgentSessionManager {
         const eventKind =
           status === "awaiting_approval"
             ? "approval"
+            : s.fleetMetadata?.budgetWarning
+              ? "budget_warning"
             : s.fleetMetadata?.lifecycle === "interrupted"
               ? "interrupted"
               : status === "error"
@@ -4257,6 +4405,8 @@ export class AgentSessionManager {
           attention:
             status === "awaiting_approval"
               ? "approval"
+              : s.fleetMetadata?.budgetWarning
+                ? "budget_warning"
               : s.fleetMetadata?.lifecycle === "interrupted"
                 ? "interrupted"
                 : status === "error"

@@ -522,8 +522,13 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
             maxToolCalls: { type: "number" },
             maxApiTurns: { type: "number" },
             maxElapsedMs: { type: "number" },
+            maxEstimatedCostUsd: { type: "number" },
+            estimatedCostPerMillionTokens: { type: "number" },
+            warningThresholdRatio: { type: "number" },
+            scope: { type: "string", enum: ["session", "subtree", "goal"] },
           },
         },
+        goalId: { type: "string" },
       },
       required: ["task", "message"],
     },
@@ -2553,9 +2558,21 @@ export async function dispatchToolCall(
                   maxToolCalls: Number(budget.maxToolCalls) || undefined,
                   maxApiTurns: Number(budget.maxApiTurns) || undefined,
                   maxElapsedMs: Number(budget.maxElapsedMs) || undefined,
+                  maxEstimatedCostUsd:
+                    Number(budget.maxEstimatedCostUsd) || undefined,
+                  estimatedCostPerMillionTokens:
+                    Number(budget.estimatedCostPerMillionTokens) || undefined,
+                  warningThresholdRatio:
+                    Number(budget.warningThresholdRatio) || undefined,
+                  scope:
+                    budget.scope === "subtree" || budget.scope === "goal"
+                      ? budget.scope
+                      : "session",
                 };
               })()
             : undefined,
+        goalId:
+          typeof params.goalId === "string" ? params.goalId.trim() : undefined,
       });
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],

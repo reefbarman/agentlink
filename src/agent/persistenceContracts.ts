@@ -89,6 +89,7 @@ export interface PersistedFleetMetadata {
   terminalReason?: string;
   completedAt?: number;
   finalResult?: string;
+  goalId?: string;
   delegation?: {
     ownedPaths?: string[];
     forbiddenPaths?: string[];
@@ -101,13 +102,19 @@ export interface PersistedFleetMetadata {
     maxToolCalls?: number;
     maxApiTurns?: number;
     maxElapsedMs?: number;
+    maxEstimatedCostUsd?: number;
+    estimatedCostPerMillionTokens?: number;
+    warningThresholdRatio?: number;
+    scope?: "session" | "subtree" | "goal";
   };
   budgetUsage?: {
     tokens: number;
     toolCalls: number;
     apiTurns: number;
     elapsedMs: number;
+    estimatedCostUsd?: number;
   };
+  budgetWarning?: { kind: string; ratio: number; emittedAt: number };
 }
 
 export interface PersistedSessionMetadata {

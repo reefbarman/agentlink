@@ -3,6 +3,10 @@ export interface AgentBudget {
   maxToolCalls?: number;
   maxApiTurns?: number;
   maxElapsedMs?: number;
+  maxEstimatedCostUsd?: number;
+  estimatedCostPerMillionTokens?: number;
+  warningThresholdRatio?: number;
+  scope?: "session" | "subtree" | "goal";
 }
 
 export interface SpawnBackgroundRequest {
@@ -19,6 +23,7 @@ export interface SpawnBackgroundRequest {
   worktree?: "shared" | "isolated";
   expectedResult?: "text" | "review_findings" | "patch" | "verification";
   budget?: AgentBudget;
+  goalId?: string;
 }
 
 export interface SpawnBackgroundResult {

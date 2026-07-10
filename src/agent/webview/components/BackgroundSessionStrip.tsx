@@ -54,11 +54,20 @@ export interface BgSessionInfoProps {
     maxToolCalls?: number;
     maxApiTurns?: number;
     maxElapsedMs?: number;
+    maxEstimatedCostUsd?: number;
+    estimatedCostPerMillionTokens?: number;
+    warningThresholdRatio?: number;
+    scope?: "session" | "subtree" | "goal";
   };
-  attention?: "approval" | "failed" | "interrupted";
+  attention?: "approval" | "failed" | "interrupted" | "budget_warning";
   attentionEvent?: {
     id: string;
-    kind: "approval" | "completion" | "failure" | "interrupted";
+    kind:
+      | "approval"
+      | "completion"
+      | "failure"
+      | "interrupted"
+      | "budget_warning";
     timestamp: number;
   };
   streamingText?: string;

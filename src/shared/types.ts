@@ -215,11 +215,20 @@ export interface BgSessionInfo {
     maxToolCalls?: number;
     maxApiTurns?: number;
     maxElapsedMs?: number;
+    maxEstimatedCostUsd?: number;
+    estimatedCostPerMillionTokens?: number;
+    warningThresholdRatio?: number;
+    scope?: "session" | "subtree" | "goal";
   };
-  attention?: "approval" | "failed" | "interrupted";
+  attention?: "approval" | "failed" | "interrupted" | "budget_warning";
   attentionEvent?: {
     id: string;
-    kind: "approval" | "completion" | "failure" | "interrupted";
+    kind:
+      | "approval"
+      | "completion"
+      | "failure"
+      | "interrupted"
+      | "budget_warning";
     timestamp: number;
   };
   /** Accumulated streaming text from the bg agent (last ~500 chars for preview). */

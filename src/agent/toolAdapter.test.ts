@@ -745,7 +745,12 @@ describe("spawn_background_agent tool", () => {
         maxToolCalls: 50,
         maxApiTurns: undefined,
         maxElapsedMs: undefined,
+        maxEstimatedCostUsd: undefined,
+        estimatedCostPerMillionTokens: undefined,
+        warningThresholdRatio: undefined,
+        scope: "session",
       },
+      goalId: undefined,
     });
 
     const text = (result.content[0] as { type: string; text: string }).text;
@@ -794,6 +799,7 @@ describe("spawn_background_agent tool", () => {
       worktree: undefined,
       expectedResult: undefined,
       budget: undefined,
+      goalId: undefined,
     });
     expect(onSpawnBackground).not.toHaveBeenCalled();
     const text = (result.content[0] as { type: string; text: string }).text;
