@@ -4099,7 +4099,7 @@ export class AgentSessionManager {
   getBgSessionInfos(): BgSessionInfo[] {
     const infos = Array.from(this.sessions.values())
       .filter((s) => s.background)
-      .map((s) => {
+      .map((s): BgSessionInfo => {
         const { status, done: isDone } = this.getProjectedBgStatus(s);
         const meta = this.bgMeta.get(s.id);
         const streamingText = this.bgStreamingText.get(s.id);
