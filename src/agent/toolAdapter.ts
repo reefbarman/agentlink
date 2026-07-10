@@ -496,6 +496,34 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           description:
             'Optional routing tier override ("cheap", "balanced", or "deep_reasoning"). For review tasks, omit this to let the router infer complexity from the request.',
         },
+        ownedPaths: {
+          type: "array",
+          items: { type: "string" },
+          description: "Advisory paths delegated for this agent to own.",
+        },
+        forbiddenPaths: {
+          type: "array",
+          items: { type: "string" },
+          description: "Paths the delegated agent must not modify.",
+        },
+        permissionProfile: {
+          type: "string",
+          enum: ["review-only", "workspace-safe", "interactive"],
+        },
+        worktree: { type: "string", enum: ["shared", "isolated"] },
+        expectedResult: {
+          type: "string",
+          enum: ["text", "review_findings", "patch", "verification"],
+        },
+        budget: {
+          type: "object",
+          properties: {
+            maxTokens: { type: "number" },
+            maxToolCalls: { type: "number" },
+            maxApiTurns: { type: "number" },
+            maxElapsedMs: { type: "number" },
+          },
+        },
       },
       required: ["task", "message"],
     },
@@ -1120,12 +1148,7 @@ function createModeSwitchProvider(
       // Only ask_user modeSwitch consent passes the silent flag.
       return request.silent === undefined
         ? onModeSwitch(sessionId, request.mode, request.reason)
-        : onModeSwitch(
-            sessionId,
-            request.mode,
-            request.reason,
-            request.silent,
-          );
+        : onModeSwitch(sessionId, request.mode, request.reason, request.silent);
     },
   };
 }
@@ -1143,10 +1166,14 @@ export interface ToolDispatchContext {
   approvalManager: ApprovalManager;
   approvalPanel: ApprovalPanelProvider;
   sessionId: string;
+  delegationPolicy?: {
+    ownedPaths?: string[];
+    forbiddenPaths?: string[];
+  };
   extensionUri: import("vscode").Uri;
   globalStorageUri?: import("vscode").Uri;
-  trackerCtx?: import("../server/ToolCallTracker.js").TrackerContext;
-  toolCallTracker?: import("../server/ToolCallTracker.js").ToolCallTracker;
+  trackerCtx?: import("./AgentToolCallTracker.js").TrackerContext;
+  toolCallTracker?: import("./AgentToolCallTracker.js").AgentToolCallTracker;
   mcpHub?: McpClientHub;
   /** Current agent mode slug (e.g. "architect", "code"). Used for mode-specific approval logic. */
   mode?: string;
@@ -1292,6 +1319,11 @@ export function createAgentToolRuntime(
     async executeTool(request: AgentToolExecutionRequest) {
       const startedAt = Date.now();
       try {
+        enforceDelegatedPathPolicy(
+          request.name,
+          request.input,
+          ctx.delegationPolicy,
+        );
         const result = await dispatchToolCall(request.name, request.input, {
           ...ctx,
           sessionId: request.context.sessionId,
@@ -1343,6 +1375,55 @@ export function createAgentToolRuntime(
       return ctx.mcpHub?.getServerConfig(serverName)?.toolDisclosure;
     },
   };
+}
+
+const PATH_MUTATING_TOOLS = new Set([
+  "write_file",
+  "apply_diff",
+  "find_and_replace",
+  "rename_symbol",
+  "apply_code_action",
+]);
+
+function enforceDelegatedPathPolicy(
+  toolName: string,
+  input: Record<string, unknown>,
+  policy?: ToolDispatchContext["delegationPolicy"],
+): void {
+  if (!policy || !PATH_MUTATING_TOOLS.has(toolName)) return;
+  const normalize = (value: string) =>
+    value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  const paths = Object.entries(input)
+    .filter(([key]) => /(^|_)(path|file|directory)$/i.test(key))
+    .flatMap(([, value]) =>
+      typeof value === "string"
+        ? [normalize(value)]
+        : Array.isArray(value)
+          ? value
+              .filter((item): item is string => typeof item === "string")
+              .map(normalize)
+          : [],
+    );
+  if (paths.length === 0) return;
+  const contains = (scope: string, path: string) => {
+    const normalizedScope = normalize(scope);
+    return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
+  };
+  for (const path of paths) {
+    if (policy.forbiddenPaths?.some((scope) => contains(scope, path))) {
+      throw new Error(
+        `Delegation policy denied ${toolName} for forbidden path: ${path}`,
+      );
+    }
+    if (
+      policy.ownedPaths?.length &&
+      !policy.ownedPaths.some((scope) => contains(scope, path))
+    ) {
+      throw new Error(
+        `Delegation policy denied ${toolName} outside owned paths: ${path}`,
+      );
+    }
+  }
 }
 
 /**
@@ -2407,6 +2488,41 @@ export async function dispatchToolCall(
                   params.modelTier,
                 ) as SpawnBackgroundRequest["modelTier"])
               : undefined
+            : undefined,
+        ownedPaths: Array.isArray(params.ownedPaths)
+          ? params.ownedPaths.map(String)
+          : undefined,
+        forbiddenPaths: Array.isArray(params.forbiddenPaths)
+          ? params.forbiddenPaths.map(String)
+          : undefined,
+        permissionProfile:
+          params.permissionProfile === "review-only" ||
+          params.permissionProfile === "workspace-safe" ||
+          params.permissionProfile === "interactive"
+            ? params.permissionProfile
+            : undefined,
+        worktree:
+          params.worktree === "shared" || params.worktree === "isolated"
+            ? params.worktree
+            : undefined,
+        expectedResult:
+          params.expectedResult === "text" ||
+          params.expectedResult === "review_findings" ||
+          params.expectedResult === "patch" ||
+          params.expectedResult === "verification"
+            ? params.expectedResult
+            : undefined,
+        budget:
+          params.budget && typeof params.budget === "object"
+            ? (() => {
+                const budget = params.budget as Record<string, unknown>;
+                return {
+                  maxTokens: Number(budget.maxTokens) || undefined,
+                  maxToolCalls: Number(budget.maxToolCalls) || undefined,
+                  maxApiTurns: Number(budget.maxApiTurns) || undefined,
+                  maxElapsedMs: Number(budget.maxElapsedMs) || undefined,
+                };
+              })()
             : undefined,
       });
       return {

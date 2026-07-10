@@ -193,6 +193,7 @@ export interface BgSessionInfo {
     | "completed"
     | "failed"
     | "cancelled"
+    | "budget_exhausted"
     | "interrupted";
   terminalReason?: string;
   createdAt?: number;
@@ -200,6 +201,13 @@ export interface BgSessionInfo {
   totalInputTokens?: number;
   totalOutputTokens?: number;
   toolCalls?: number;
+  apiTurns?: number;
+  budget?: {
+    maxTokens?: number;
+    maxToolCalls?: number;
+    maxApiTurns?: number;
+    maxElapsedMs?: number;
+  };
   /** Accumulated streaming text from the bg agent (last ~500 chars for preview). */
   streamingText?: string;
   /** Final result text when agent is done. */

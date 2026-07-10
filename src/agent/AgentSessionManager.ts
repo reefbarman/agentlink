@@ -173,6 +173,8 @@ export class AgentSessionManager {
       fallbackUsed: boolean;
       toolCalls: number;
       tokenUsage: number;
+      apiTurns: number;
+      startedAt: number;
     }
   >();
   /** Current heuristic phase bucket per background session. */
@@ -309,7 +311,11 @@ export class AgentSessionManager {
     session.lastCacheReadTokens = usage.cachedReadTokens ?? 0;
 
     const meta = this.bgMeta.get(session.id);
-    if (meta) meta.tokenUsage = usage.totalTokens;
+    if (meta) {
+      meta.tokenUsage = usage.totalTokens;
+      meta.apiTurns += 1;
+    }
+    this.enforceBackgroundBudget(session);
   }
 
   private acpStopReasonMessage(response: PromptResponse): string | undefined {
@@ -429,6 +435,7 @@ export class AgentSessionManager {
         toolCallId: update.toolCallId,
         toolName: update.title,
       });
+      this.enforceBackgroundBudget(session);
       return;
     }
 
@@ -447,6 +454,7 @@ export class AgentSessionManager {
       session.lastInputTokens = update.used;
       const meta = this.bgMeta.get(session.id);
       if (meta) meta.tokenUsage = update.used;
+      this.enforceBackgroundBudget(session);
     }
   }
 
@@ -2314,6 +2322,7 @@ export class AgentSessionManager {
         session.status = "idle";
       } else if (
         fleet?.lifecycle === "failed" ||
+        fleet?.lifecycle === "budget_exhausted" ||
         fleet?.lifecycle === "interrupted"
       ) {
         session.status = "error";
@@ -2341,6 +2350,11 @@ export class AgentSessionManager {
           toolCalls: 0,
           tokenUsage:
             session.totalInputTokens + session.totalOutputTokens,
+          apiTurns: fleet.budgetUsage?.apiTurns ?? 0,
+          startedAt:
+            fleet.completedAt && fleet.budgetUsage
+              ? fleet.completedAt - fleet.budgetUsage.elapsedMs
+              : session.createdAt,
         });
         if (fleet.completedAt) {
           this.bgCompletedAt.set(session.id, fleet.completedAt);
@@ -2564,17 +2578,31 @@ export class AgentSessionManager {
     session: AgentSession,
     start: () => Promise<void>,
   ): void {
+    const launch = async (): Promise<void> => {
+      const meta = this.bgMeta.get(session.id);
+      if (meta) meta.startedAt = Date.now();
+      const maxElapsedMs = session.fleetMetadata?.budget?.maxElapsedMs;
+      if (maxElapsedMs !== undefined && maxElapsedMs > 0) {
+        const timer = this.host.timers.setTimeout(() => {
+          this.enforceBackgroundBudget(session);
+        }, maxElapsedMs);
+        const timers = this.bgSafetyTimers.get(session.id) ?? [];
+        timers.push(timer);
+        this.bgSafetyTimers.set(session.id, timers);
+      }
+      await start();
+    };
     if (this.activeBackgroundCount() >= this.bgDefaults.maxConcurrent) {
       session.status = "queued";
       if (session.fleetMetadata) session.fleetMetadata.lifecycle = "queued";
-      this.bgLaunchQueue.push({ sessionId: session.id, start });
+      this.bgLaunchQueue.push({ sessionId: session.id, start: launch });
       this.saveSession(session.id);
       this.onSessionsChanged?.();
       return;
     }
     session.status = "streaming";
     if (session.fleetMetadata) session.fleetMetadata.lifecycle = "running";
-    void start().finally(() => this.drainBackgroundQueue());
+    void launch().finally(() => this.drainBackgroundQueue());
   }
 
   private drainBackgroundQueue(): void {
@@ -2632,6 +2660,7 @@ export class AgentSessionManager {
           candidate.fleetMetadata.lifecycle !== "completed" &&
           candidate.fleetMetadata.lifecycle !== "failed" &&
           candidate.fleetMetadata.lifecycle !== "cancelled" &&
+          candidate.fleetMetadata.lifecycle !== "budget_exhausted" &&
           candidate.fleetMetadata.lifecycle !== "interrupted",
       ).length;
       const maxChildren = this.bgDefaults.maxChildrenPerParent ?? 2;
@@ -2688,6 +2717,8 @@ export class AgentSessionManager {
         fallbackUsed: false,
         toolCalls: 0,
         tokenUsage: 0,
+        apiTurns: 0,
+        startedAt: Date.now(),
       });
       session.fleetMetadata = this.createFleetMetadata(session, {
         task,
@@ -2702,6 +2733,14 @@ export class AgentSessionManager {
             ? `explicit ACP provider override (${backendRoute.reference})`
             : `configured default ACP background agent (${backendRoute.reference})`,
         fallbackUsed: false,
+        delegation: {
+          ownedPaths: request.ownedPaths,
+          forbiddenPaths: request.forbiddenPaths,
+          permissionProfile: request.permissionProfile,
+          worktree: request.worktree,
+          expectedResult: request.expectedResult,
+        },
+        budget: request.budget,
       });
       this.saveSession(session.id);
       this.onSessionsChanged?.();
@@ -2915,6 +2954,8 @@ export class AgentSessionManager {
       fallbackUsed: route.fallbackUsed,
       toolCalls: 0,
       tokenUsage: 0,
+      apiTurns: 0,
+      startedAt: Date.now(),
     });
     session.fleetMetadata = this.createFleetMetadata(session, {
       task,
@@ -2926,6 +2967,14 @@ export class AgentSessionManager {
       taskClass: route.taskClass,
       routingReason: route.routingReason,
       fallbackUsed: route.fallbackUsed,
+      delegation: {
+        ownedPaths: request.ownedPaths,
+        forbiddenPaths: request.forbiddenPaths,
+        permissionProfile: request.permissionProfile,
+        worktree: request.worktree,
+        expectedResult: request.expectedResult,
+      },
+      budget: request.budget,
     });
     this.saveSession(session.id);
     this.onSessionsChanged?.();
@@ -2936,6 +2985,10 @@ export class AgentSessionManager {
     const bgCtx: ToolDispatchContext = {
       ...baseCtx,
       sessionId: session.id,
+      delegationPolicy: {
+        ownedPaths: request.ownedPaths,
+        forbiddenPaths: request.forbiddenPaths,
+      },
       onApprovalRequest: baseCtx.onApprovalRequest
         ? (req) => baseCtx.onApprovalRequest!({ ...req, backgroundTask: task })
         : undefined,
@@ -2970,7 +3023,10 @@ export class AgentSessionManager {
       try {
         for await (const event of bgEngine.run(session, {
           isBackground: true,
-          toolProfile: route.toolProfile,
+          toolProfile:
+            request.permissionProfile === "review-only"
+              ? "review"
+              : undefined,
         })) {
           if (event.type === "text_delta") {
             this.appendBgStreamingText(session.id, event.text);
@@ -2997,8 +3053,11 @@ export class AgentSessionManager {
             }
             if (event.type === "api_request") {
               meta.tokenUsage += event.uncachedInputTokens + event.outputTokens;
+              meta.apiTurns += 1;
             }
           }
+
+          if (this.enforceBackgroundBudget(session)) break;
 
           const { status } = this.getProjectedBgStatus(session);
           this.maybeScheduleBgSummary({
@@ -3865,9 +3924,20 @@ export class AgentSessionManager {
     if (!fleet) return;
     fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
     fleet.finalResult = resultText;
+    const meta = this.bgMeta.get(session.id);
+    if (meta) {
+      fleet.budgetUsage = {
+        tokens: meta.tokenUsage,
+        toolCalls: meta.toolCalls,
+        apiTurns: meta.apiTurns,
+        elapsedMs: Math.max(0, Date.now() - meta.startedAt),
+      };
+    }
     if (this.bgCancelled.has(session.id)) {
       fleet.lifecycle = "cancelled";
       fleet.terminalReason ??= "cancelled_by_user";
+    } else if (fleet.terminalReason?.startsWith("budget_exhausted:")) {
+      fleet.lifecycle = "budget_exhausted";
     } else if (session.status === "error") {
       fleet.lifecycle = "failed";
       fleet.terminalReason = this.bgErrors.get(session.id) ?? "agent_error";
@@ -3875,6 +3945,45 @@ export class AgentSessionManager {
       fleet.lifecycle = "completed";
       fleet.terminalReason = undefined;
     }
+  }
+
+  private enforceBackgroundBudget(session: AgentSession): boolean {
+    const fleet = session.fleetMetadata;
+    const meta = this.bgMeta.get(session.id);
+    if (!fleet?.budget || !meta) return false;
+    const elapsedMs = Math.max(0, Date.now() - meta.startedAt);
+    const checks: Array<[number | undefined, number, string]> = [
+      [fleet.budget.maxTokens, meta.tokenUsage, "tokens"],
+      [fleet.budget.maxToolCalls, meta.toolCalls, "tool_calls"],
+      [fleet.budget.maxApiTurns, meta.apiTurns, "api_turns"],
+      [fleet.budget.maxElapsedMs, elapsedMs, "elapsed_time"],
+    ];
+    const exhausted = checks.find(
+      ([limit, used]) => limit !== undefined && limit >= 0 && used >= limit,
+    );
+    if (!exhausted) return false;
+    const [, , kind] = exhausted;
+    const reason = `budget_exhausted:${kind}`;
+    fleet.terminalReason = reason;
+    session.status = "error";
+    this.setBgError(session.id, reason);
+    session.abort();
+    // Budget exhaustion owns the subtree just like explicit cancellation.
+    for (const candidate of this.sessions.values()) {
+      if (
+        candidate.fleetMetadata?.parentSessionId === session.id &&
+        candidate.fleetMetadata.lifecycle !== "completed" &&
+        candidate.fleetMetadata.lifecycle !== "failed" &&
+        candidate.fleetMetadata.lifecycle !== "cancelled" &&
+        candidate.fleetMetadata.lifecycle !== "budget_exhausted"
+      ) {
+        this.stopSession(candidate.id);
+        if (candidate.fleetMetadata) {
+          candidate.fleetMetadata.terminalReason = "parent_budget_exhausted";
+        }
+      }
+    }
+    return true;
   }
 
   getBackgroundResultSummary(sessionId: string): string | undefined {
@@ -3981,6 +4090,8 @@ export class AgentSessionManager {
           totalInputTokens: s.totalInputTokens,
           totalOutputTokens: s.totalOutputTokens,
           toolCalls: meta?.toolCalls,
+          apiTurns: meta?.apiTurns,
+          budget: s.fleetMetadata?.budget,
           streamingText,
           resultText,
           errorMessage,

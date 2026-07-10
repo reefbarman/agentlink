@@ -66,6 +66,7 @@ export type PersistedFleetLifecycle =
   | "completed"
   | "failed"
   | "cancelled"
+  | "budget_exhausted"
   | "interrupted";
 
 /** Durable execution identity for non-foreground fleet sessions. */
@@ -87,6 +88,25 @@ export interface PersistedFleetMetadata {
   terminalReason?: string;
   completedAt?: number;
   finalResult?: string;
+  delegation?: {
+    ownedPaths?: string[];
+    forbiddenPaths?: string[];
+    permissionProfile?: string;
+    worktree?: "shared" | "isolated";
+    expectedResult?: string;
+  };
+  budget?: {
+    maxTokens?: number;
+    maxToolCalls?: number;
+    maxApiTurns?: number;
+    maxElapsedMs?: number;
+  };
+  budgetUsage?: {
+    tokens: number;
+    toolCalls: number;
+    apiTurns: number;
+    elapsedMs: number;
+  };
 }
 
 export interface PersistedSessionMetadata {

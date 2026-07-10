@@ -32,6 +32,7 @@ export interface BgSessionInfoProps {
     | "completed"
     | "failed"
     | "cancelled"
+    | "budget_exhausted"
     | "interrupted";
   terminalReason?: string;
   createdAt?: number;
@@ -39,6 +40,13 @@ export interface BgSessionInfoProps {
   totalInputTokens?: number;
   totalOutputTokens?: number;
   toolCalls?: number;
+  apiTurns?: number;
+  budget?: {
+    maxTokens?: number;
+    maxToolCalls?: number;
+    maxApiTurns?: number;
+    maxElapsedMs?: number;
+  };
   streamingText?: string;
   resultText?: string;
   resultSummary?: string;
@@ -211,6 +219,8 @@ export function BackgroundSessionStrip({
                 s.terminalReason ? `reason: ${s.terminalReason}` : null,
                 `tokens: ${(s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0)}`,
                 s.toolCalls !== undefined ? `tools: ${s.toolCalls}` : null,
+                s.apiTurns !== undefined ? `API turns: ${s.apiTurns}` : null,
+                s.budget ? `budget: ${JSON.stringify(s.budget)}` : null,
               ].filter((value): value is string => Boolean(value)).join("\n")}
             >
               {(s.depth ?? 1) > 1 && (

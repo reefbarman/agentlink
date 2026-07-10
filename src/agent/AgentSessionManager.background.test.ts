@@ -541,6 +541,35 @@ describe("AgentSessionManager background agents", () => {
     expect(info.errorMessage).toBeUndefined();
   });
 
+  it("stops at a hard budget and persists an explicit terminal reason", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        yield { type: "tool_start", toolCallId: "tc-1", toolName: "search" };
+        yield { type: "tool_start", toolCallId: "tc-2", toolName: "read" };
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "bounded task",
+      message: "run",
+      budget: { maxToolCalls: 2 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+
+    expect(session.abort).toHaveBeenCalled();
+    expect(session.fleetMetadata).toEqual(
+      expect.objectContaining({
+        lifecycle: "budget_exhausted",
+        terminalReason: "budget_exhausted:tool_calls",
+        budgetUsage: expect.objectContaining({ toolCalls: 2 }),
+      }),
+    );
+  });
+
   it("exposes route summaries for debug payloads", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);

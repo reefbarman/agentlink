@@ -1,3 +1,10 @@
+export interface AgentBudget {
+  maxTokens?: number;
+  maxToolCalls?: number;
+  maxApiTurns?: number;
+  maxElapsedMs?: number;
+}
+
 export interface SpawnBackgroundRequest {
   task: string;
   message: string;
@@ -6,6 +13,12 @@ export interface SpawnBackgroundRequest {
   provider?: string;
   taskClass?: string;
   modelTier?: "cheap" | "balanced" | "deep_reasoning";
+  ownedPaths?: string[];
+  forbiddenPaths?: string[];
+  permissionProfile?: "review-only" | "workspace-safe" | "interactive";
+  worktree?: "shared" | "isolated";
+  expectedResult?: "text" | "review_findings" | "patch" | "verification";
+  budget?: AgentBudget;
 }
 
 export interface SpawnBackgroundResult {

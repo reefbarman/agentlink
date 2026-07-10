@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   getAgentTools,
   dispatchToolCall,
+  createAgentToolRuntime,
   READ_ONLY_TOOLS,
   type ToolDispatchContext,
 } from "./toolAdapter.js";
@@ -648,7 +649,31 @@ describe("getAgentTools", () => {
 });
 
 describe("spawn_background_agent tool", () => {
-  it("schema includes routing params but not guardrail params", () => {
+  it("enforces delegated owned and forbidden paths before writes", async () => {
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      delegationPolicy: {
+        ownedPaths: ["src/agent"],
+        forbiddenPaths: ["src/agent/secrets"],
+      },
+    });
+    await expect(
+      runtime.executeTool({
+        name: "write_file",
+        input: { path: "src/sidebar/out.ts", content: "no" },
+        context: { sessionId: "test-session", mode: "code" },
+      }),
+    ).rejects.toThrow(/outside owned paths/);
+    await expect(
+      runtime.executeTool({
+        name: "write_file",
+        input: { path: "src/agent/secrets/key.ts", content: "no" },
+        context: { sessionId: "test-session", mode: "code" },
+      }),
+    ).rejects.toThrow(/forbidden path/);
+  });
+
+  it("schema includes routing, delegation, and budget params", () => {
     const spawnTool = getAgentTools().find(
       (t) => t.name === "spawn_background_agent",
     );
@@ -664,10 +689,12 @@ describe("spawn_background_agent tool", () => {
     expect(props.modelTier).toBeDefined();
     expect(JSON.stringify(spawnTool)).toContain("readonly-research");
     expect(JSON.stringify(spawnTool)).toContain("non-conflicting");
-    // Guardrail params removed — background agents run without limits
+    expect(props.ownedPaths).toBeDefined();
+    expect(props.forbiddenPaths).toBeDefined();
+    expect(props.permissionProfile).toBeDefined();
+    expect(props.budget).toBeDefined();
     expect(props.timeoutSeconds).toBeUndefined();
     expect(props.tokenBudget).toBeUndefined();
-    expect(props.maxToolCalls).toBeUndefined();
   });
 
   it("dispatches structured request and returns structured result", async () => {
@@ -691,6 +718,11 @@ describe("spawn_background_agent tool", () => {
         provider: "anthropic",
         taskClass: "review_code",
         modelTier: "deep_reasoning",
+        ownedPaths: ["src/agent"],
+        forbiddenPaths: ["src/server"],
+        permissionProfile: "workspace-safe",
+        expectedResult: "patch",
+        budget: { maxTokens: 20_000, maxToolCalls: 50 },
       },
       { ...mockCtx, onSpawnBackground },
     );
@@ -703,6 +735,17 @@ describe("spawn_background_agent tool", () => {
       provider: "anthropic",
       taskClass: "review_code",
       modelTier: "deep_reasoning",
+      ownedPaths: ["src/agent"],
+      forbiddenPaths: ["src/server"],
+      permissionProfile: "workspace-safe",
+      worktree: undefined,
+      expectedResult: "patch",
+      budget: {
+        maxTokens: 20_000,
+        maxToolCalls: 50,
+        maxApiTurns: undefined,
+        maxElapsedMs: undefined,
+      },
     });
 
     const text = (result.content[0] as { type: string; text: string }).text;
@@ -745,6 +788,12 @@ describe("spawn_background_agent tool", () => {
       provider: undefined,
       taskClass: undefined,
       modelTier: undefined,
+      ownedPaths: undefined,
+      forbiddenPaths: undefined,
+      permissionProfile: undefined,
+      worktree: undefined,
+      expectedResult: undefined,
+      budget: undefined,
     });
     expect(onSpawnBackground).not.toHaveBeenCalled();
     const text = (result.content[0] as { type: string; text: string }).text;
