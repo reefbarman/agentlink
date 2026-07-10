@@ -1291,14 +1291,24 @@ export function activate(context: vscode.ExtensionContext): void {
     onFileRead: (filePath) => {
       agentSessionManager.getForegroundSession()?.trackFileRead(filePath);
     },
-    onSpawnBackground: (request) =>
-      agentSessionManager.spawnBackground(request),
-    onGetBackgroundStatus: (sessionId) =>
-      agentSessionManager.getBackgroundStatus(sessionId),
-    onGetBackgroundResult: (sessionId) =>
-      agentSessionManager.waitForBackground(sessionId),
-    onKillBackground: (sessionId, reason) =>
-      agentSessionManager.killBackground(sessionId, reason),
+    onSpawnBackground: (callerSessionId, request) =>
+      agentSessionManager.spawnBackground(request, callerSessionId),
+    onGetBackgroundStatus: (callerSessionId, sessionId) =>
+      agentSessionManager.getAuthorizedBackgroundStatus(
+        callerSessionId,
+        sessionId,
+      ),
+    onGetBackgroundResult: (callerSessionId, sessionId) =>
+      agentSessionManager.waitForAuthorizedBackground(
+        callerSessionId,
+        sessionId,
+      ),
+    onKillBackground: (callerSessionId, sessionId, reason) =>
+      agentSessionManager.killAuthorizedBackground(
+        callerSessionId,
+        sessionId,
+        reason,
+      ),
     toolCallTracker,
     toolUsageTelemetry: toolUsageTelemetry ?? undefined,
   });

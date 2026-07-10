@@ -631,6 +631,104 @@ describe("AgentSessionManager background agents", () => {
     expect(mgr.getForegroundSession()?.mode).toBe("code");
   });
 
+  it("allows background agents to spawn descendants within depth policy", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({
+      ...toolCtx,
+      onSpawnBackground: (callerSessionId, request) =>
+        mgr.spawnBackground(request, callerSessionId),
+      onGetBackgroundStatus: (callerSessionId, sessionId) =>
+        mgr.getAuthorizedBackgroundStatus(callerSessionId, sessionId),
+      onGetBackgroundResult: (callerSessionId, sessionId) =>
+        mgr.waitForAuthorizedBackground(callerSessionId, sessionId),
+      onKillBackground: (callerSessionId, sessionId, reason) =>
+        mgr.killAuthorizedBackground(callerSessionId, sessionId, reason),
+    });
+    await mgr.createSession("code");
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "coordinate",
+      mode: "code",
+    });
+    const parentRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
+
+    const result = await parentRuntime.executeTool({
+      name: "spawn_background_agent",
+      input: { task: "child", message: "inspect", mode: "review" },
+      context: { sessionId: parent.sessionId },
+    });
+    const childId = JSON.parse(result.content[0].text).sessionId;
+    const child = (mgr as any).sessions.get(childId);
+
+    expect(child.fleetMetadata).toEqual(
+      expect.objectContaining({
+        parentSessionId: parent.sessionId,
+        depth: 2,
+      }),
+    );
+    const childRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
+    await expect(
+      childRuntime.executeTool({
+        name: "spawn_background_agent",
+        input: { task: "too deep", message: "stop" },
+        context: { sessionId: childId },
+      }),
+    ).rejects.toThrow(/maximum fleet depth reached/);
+  });
+
+  it("prevents background agents from managing sibling subtrees", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const first = await mgr.spawnBackground({ task: "first", message: "one" });
+    const second = await mgr.spawnBackground({ task: "second", message: "two" });
+
+    expect(
+      mgr.getAuthorizedBackgroundStatus(first.sessionId, second.sessionId),
+    ).toEqual(
+      expect.objectContaining({
+        status: "error",
+        partialOutput: expect.stringContaining("outside the caller's subtree"),
+      }),
+    );
+    expect(
+      mgr.killAuthorizedBackground(first.sessionId, second.sessionId),
+    ).toEqual(
+      expect.objectContaining({ killed: false }),
+    );
+  });
+
+  it("propagates parent cancellation through the descendant subtree", async () => {
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "coordinate",
+    });
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "work" },
+      parent.sessionId,
+    );
+
+    mgr.stopSession(parent.sessionId);
+
+    expect(mgr.getBackgroundStatus(parent.sessionId).status).toBe("cancelled");
+    expect(mgr.getBackgroundStatus(child.sessionId).status).toBe("cancelled");
+    expect((mgr as any).sessions.get(child.sessionId).fleetMetadata).toEqual(
+      expect.objectContaining({
+        lifecycle: "cancelled",
+        terminalReason: "cancelled_by_user",
+      }),
+    );
+  });
+
   it("creates native review agents with the full prompt path", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);

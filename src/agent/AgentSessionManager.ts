@@ -216,6 +216,8 @@ export class AgentSessionManager {
     log?: (msg: string) => void,
     private readonly bgDefaults: {
       maxConcurrent: number;
+      maxDepth?: number;
+      maxChildrenPerParent?: number;
     } = {
       maxConcurrent: 3,
     },
@@ -1409,8 +1411,20 @@ export class AgentSessionManager {
   }
 
   stopSession(sessionId: string): void {
+    const childIds = Array.from(this.sessions.values())
+      .filter(
+        (candidate) =>
+          candidate.fleetMetadata?.parentSessionId === sessionId &&
+          candidate.background,
+      )
+      .map((candidate) => candidate.id);
+    for (const childId of childIds) this.stopSession(childId);
+
     const session = this.sessions.get(sessionId);
     if (session) {
+      this.bgLaunchQueue = this.bgLaunchQueue.filter(
+        (queued) => queued.sessionId !== sessionId,
+      );
       session.abort();
       session.status = "idle";
       session.runState = undefined;
@@ -2584,6 +2598,7 @@ export class AgentSessionManager {
    */
   async spawnBackground(
     request: SpawnBackgroundRequest,
+    parentSessionId?: string,
   ): Promise<SpawnBackgroundResult> {
     if (!this.toolCtx) {
       throw new Error("No tool context — cannot spawn background agent");
@@ -2597,12 +2612,42 @@ export class AgentSessionManager {
       );
     }
 
+    const parent = parentSessionId
+      ? this.sessions.get(parentSessionId)
+      : this.getForegroundSession();
+    if (parentSessionId && !parent) {
+      throw new Error(`Background spawn rejected: parent session not found.`);
+    }
+    const parentDepth = parent?.fleetMetadata?.depth ?? 0;
+    const maxDepth = this.bgDefaults.maxDepth ?? 2;
+    if (parentDepth >= maxDepth) {
+      throw new Error(
+        `Background spawn rejected: maximum fleet depth reached (${maxDepth}).`,
+      );
+    }
+    if (parent) {
+      const childCount = Array.from(this.sessions.values()).filter(
+        (candidate) =>
+          candidate.fleetMetadata?.parentSessionId === parent.id &&
+          candidate.fleetMetadata.lifecycle !== "completed" &&
+          candidate.fleetMetadata.lifecycle !== "failed" &&
+          candidate.fleetMetadata.lifecycle !== "cancelled" &&
+          candidate.fleetMetadata.lifecycle !== "interrupted",
+      ).length;
+      const maxChildren = this.bgDefaults.maxChildrenPerParent ?? 2;
+      if (childCount >= maxChildren) {
+        throw new Error(
+          `Background spawn rejected: per-parent child limit reached (${maxChildren}).`,
+        );
+      }
+    }
+
     const backendRoute = resolveBackgroundBackendRoute(
       this.getBackgroundAgentSettings(),
       request,
     );
     const fg = this.getForegroundSession();
-    const parentSessionId = fg?.id;
+    parentSessionId = parent?.id;
 
     if (backendRoute.backend === "acp") {
       const resolvedMode = request.mode?.trim() || "review";
@@ -2810,8 +2855,8 @@ export class AgentSessionManager {
       };
     }
 
-    const foregroundMode = fg?.mode ?? "code";
-    const foregroundModel = fg?.model ?? this.config.model;
+    const foregroundMode = parent?.mode ?? fg?.mode ?? "code";
+    const foregroundModel = parent?.model ?? fg?.model ?? this.config.model;
 
     const route = await resolveBackgroundRoute(this.host.providers, request, {
       mode: foregroundMode,
@@ -2885,10 +2930,8 @@ export class AgentSessionManager {
     this.saveSession(session.id);
     this.onSessionsChanged?.();
 
-    // Build a bg-specific tool context: inherit base but block nested spawning,
-    // and wrap onApprovalRequest / onQuestion to attribute the request to the
-    // background task. Mode switching is safe because callbacks receive the
-    // originating session ID.
+    // Build a bg-specific tool context and preserve session-scoped fleet
+    // controls so this agent may coordinate descendants within scheduler policy.
     const baseCtx = this.toolCtx;
     const bgCtx: ToolDispatchContext = {
       ...baseCtx,
@@ -2896,10 +2939,6 @@ export class AgentSessionManager {
       onApprovalRequest: baseCtx.onApprovalRequest
         ? (req) => baseCtx.onApprovalRequest!({ ...req, backgroundTask: task })
         : undefined,
-      onSpawnBackground: undefined,
-      onGetBackgroundStatus: undefined,
-      onGetBackgroundResult: undefined,
-      onKillBackground: undefined,
       onQuestion: baseCtx.onQuestion
         ? (context, questions, bgSessionId) =>
             baseCtx.onQuestion!(context, questions, bgSessionId, task)
@@ -3649,6 +3688,65 @@ export class AgentSessionManager {
       toolCalls: meta?.toolCalls,
       tokenUsage: meta?.tokenUsage,
     };
+  }
+
+  private canManageBackground(
+    callerSessionId: string,
+    targetSessionId: string,
+  ): boolean {
+    const caller = this.sessions.get(callerSessionId);
+    const target = this.sessions.get(targetSessionId);
+    if (!caller || !target?.background) return false;
+    if (!caller.background) return caller.id === this.foregroundId;
+    let parentId = target.fleetMetadata?.parentSessionId;
+    while (parentId) {
+      if (parentId === callerSessionId) return true;
+      parentId = this.sessions.get(parentId)?.fleetMetadata?.parentSessionId;
+    }
+    return false;
+  }
+
+  getAuthorizedBackgroundStatus(
+    callerSessionId: string,
+    sessionId: string,
+  ): BgStatusResult {
+    if (!this.canManageBackground(callerSessionId, sessionId)) {
+      return {
+        status: "error",
+        done: true,
+        partialOutput: "Background session is outside the caller's subtree",
+        displayStatus: "Unauthorized",
+      };
+    }
+    return this.getBackgroundStatus(sessionId);
+  }
+
+  waitForAuthorizedBackground(
+    callerSessionId: string,
+    sessionId: string,
+  ): Promise<string> {
+    if (!this.canManageBackground(callerSessionId, sessionId)) {
+      return Promise.resolve(
+        JSON.stringify({
+          error: "Background session is outside the caller's subtree",
+        }),
+      );
+    }
+    return this.waitForBackground(sessionId);
+  }
+
+  killAuthorizedBackground(
+    callerSessionId: string,
+    sessionId: string,
+    reason?: string,
+  ): { killed: boolean; partialOutput?: string } {
+    if (!this.canManageBackground(callerSessionId, sessionId)) {
+      return {
+        killed: false,
+        partialOutput: "Background session is outside the caller's subtree",
+      };
+    }
+    return this.killBackground(sessionId, reason);
   }
 
   /**

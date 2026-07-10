@@ -760,7 +760,7 @@ export function getAgentTools(
     ...(profileAllowlist ? [] : [ASK_USER_TOOL]),
     ...(profileAllowlist ? [] : [SET_TASK_STATUS_TOOL]),
     ...(profileAllowlist ? [] : [SWITCH_MODE_TOOL]),
-    ...(isBackground || profileAllowlist ? [] : BG_AGENT_TOOLS),
+    ...(profileAllowlist ? [] : BG_AGENT_TOOLS),
   ];
 }
 
@@ -1194,14 +1194,22 @@ export interface ToolDispatchContext {
   onSkillLoad?: (skillName: string) => void;
   /** Spawn a background agent session. Returns routing metadata and new session ID. */
   onSpawnBackground?: (
+    callerSessionId: string,
     request: SpawnBackgroundRequest,
   ) => Promise<SpawnBackgroundResult>;
   /** Non-blocking status check for a background session. */
-  onGetBackgroundStatus?: (sessionId: string) => BgStatusResult;
+  onGetBackgroundStatus?: (
+    callerSessionId: string,
+    sessionId: string,
+  ) => BgStatusResult;
   /** Wait for a background session to finish and return its last assistant message. */
-  onGetBackgroundResult?: (sessionId: string) => Promise<string>;
+  onGetBackgroundResult?: (
+    callerSessionId: string,
+    sessionId: string,
+  ) => Promise<string>;
   /** Kill a running background agent and return its partial output. */
   onKillBackground?: (
+    callerSessionId: string,
     sessionId: string,
     reason?: string,
   ) => { killed: boolean; partialOutput?: string };
@@ -2355,7 +2363,10 @@ export async function dispatchToolCall(
       const spawnBackground = ctx.backgroundAgentProvider
         ? (request: SpawnBackgroundRequest) =>
             ctx.backgroundAgentProvider!.spawn(request)
-        : ctx.onSpawnBackground;
+        : ctx.onSpawnBackground
+          ? (request: SpawnBackgroundRequest) =>
+              ctx.onSpawnBackground!(ctx.sessionId, request)
+          : undefined;
       if (!spawnBackground) {
         return {
           content: [
@@ -2407,7 +2418,10 @@ export async function dispatchToolCall(
       const getBackgroundStatus = ctx.backgroundAgentProvider
         ? (sessionId: string) =>
             ctx.backgroundAgentProvider!.getStatus(sessionId)
-        : ctx.onGetBackgroundStatus;
+        : ctx.onGetBackgroundStatus
+          ? (sessionId: string) =>
+              ctx.onGetBackgroundStatus!(ctx.sessionId, sessionId)
+          : undefined;
       if (!getBackgroundStatus) {
         return {
           content: [
@@ -2430,7 +2444,10 @@ export async function dispatchToolCall(
       const getBackgroundResult = ctx.backgroundAgentProvider
         ? (sessionId: string) =>
             ctx.backgroundAgentProvider!.getResult(sessionId)
-        : ctx.onGetBackgroundResult;
+        : ctx.onGetBackgroundResult
+          ? (sessionId: string) =>
+              ctx.onGetBackgroundResult!(ctx.sessionId, sessionId)
+          : undefined;
       if (!getBackgroundResult) {
         return {
           content: [
@@ -2455,7 +2472,10 @@ export async function dispatchToolCall(
       const killBackground = ctx.backgroundAgentProvider
         ? (sessionId: string, reason?: string) =>
             ctx.backgroundAgentProvider!.kill(sessionId, reason)
-        : ctx.onKillBackground;
+        : ctx.onKillBackground
+          ? (sessionId: string, reason?: string) =>
+              ctx.onKillBackground!(ctx.sessionId, sessionId, reason)
+          : undefined;
       if (!killBackground) {
         return {
           content: [

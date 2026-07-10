@@ -394,13 +394,13 @@ describe("getAgentTools", () => {
     ).not.toContain("set_task_status");
   });
 
-  it("allows session-scoped mode switching but keeps recursive fleet controls out of background sessions", () => {
+  it("allows session-scoped mode switching and recursive fleet controls in background sessions", () => {
     const names = getAgentTools(undefined, undefined, true).map((t) => t.name);
     expect(names).toContain("switch_mode");
-    expect(names).not.toContain("spawn_background_agent");
-    expect(names).not.toContain("get_background_status");
-    expect(names).not.toContain("get_background_result");
-    expect(names).not.toContain("kill_background_agent");
+    expect(names).toContain("spawn_background_agent");
+    expect(names).toContain("get_background_status");
+    expect(names).toContain("get_background_result");
+    expect(names).toContain("kill_background_agent");
   });
 
   it("restricts tools when toolProfile is set to 'review'", () => {
@@ -695,7 +695,7 @@ describe("spawn_background_agent tool", () => {
       { ...mockCtx, onSpawnBackground },
     );
 
-    expect(onSpawnBackground).toHaveBeenCalledWith({
+    expect(onSpawnBackground).toHaveBeenCalledWith("test-session", {
       task: "Review patch",
       message: "Review the recent changes",
       mode: "review",
@@ -783,7 +783,10 @@ describe("spawn_background_agent tool", () => {
       { ...mockCtx, onGetBackgroundStatus },
     );
 
-    expect(onGetBackgroundStatus).toHaveBeenCalledWith("bg-456");
+    expect(onGetBackgroundStatus).toHaveBeenCalledWith(
+      "test-session",
+      "bg-456",
+    );
     const text = (result.content[0] as { type: string; text: string }).text;
     expect(JSON.parse(text)).toMatchObject({
       status: "streaming",
@@ -829,7 +832,11 @@ describe("spawn_background_agent tool", () => {
       { ...mockCtx, onKillBackground },
     );
 
-    expect(onKillBackground).toHaveBeenCalledWith("bg-456", "taking too long");
+    expect(onKillBackground).toHaveBeenCalledWith(
+      "test-session",
+      "bg-456",
+      "taking too long",
+    );
     const text = (result.content[0] as { type: string; text: string }).text;
     expect(JSON.parse(text)).toMatchObject({
       killed: true,
