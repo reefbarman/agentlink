@@ -3719,7 +3719,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (!this.sessionManager?.getForegroundSession()) {
           this.postMessage({ type: "agentRestoreSessionStart" });
           this.sessionManager
-            ?.restoreLastSession()
+            ?.restorePersistedBackgroundSessions()
+            .then(() => this.sessionManager?.restoreLastSession())
             .then((session) => {
               if (session) {
                 this.postSessionLoaded(session, {

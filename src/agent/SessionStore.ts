@@ -5,6 +5,8 @@ import * as path from "path";
 import type { AgentMessage, SessionInfo } from "./types.js";
 import type {
   CheckpointState,
+  PersistedFleetMetadata,
+  PersistedSessionRunState,
   PersistResult,
   PersistedSessionMetadata,
   PersistedSessionRecord,
@@ -66,6 +68,8 @@ interface MetadataFile {
   checkpoints?: Checkpoint[];
   checkpointState?: CheckpointState;
   revertPending?: RevertRecoveryState;
+  runState?: PersistedSessionRunState;
+  fleet?: PersistedFleetMetadata;
 }
 
 // Narrow seam for testing atomic JSON writes without mocking Node's ESM `fs`
@@ -454,6 +458,13 @@ export class SessionStore implements SessionPersistenceProvider {
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
   }
 
+  /** List every persisted placement for fleet/history projections. */
+  listAll(): SessionSummary[] {
+    return Array.from(this.index.values()).sort(
+      (a, b) => b.lastActiveAt - a.lastActiveAt,
+    );
+  }
+
   /**
    * Load full message history for a session.
    * Returns null if the session doesn't exist or files are corrupt.
@@ -643,6 +654,8 @@ export class SessionStore implements SessionPersistenceProvider {
         checkpoints: file.checkpoints ?? [],
       },
       revertPending: file.revertPending,
+      runState: file.runState,
+      fleet: file.fleet,
     };
   }
 
@@ -672,6 +685,8 @@ export class SessionStore implements SessionPersistenceProvider {
       checkpoints,
       checkpointState: metadata.checkpointState,
       revertPending: metadata.revertPending,
+      runState: metadata.runState,
+      fleet: metadata.fleet,
     };
   }
 

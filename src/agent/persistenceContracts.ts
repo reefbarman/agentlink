@@ -60,6 +60,34 @@ export type PersistedSessionRunState =
       question: PendingQuestionRecoveryState;
     };
 
+export type PersistedFleetLifecycle =
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+/** Durable execution identity for non-foreground fleet sessions. */
+export interface PersistedFleetMetadata {
+  schemaVersion: 1;
+  placement: "background" | "worktree" | "remote";
+  parentSessionId?: string;
+  rootSessionId: string;
+  task: string;
+  depth: number;
+  backend: "native" | `acp:${string}`;
+  resolvedMode: string;
+  resolvedModel: string;
+  resolvedProvider: string;
+  taskClass: string;
+  routingReason: string;
+  fallbackUsed: boolean;
+  lifecycle: PersistedFleetLifecycle;
+  terminalReason?: string;
+  completedAt?: number;
+  finalResult?: string;
+}
+
 export interface PersistedSessionMetadata {
   mode: string;
   model: string;
@@ -74,6 +102,7 @@ export interface PersistedSessionMetadata {
   checkpointState?: CheckpointState;
   revertPending?: RevertRecoveryState;
   runState?: PersistedSessionRunState;
+  fleet?: PersistedFleetMetadata;
 }
 
 export interface PersistedSessionRecord {

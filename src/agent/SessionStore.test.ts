@@ -153,7 +153,56 @@ describe("SessionStore", () => {
     // Verify filtering behavior after reloading from persisted index.
     const reloadedStore = new SessionStore(tmpDir);
     expect(reloadedStore.list().map((s) => s.id)).toEqual(["foreground-1"]);
+    expect(reloadedStore.listAll().map((s) => s.id)).toEqual([
+      "background-1",
+      "foreground-1",
+    ]);
     expect(reloadedStore.get("background-1")?.background).toBe(true);
+  });
+
+  it("round-trips durable fleet metadata", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    const fleet = {
+      schemaVersion: 1 as const,
+      placement: "background" as const,
+      parentSessionId: "foreground-1",
+      rootSessionId: "foreground-1",
+      task: "Review patch",
+      depth: 1,
+      backend: "native" as const,
+      resolvedMode: "review",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "review_code",
+      routingReason: "defaulted to foreground model",
+      fallbackUsed: false,
+      lifecycle: "completed" as const,
+      completedAt: 10,
+      finalResult: "No blocking findings",
+    };
+
+    await store.saveSession({
+      session: createRecord({
+        summary: createSummary({
+          id: "background-1",
+          background: true,
+        }),
+        metadata: { fleet },
+      }),
+      expectedRevision: null,
+    });
+
+    const reloaded = new SessionStore(tmpDir);
+    const result = await reloaded.readSession("background-1");
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        value: expect.objectContaining({
+          metadata: expect.objectContaining({ fleet }),
+        }),
+      }),
+    );
   });
 
   it("creates and updates sessions with revision-aware saves", async () => {

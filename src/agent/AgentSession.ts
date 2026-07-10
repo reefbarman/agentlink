@@ -21,7 +21,10 @@ import { BUILT_IN_MODES } from "./modes.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { SkillEntry } from "./skillLoader.js";
 import type { McpToolDisclosurePartition } from "./mcpToolDisclosure.js";
-import type { PersistedSessionRunState } from "./persistenceContracts.js";
+import type {
+  PersistedFleetMetadata,
+  PersistedSessionRunState,
+} from "./persistenceContracts.js";
 import {
   buildPromptArtifacts,
   type AdvertisedRuleEntry,
@@ -58,6 +61,7 @@ export class AgentSession {
   currentTool: string | undefined;
   /** Durable marker for a foreground run that may need recovery after reload. */
   runState: PersistedSessionRunState | undefined;
+  fleetMetadata: PersistedFleetMetadata | undefined;
 
   /** Cumulative uncached input tokens across the session.
    * This is intentionally uncached-only for cost/usage accounting; use lastInputTokens
@@ -465,6 +469,7 @@ export class AgentSession {
     reasoningEffort?: ReasoningEffort;
     loadedSkills?: string[];
     runState?: PersistedSessionRunState;
+    fleetMetadata?: PersistedFleetMetadata;
     messages: AgentMessage[];
   }): void {
     this.id = data.id;
@@ -481,6 +486,7 @@ export class AgentSession {
     // Leave status at its constructed idle value. A restored runState marks the
     // session resumable without pretending the old in-memory run still exists.
     this.runState = data.runState;
+    this.fleetMetadata = data.fleetMetadata;
     this.messages = data.messages;
     this.resetProviderResponseState();
     this.loadedSkills.clear();

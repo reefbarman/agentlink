@@ -4,6 +4,7 @@ import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
 import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
 import type {
   PendingQuestionRecoveryState,
+  PersistedFleetMetadata,
   PersistResult,
   PersistedSessionRecord,
   PersistenceRevision,
@@ -880,6 +881,9 @@ export class AgentSessionManager {
         reasoningEffort: session.reasoningEffort,
         loadedSkills: session.getLoadedSkills?.() ?? [],
         runState: session.runState ? { ...session.runState } : undefined,
+        fleet: session.fleetMetadata
+          ? structuredClone(session.fleetMetadata)
+          : undefined,
         checkpointState: {
           baseCommit: this.checkpointManager?.baseCommit ?? null,
           checkpoints:
@@ -1410,6 +1414,14 @@ export class AgentSessionManager {
       if (session.background) {
         this.bgCancelled.add(sessionId);
         this.markBgCompleted(sessionId);
+        if (session.fleetMetadata) {
+          session.fleetMetadata.lifecycle = "cancelled";
+          session.fleetMetadata.terminalReason = "cancelled_by_user";
+          session.fleetMetadata.finalResult =
+            session.getLastAssistantText() ??
+            this.bgStreamingText.get(sessionId) ??
+            undefined;
+        }
       }
       this.onSessionsChanged?.();
     }
@@ -2104,6 +2116,13 @@ export class AgentSessionManager {
     );
   }
 
+  /** List persisted background/fleet sessions without changing foreground history defaults. */
+  listPersistedFleetSessions(): SessionSummary[] {
+    return (this.persistence?.listAll() ?? []).filter(
+      (session) => session.background && session.messageCount > 0,
+    );
+  }
+
   getPersistedSessionSummary(sessionId: string): SessionSummary | undefined {
     return this.persistence?.get(sessionId);
   }
@@ -2218,6 +2237,108 @@ export class AgentSessionManager {
       return null;
     }
     return session;
+  }
+
+  /** Restore durable background records for Agent HQ/browser projections. */
+  async restorePersistedBackgroundSessions(): Promise<AgentSession[]> {
+    if (!this.persistence) return [];
+    const restored: AgentSession[] = [];
+    for (const summary of this.persistence
+      .listAll()
+      .filter((candidate) => candidate.background)) {
+      if (this.sessions.has(summary.id)) continue;
+      const readResult = await this.persistence.readSession(summary.id);
+      if (!readResult.ok) continue;
+      const { messages, metadata } = readResult.value;
+      const providerId = this.host.providers.tryResolveProvider(
+        summary.model,
+      )?.id;
+      const session = await this.host.createSession({
+        mode: summary.mode,
+        config: this.buildConfigForModel(summary.model),
+        cwd: this.cwd,
+        workspaceFolders: this.getWorkspaceFolders(),
+        devMode: this.devMode,
+        background: true,
+        isBackground: true,
+        providerId,
+      });
+      session.restoreFromStore({
+        id: summary.id,
+        title: summary.title,
+        createdAt: summary.createdAt,
+        lastActiveAt: summary.lastActiveAt,
+        totalInputTokens: summary.totalInputTokens,
+        totalOutputTokens: summary.totalOutputTokens,
+        totalCacheReadTokens: metadata.totalCacheReadTokens ?? 0,
+        totalCacheCreationTokens: metadata.totalCacheCreationTokens ?? 0,
+        lastInputTokens: metadata.lastInputTokens ?? 0,
+        lastCacheReadTokens: 0,
+        reasoningEffort: metadata.reasoningEffort,
+        loadedSkills: metadata.loadedSkills ?? [],
+        messages,
+        fleetMetadata: metadata.fleet,
+      });
+      await session.rebuildSystemPrompt({
+        devMode: this.devMode,
+        workspaceFolders: this.getWorkspaceFolders(),
+      });
+
+      const fleet = session.fleetMetadata;
+      if (fleet?.lifecycle === "running") {
+        fleet.lifecycle = "interrupted";
+        fleet.terminalReason = "extension_reloaded_during_run";
+        fleet.completedAt = Date.now();
+      }
+      if (fleet?.lifecycle === "cancelled") {
+        this.bgCancelled.add(session.id);
+        session.status = "idle";
+      } else if (
+        fleet?.lifecycle === "failed" ||
+        fleet?.lifecycle === "interrupted"
+      ) {
+        session.status = "error";
+        this.setBgError(
+          session.id,
+          fleet.terminalReason ?? "Background agent interrupted",
+        );
+      } else {
+        session.status = "idle";
+      }
+      if (fleet?.parentSessionId) {
+        this.bgParents.set(session.id, {
+          sessionId: fleet.parentSessionId,
+          task: fleet.task,
+        });
+      }
+      if (fleet) {
+        this.bgMeta.set(session.id, {
+          resolvedMode: fleet.resolvedMode,
+          resolvedModel: fleet.resolvedModel,
+          resolvedProvider: fleet.resolvedProvider,
+          taskClass: fleet.taskClass,
+          routingReason: fleet.routingReason,
+          fallbackUsed: fleet.fallbackUsed,
+          toolCalls: 0,
+          tokenUsage:
+            session.totalInputTokens + session.totalOutputTokens,
+        });
+        if (fleet.completedAt) {
+          this.bgCompletedAt.set(session.id, fleet.completedAt);
+        }
+        if (fleet.finalResult) {
+          this.bgFinalResults.set(session.id, fleet.finalResult);
+        }
+      }
+      this.sessions.set(session.id, session);
+      this.sessionRevisions.set(session.id, readResult.revision);
+      restored.push(session);
+      if (fleet?.lifecycle === "interrupted") {
+        await this.saveSessionNow(session.id);
+      }
+    }
+    if (restored.length > 0) this.onSessionsChanged?.();
+    return restored;
   }
 
   async deletePersistedSession(sessionId: string): Promise<boolean> {
@@ -2489,6 +2610,21 @@ export class AgentSessionManager {
         toolCalls: 0,
         tokenUsage: 0,
       });
+      session.fleetMetadata = this.createFleetMetadata(session, {
+        task,
+        parentSessionId,
+        backend: `acp:${backendRoute.agent.id}`,
+        resolvedMode,
+        resolvedModel: `acp:${backendRoute.agent.id}`,
+        resolvedProvider: "acp",
+        taskClass,
+        routingReason:
+          backendRoute.reason === "explicit_provider"
+            ? `explicit ACP provider override (${backendRoute.reference})`
+            : `configured default ACP background agent (${backendRoute.reference})`,
+        fallbackUsed: false,
+      });
+      this.saveSession(session.id);
       this.onSessionsChanged?.();
 
       const assistantTextParts: string[] = [];
@@ -2598,6 +2734,8 @@ export class AgentSessionManager {
             ? `ACP background agent stopped: ${this.bgErrors.get(session.id)}`
             : "(ACP background agent completed without output)";
           const resultText = session.getLastAssistantText() ?? fallbackMsg;
+          this.finalizeFleetMetadata(session, resultText);
+          this.saveSession(session.id);
           this.bgFinalResults.set(session.id, resultText);
           for (const t of this.bgSafetyTimers.get(session.id) ?? []) {
             this.host.timers.clearTimeout(t);
@@ -2698,6 +2836,18 @@ export class AgentSessionManager {
       toolCalls: 0,
       tokenUsage: 0,
     });
+    session.fleetMetadata = this.createFleetMetadata(session, {
+      task,
+      parentSessionId,
+      backend: "native",
+      resolvedMode: route.resolvedMode,
+      resolvedModel: route.resolvedModel,
+      resolvedProvider: route.resolvedProvider,
+      taskClass: route.taskClass,
+      routingReason: route.routingReason,
+      fallbackUsed: route.fallbackUsed,
+    });
+    this.saveSession(session.id);
     this.onSessionsChanged?.();
 
     // Build a bg-specific tool context: inherit base but block nested spawning,
@@ -2825,6 +2975,8 @@ export class AgentSessionManager {
         ? `Background agent stopped: ${this.bgErrors.get(session.id)}`
         : "(background agent completed without output)";
       const resultText = session.getLastAssistantText() ?? fallbackMsg;
+      this.finalizeFleetMetadata(session, resultText);
+      this.saveSession(session.id);
 
       // Store result BEFORE resolving waiters to close the race window
       this.bgFinalResults.set(session.id, resultText);
@@ -3536,7 +3688,57 @@ export class AgentSessionManager {
 
   /** Mark a bg session as completed with a timestamp. */
   markBgCompleted(sessionId: string): void {
-    this.bgCompletedAt.set(sessionId, Date.now());
+    const completedAt = Date.now();
+    this.bgCompletedAt.set(sessionId, completedAt);
+    const session = this.sessions.get(sessionId);
+    if (session?.fleetMetadata) {
+      session.fleetMetadata.completedAt = completedAt;
+    }
+  }
+
+  private createFleetMetadata(
+    session: AgentSession,
+    args: Omit<
+      PersistedFleetMetadata,
+      | "schemaVersion"
+      | "placement"
+      | "rootSessionId"
+      | "depth"
+      | "lifecycle"
+    >,
+  ): PersistedFleetMetadata {
+    const parent = args.parentSessionId
+      ? this.sessions.get(args.parentSessionId)
+      : undefined;
+    return {
+      schemaVersion: 1,
+      placement: "background",
+      ...args,
+      rootSessionId:
+        parent?.fleetMetadata?.rootSessionId ?? args.parentSessionId ?? session.id,
+      depth: parent?.fleetMetadata ? parent.fleetMetadata.depth + 1 : 1,
+      lifecycle: "running",
+    };
+  }
+
+  private finalizeFleetMetadata(
+    session: AgentSession,
+    resultText: string,
+  ): void {
+    const fleet = session.fleetMetadata;
+    if (!fleet) return;
+    fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
+    fleet.finalResult = resultText;
+    if (this.bgCancelled.has(session.id)) {
+      fleet.lifecycle = "cancelled";
+      fleet.terminalReason ??= "cancelled_by_user";
+    } else if (session.status === "error") {
+      fleet.lifecycle = "failed";
+      fleet.terminalReason = this.bgErrors.get(session.id) ?? "agent_error";
+    } else {
+      fleet.lifecycle = "completed";
+      fleet.terminalReason = undefined;
+    }
   }
 
   getBackgroundResultSummary(sessionId: string): string | undefined {

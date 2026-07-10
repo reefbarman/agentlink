@@ -46,7 +46,18 @@ const mocks = vi.hoisted(() => {
         totalOutputTokens: 0,
         totalCacheReadTokens: 0,
         totalCacheCreationTokens: 0,
+        lastInputTokens: 0,
+        lastCacheReadTokens: 0,
+        lastActiveAt: 1,
+        fleetMetadata: undefined as any,
         addUserMessage: vi.fn(),
+        restoreFromStore: vi.fn((data: any) => {
+          mockSession.id = data.id;
+          mockSession.title = data.title;
+          mockSession.lastActiveAt = data.lastActiveAt;
+          mockSession.fleetMetadata = data.fleetMetadata;
+        }),
+        rebuildSystemPrompt: vi.fn(async () => {}),
         setMode: vi.fn(async (mode: string) => {
           mockSession.mode = mode;
         }),
@@ -592,6 +603,126 @@ describe("AgentSessionManager background agents", () => {
     );
     expect(mocks.createSession.mock.calls.at(-1)?.[0]).not.toHaveProperty(
       "lightweight",
+    );
+  });
+
+  it("records durable native fleet identity and completion", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+
+    const spawned = await mgr.spawnBackground({
+      task: "review task",
+      message: "review thoroughly",
+      taskClass: "review_code",
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+
+    expect(session.fleetMetadata).toEqual(
+      expect.objectContaining({
+        schemaVersion: 1,
+        placement: "background",
+        parentSessionId: foreground.id,
+        rootSessionId: foreground.id,
+        depth: 1,
+        backend: "native",
+        lifecycle: "running",
+      }),
+    );
+
+    await waitFor(
+      () => session.fleetMetadata.lifecycle,
+      (lifecycle) => lifecycle === "completed",
+    );
+    expect(session.fleetMetadata).toEqual(
+      expect.objectContaining({
+        lifecycle: "completed",
+        completedAt: expect.any(Number),
+        finalResult: "background result",
+      }),
+    );
+  });
+
+  it("restores persisted background ancestry and marks running work interrupted", async () => {
+    const summary = {
+      schemaVersion: 1,
+      id: "persisted-bg",
+      mode: "review",
+      model: "claude-sonnet-4-6",
+      title: "Persisted review",
+      messageCount: 1,
+      totalInputTokens: 20,
+      totalOutputTokens: 10,
+      createdAt: 1,
+      lastActiveAt: 2,
+      background: true,
+    };
+    const fleet = {
+      schemaVersion: 1 as const,
+      placement: "background" as const,
+      parentSessionId: "foreground-1",
+      rootSessionId: "foreground-1",
+      task: "Persisted review",
+      depth: 1,
+      backend: "native" as const,
+      resolvedMode: "review",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "review_code",
+      routingReason: "defaulted to foreground model",
+      fallbackUsed: false,
+      lifecycle: "running" as const,
+    };
+    const saveSession = vi.fn().mockResolvedValue({
+      ok: true,
+      revision: "2",
+    });
+    const store = {
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => [summary]),
+      readSession: vi.fn().mockResolvedValue({
+        ok: true,
+        revision: "1",
+        value: {
+          summary,
+          messages: [{ role: "user", content: "review" }],
+          metadata: {
+            mode: summary.mode,
+            model: summary.model,
+            totalInputTokens: 20,
+            totalOutputTokens: 10,
+            fleet,
+          },
+        },
+      }),
+      saveSession,
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    const restored = await mgr.restorePersistedBackgroundSessions();
+
+    expect(restored).toHaveLength(1);
+    expect(restored[0].fleetMetadata).toEqual(
+      expect.objectContaining({
+        parentSessionId: "foreground-1",
+        lifecycle: "interrupted",
+        terminalReason: "extension_reloaded_during_run",
+      }),
+    );
+    expect(mgr.getBackgroundStatus("persisted-bg")).toEqual(
+      expect.objectContaining({ status: "error", done: true }),
+    );
+    expect(mgr.listPersistedFleetSessions().map((item) => item.id)).toEqual([
+      "persisted-bg",
+    ]);
+    expect(saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedRevision: "1" }),
     );
   });
 
