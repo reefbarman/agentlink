@@ -758,9 +758,8 @@ export function getAgentTools(
       : []),
     ...(profileAllowlist ? [] : [ASK_USER_TOOL]),
     ...(profileAllowlist ? [] : [SET_TASK_STATUS_TOOL]),
-    ...(isBackground || profileAllowlist
-      ? []
-      : [SWITCH_MODE_TOOL, ...BG_AGENT_TOOLS]),
+    ...(profileAllowlist ? [] : [SWITCH_MODE_TOOL]),
+    ...(isBackground || profileAllowlist ? [] : BG_AGENT_TOOLS),
   ];
 }
 
@@ -1113,14 +1112,19 @@ function createSessionStatusProvider(
 
 function createModeSwitchProvider(
   onModeSwitch: NonNullable<ToolDispatchContext["onModeSwitch"]>,
+  sessionId: string,
 ): ModeSwitchProvider {
   return {
     switchMode(request) {
-      // Preserve legacy explicit switch_mode callback shape: only ask_user
-      // modeSwitch consent should pass the silent third argument.
+      // Only ask_user modeSwitch consent passes the silent flag.
       return request.silent === undefined
-        ? onModeSwitch(request.mode, request.reason)
-        : onModeSwitch(request.mode, request.reason, request.silent);
+        ? onModeSwitch(sessionId, request.mode, request.reason)
+        : onModeSwitch(
+            sessionId,
+            request.mode,
+            request.reason,
+            request.silent,
+          );
     },
   };
 }
@@ -1146,6 +1150,7 @@ export interface ToolDispatchContext {
   /** Current agent mode slug (e.g. "architect", "code"). Used for mode-specific approval logic. */
   mode?: string;
   onModeSwitch?: (
+    sessionId: string,
     mode: string,
     reason?: string,
     /**
@@ -2277,7 +2282,7 @@ export async function dispatchToolCall(
       const modeSwitchProvider =
         ctx.modeSwitchProvider ??
         (ctx.onModeSwitch
-          ? createModeSwitchProvider(ctx.onModeSwitch)
+          ? createModeSwitchProvider(ctx.onModeSwitch, ctx.sessionId)
           : undefined);
       return buildAskUserToolResult({
         context,
@@ -2293,7 +2298,7 @@ export async function dispatchToolCall(
       const modeSwitchProvider =
         ctx.modeSwitchProvider ??
         (ctx.onModeSwitch
-          ? createModeSwitchProvider(ctx.onModeSwitch)
+          ? createModeSwitchProvider(ctx.onModeSwitch, ctx.sessionId)
           : undefined);
       if (!modeSwitchProvider) {
         return {

@@ -394,9 +394,9 @@ describe("getAgentTools", () => {
     ).not.toContain("set_task_status");
   });
 
-  it("keeps recursive fleet controls and mode switching out of background sessions for now", () => {
+  it("allows session-scoped mode switching but keeps recursive fleet controls out of background sessions", () => {
     const names = getAgentTools(undefined, undefined, true).map((t) => t.name);
-    expect(names).not.toContain("switch_mode");
+    expect(names).toContain("switch_mode");
     expect(names).not.toContain("spawn_background_agent");
     expect(names).not.toContain("get_background_status");
     expect(names).not.toContain("get_background_result");
@@ -1556,7 +1556,11 @@ describe("dispatchToolCall", () => {
         { ...mockCtx, onModeSwitch },
       );
 
-      expect(onModeSwitch).toHaveBeenCalledWith("architect", "Need a plan");
+      expect(onModeSwitch).toHaveBeenCalledWith(
+        "test-session",
+        "architect",
+        "Need a plan",
+      );
       const parsed = JSON.parse(
         (result.content[0] as { type: "text"; text: string }).text,
       );
@@ -1783,6 +1787,7 @@ describe("dispatchToolCall", () => {
         "test-session",
       );
       expect(onModeSwitch).toHaveBeenCalledWith(
+        "test-session",
         "architect",
         expect.stringContaining("Plan first"),
         true,

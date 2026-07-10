@@ -254,6 +254,7 @@ export class AgentSession {
       activeFilePath: this.activeFilePath,
       providerId: this.providerId,
       model: this.model,
+      isBackground: this.background,
       workspaceFolders: this.workspaceFolders,
       mcpToolCatalog: this.mcpToolDisclosure?.catalog,
     });
@@ -275,6 +276,7 @@ export class AgentSession {
       devMode: opts?.devMode,
       providerId: this.providerId,
       model: this.model,
+      isBackground: this.background,
       workspaceFolders: this.workspaceFolders,
       mcpToolCatalog: this.mcpToolDisclosure?.catalog,
     });

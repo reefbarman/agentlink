@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => {
         followUp?: string;
       } | null = null;
       let assistantText = "background result";
-      return {
+      const mockSession = {
         id: `bg-${seq}`,
         mode: opts.mode,
         model: opts.config.model,
@@ -47,6 +47,9 @@ const mocks = vi.hoisted(() => {
         totalCacheReadTokens: 0,
         totalCacheCreationTokens: 0,
         addUserMessage: vi.fn(),
+        setMode: vi.fn(async (mode: string) => {
+          mockSession.mode = mode;
+        }),
         appendAssistantTurn: vi.fn((content: any[]) => {
           assistantText = content
             .filter((block) => block?.type === "text")
@@ -80,6 +83,7 @@ const mocks = vi.hoisted(() => {
         getLastAssistantText: vi.fn(() => assistantText),
         getFullAssistantTranscript: vi.fn(() => assistantText),
       };
+      return mockSession;
     }),
   };
 });
@@ -522,6 +526,52 @@ describe("AgentSessionManager background agents", () => {
       spawned.sessionId,
       "review task",
     );
+  });
+
+  it("routes background mode switches with the originating session id", async () => {
+    const onModeSwitch = vi.fn().mockResolvedValue({
+      approved: true,
+      mode: "debug",
+    });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({ ...toolCtx, onModeSwitch });
+
+    const spawned = await mgr.spawnBackground({
+      task: "debug task",
+      message: "investigate",
+      mode: "code",
+    });
+    const bgRuntime = mocks.setToolRuntime.mock.calls.at(-1)?.[0];
+
+    await bgRuntime.executeTool({
+      name: "switch_mode",
+      input: { mode: "debug", reason: "Need runtime diagnostics" },
+      context: { sessionId: spawned.sessionId },
+    });
+
+    expect(onModeSwitch).toHaveBeenCalledWith(
+      spawned.sessionId,
+      "debug",
+      "Need runtime diagnostics",
+    );
+  });
+
+  it("switches a background session without changing foreground ownership", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground({
+      task: "debug task",
+      message: "investigate",
+      mode: "code",
+    });
+
+    const switched = await mgr.switchSessionMode(spawned.sessionId, "debug");
+
+    expect(switched?.id).toBe(spawned.sessionId);
+    expect(switched?.mode).toBe("debug");
+    expect(mgr.getForegroundSession()?.id).toBe(foreground.id);
+    expect(mgr.getForegroundSession()?.mode).toBe("code");
   });
 
   it("creates native review agents with the full prompt path", async () => {

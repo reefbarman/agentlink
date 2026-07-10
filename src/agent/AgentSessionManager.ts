@@ -1617,15 +1617,13 @@ export class AgentSessionManager {
     }
   }
 
-  /**
-   * Switch the current foreground session to a different mode in-place,
-   * preserving its message history and session ID.
-   */
-  async switchForegroundMode(
+  /** Switch one session in-place without changing foreground ownership. */
+  async switchSessionMode(
+    sessionId: string,
     mode: string,
     opts?: { agentMode?: AgentMode; devMode?: boolean },
   ): Promise<AgentSession | null> {
-    const session = this.getForegroundSession();
+    const session = this.sessions.get(sessionId);
     if (!session) return null;
 
     const model = this.getModelForMode(mode);
@@ -1637,14 +1635,26 @@ export class AgentSessionManager {
     this.refreshMcpToolDisclosure(session);
     await session.setMode(mode, opts);
 
-    this.updateConfig({
-      model,
-      autoCondenseThreshold: session.autoCondenseThreshold,
-    });
+    if (!session.background && this.foregroundId === session.id) {
+      this.updateConfig({
+        model,
+        autoCondenseThreshold: session.autoCondenseThreshold,
+      });
+    }
 
     this.onSessionsChanged?.();
     this.saveSession(session.id);
     return session;
+  }
+
+  /** Switch the current foreground session while preserving its identity. */
+  async switchForegroundMode(
+    mode: string,
+    opts?: { agentMode?: AgentMode; devMode?: boolean },
+  ): Promise<AgentSession | null> {
+    const session = this.getForegroundSession();
+    if (!session) return null;
+    return this.switchSessionMode(session.id, mode, opts);
   }
 
   queueModeSwitchResume(
@@ -2691,14 +2701,13 @@ export class AgentSessionManager {
     this.onSessionsChanged?.();
 
     // Build a bg-specific tool context: inherit base but block nested spawning,
-    // wrap onApprovalRequest / onQuestion to attribute the request to the
-    // background task, and prevent background agents from switching the
-    // foreground session's mode.
+    // and wrap onApprovalRequest / onQuestion to attribute the request to the
+    // background task. Mode switching is safe because callbacks receive the
+    // originating session ID.
     const baseCtx = this.toolCtx;
     const bgCtx: ToolDispatchContext = {
       ...baseCtx,
       sessionId: session.id,
-      onModeSwitch: undefined,
       onApprovalRequest: baseCtx.onApprovalRequest
         ? (req) => baseCtx.onApprovalRequest!({ ...req, backgroundTask: task })
         : undefined,

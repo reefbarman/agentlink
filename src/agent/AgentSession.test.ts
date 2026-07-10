@@ -545,6 +545,22 @@ describe("AgentSession", () => {
         expect.objectContaining({ providerId: "codex" }),
       );
     });
+
+    it("setMode preserves background prompt identity", async () => {
+      const session = await makeSession({
+        background: true,
+        isBackground: true,
+      });
+      mockedBuildPromptArtifacts.mockClear();
+
+      await session.setMode("debug");
+
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "debug",
+        "/test",
+        expect.objectContaining({ isBackground: true }),
+      );
+    });
   });
 
   describe("rebuildSystemPrompt", () => {
@@ -561,6 +577,22 @@ describe("AgentSession", () => {
         expect.objectContaining({ providerId: "codex" }),
       );
       expect(session.systemPrompt).toBe("rebuilt prompt");
+    });
+
+    it("preserves background prompt identity", async () => {
+      const session = await makeSession({
+        background: true,
+        isBackground: true,
+      });
+      mockedBuildPromptArtifacts.mockClear();
+
+      await session.rebuildSystemPrompt();
+
+      expect(mockedBuildPromptArtifacts).toHaveBeenCalledWith(
+        "code",
+        "/test",
+        expect.objectContaining({ isBackground: true }),
+      );
     });
   });
 

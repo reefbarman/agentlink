@@ -1277,8 +1277,8 @@ export function activate(context: vscode.ExtensionContext): void {
     extensionUri: context.extensionUri,
     globalStorageUri: context.globalStorageUri,
     mcpHub: chatViewProvider.getMcpHub(),
-    onModeSwitch: (mode, reason, silent) =>
-      chatViewProvider.handleModeSwitch(mode, reason, silent),
+    onModeSwitch: (sessionId, mode, reason, silent) =>
+      chatViewProvider.handleModeSwitch(mode, reason, silent, sessionId),
     onApprovalRequest: (request, sessionId) =>
       chatViewProvider.requestApproval(request, sessionId),
     onQuestion: (context, questions, sessionId, backgroundTask) =>
