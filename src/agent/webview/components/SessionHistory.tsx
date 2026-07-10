@@ -133,7 +133,6 @@ export function SessionHistory({
                         if (e.key === "Enter") handleConfirmRename();
                         if (e.key === "Escape") setEditingId(null);
                       }}
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       ref={(el: any) => el?.focus()}
                     />
                     <button

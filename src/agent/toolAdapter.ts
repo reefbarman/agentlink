@@ -1564,7 +1564,6 @@ export async function dispatchToolCall(
     return result;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params = input as any;
 
   switch (toolName) {

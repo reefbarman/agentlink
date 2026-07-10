@@ -166,7 +166,6 @@ vi.mock("../tools/renameSymbol.js", () => ({
     .mockResolvedValue({ content: [{ type: "text", text: "renamed" }] }),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockOnApprovalRequest = vi.fn();
 const mockCtx: ToolDispatchContext = {
   approvalManager: {} as any,

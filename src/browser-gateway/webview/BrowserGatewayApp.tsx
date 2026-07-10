@@ -1123,7 +1123,6 @@ export function BrowserGatewayApp({
   useEffect(() => {
     if (modelsVersion === undefined || modelsVersion === 0) return;
     void fetchModels();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelsVersion]);
 
   useEffect(() => {

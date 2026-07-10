@@ -50,7 +50,7 @@ class FakeProvider implements ModelProvider {
     return this.routable;
   }
 
-  // eslint-disable-next-line require-yield
+  // oxlint-disable-next-line require-yield
   async *stream(_request: StreamRequest): AsyncGenerator<ProviderStreamEvent> {
     return;
   }

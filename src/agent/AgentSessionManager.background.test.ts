@@ -140,11 +140,8 @@ describe("AgentSessionManager background agents", () => {
   };
 
   const toolCtx: ToolDispatchContext = {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     approvalManager: {} as any,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     approvalPanel: {} as any,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     extensionUri: {} as any,
     sessionId: "fg",
   };
