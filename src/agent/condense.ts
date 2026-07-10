@@ -36,6 +36,7 @@ import {
   isTreeSitterSupported,
 } from "../indexer/treeSitterChunker.js";
 import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
+import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -137,7 +138,7 @@ function normalizeToolResultText(text: string): string {
     text.length - (MAX_TOOL_RESULT_TEXT_CHARS - headChars),
   );
   const omittedChars = text.length - head.length - tail.length;
-  const omittedTokens = Math.ceil(omittedChars / 4);
+  const omittedTokens = estimateTokensFromChars(omittedChars);
   return `${head}\n\n[... ~${omittedTokens.toLocaleString()} tokens (~${omittedChars.toLocaleString()} chars) omitted from middle ...]\n\n${tail}`;
 }
 
@@ -777,8 +778,8 @@ function estimateCondenseInputTokens(args: {
   systemPrompt: string;
   messages: MessageParam[];
 }): number {
-  return Math.ceil(
-    (args.systemPrompt.length + estimateMessageTextChars(args.messages)) / 4,
+  return estimateTokensFromChars(
+    args.systemPrompt.length + estimateMessageTextChars(args.messages),
   );
 }
 
@@ -1134,13 +1135,12 @@ export async function summarizeConversation(
 
   newMessages.push(summaryMessage);
 
-  const newInputTokens = Math.ceil(
-    (systemPrompt.length +
+  const newInputTokens = estimateTokensFromChars(
+    systemPrompt.length +
       summaryContent.reduce(
         (acc, b) => acc + (b.type === "text" ? b.text.length : 0),
         0,
-      )) /
-      4,
+      ),
   );
 
   const effectiveHistory = getEffectiveHistory(newMessages);

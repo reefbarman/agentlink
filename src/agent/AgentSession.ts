@@ -31,6 +31,7 @@ import {
   type WorkspaceFolderInfo,
 } from "./systemPrompt.js";
 import { buildSessionTitleFromUserText } from "./sessionTitle.js";
+import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import { randomUUID } from "crypto";
 
 export class AgentSession {
@@ -563,7 +564,7 @@ export class AgentSession {
    * heuristic as Codex CLI.
    */
   addEstimatedTokens(chars: number): void {
-    this.estimatedAccumulatedTokens += Math.ceil(chars / 4);
+    this.estimatedAccumulatedTokens += estimateTokensFromChars(chars);
   }
 
   /**

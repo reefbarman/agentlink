@@ -4,10 +4,8 @@ import * as path from "path";
 import { exec } from "child_process";
 import picomatch from "picomatch";
 import type { ContextBreakdownItem } from "../shared/types.js";
-import {
-  estimateTokensFromChars,
-  measureContextItem,
-} from "./contextBreakdown.js";
+import { measureContextItem } from "./contextBreakdown.js";
+import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import {
   loadAllInstructionBlocks,
   loadAllInstructions,

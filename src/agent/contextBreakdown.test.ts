@@ -1,6 +1,5 @@
 import {
   buildToolContextBreakdown,
-  estimateTokensFromChars,
   measureContextItem,
 } from "./contextBreakdown.js";
 import { describe, expect, it } from "vitest";
@@ -8,13 +7,6 @@ import { describe, expect, it } from "vitest";
 import type { ToolDefinition } from "./providers/types.js";
 
 describe("contextBreakdown", () => {
-  it("estimates tokens from chars conservatively", () => {
-    expect(estimateTokensFromChars(0)).toBe(0);
-    expect(estimateTokensFromChars(1)).toBe(1);
-    expect(estimateTokensFromChars(4)).toBe(1);
-    expect(estimateTokensFromChars(5)).toBe(2);
-  });
-
   it("measures prompt sections", () => {
     expect(measureContextItem("base", "abcd", 2)).toEqual({
       label: "base",

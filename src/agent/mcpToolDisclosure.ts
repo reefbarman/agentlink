@@ -1,6 +1,6 @@
 import type { McpToolDisclosureMode } from "../core/tools/types.js";
 import type { ToolDefinition } from "./providers/types.js";
-import { estimateTokensFromChars } from "./contextBreakdown.js";
+import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 
 export type { McpToolDisclosureMode };

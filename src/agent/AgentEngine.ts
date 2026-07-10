@@ -51,6 +51,7 @@ import type {
 import { toSupportedImageMediaType } from "./providers/types.js";
 import { toCoreModelDocumentMediaType } from "../core/modelRuntime.js";
 import { sleep } from "../util/sleep.js";
+import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_API_RETRIES = 3;
@@ -480,7 +481,7 @@ function truncateToolText(
   const head = headSlice(text, halfChars);
   const tail = tailSlice(text, maxChars - halfChars);
   const omittedChars = text.length - head.length - tail.length;
-  const omittedTokens = Math.ceil(omittedChars / 4);
+  const omittedTokens = estimateTokensFromChars(omittedChars);
 
   let notice = `\n\n[... ~${omittedTokens.toLocaleString()} tokens (~${omittedChars.toLocaleString()} chars) omitted from middle ...]`;
 

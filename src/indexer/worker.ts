@@ -63,6 +63,7 @@ import type {
 } from "./types.js";
 import { EMBEDDING_DIM, EMBEDDING_MODEL } from "./types.js";
 import { sleep } from "../util/sleep.js";
+import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 
 // --- Constants ---
 
@@ -820,11 +821,6 @@ async function handleIncrementalUpdate(
 // OpenAI Embedding API
 // ============================================================
 
-/** Estimate token count for a text (rough: 1 token ≈ 4 chars for code). */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
 /**
  * Split texts into token-aware batches that respect both the count limit
  * (EMBEDDING_BATCH_SIZE) and the token limit (MAX_BATCH_TOKENS).
@@ -840,7 +836,7 @@ function buildTokenAwareBatches(
     let batchTokens = 0;
     const batchStart = i;
     while (i < texts.length && batch.length < EMBEDDING_BATCH_SIZE) {
-      const tokens = estimateTokens(texts[i]);
+      const tokens = estimateTokensFromChars(texts[i].length);
       if (batch.length > 0 && batchTokens + tokens > MAX_BATCH_TOKENS) break;
       batch.push(texts[i]);
       batchTokens += tokens;

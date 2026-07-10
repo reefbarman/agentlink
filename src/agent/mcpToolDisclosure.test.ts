@@ -6,7 +6,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import type { ToolDefinition } from "./providers/types.js";
-import { estimateTokensFromChars } from "./contextBreakdown.js";
+import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 
 function tool(name: string, description = "test tool"): ToolDefinition {
   return {
