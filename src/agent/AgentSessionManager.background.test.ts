@@ -1033,6 +1033,7 @@ describe("AgentSessionManager background agents", () => {
       task: "review task",
       message: "review thoroughly",
       taskClass: "review_code",
+      expectedResult: "review_findings",
     });
 
     expect(mocks.createSession).toHaveBeenCalledWith(
@@ -1043,6 +1044,10 @@ describe("AgentSessionManager background agents", () => {
     );
     expect(mocks.createSession.mock.calls.at(-1)?.[0]).not.toHaveProperty(
       "lightweight",
+    );
+    const session = Array.from((mgr as any).sessions.values()).at(-1) as any;
+    expect(session.addUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining('"type":"review_findings"'),
     );
   });
 

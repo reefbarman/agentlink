@@ -72,8 +72,10 @@ import {
   FleetScheduler,
 } from "./FleetScheduler.js";
 import {
+  parseFleetResultEnvelope,
   planFleetWorkflow,
   type FleetWorkflowRequest,
+  withFleetResultInstruction,
 } from "./FleetWorkflows.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
 
@@ -2733,6 +2735,10 @@ export class AgentSessionManager {
         "spawn_background_agent requires non-empty task and message",
       );
     }
+    const executionMessage = withFleetResultInstruction(
+      request.expectedResult,
+      message,
+    );
 
     const parent = parentSessionId
       ? this.sessions.get(parentSessionId)
@@ -2793,7 +2799,7 @@ export class AgentSessionManager {
       session.reasoningEffort = "none";
       session.title = task.slice(0, 80);
       session.status = "queued";
-      session.addUserMessage(message);
+      session.addUserMessage(executionMessage);
       session.createAbortController();
       this.sessions.set(session.id, session);
       if (parentSessionId) {
@@ -2850,7 +2856,7 @@ export class AgentSessionManager {
             agent: backendRoute.agent,
             cwd: this.cwd,
             additionalDirectories: this.getAcpAdditionalDirectories(),
-            prompt: message,
+            prompt: executionMessage,
             signal: session.abortSignal,
             onEvent: (event) => {
               if (event.type === "stderr") {
@@ -3125,7 +3131,7 @@ export class AgentSessionManager {
     const bgEngine = this.host.createEngine(this.host.providers, this.log);
     bgEngine.setToolRuntime(this.host.createToolRuntime(bgCtx));
 
-    session.addUserMessage(message);
+    session.addUserMessage(executionMessage);
 
     // Fire-and-forget — runs concurrently alongside the foreground session.
     // Background agents run indefinitely (like foreground agents) using
@@ -4317,6 +4323,10 @@ export class AgentSessionManager {
     if (!fleet) return;
     fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
     fleet.finalResult = resultText;
+    fleet.structuredResult = parseFleetResultEnvelope(
+      fleet.delegation?.expectedResult as SpawnBackgroundRequest["expectedResult"],
+      resultText,
+    );
     const meta = this.bgMeta.get(session.id);
     if (meta) {
       fleet.budgetUsage = {
@@ -4532,7 +4542,10 @@ export class AgentSessionManager {
     try {
       const result = await provider.start({
         task: request.task,
-        prompt: request.message,
+        prompt: withFleetResultInstruction(
+          request.expectedResult,
+          request.message,
+        ),
         sourcePath: this.cwd,
         mode: request.mode,
         autoSubmit: true,
@@ -4607,6 +4620,11 @@ export class AgentSessionManager {
             : record.error ?? `worktree_${record.status}`;
         session.fleetMetadata.finalResult =
           record.resultText ?? record.error ?? "Worktree agent ended without output";
+        session.fleetMetadata.structuredResult = parseFleetResultEnvelope(
+          session.fleetMetadata.delegation
+            ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
+          session.fleetMetadata.finalResult,
+        );
         session.fleetMetadata.completedAt = Date.now();
         const meta = this.bgMeta.get(session.id);
         if (meta && record.usage) {
@@ -4945,6 +4963,7 @@ export class AgentSessionManager {
           unreadEventCount: unreadEvents.length,
           events,
           policyAuditCount: s.fleetMetadata?.policyAudit?.length ?? 0,
+          structuredResult: s.fleetMetadata?.structuredResult,
           streamingText,
           resultText,
           errorMessage,

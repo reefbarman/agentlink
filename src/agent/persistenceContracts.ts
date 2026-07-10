@@ -4,6 +4,7 @@ import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
 import type { Question } from "./webview/types.js";
 import type { ReasoningEffort } from "./providers/types.js";
 import type { SessionSummary } from "./SessionStore.js";
+import type { FleetResultEnvelope } from "./FleetWorkflows.js";
 
 export type PersistenceRevision = string;
 
@@ -121,6 +122,7 @@ export interface PersistedFleetMetadata {
   worktreeExchangeId?: string;
   worktreePath?: string;
   childSessionId?: string;
+  structuredResult?: FleetResultEnvelope;
   eventSequence?: number;
   events?: Array<{
     id: string;

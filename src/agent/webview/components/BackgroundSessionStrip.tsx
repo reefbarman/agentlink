@@ -97,6 +97,7 @@ export interface BgSessionInfoProps {
     readAt?: number;
   }>;
   policyAuditCount?: number;
+  structuredResult?: import("../../FleetWorkflows.js").FleetResultEnvelope;
   streamingText?: string;
   resultText?: string;
   resultSummary?: string;
@@ -379,6 +380,9 @@ export function BackgroundSessionStrip({
                 s.budget ? `budget: ${JSON.stringify(s.budget)}` : null,
                 s.policyAuditCount
                   ? `policy decisions: ${s.policyAuditCount}`
+                  : null,
+                s.structuredResult
+                  ? `result: ${JSON.stringify(s.structuredResult)}`
                   : null,
               ].filter((value): value is string => Boolean(value)).join("\n")}
             >

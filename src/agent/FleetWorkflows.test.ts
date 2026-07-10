@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseFleetResultEnvelope, planFleetWorkflow } from "./FleetWorkflows.js";
+import {
+  parseFleetResultEnvelope,
+  planFleetWorkflow,
+  withFleetResultInstruction,
+} from "./FleetWorkflows.js";
 
 describe("fleet workflows", () => {
   it("builds structured review and verification delegations", () => {
@@ -51,5 +55,8 @@ describe("fleet workflows", () => {
         JSON.stringify({ type: "verification", passed: true, summary: "ok" }),
       ),
     ).toEqual({ type: "verification", passed: true, summary: "ok" });
+    expect(withFleetResultInstruction("verification", "Verify it")).toContain(
+      '"type":"verification"',
+    );
   });
 });

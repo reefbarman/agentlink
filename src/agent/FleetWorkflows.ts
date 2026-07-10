@@ -134,3 +134,19 @@ export function parseFleetResultEnvelope(
   }
   return { type: "text", text };
 }
+
+export function withFleetResultInstruction(
+  expected: SpawnBackgroundRequest["expectedResult"],
+  message: string,
+): string {
+  if (!expected || expected === "text") return message;
+  const shapes = {
+    review_findings:
+      '{"type":"review_findings","findings":[{"severity":"critical|high|medium|low","message":"...","path":"optional","line":1}]}',
+    patch:
+      '{"type":"patch","summary":"...","files":["..."],"verification":"optional"}',
+    verification:
+      '{"type":"verification","passed":true,"summary":"...","screenshots":["optional paths"],"logs":["optional evidence"]}',
+  } as const;
+  return `${message}\n\nReturn the final answer as JSON matching this exact result envelope: ${shapes[expected]}`;
+}
