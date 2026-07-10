@@ -1197,6 +1197,12 @@ export interface ToolDispatchContext {
   delegationPolicy?: {
     ownedPaths?: string[];
     forbiddenPaths?: string[];
+    onDecision?: (decision: {
+      decision: "allowed" | "denied";
+      operation: string;
+      reason: string;
+      path?: string;
+    }) => void;
   };
   extensionUri: import("vscode").Uri;
   globalStorageUri?: import("vscode").Uri;
@@ -1448,6 +1454,12 @@ function enforceDelegatedPathPolicy(
   };
   for (const path of paths) {
     if (policy.forbiddenPaths?.some((scope) => contains(scope, path))) {
+      policy.onDecision?.({
+        decision: "denied",
+        operation: toolName,
+        reason: "forbidden_path",
+        path,
+      });
       throw new Error(
         `Delegation policy denied ${toolName} for forbidden path: ${path}`,
       );
@@ -1456,10 +1468,22 @@ function enforceDelegatedPathPolicy(
       policy.ownedPaths?.length &&
       !policy.ownedPaths.some((scope) => contains(scope, path))
     ) {
+      policy.onDecision?.({
+        decision: "denied",
+        operation: toolName,
+        reason: "outside_owned_paths",
+        path,
+      });
       throw new Error(
         `Delegation policy denied ${toolName} outside owned paths: ${path}`,
       );
     }
+    policy.onDecision?.({
+      decision: "allowed",
+      operation: toolName,
+      reason: "delegated_path_allowed",
+      path,
+    });
   }
 }
 

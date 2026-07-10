@@ -138,6 +138,14 @@ export interface PersistedFleetMetadata {
     summary: string;
     readAt?: number;
   }>;
+  policyAudit?: Array<{
+    id: string;
+    timestamp: number;
+    decision: "allowed" | "denied" | "approval_requested";
+    operation: string;
+    reason: string;
+    path?: string;
+  }>;
 }
 
 export interface PersistedSessionMetadata {

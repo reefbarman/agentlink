@@ -248,6 +248,7 @@ export interface BgSessionInfo {
     summary: string;
     readAt?: number;
   }>;
+  policyAuditCount?: number;
   /** Accumulated streaming text from the bg agent (last ~500 chars for preview). */
   streamingText?: string;
   /** Final result text when agent is done. */

@@ -87,6 +87,7 @@ export interface BgSessionInfoProps {
     summary: string;
     readAt?: number;
   }>;
+  policyAuditCount?: number;
   streamingText?: string;
   resultText?: string;
   resultSummary?: string;
@@ -306,6 +307,9 @@ export function BackgroundSessionStrip({
                 s.toolCalls !== undefined ? `tools: ${s.toolCalls}` : null,
                 s.apiTurns !== undefined ? `API turns: ${s.apiTurns}` : null,
                 s.budget ? `budget: ${JSON.stringify(s.budget)}` : null,
+                s.policyAuditCount
+                  ? `policy decisions: ${s.policyAuditCount}`
+                  : null,
               ].filter((value): value is string => Boolean(value)).join("\n")}
             >
               {(s.depth ?? 1) > 1 && (

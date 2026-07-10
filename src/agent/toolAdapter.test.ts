@@ -650,11 +650,13 @@ describe("getAgentTools", () => {
 
 describe("spawn_background_agent tool", () => {
   it("enforces delegated owned and forbidden paths before writes", async () => {
+    const onDecision = vi.fn();
     const runtime = createAgentToolRuntime({
       ...mockCtx,
       delegationPolicy: {
         ownedPaths: ["src/agent"],
         forbiddenPaths: ["src/agent/secrets"],
+        onDecision,
       },
     });
     await expect(
@@ -671,6 +673,15 @@ describe("spawn_background_agent tool", () => {
         context: { sessionId: "test-session", mode: "code" },
       }),
     ).rejects.toThrow(/forbidden path/);
+    expect(onDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "denied",
+        reason: "outside_owned_paths",
+      }),
+    );
+    expect(onDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "denied", reason: "forbidden_path" }),
+    );
   });
 
   it("schema includes routing, delegation, and budget params", () => {

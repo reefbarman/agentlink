@@ -3044,9 +3044,15 @@ export class AgentSessionManager {
       delegationPolicy: {
         ownedPaths: request.ownedPaths,
         forbiddenPaths: request.forbiddenPaths,
+        onDecision: (decision) => this.appendPolicyAudit(session, decision),
       },
       onApprovalRequest: baseCtx.onApprovalRequest
         ? (req) => {
+            this.appendPolicyAudit(session, {
+              decision: "approval_requested",
+              operation: req.kind,
+              reason: req.title || "approval_required",
+            });
             this.appendFleetEvent(
               session,
               "approval",
@@ -4165,6 +4171,28 @@ export class AgentSessionManager {
     this.onSessionsChanged?.();
   }
 
+  private appendPolicyAudit(
+    session: AgentSession,
+    entry: {
+      decision: "allowed" | "denied" | "approval_requested";
+      operation: string;
+      reason: string;
+      path?: string;
+    },
+  ): void {
+    const fleet = session.fleetMetadata;
+    if (!fleet) return;
+    fleet.policyAudit = [
+      ...(fleet.policyAudit ?? []).slice(-199),
+      {
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        ...entry,
+      },
+    ];
+    this.saveSession(session.id);
+  }
+
   markFleetEventsRead(sessionId: string): { marked: number } {
     const session = this.sessions.get(sessionId);
     const events = session?.fleetMetadata?.events;
@@ -4627,6 +4655,7 @@ export class AgentSessionManager {
           archivedAt: s.fleetMetadata?.archivedAt,
           unreadEventCount: unreadEvents.length,
           events,
+          policyAuditCount: s.fleetMetadata?.policyAudit?.length ?? 0,
           streamingText,
           resultText,
           errorMessage,
