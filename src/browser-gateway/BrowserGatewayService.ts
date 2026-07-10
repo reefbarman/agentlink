@@ -18,6 +18,11 @@ import type {
   BgSessionInfo,
   BrowserGatewayThemeSnapshot,
 } from "../shared/types.js";
+import {
+  getDevelopmentStreamingBaselineMetrics,
+  type StreamingBaselineMetrics,
+  utf8ByteLength,
+} from "../shared/streamingBaselineMetrics.js";
 
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
@@ -281,6 +286,10 @@ export class BrowserGatewayService implements vscode.Disposable {
       ChatViewProvider["getBrowserMcpStatusInfos"]
     >,
     private readonly maxRecentEvents = 20,
+    private readonly streamingMetrics: StreamingBaselineMetrics = getDevelopmentStreamingBaselineMetrics(
+      "vscode-gateway",
+      __DEV_BUILD__,
+    ),
   ) {
     const snapshot = uiEventHub.getSnapshot();
     if (snapshot) {
@@ -346,9 +355,20 @@ export class BrowserGatewayService implements vscode.Disposable {
     const projectedMatchesForeground =
       projected && projected.sessionId === foreground.id;
 
+    const projectionStartedAt = this.streamingMetrics.enabled
+      ? performance.now()
+      : 0;
     const projectedMessages = projectedMatchesForeground
       ? projected.projectedMessages
       : agentMessagesToChatMessages(persistedMessages);
+    if (this.streamingMetrics.enabled) {
+      this.streamingMetrics.record({
+        type: "message_projection",
+        surface: "vscode-gateway",
+        durationMs: performance.now() - projectionStartedAt,
+        messageCount: projectedMessages.length,
+      });
+    }
 
     return {
       sessions,
@@ -679,8 +699,19 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   private emitSnapshot(): void {
+    const snapshotStartedAt = this.streamingMetrics.enabled
+      ? performance.now()
+      : 0;
     const snapshot = this.getSerializableSnapshotState();
+    this.recordSnapshotBuild(snapshot, snapshotStartedAt);
+    const serializationStartedAt = this.streamingMetrics.enabled
+      ? performance.now()
+      : 0;
     this.lastSerializedSnapshot = JSON.stringify(snapshot);
+    this.recordSerialization(
+      this.lastSerializedSnapshot,
+      serializationStartedAt,
+    );
     this.onDidChangeEmitter.fire(snapshot);
   }
 
@@ -691,12 +722,43 @@ export class BrowserGatewayService implements vscode.Disposable {
     if (this.hasActiveClientsProbe && !this.hasActiveClientsProbe()) {
       return;
     }
+    const snapshotStartedAt = this.streamingMetrics.enabled
+      ? performance.now()
+      : 0;
     const snapshot = this.getSerializableSnapshotState();
+    this.recordSnapshotBuild(snapshot, snapshotStartedAt);
+    const serializationStartedAt = this.streamingMetrics.enabled
+      ? performance.now()
+      : 0;
     const serialized = JSON.stringify(snapshot);
+    this.recordSerialization(serialized, serializationStartedAt);
     if (serialized === this.lastSerializedSnapshot) {
       return;
     }
     this.lastSerializedSnapshot = serialized;
     this.onDidChangeEmitter.fire(snapshot);
+  }
+
+  private recordSnapshotBuild(
+    snapshot: BrowserGatewaySnapshotState,
+    startedAt: number,
+  ): void {
+    if (!this.streamingMetrics.enabled) return;
+    this.streamingMetrics.record({
+      type: "snapshot_build",
+      surface: "vscode-gateway",
+      durationMs: performance.now() - startedAt,
+      messageCount: snapshot.session.foreground?.projectedMessages.length ?? 0,
+    });
+  }
+
+  private recordSerialization(serialized: string, startedAt: number): void {
+    if (!this.streamingMetrics.enabled) return;
+    this.streamingMetrics.record({
+      type: "serialization",
+      surface: "vscode-gateway",
+      durationMs: performance.now() - startedAt,
+      bytes: utf8ByteLength(serialized),
+    });
   }
 }

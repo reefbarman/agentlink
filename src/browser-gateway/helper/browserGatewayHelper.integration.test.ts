@@ -33,6 +33,7 @@ import type {
   BrowserGatewayAskAgentSummarizer,
   BrowserGatewayAskAgentSummaryResult,
 } from "./browserGatewayAskAgentSummarizer.js";
+import { StreamingBaselineRecorder } from "../../shared/streamingBaselineMetrics.js";
 
 async function waitForListening(
   server: http.Server,
@@ -120,6 +121,7 @@ type AskAgentToolLoopTestClient = Pick<
 async function makeAskAgentToolLoopTestHarness(params: {
   modelClient: AskAgentToolLoopTestClient;
   helperVersion?: string;
+  streamingMetrics?: StreamingBaselineRecorder;
 }): Promise<{
   helper: BrowserGatewayHelper;
   helperServer: http.Server;
@@ -157,6 +159,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
       askAgentMemoryStore: new BrowserGatewayAskAgentMemoryStore({
         filePath: path.join(storeDir, "memory.json"),
       }),
+      streamingMetrics: params.streamingMetrics,
     },
   );
   helperServer.on("request", helper.handleRequest);
@@ -3767,7 +3770,11 @@ describe("BrowserGatewayHelper proxy routing", () => {
         return { text: "Continuing after your answer.", toolCalls: [] };
       },
     );
-    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    const streamingMetrics = new StreamingBaselineRecorder();
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      streamingMetrics,
+    });
     helper = harness.helper;
     servers.push(harness.helperServer);
 
@@ -3866,6 +3873,18 @@ describe("BrowserGatewayHelper proxy routing", () => {
     expect(assistant?.blocks).toEqual([
       { type: "text", text: "Continuing after your answer." },
     ]);
+    expect(streamingMetrics.summarize("ask-agent-helper")).toMatchObject({
+      textDeltas: 2,
+      semanticDeltas: 2,
+      coalescingOpportunities: 0,
+      connectedClientsMax: 0,
+    });
+    expect(
+      streamingMetrics.summarize("ask-agent-helper").snapshotBuilds,
+    ).toBeGreaterThanOrEqual(4);
+    expect(
+      streamingMetrics.summarize("ask-agent-helper").projectedMessages,
+    ).toBeGreaterThan(0);
   });
 
   it("applies safe Ask Agent todo_write and set_task_status tool calls", async () => {

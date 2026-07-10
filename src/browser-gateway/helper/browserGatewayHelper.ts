@@ -152,6 +152,11 @@ import {
   MAX_MEMORY_NUDGES_PER_SESSION,
   detectMemoryCandidates,
 } from "../../shared/memoryCandidates.js";
+import {
+  getDevelopmentStreamingBaselineMetrics,
+  type StreamingBaselineMetrics,
+  utf8ByteLength,
+} from "../../shared/streamingBaselineMetrics.js";
 
 export interface HelperRuntimeOptions {
   port: number;
@@ -596,6 +601,7 @@ export class BrowserGatewayHelper {
   private modelCatalogSnapshot: CoreModelCatalogSnapshot | null = null;
   private readonly askAgentSessionStore: BrowserGatewayAskAgentSessionStore;
   private readonly askAgentEventClients = new Set<http.ServerResponse>();
+  private readonly streamingMetrics: StreamingBaselineMetrics;
   private readonly askAgentModelClient: Pick<
     BrowserGatewayAskAgentModelClient,
     "complete"
@@ -662,8 +668,12 @@ export class BrowserGatewayHelper {
       askAgentMemorySummaryDebounceMs?: number;
       askAgentPreferencesStore?: BrowserGatewayAskAgentPreferencesStore;
       askAgentHistoryStore?: BrowserGatewayAskAgentHistoryStore;
+      streamingMetrics?: StreamingBaselineMetrics;
     } = {},
   ) {
+    this.streamingMetrics =
+      injectables.streamingMetrics ??
+      getDevelopmentStreamingBaselineMetrics("ask-agent-helper", __DEV_BUILD__);
     this.deviceStore = injectables.deviceStore ?? new DeviceStore();
     this.pairingBroker = injectables.pairingBroker ?? new PairingBroker();
     this.mdnsAdvertiser = injectables.mdnsAdvertiser ?? null;
@@ -2002,7 +2012,8 @@ export class BrowserGatewayHelper {
     now: number,
     theme: BrowserGatewayThemeSnapshot,
   ): ReturnType<BrowserGatewayAskAgentSessionStore["getOrCreate"]> {
-    return this.askAgentSessionStore.getOrCreate({
+    const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
+    const response = this.askAgentSessionStore.getOrCreate({
       now,
       theme,
       modelCredentialStatus: this.getAskAgentModelCredentialStatus(now),
@@ -2012,6 +2023,8 @@ export class BrowserGatewayHelper {
         null,
       memoryCandidateNudge: this.askAgentMemoryCandidateNudge,
     });
+    this.recordAskAgentSnapshotBuild(response.snapshot, startedAt);
+    return response;
   }
 
   private async persistAskAgentHistory(): Promise<void> {
@@ -2538,8 +2551,11 @@ export class BrowserGatewayHelper {
       Connection: "keep-alive",
     });
     this.askAgentEventClients.add(res);
+    this.recordAskAgentClientCount();
     req.on("close", () => {
-      this.askAgentEventClients.delete(res);
+      if (this.askAgentEventClients.delete(res)) {
+        this.recordAskAgentClientCount();
+      }
     });
     this.writeAskAgentEvent(res, "snapshot", response.snapshot);
   }
@@ -3518,14 +3534,16 @@ export class BrowserGatewayHelper {
       this.askAgentModelClient.completeWithToolCalls?.bind(
         this.askAgentModelClient,
       );
-    const broadcastTurnSnapshot = () =>
-      this.broadcastAskAgentSnapshot(
-        this.askAgentSessionStore.getOrCreate({
-          now: Date.now(),
-          theme: params.theme,
-          modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
-        }).snapshot,
-      );
+    const broadcastTurnSnapshot = () => {
+      const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
+      const snapshot = this.askAgentSessionStore.getOrCreate({
+        now: Date.now(),
+        theme: params.theme,
+        modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
+      }).snapshot;
+      this.recordAskAgentSnapshotBuild(snapshot, startedAt);
+      this.broadcastAskAgentSnapshot(snapshot);
+    };
 
     if (!completeWithToolCalls) {
       const assistantText = await this.askAgentModelClient.complete({
@@ -3536,6 +3554,14 @@ export class BrowserGatewayHelper {
         memoryContext: params.memoryContext,
         signal: params.signal,
         onDelta: (delta) => {
+          if (this.streamingMetrics.enabled) {
+            this.streamingMetrics.record({
+              type: "delta",
+              surface: "ask-agent-helper",
+              kind: "text",
+              chars: delta.length,
+            });
+          }
           this.askAgentSessionStore.appendAssistantDelta(
             params.assistantMessageId,
             delta,
@@ -3569,6 +3595,14 @@ export class BrowserGatewayHelper {
           signal: params.signal,
           onDelta: (delta) => {
             onText(delta);
+            if (this.streamingMetrics.enabled) {
+              this.streamingMetrics.record({
+                type: "delta",
+                surface: "ask-agent-helper",
+                kind: "text",
+                chars: delta.length,
+              });
+            }
             this.askAgentSessionStore.appendAssistantDelta(
               params.assistantMessageId,
               delta,
@@ -3580,6 +3614,7 @@ export class BrowserGatewayHelper {
       },
       runTool: async (toolCall) => {
         const toolStartedAt = Date.now();
+        this.recordAskAgentSemanticDelta();
         this.askAgentSessionStore.startAssistantToolCall({
           messageId: params.assistantMessageId,
           toolCallId: toolCall.id,
@@ -3592,6 +3627,7 @@ export class BrowserGatewayHelper {
           mcpBridgeTarget,
           params.signal,
         );
+        this.recordAskAgentSemanticDelta();
         this.askAgentSessionStore.completeAssistantToolCall({
           messageId: params.assistantMessageId,
           toolCallId: toolCall.id,
@@ -4434,6 +4470,7 @@ export class BrowserGatewayHelper {
           }
         : {}),
     });
+    this.recordAskAgentSemanticDelta();
     this.askAgentSessionStore.setQuestionRequest(null);
     const marker: FinalMessageMarker = {
       status: status as FinalMessageStatus,
@@ -5085,6 +5122,13 @@ export class BrowserGatewayHelper {
       BrowserGatewayAskAgentSessionStore["getOrCreate"]
     >["snapshot"],
   ): void {
+    if (this.streamingMetrics.enabled) {
+      this.streamingMetrics.record({
+        type: "broadcast",
+        surface: "ask-agent-helper",
+        clientCount: this.askAgentEventClients.size,
+      });
+    }
     for (const client of this.askAgentEventClients) {
       try {
         this.writeAskAgentEvent(client, "update", snapshot);
@@ -5102,10 +5146,64 @@ export class BrowserGatewayHelper {
     >["snapshot"],
   ): void {
     if (res.destroyed || res.writableEnded) {
-      this.askAgentEventClients.delete(res);
+      if (this.askAgentEventClients.delete(res)) {
+        this.recordAskAgentClientCount();
+      }
       return;
     }
-    res.write(`event: ${event}\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
+    const serialized = JSON.stringify(snapshot);
+    if (this.streamingMetrics.enabled) {
+      this.streamingMetrics.record({
+        type: "serialization",
+        surface: "ask-agent-helper",
+        durationMs: performance.now() - startedAt,
+        bytes: utf8ByteLength(serialized),
+      });
+    }
+    res.write(`event: ${event}\ndata: ${serialized}\n\n`);
+  }
+
+  private recordAskAgentSnapshotBuild(
+    snapshot: ReturnType<
+      BrowserGatewayAskAgentSessionStore["getOrCreate"]
+    >["snapshot"],
+    startedAt: number,
+  ): void {
+    if (!this.streamingMetrics.enabled) return;
+    const messageCount = snapshot.session.foreground.projectedMessages.length;
+    const durationMs = performance.now() - startedAt;
+    this.streamingMetrics.record({
+      type: "snapshot_build",
+      surface: "ask-agent-helper",
+      durationMs,
+      messageCount,
+    });
+    this.streamingMetrics.record({
+      type: "message_projection",
+      surface: "ask-agent-helper",
+      durationMs,
+      messageCount,
+    });
+  }
+
+  private recordAskAgentSemanticDelta(): void {
+    if (!this.streamingMetrics.enabled) return;
+    this.streamingMetrics.record({
+      type: "delta",
+      surface: "ask-agent-helper",
+      kind: "semantic",
+      chars: 0,
+    });
+  }
+
+  private recordAskAgentClientCount(): void {
+    if (!this.streamingMetrics.enabled) return;
+    this.streamingMetrics.record({
+      type: "sse_clients",
+      surface: "ask-agent-helper",
+      clientCount: this.askAgentEventClients.size,
+    });
   }
 
   private async handleProxyRequest(

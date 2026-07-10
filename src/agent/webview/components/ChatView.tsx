@@ -1,3 +1,7 @@
+import type {
+  StreamingBaselineMetrics,
+  StreamingBaselineSurface,
+} from "../../../shared/streamingBaselineMetrics";
 import {
   useCallback,
   useEffect,
@@ -47,6 +51,12 @@ interface ChatViewProps {
   onOpenTranscript?: (sessionId: string) => void;
   onFinalMarkerContinue?: (prompt: string) => void;
   initialMessageLimit?: number;
+  streamingMetrics?: StreamingBaselineMetrics;
+  streamingMetricsSurface?: Extract<
+    StreamingBaselineSurface,
+    "vscode-webview" | "browser-webview"
+  >;
+  streamingMetricsScope?: string;
 }
 
 export function ChatView({
@@ -73,6 +83,9 @@ export function ChatView({
   onOpenTranscript,
   onFinalMarkerContinue,
   initialMessageLimit,
+  streamingMetrics,
+  streamingMetricsSurface,
+  streamingMetricsScope,
 }: ChatViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -294,6 +307,9 @@ export function ChatView({
             onFinalMarkerContinue={onFinalMarkerContinue}
             onRevertCheckpoint={onRevertCheckpoint}
             onViewCheckpointDiff={onViewCheckpointDiff}
+            streamingMetrics={streamingMetrics}
+            streamingMetricsSurface={streamingMetricsSurface}
+            streamingMetricsScope={streamingMetricsScope}
           />
         </div>
       </div>

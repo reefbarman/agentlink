@@ -52,3 +52,33 @@ Delete specific feedback entries by their 0-based index (as returned by `get_fee
 | Parameter | Type     | Description                        |
 | --------- | -------- | ---------------------------------- |
 | `indices` | number[] | Array of 0-based indices to delete |
+
+## Streaming Baseline
+
+Development builds collect bounded, non-reactive streaming metrics for the VS Code gateway, helper Ask Agent, and both transcript webviews. Production builds use no-op recorders and do not mount transcript metric wrappers.
+
+Inspect the current runtime from its own developer console (Extension Host, helper process, VS Code webview, or browser webview):
+
+```js
+__agentlinkStreamingBaseline.summarize("browser-webview")
+__agentlinkStreamingBaseline.events("browser-webview")
+__agentlinkStreamingBaseline.reset("browser-webview")
+```
+
+Use the matching surface name: `vscode-gateway`, `ask-agent-helper`, `vscode-webview`, or `browser-webview`. Each process/webview keeps its own latest 50,000 samples and reports dropped samples in the summary.
+
+### Reproduce
+
+- [ ] Run `npx vitest run src/shared/streamingBaselineMetrics.test.ts src/shared/streamingBaselineFixture.test.ts src/agent/webview/components/TranscriptMessageList.test.ts src/browser-gateway/BrowserGatewayService.test.ts src/browser-gateway/BrowserGatewayServer.test.ts`.
+- [ ] Run `npx vitest run src/browser-gateway/helper/browserGatewayHelper.integration.test.ts -t "surfaces safe Ask Agent ask_user tool calls and resumes after submitted answers"`.
+- [ ] Confirm all fixture and integration assertions pass before comparing later optimizations.
+
+### Current baseline
+
+- [x] Scenarios cover 4- and 200-message transcripts, 1 and 3 SSE clients, 8 text deltas, and 4 tool/approval/final-status transitions.
+- [x] Twelve browser-observed updates produce 24 full snapshot builds and serializations, plus 12 broadcasts. The 150 ms VS Code poll can collapse faster token deltas before they become observed updates.
+- [x] Broadcast deliveries scale with clients: 12 for one client and 36 for three clients.
+- [x] Eight uninterrupted text deltas expose seven coalescing opportunities.
+- [x] Unchanged-history commits scale with transcript length: 36 for 4 messages and 2,388 for 200 messages.
+- [x] The real helper ask-user pause/resume fixture records 2 text deltas, 2 semantic boundaries, and 9 full snapshot builds; semantic pauses correctly split coalescing bursts.
+- [x] The measured per-update amplification is material. Capture turn-level runtime timings for representative model cadences before choosing coalescing windows; continue with shared-history memoization and retain semantic flush boundaries.

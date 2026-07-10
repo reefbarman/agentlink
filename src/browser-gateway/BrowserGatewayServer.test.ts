@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserGatewayServer } from "./BrowserGatewayServer.js";
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
+import { StreamingBaselineRecorder } from "../shared/streamingBaselineMetrics.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 
 vi.mock("vscode", () => {
@@ -222,6 +223,73 @@ afterEach(() => {
 });
 
 describe("BrowserGatewayServer", () => {
+  it("records one wire serialization per broadcast across multiple SSE clients", async () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const recorder = new StreamingBaselineRecorder();
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => ({
+        cssVariables: {},
+        colorScheme: "dark",
+        themeLabel: "Dark",
+        source: "vscode-theme-api",
+      }),
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+      20,
+      recorder,
+    );
+    const server = new BrowserGatewayServer(
+      service,
+      makeChatViewProviderStub() as never,
+      "test-token",
+      "metrics-instance",
+      "Metrics Workspace",
+      "/workspace/metrics",
+      vi.fn(),
+      recorder,
+    );
+    const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+
+    try {
+      const port = await server.start(0);
+      for (let index = 0; index < 2; index += 1) {
+        const response = await fetch(`http://127.0.0.1:${port}/events`);
+        const reader = response.body!.getReader();
+        readers.push(reader);
+        await reader.read();
+      }
+      expect(recorder.summarize("vscode-gateway").connectedClientsMax).toBe(2);
+      recorder.reset();
+
+      hub.publishApproval({
+        kind: "write",
+        id: "metrics-approval",
+        filePath: "src/file.ts",
+        writeOperation: "modify",
+      });
+      await Promise.all(readers.map((reader) => reader.read()));
+
+      expect(recorder.summarize("vscode-gateway")).toMatchObject({
+        snapshotBuilds: 2,
+        serializations: 2,
+        broadcasts: 1,
+        broadcastDeliveries: 2,
+        connectedClientsMax: 2,
+      });
+    } finally {
+      await Promise.all(readers.map((reader) => reader.cancel()));
+      await server.stop();
+      service.dispose();
+      hub.dispose();
+    }
+  });
+
   it("serves API/stream routes, registry/snapshot state, diff detail, and routes browser actions", async () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();

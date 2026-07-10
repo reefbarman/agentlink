@@ -1,9 +1,10 @@
 /** @vitest-environment jsdom */
 
+import { cleanup, render, screen } from "@testing-library/preact";
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/preact";
 
 import type { ChatMessage } from "../types";
+import { StreamingBaselineRecorder } from "../../../shared/streamingBaselineMetrics";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { h } from "preact";
 
@@ -186,9 +187,7 @@ describe("TranscriptMessageList background result rendering", () => {
 
     const rows = Array.from(container.querySelectorAll(".assistant-message"));
     expect(rows).toHaveLength(3);
-    expect(rows[0].textContent).toContain(
-      "I am checking the foreground path.",
-    );
+    expect(rows[0].textContent).toContain("I am checking the foreground path.");
     expect(rows[1].textContent).toContain("Background Result");
     expect(rows[1].textContent).toContain("Review implementation");
     expect(rows[1].textContent).toContain("No blocking issues found.");
@@ -228,5 +227,160 @@ describe("TranscriptMessageList background result rendering", () => {
     expect(activeRow).toBe(rows[0]);
     expect(activeRow?.textContent).not.toContain("Background Result");
     expect(rows[1].textContent).toContain("Background Result");
+  });
+});
+
+describe("TranscriptMessageList streaming baseline metrics", () => {
+  it("distinguishes unchanged history from the active message", () => {
+    const history: ChatMessage = {
+      id: "history-1",
+      role: "user",
+      content: "Earlier prompt",
+      timestamp: 1,
+      blocks: [],
+    };
+    const active: ChatMessage = {
+      id: "active-1",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+      blocks: [{ type: "text", text: "A" }],
+    };
+    const recorder = new StreamingBaselineRecorder();
+    const { rerender } = render(
+      h(TranscriptMessageList, {
+        messages: [history, active],
+        streaming: true,
+        streamingMetrics: recorder,
+        streamingMetricsSurface: "vscode-webview",
+        streamingMetricsScope: "session-1",
+      }),
+    );
+    recorder.reset();
+
+    const nextActive: ChatMessage = {
+      ...active,
+      blocks: [{ type: "text", text: "AB" }],
+    };
+    rerender(
+      h(TranscriptMessageList, {
+        messages: [{ ...history }, nextActive],
+        streaming: true,
+        streamingMetrics: recorder,
+        streamingMetricsSurface: "vscode-webview",
+        streamingMetricsScope: "session-1",
+      }),
+    );
+
+    expect(recorder.summarize("vscode-webview", "session-1")).toMatchObject({
+      historyRenders: 1,
+      unchangedHistoryRenders: 1,
+      activeRenders: 1,
+      historyCommits: 1,
+      unchangedHistoryCommits: 1,
+      activeCommits: 1,
+    });
+    cleanup();
+  });
+
+  it("measures long-transcript amplification through real Preact renders", () => {
+    const history: ChatMessage[] = Array.from({ length: 199 }, (_, index) => ({
+      id: `history-${index + 1}`,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: index % 2 === 0 ? `Prompt ${index + 1}` : "",
+      timestamp: index + 1,
+      blocks:
+        index % 2 === 0
+          ? []
+          : [{ type: "text" as const, text: `Response ${index + 1}` }],
+    }));
+    const active: ChatMessage = {
+      id: "active-long",
+      role: "assistant",
+      content: "",
+      timestamp: 200,
+      blocks: [{ type: "text", text: "A" }],
+    };
+    const recorder = new StreamingBaselineRecorder();
+    const { rerender } = render(
+      h(TranscriptMessageList, {
+        messages: [...history, active],
+        streaming: true,
+        streamingMetrics: recorder,
+        streamingMetricsSurface: "browser-webview",
+        streamingMetricsScope: "long-session",
+      }),
+    );
+    recorder.reset();
+
+    for (let update = 1; update <= 12; update += 1) {
+      rerender(
+        h(TranscriptMessageList, {
+          messages: [
+            ...history,
+            {
+              ...active,
+              blocks: [{ type: "text", text: `A${update}` }],
+            },
+          ],
+          streaming: true,
+          streamingMetrics: recorder,
+          streamingMetricsSurface: "browser-webview",
+          streamingMetricsScope: "long-session",
+        }),
+      );
+    }
+
+    expect(recorder.summarize("browser-webview", "long-session")).toMatchObject(
+      {
+        historyRenders: 2_388,
+        unchangedHistoryRenders: 2_388,
+        activeRenders: 12,
+        historyCommits: 2_388,
+        unchangedHistoryCommits: 2_388,
+        activeCommits: 12,
+      },
+    );
+    cleanup();
+  });
+
+  it("classifies split background results outside the active row", () => {
+    const recorder = new StreamingBaselineRecorder();
+    const messages: ChatMessage[] = [
+      {
+        id: "assistant-streaming-with-bg-result",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [
+          { type: "text", text: "Foreground work is still in progress." },
+          {
+            type: "bg_agent_result",
+            sessionId: "bg-2",
+            task: "Check tests",
+            status: "completed",
+            resultText: "Tests look covered.",
+          },
+        ],
+      },
+    ];
+
+    render(
+      h(TranscriptMessageList, {
+        messages,
+        streaming: true,
+        streamingMetrics: recorder,
+        streamingMetricsSurface: "browser-webview",
+        streamingMetricsScope: "ask-agent",
+      }),
+    );
+
+    expect(recorder.summarize("browser-webview", "ask-agent")).toMatchObject({
+      historyRenders: 1,
+      activeRenders: 1,
+      historyCommits: 1,
+      activeCommits: 1,
+    });
+    cleanup();
   });
 });

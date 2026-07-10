@@ -24,6 +24,11 @@ import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { DecisionMessage } from "../approvals/webview/types.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 import { writeBrowserGatewayThemeCache } from "./browserGatewayThemeCache.js";
+import {
+  getDevelopmentStreamingBaselineMetrics,
+  type StreamingBaselineMetrics,
+  utf8ByteLength,
+} from "../shared/streamingBaselineMetrics.js";
 
 export type BrowserGatewaySnapshot = ReturnType<
   BrowserGatewayService["getSerializableSnapshotState"]
@@ -61,6 +66,10 @@ export class BrowserGatewayServer implements vscode.Disposable {
     private readonly workspaceName: string,
     private readonly workspacePath: string,
     private readonly log: (message: string) => void,
+    private readonly streamingMetrics: StreamingBaselineMetrics = getDevelopmentStreamingBaselineMetrics(
+      "vscode-gateway",
+      __DEV_BUILD__,
+    ),
   ) {}
 
   async start(port = 0): Promise<number> {
@@ -137,7 +146,18 @@ export class BrowserGatewayServer implements vscode.Disposable {
   }
 
   getSnapshot(): BrowserGatewaySnapshot {
-    return this.gatewayService.getSerializableSnapshotState();
+    const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
+    const snapshot = this.gatewayService.getSerializableSnapshotState();
+    if (this.streamingMetrics.enabled) {
+      this.streamingMetrics.record({
+        type: "snapshot_build",
+        surface: "vscode-gateway",
+        durationMs: performance.now() - startedAt,
+        messageCount:
+          snapshot.session.foreground?.projectedMessages.length ?? 0,
+      });
+    }
+    return snapshot;
   }
 
   private async upsertCurrentRegistryRecord(
@@ -970,15 +990,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
     res.flushHeaders?.();
 
     const snapshot = this.getSnapshot();
-    if (
-      !this.writeSseChunk(
-        res,
-        `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
-      )
-    ) {
+    const { serialized } = this.serializeSnapshot(snapshot);
+    if (!this.writeSseChunk(res, `event: snapshot\ndata: ${serialized}\n\n`)) {
       return;
     }
     this.sseClients.add(res);
+    this.recordSseClientCount();
     this.sseKeepaliveTimers.set(
       res,
       setInterval(() => {
@@ -998,12 +1015,38 @@ export class BrowserGatewayServer implements vscode.Disposable {
   }
 
   private broadcast(payload: unknown): void {
-    const chunk = `event: update\ndata: ${JSON.stringify(payload)}\n\n`;
+    const { serialized, bytes } = this.serializeSnapshot(payload);
+    if (this.streamingMetrics.enabled) {
+      this.streamingMetrics.record({
+        type: "broadcast",
+        surface: "vscode-gateway",
+        clientCount: this.sseClients.size,
+        bytes,
+      });
+    }
+    const chunk = `event: update\ndata: ${serialized}\n\n`;
     for (const client of this.sseClients) {
       if (!this.writeSseChunk(client, chunk)) {
         this.removeSseClient(client);
       }
     }
+  }
+
+  private serializeSnapshot(payload: unknown): {
+    serialized: string;
+    bytes: number | undefined;
+  } {
+    const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
+    const serialized = JSON.stringify(payload);
+    if (!this.streamingMetrics.enabled) return { serialized, bytes: undefined };
+    const bytes = utf8ByteLength(serialized);
+    this.streamingMetrics.record({
+      type: "serialization",
+      surface: "vscode-gateway",
+      durationMs: performance.now() - startedAt,
+      bytes,
+    });
+    return { serialized, bytes };
   }
 
   private writeSseChunk(client: http.ServerResponse, chunk: string): boolean {
@@ -1017,7 +1060,8 @@ export class BrowserGatewayServer implements vscode.Disposable {
   }
 
   private removeSseClient(client: http.ServerResponse): void {
-    this.sseClients.delete(client);
+    const removed = this.sseClients.delete(client);
+    if (removed) this.recordSseClientCount();
     const keepaliveTimer = this.sseKeepaliveTimers.get(client);
     if (keepaliveTimer) {
       clearInterval(keepaliveTimer);
@@ -1030,6 +1074,15 @@ export class BrowserGatewayServer implements vscode.Disposable {
         // ignore
       }
     }
+  }
+
+  private recordSseClientCount(): void {
+    if (!this.streamingMetrics.enabled) return;
+    this.streamingMetrics.record({
+      type: "sse_clients",
+      surface: "vscode-gateway",
+      clientCount: this.sseClients.size,
+    });
   }
 
   private async handleInstancesRequest(

@@ -58,6 +58,7 @@ import { TodoPanel } from "./components/TodoPanel";
 import { TranscriptView } from "./components/TranscriptView";
 import { UrlElicitationModal } from "./components/UrlElicitationModal";
 import { detectQuestionFromAssistantText } from "./questionDetection";
+import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
@@ -141,6 +142,10 @@ export interface Injection {
   path?: string;
   context?: string;
 }
+
+const streamingBaselineMetrics = __DEV_BUILD__
+  ? getDevelopmentStreamingBaselineMetrics("vscode-webview", true)
+  : undefined;
 
 export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -413,6 +418,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         case "agentToolStart":
           if (dropIfNotStreaming()) break;
+          streamingBaselineMetrics?.record({
+            type: "delta",
+            surface: "vscode-webview",
+            kind: "semantic",
+            chars: 0,
+          });
           // Flush any buffered text deltas first so pre-tool text lands in its
           // own block before the tool_call block is inserted.
           flushDeltasNow();
@@ -433,6 +444,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         case "agentToolComplete":
           if (dropIfNotStreaming()) break;
+          streamingBaselineMetrics?.record({
+            type: "delta",
+            surface: "vscode-webview",
+            kind: "semantic",
+            chars: 0,
+          });
           // Flush any buffered input deltas before marking complete,
           // otherwise the input JSON may be empty/partial when the
           // tool block switches to its "complete" state.
@@ -463,6 +480,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         case "agentTextDelta":
           if (dropIfNotStreaming()) break;
+          streamingBaselineMetrics?.record({
+            type: "delta",
+            surface: "vscode-webview",
+            kind: "text",
+            chars: msg.text.length,
+          });
           textDeltaBuf.current += msg.text;
           scheduleDeltaFlush();
           break;
@@ -489,6 +512,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           });
           break;
         case "agentError":
+          streamingBaselineMetrics?.record({
+            type: "delta",
+            surface: "vscode-webview",
+            kind: "semantic",
+            chars: 0,
+          });
           flushDeltasNow();
           streamingRef.current = false;
           dispatch({
@@ -503,12 +532,24 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           dispatch({ type: "TODO_UPDATE", todos: msg.todos });
           break;
         case "agentFinalMarker":
+          streamingBaselineMetrics?.record({
+            type: "delta",
+            surface: "vscode-webview",
+            kind: "semantic",
+            chars: 0,
+          });
           dispatch({
             type: "SET_FINAL_MARKER",
             marker: msg.marker,
           });
           break;
         case "agentDone": {
+          streamingBaselineMetrics?.record({
+            type: "delta",
+            surface: "vscode-webview",
+            kind: "semantic",
+            chars: 0,
+          });
           flushDeltasNow();
           streamingRef.current = false;
           dispatch({ type: "DONE" });
@@ -699,6 +740,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         }
 
         case "agentQuestionRequest":
+          streamingBaselineMetrics?.record({
+            type: "delta",
+            surface: "vscode-webview",
+            kind: "semantic",
+            chars: 0,
+          });
           dispatch({
             type: "SET_QUESTION",
             id: msg.id,
@@ -2320,6 +2367,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onStopBackground={handleStopBackground}
           onOpenTranscript={handleOpenBgTranscript}
           onFinalMarkerContinue={handleFinalMarkerContinue}
+          streamingMetrics={streamingBaselineMetrics}
+          streamingMetricsSurface="vscode-webview"
+          streamingMetricsScope={state.chatState.sessionId ?? "foreground"}
         />
         <MessageQueuePanel
           queue={state.messageQueue}

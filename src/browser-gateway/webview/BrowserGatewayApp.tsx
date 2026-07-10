@@ -60,6 +60,7 @@ import {
   turnMadeProgress,
 } from "../../shared/autoContinueProgress";
 import { randomId } from "../../shared/randomId";
+import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
 import { McpManagerPanel } from "../../shared/ui/McpManagerPanel";
@@ -91,6 +92,9 @@ const SIDE_PANE_KEYBOARD_STEP = 32;
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
 const DISCONNECTED_INSTANCE_RETENTION_MS = 3 * 60 * 1_000;
+const streamingBaselineMetrics = __DEV_BUILD__
+  ? getDevelopmentStreamingBaselineMetrics("browser-webview", true)
+  : undefined;
 
 function dedupeBackgroundSessions(sessions: BgSessionInfo[]): BgSessionInfo[] {
   if (sessions.length <= 1) return sessions;
@@ -1177,13 +1181,18 @@ export function BrowserGatewayApp({
   );
   useEffect(() => {
     const currentIds = new Set(
-      background.flatMap((session) => session.events?.map((event) => event.id) ?? []),
+      background.flatMap(
+        (session) => session.events?.map((event) => event.id) ?? [],
+      ),
     );
     if (seenFleetEventIdsRef.current === null) {
       seenFleetEventIdsRef.current = currentIds;
       return;
     }
-    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    if (
+      typeof Notification !== "undefined" &&
+      Notification.permission === "granted"
+    ) {
       for (const session of background) {
         for (const event of session.events ?? []) {
           if (!seenFleetEventIdsRef.current.has(event.id) && !event.readAt) {
@@ -4714,6 +4723,9 @@ export function BrowserGatewayApp({
                     }}
                     onRevertCheckpoint={handleRevertCheckpoint}
                     onViewCheckpointDiff={handleViewCheckpointDiff}
+                    streamingMetrics={streamingBaselineMetrics}
+                    streamingMetricsSurface="browser-webview"
+                    streamingMetricsScope={`${snapshotOriginRef.current.tabId}:${foreground?.sessionId ?? "foreground"}`}
                   />
                 )}
               </div>
