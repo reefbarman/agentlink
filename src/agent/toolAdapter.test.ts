@@ -383,13 +383,25 @@ describe("getAgentTools", () => {
     );
   });
 
-  it("excludes set_task_status from background and profile-restricted tool sets", () => {
+  it("keeps final status and memory proposals available to background agents", () => {
     expect(
       getAgentTools(undefined, undefined, true).map((t) => t.name),
-    ).not.toContain("set_task_status");
+    ).toEqual(expect.arrayContaining(["set_task_status", "propose_memory"]));
+  });
+
+  it("excludes final status from explicitly profile-restricted tool sets", () => {
     expect(
       getAgentTools(undefined, undefined, false, "review").map((t) => t.name),
     ).not.toContain("set_task_status");
+  });
+
+  it("keeps recursive fleet controls and mode switching out of background sessions for now", () => {
+    const names = getAgentTools(undefined, undefined, true).map((t) => t.name);
+    expect(names).not.toContain("switch_mode");
+    expect(names).not.toContain("spawn_background_agent");
+    expect(names).not.toContain("get_background_status");
+    expect(names).not.toContain("get_background_result");
+    expect(names).not.toContain("kill_background_agent");
   });
 
   it("restricts tools when toolProfile is set to 'review'", () => {

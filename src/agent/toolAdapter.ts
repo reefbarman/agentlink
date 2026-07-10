@@ -650,7 +650,9 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
  * Get tool definitions formatted for the Claude SDK.
  * When mode is provided, only tools allowed by the mode's toolGroups are included.
  * MCP tools (prefixed 'server__tool') are passed as external Anthropic.Tool objects.
- * When isBackground is true, background agent management tools are excluded.
+ * When isBackground is true, recursive fleet controls and mode switching are
+ * excluded until those operations are session-scoped. Normal mode tools,
+ * memory proposals, questions, and final task status remain available.
  * When toolProfile is set, further restricts to only the tools in that profile.
  * When skillAllowedTools is set, further restricts normal tools after a skill
  * with allowed-tools frontmatter has been loaded. Hidden control tools stay
@@ -680,7 +682,6 @@ export function getAgentTools(
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
     .filter(([name]) => (__DEV_BUILD__ ? true : !DEV_FEEDBACK_TOOLS.has(name)))
-    .filter(([name]) => !(isBackground && name === "propose_memory"))
     .filter(
       ([name]) =>
         Boolean(profileAllowlist) ||
@@ -756,9 +757,10 @@ export function getAgentTools(
       ? [CALL_MCP_TOOL]
       : []),
     ...(profileAllowlist ? [] : [ASK_USER_TOOL]),
+    ...(profileAllowlist ? [] : [SET_TASK_STATUS_TOOL]),
     ...(isBackground || profileAllowlist
       ? []
-      : [SET_TASK_STATUS_TOOL, SWITCH_MODE_TOOL, ...BG_AGENT_TOOLS]),
+      : [SWITCH_MODE_TOOL, ...BG_AGENT_TOOLS]),
   ];
 }
 
