@@ -813,6 +813,30 @@ describe("spawn_background_agent tool", () => {
     expect(props.reason).toBeDefined();
   });
 
+  it("dispatches descendant steering and detachment controls", async () => {
+    const onSteerBackground = vi.fn(() => ({ accepted: true }));
+    const onDetachBackground = vi.fn(() => ({ detached: true }));
+    await dispatchToolCall(
+      "steer_background_agent",
+      { sessionId: "bg-child", message: "change direction" },
+      { ...mockCtx, onSteerBackground },
+    );
+    await dispatchToolCall(
+      "detach_background_agent",
+      { sessionId: "bg-child" },
+      { ...mockCtx, onDetachBackground },
+    );
+    expect(onSteerBackground).toHaveBeenCalledWith(
+      "test-session",
+      "bg-child",
+      "change direction",
+    );
+    expect(onDetachBackground).toHaveBeenCalledWith(
+      "test-session",
+      "bg-child",
+    );
+  });
+
   it("dispatches get_background_status to onGetBackgroundStatus callback", async () => {
     const onGetBackgroundStatus = vi.fn().mockReturnValue({
       status: "streaming",

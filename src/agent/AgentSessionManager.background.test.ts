@@ -51,6 +51,7 @@ const mocks = vi.hoisted(() => {
         lastActiveAt: 1,
         fleetMetadata: undefined as any,
         addUserMessage: vi.fn(),
+        setPendingInterjection: vi.fn(() => true),
         restoreFromStore: vi.fn((data: any) => {
           mockSession.id = data.id;
           mockSession.title = data.title;
@@ -777,6 +778,54 @@ describe("AgentSessionManager background agents", () => {
       mgr.killAuthorizedBackground(first.sessionId, second.sessionId),
     ).toEqual(
       expect.objectContaining({ killed: false }),
+    );
+  });
+
+  it("steers authorized descendants at a safe boundary", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const child = await mgr.spawnBackground({ task: "child", message: "work" });
+    const session = (mgr as any).sessions.get(child.sessionId);
+    session.status = "streaming";
+
+    expect(
+      mgr.steerAuthorizedBackground(
+        foreground.id,
+        child.sessionId,
+        "Focus on the failing test",
+      ),
+    ).toEqual({ accepted: true });
+    expect(session.setPendingInterjection).toHaveBeenCalledWith(
+      "Focus on the failing test",
+      expect.any(String),
+      undefined,
+      "Focus on the failing test",
+    );
+  });
+
+  it("detaches a descendant subtree into an independent root", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const foreground = await mgr.createSession("code");
+    const parent = await mgr.spawnBackground({ task: "parent", message: "work" });
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "work" },
+      parent.sessionId,
+    );
+
+    expect(
+      mgr.detachAuthorizedBackground(foreground.id, parent.sessionId),
+    ).toEqual({ detached: true });
+    expect((mgr as any).sessions.get(parent.sessionId).fleetMetadata).toEqual(
+      expect.objectContaining({
+        parentSessionId: undefined,
+        rootSessionId: parent.sessionId,
+        depth: 1,
+      }),
+    );
+    expect((mgr as any).sessions.get(child.sessionId).fleetMetadata).toEqual(
+      expect.objectContaining({ rootSessionId: parent.sessionId, depth: 2 }),
     );
   });
 

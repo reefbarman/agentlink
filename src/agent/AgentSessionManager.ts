@@ -3847,6 +3847,68 @@ export class AgentSessionManager {
     return this.killBackground(sessionId, reason);
   }
 
+  steerAuthorizedBackground(
+    callerSessionId: string,
+    sessionId: string,
+    message: string,
+  ): { accepted: boolean; reason?: string } {
+    if (!this.canManageBackground(callerSessionId, sessionId)) {
+      return { accepted: false, reason: "outside the caller's subtree" };
+    }
+    const session = this.sessions.get(sessionId);
+    const instruction = message.trim();
+    if (!session || !instruction) {
+      return { accepted: false, reason: "session and message are required" };
+    }
+    if (
+      session.status !== "streaming" &&
+      session.status !== "tool_executing" &&
+      session.status !== "awaiting_approval"
+    ) {
+      return { accepted: false, reason: "session is not currently running" };
+    }
+    const accepted = session.setPendingInterjection(
+      instruction,
+      crypto.randomUUID(),
+      undefined,
+      instruction,
+    );
+    this.onSessionsChanged?.();
+    return accepted
+      ? { accepted: true }
+      : { accepted: false, reason: "another steering message is pending" };
+  }
+
+  detachAuthorizedBackground(
+    callerSessionId: string,
+    sessionId: string,
+  ): { detached: boolean; reason?: string } {
+    if (!this.canManageBackground(callerSessionId, sessionId)) {
+      return { detached: false, reason: "outside the caller's subtree" };
+    }
+    const session = this.sessions.get(sessionId);
+    const fleet = session?.fleetMetadata;
+    if (!session || !fleet?.parentSessionId) {
+      return { detached: false, reason: "session is already a root" };
+    }
+    const updateSubtree = (node: AgentSession, rootId: string, depth: number) => {
+      if (!node.fleetMetadata) return;
+      node.fleetMetadata.rootSessionId = rootId;
+      node.fleetMetadata.depth = depth;
+      for (const child of this.sessions.values()) {
+        if (child.fleetMetadata?.parentSessionId === node.id) {
+          updateSubtree(child, rootId, depth + 1);
+        }
+      }
+      this.saveSession(node.id);
+    };
+    fleet.parentSessionId = undefined;
+    this.bgParents.delete(sessionId);
+    updateSubtree(session, session.id, 1);
+    this.onSessionsChanged?.();
+    return { detached: true };
+  }
+
   /**
    * Async — blocks until the background session finishes.
    * Returns the last assistant message text.

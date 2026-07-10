@@ -1309,6 +1309,17 @@ export function activate(context: vscode.ExtensionContext): void {
         sessionId,
         reason,
       ),
+    onSteerBackground: (callerSessionId, sessionId, message) =>
+      agentSessionManager.steerAuthorizedBackground(
+        callerSessionId,
+        sessionId,
+        message,
+      ),
+    onDetachBackground: (callerSessionId, sessionId) =>
+      agentSessionManager.detachAuthorizedBackground(
+        callerSessionId,
+        sessionId,
+      ),
     toolCallTracker,
     toolUsageTelemetry: toolUsageTelemetry ?? undefined,
   });

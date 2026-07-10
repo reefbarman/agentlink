@@ -578,6 +578,29 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
       required: ["sessionId"],
     },
   },
+  {
+    name: "steer_background_agent",
+    description:
+      "Send a course-correction to a running authorized descendant. It is injected at the next safe tool boundary.",
+    input_schema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        message: { type: "string" },
+      },
+      required: ["sessionId", "message"],
+    },
+  },
+  {
+    name: "detach_background_agent",
+    description:
+      "Detach an authorized child subtree so it becomes an independent root and is not cancelled when its former parent completes.",
+    input_schema: {
+      type: "object",
+      properties: { sessionId: { type: "string" } },
+      required: ["sessionId"],
+    },
+  },
 ];
 
 /** Return value of get_background_status — non-blocking snapshot. */
@@ -1240,6 +1263,15 @@ export interface ToolDispatchContext {
     sessionId: string,
     reason?: string,
   ) => { killed: boolean; partialOutput?: string };
+  onSteerBackground?: (
+    callerSessionId: string,
+    sessionId: string,
+    message: string,
+  ) => { accepted: boolean; reason?: string };
+  onDetachBackground?: (
+    callerSessionId: string,
+    sessionId: string,
+  ) => { detached: boolean; reason?: string };
   /** Active skill tool allowlist, enforced for direct and deferred MCP dispatch. */
   skillAllowedTools?: string[];
   /** Abort signal for the current tool call, used to cancel in-flight MCP SDK requests. */
@@ -2611,6 +2643,29 @@ export async function dispatchToolCall(
       return {
         content: [{ type: "text", text: JSON.stringify(killResult) }],
       };
+    }
+
+    case "steer_background_agent": {
+      if (!ctx.onSteerBackground) {
+        return errorResult("Background steering not available");
+      }
+      const result = ctx.onSteerBackground(
+        ctx.sessionId,
+        String(params.sessionId ?? ""),
+        String(params.message ?? ""),
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    }
+
+    case "detach_background_agent": {
+      if (!ctx.onDetachBackground) {
+        return errorResult("Background detachment not available");
+      }
+      const result = ctx.onDetachBackground(
+        ctx.sessionId,
+        String(params.sessionId ?? ""),
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
 
     case "send_feedback": {
