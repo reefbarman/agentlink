@@ -5,6 +5,8 @@ import type { BrowserGatewayHelperDiscoveryRecord } from "./protocol.js";
 export interface BrowserGatewayCommandDependencies {
   ensureRuntimeReady(): Promise<void>;
   forceRestart(): Promise<void>;
+  pairBrowserDevice(): Promise<void>;
+  managePairedDevices(): Promise<void>;
   getDiscovery(): BrowserGatewayHelperDiscoveryRecord | null;
   extensionVersion: string;
   formatError(error: unknown): string;
@@ -32,6 +34,8 @@ export function collectGatewayUrls(
 export function registerBrowserGatewayCommands({
   ensureRuntimeReady,
   forceRestart,
+  pairBrowserDevice,
+  managePairedDevices,
   getDiscovery,
   extensionVersion,
   formatError,
@@ -151,6 +155,27 @@ export function registerBrowserGatewayCommands({
         } else if (pick === "Copy loopback URL") {
           await vscode.env.clipboard.writeText(discovery.url);
         }
+      },
+    ),
+    vscode.commands.registerCommand("agentlink.pairBrowserDevice", async () => {
+      try {
+        await ensureRuntimeReady();
+      } catch (error) {
+        vscode.window.showErrorMessage(formatError(error));
+        return;
+      }
+      await pairBrowserDevice();
+    }),
+    vscode.commands.registerCommand(
+      "agentlink.managePairedDevices",
+      async () => {
+        try {
+          await ensureRuntimeReady();
+        } catch (error) {
+          vscode.window.showErrorMessage(formatError(error));
+          return;
+        }
+        await managePairedDevices();
       },
     ),
   ];

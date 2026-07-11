@@ -41,6 +41,8 @@ function createDependencies(
   return {
     ensureRuntimeReady: vi.fn(async () => {}),
     forceRestart: vi.fn(async () => {}),
+    pairBrowserDevice: vi.fn(async () => {}),
+    managePairedDevices: vi.fn(async () => {}),
     getDiscovery: vi.fn(() => current),
     extensionVersion: "9.8.7",
     formatError: vi.fn((error) => `formatted: ${String(error)}`),
@@ -111,9 +113,27 @@ describe("registerBrowserGatewayCommands", () => {
       "agentlink.restartBrowserGateway",
       "agentlink.openBrowserGateway",
       "agentlink.showBrowserGatewayStatus",
+      "agentlink.pairBrowserDevice",
+      "agentlink.managePairedDevices",
     ]);
-    expect(disposables).toHaveLength(3);
+    expect(disposables).toHaveLength(5);
   });
+
+  it.each([
+    ["agentlink.pairBrowserDevice", "pairBrowserDevice"],
+    ["agentlink.managePairedDevices", "managePairedDevices"],
+  ] as const)(
+    "prepares the runtime before delegating %s",
+    async (command, action) => {
+      const dependencies = createDependencies();
+      registerBrowserGatewayCommands(dependencies);
+
+      await invoke(command);
+
+      expect(dependencies.ensureRuntimeReady).toHaveBeenCalledOnce();
+      expect(dependencies[action]).toHaveBeenCalledOnce();
+    },
+  );
 
   it("opens loopback directly when LAN access is disabled", async () => {
     const dependencies = createDependencies(discovery({ lanAccess: false }));
@@ -204,6 +224,8 @@ describe("registerBrowserGatewayCommands", () => {
 
   it.each([
     "agentlink.openBrowserGateway",
+    "agentlink.pairBrowserDevice",
+    "agentlink.managePairedDevices",
     "agentlink.showBrowserGatewayStatus",
   ])("reports runtime errors for %s", async (command) => {
     const dependencies = createDependencies();
@@ -217,5 +239,7 @@ describe("registerBrowserGatewayCommands", () => {
     expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(
       "formatted: Error: not ready",
     );
+    expect(dependencies.pairBrowserDevice).not.toHaveBeenCalled();
+    expect(dependencies.managePairedDevices).not.toHaveBeenCalled();
   });
 });

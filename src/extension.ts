@@ -1097,32 +1097,13 @@ export function activate(context: vscode.ExtensionContext): void {
     ...registerBrowserGatewayCommands({
       ensureRuntimeReady: ensureBrowserGatewayRuntimeReady,
       forceRestart: forceRestartBrowserGateway,
+      pairBrowserDevice: () => chatViewProvider.handlePairCommand(),
+      managePairedDevices: () => chatViewProvider.showPairedDevicesList(),
       getDiscovery: () => browserGatewayHelperDiscovery,
       extensionVersion: helperVersion,
       formatError: formatBrowserGatewayHelperError,
       log,
     }),
-    vscode.commands.registerCommand("agentlink.pairBrowserDevice", async () => {
-      try {
-        await ensureBrowserGatewayRuntimeReady();
-      } catch (err) {
-        vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
-        return;
-      }
-      await chatViewProvider.handlePairCommand();
-    }),
-    vscode.commands.registerCommand(
-      "agentlink.managePairedDevices",
-      async () => {
-        try {
-          await ensureBrowserGatewayRuntimeReady();
-        } catch (err) {
-          vscode.window.showErrorMessage(formatBrowserGatewayHelperError(err));
-          return;
-        }
-        await chatViewProvider.showPairedDevicesList();
-      },
-    ),
     ...registerModelAuthCommands({
       openAiAuthManager: openAiCodexAuthManager,
       secrets: context.secrets,
