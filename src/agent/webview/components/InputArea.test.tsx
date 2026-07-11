@@ -149,6 +149,34 @@ describe("InputArea slash popup", () => {
     expect(onSend).toHaveBeenCalledWith("Use smoke skill", [], "/smoke");
   });
 
+  it("opens, navigates, and selects emoji suggestions from the keyboard", () => {
+    const { container } = renderInputArea([]);
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = ":";
+    input.selectionStart = 1;
+    input.selectionEnd = 1;
+    fireEvent.input(input);
+
+    input.value = ":thu";
+    input.selectionStart = 4;
+    input.selectionEnd = 4;
+    fireEvent.input(input);
+
+    const options = container.querySelectorAll(".emoji-popup-option");
+    expect(options.length).toBeGreaterThan(1);
+    expect(options[0]?.textContent).toContain(":thumbsup:");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(options[2]?.textContent).toContain(":thumbsdown:");
+    expect(options[2]?.classList.contains("selected")).toBe(true);
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(input.value).toBe("👎");
+    expect(container.querySelector(".emoji-popup")).toBeNull();
+  });
+
   it("renders and toggles Auto Continue from the toolbar", () => {
     const onToggleAutoContinue = vi.fn();
     const { getByRole } = renderInputArea([], {

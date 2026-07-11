@@ -17,7 +17,6 @@ import {
 import {
   findTrailingEmojiShortcode,
   resolveEmojiShortcode,
-  searchEmojiShortcodes,
   shouldOpenEmojiPopup,
 } from "../emojiShortcodes";
 import {
@@ -50,6 +49,7 @@ import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
 import { WriteApprovalSelector } from "./WriteApprovalSelector";
 import { randomId } from "../../../shared/randomId";
+import { useEmojiPopup } from "./useEmojiPopup";
 import { useFileMentionPopup } from "./useFileMentionPopup";
 
 /** A pasted or dropped file held in webview state before sending. */
@@ -226,12 +226,26 @@ export function InputArea({
   const [mediaAttachments, setMediaAttachments] = useState<MediaAttachment[]>(
     [],
   );
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const [emojiQuery, setEmojiQuery] = useState("");
-  const [emojiStart, setEmojiStart] = useState(-1);
-  const [emojiSelectedIdx, setEmojiSelectedIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputWrapperRef = useRef<HTMLDivElement>(null);
+  const {
+    open: emojiOpen,
+    query: emojiQuery,
+    selectedIndex: emojiSelectedIdx,
+    suggestions: emojiSuggestions,
+    visible: shouldShowEmojiPopup,
+    close: closeEmoji,
+    trackAt: trackEmojiAt,
+    updateFromInput: updateEmojiFromInput,
+    selectNext: selectNextEmoji,
+    selectPrevious: selectPreviousEmoji,
+    setSelectedIndex: setEmojiSelectedIdx,
+    complete: handleEmojiSelect,
+  } = useEmojiPopup({
+    text,
+    onTextChange: setText,
+    textareaRef,
+  });
   const {
     open: pickerOpen,
     query: pickerQuery,
@@ -415,12 +429,6 @@ export function InputArea({
     streaming,
   ]);
 
-  const emojiSuggestions = useMemo(
-    () => searchEmojiShortcodes(emojiQuery, 12),
-    [emojiQuery],
-  );
-  const shouldShowEmojiPopup = emojiOpen && emojiSuggestions.length > 0;
-
   // Commands that execute immediately with no args needed
   const ZERO_ARG_BUILTINS = new Set([
     "new",
@@ -435,41 +443,6 @@ export function InputArea({
   ]);
   // Commands that open a sub-picker
   const SUB_PICKER_CMDS = new Set(["mode", "model", "mcp-config"]);
-
-  const closeEmoji = useCallback(() => {
-    setEmojiOpen(false);
-    setEmojiQuery("");
-    setEmojiStart(-1);
-    setEmojiSelectedIdx(0);
-  }, []);
-
-  const handleEmojiSelect = useCallback(
-    (suggestion: { emoji: string; shortcode: string }) => {
-      if (emojiStart < 0) {
-        return;
-      }
-
-      const liveCursor = textareaRef.current?.selectionStart ?? text.length;
-      const tokenEnd = Math.max(emojiStart + 1, liveCursor);
-      const before = text.slice(0, emojiStart);
-      const after = text.slice(tokenEnd);
-      const nextText = `${before}${suggestion.emoji}${after}`;
-      const nextCursor = (before + suggestion.emoji).length;
-      setText(nextText);
-      closeEmoji();
-      requestAnimationFrame(() => {
-        if (textareaRef.current) {
-          textareaRef.current.focus();
-          textareaRef.current.selectionStart = nextCursor;
-          textareaRef.current.selectionEnd = nextCursor;
-          textareaRef.current.style.height = "auto";
-          textareaRef.current.style.height =
-            textareaRef.current.scrollHeight + "px";
-        }
-      });
-    },
-    [text, emojiStart, closeEmoji],
-  );
 
   const handleSlashSelect = useCallback(
     (cmd: SlashCommandInfo) => {
@@ -573,14 +546,12 @@ export function InputArea({
       if (shouldShowEmojiPopup) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
-          setEmojiSelectedIdx((i) => (i + 1) % emojiSuggestions.length);
+          selectNextEmoji(emojiSuggestions.length);
           return;
         }
         if (e.key === "ArrowUp") {
           e.preventDefault();
-          setEmojiSelectedIdx((i) =>
-            i <= 0 ? emojiSuggestions.length - 1 : i - 1,
-          );
+          selectPreviousEmoji(emojiSuggestions.length);
           return;
         }
         if (e.key === "Enter" && !e.shiftKey) {
@@ -687,6 +658,8 @@ export function InputArea({
       emojiSelectedIdx,
       handleEmojiSelect,
       closeEmoji,
+      selectNextEmoji,
+      selectPreviousEmoji,
       onComposerEvent,
     ],
   );
@@ -863,21 +836,7 @@ export function InputArea({
 
       updateSlashFromInput(value, cursor);
 
-      if (emojiOpen && emojiStart >= 0) {
-        const query = value.slice(emojiStart + 1, cursor);
-        if (
-          query.length === 0 ||
-          query.includes(" ") ||
-          query.includes("\n") ||
-          cursor <= emojiStart ||
-          query.endsWith(":")
-        ) {
-          closeEmoji();
-        } else {
-          setEmojiQuery(query.toLowerCase());
-          setEmojiSelectedIdx(0);
-        }
-      }
+      updateEmojiFromInput(value, cursor);
 
       if (!pickerOpen && !slashOpen && !emojiOpen) {
         // Check if user just typed @
@@ -908,24 +867,7 @@ export function InputArea({
           value[cursor - 1] === ":" &&
           shouldOpenEmojiPopup(value, cursor - 1)
         ) {
-          setEmojiStart(cursor - 1);
-          setEmojiQuery("");
-        }
-      }
-
-      if (emojiStart >= 0) {
-        const activeQuery = value.slice(emojiStart + 1, cursor);
-        if (
-          activeQuery.length >= 3 &&
-          !activeQuery.includes(" ") &&
-          !activeQuery.includes("\n") &&
-          !activeQuery.endsWith(":")
-        ) {
-          setEmojiOpen(true);
-          setEmojiQuery(activeQuery.toLowerCase());
-          setEmojiSelectedIdx(0);
-        } else if (activeQuery.length === 0) {
-          setEmojiOpen(false);
+          trackEmojiAt(cursor - 1);
         }
       }
     },
@@ -937,8 +879,9 @@ export function InputArea({
       updateSlashFromInput,
       openSlashAt,
       emojiOpen,
-      emojiStart,
       closeEmoji,
+      updateEmojiFromInput,
+      trackEmojiAt,
       vscodeApi,
       allowFileMentions,
     ],
