@@ -13,6 +13,7 @@ import {
   resolveCurrentDiff,
   showDiffMoreOptions,
 } from "./integrations/DiffViewProvider.js";
+import { registerDiffViewContentProvider } from "./integrations/diffViewContentProvider.js";
 import { SidebarProvider } from "./sidebar/SidebarProvider.js";
 import {
   ApprovalManager,
@@ -81,7 +82,6 @@ import {
   type ToolUsageTelemetry,
 } from "./telemetry/ToolUsageTelemetry.js";
 
-export const DIFF_VIEW_URI_SCHEME = "agentlink-diff";
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
 
 let outputChannel: vscode.OutputChannel;
@@ -659,21 +659,7 @@ export function activate(context: vscode.ExtensionContext): void {
     log(`Migration warning: ${err}`);
   });
 
-  // Register TextDocumentContentProvider for diff view (readonly left side)
-  const diffContentProvider = new (class
-    implements vscode.TextDocumentContentProvider
-  {
-    provideTextDocumentContent(uri: vscode.Uri): string {
-      return Buffer.from(uri.query, "base64").toString("utf-8");
-    }
-  })();
-
-  context.subscriptions.push(
-    vscode.workspace.registerTextDocumentContentProvider(
-      DIFF_VIEW_URI_SCHEME,
-      diffContentProvider,
-    ),
-  );
+  context.subscriptions.push(registerDiffViewContentProvider());
 
   // Tool call tracker (wraps tool handlers for cancel/complete from sidebar)
   const extVersion =

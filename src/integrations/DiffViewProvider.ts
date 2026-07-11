@@ -9,7 +9,7 @@ import type {
 } from "../approvals/ApprovalPanelProvider.js";
 
 import { DEFAULT_DIAGNOSTIC_DELAY_MS } from "../core/capabilities/editReview.js";
-import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
+import { DIFF_VIEW_URI_SCHEME } from "./diffViewContentProvider.js";
 import type { OnApprovalRequest } from "../shared/types.js";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
 import { randomUUID } from "crypto";

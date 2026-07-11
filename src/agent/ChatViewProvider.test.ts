@@ -28,10 +28,6 @@ const mockOutputChannel = {
   dispose: vi.fn(),
 };
 
-vi.mock("../extension.js", () => ({
-  DIFF_VIEW_URI_SCHEME: "agentlink-diff",
-}));
-
 const mockGetConfiguration = vi.fn(() => ({
   get: vi.fn((key: string, fallback?: unknown) => {
     if (key === "modelCondenseThresholds") {

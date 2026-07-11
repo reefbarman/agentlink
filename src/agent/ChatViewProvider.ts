@@ -84,7 +84,7 @@ import type {
 } from "../approvals/webview/types.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { AgentToolCallTracker } from "./AgentToolCallTracker.js";
-import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
+import { DIFF_VIEW_URI_SCHEME } from "../integrations/diffViewContentProvider.js";
 import { getRelativePath } from "../util/paths.js";
 import {
   detectQuestion,
