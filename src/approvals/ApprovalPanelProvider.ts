@@ -15,6 +15,7 @@ import { isMemoryProtectedPath } from "./protectedPaths.js";
 import path from "path";
 import picomatch from "picomatch";
 import { randomUUID } from "crypto";
+import { renderWebviewShell } from "../adapters/vscode/webviewShell.js";
 import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
 
 // ── Response types ──────────────────────────────────────────────────────────
@@ -738,7 +739,6 @@ export class ApprovalPanelProvider
   // ── HTML shell (loads Preact bundle) ────────────────────────────────────
 
   private getShellHtml(webview: vscode.Webview): string {
-    const nonce = randomUUID().replace(/-/g, "");
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "dist", "approval.js"),
     );
@@ -749,22 +749,12 @@ export class ApprovalPanelProvider
       vscode.Uri.joinPath(this.extensionUri, "dist", "codicon.css"),
     );
 
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
-  <link rel="stylesheet" href="${codiconsUri}">
-  <link rel="stylesheet" href="${styleUri}">
-  <title>Approval</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
-</body>
-</html>`;
+    return renderWebviewShell({
+      title: "Approval",
+      cspSource: webview.cspSource,
+      scriptUri: scriptUri.toString(),
+      styleUris: [codiconsUri.toString(), styleUri.toString()],
+    });
   }
 
   // ── Recent approval cache ───────────────────────────────────────────────

@@ -102,7 +102,9 @@ function makeWebviewView() {
         onDidReceiveMessage = cb;
         return { dispose: vi.fn() };
       },
-      asWebviewUri: (uri: unknown) => uri,
+      asWebviewUri: (uri: { path?: string }) => ({
+        toString: () => `webview:${uri.path ?? ""}`,
+      }),
     },
     visible: true,
     onDidChangeVisibility: (cb: () => void) => {
@@ -222,6 +224,27 @@ describe("SidebarProvider write approval sync", () => {
 describe("SidebarProvider retained activity behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("renders the shared shell with sidebar resources", async () => {
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const provider = new SidebarProvider({ path: "/ext" } as never);
+    const webview = makeWebviewView();
+
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+
+    expect(webview.view.webview.html).toContain("<title>AgentLink</title>");
+    expect(webview.view.webview.html).toContain(
+      'href="webview:/ext/dist/sidebar.css"',
+    );
+    expect(webview.view.webview.html).toContain(
+      'src="webview:/ext/dist/sidebar.js"',
+    );
+    expect(webview.view.webview.html).not.toContain("codicon.css");
   });
 
   it("restores approval, index, session, and tool-call state on webviewReady", async () => {

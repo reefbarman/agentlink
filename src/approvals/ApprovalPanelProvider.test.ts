@@ -42,6 +42,36 @@ function createProvider() {
   };
 }
 
+describe("ApprovalPanelProvider webview shell", () => {
+  it("renders the shared shell with approval resources", () => {
+    const { provider } = createProvider();
+    const webview = {
+      options: {},
+      html: "",
+      cspSource: "vscode-resource:",
+      asWebviewUri: (uri: { toString: () => string }) => ({
+        toString: () => `webview:${uri.toString()}`,
+      }),
+    };
+
+    provider.resolveWebviewView({ webview } as never);
+
+    expect(webview.html).toContain("<title>Approval</title>");
+    expect(webview.html).toContain(
+      'href="webview:file:///extension/dist/codicon.css"',
+    );
+    expect(webview.html).toContain(
+      'href="webview:file:///extension/dist/approval.css"',
+    );
+    expect(webview.html).toContain(
+      'src="webview:file:///extension/dist/approval.js"',
+    );
+    expect(webview.html.indexOf("codicon.css")).toBeLessThan(
+      webview.html.indexOf("approval.css"),
+    );
+  });
+});
+
 describe("ApprovalPanelProvider path approval queue", () => {
   it("auto-approves queued allow-once path requests in the same directory", async () => {
     const { provider } = createProvider();

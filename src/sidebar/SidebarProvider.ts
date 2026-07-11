@@ -19,7 +19,7 @@ import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
 
 import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
 import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js";
-import { randomUUID } from "crypto";
+import { renderWebviewShell } from "../adapters/vscode/webviewShell.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
 export type { SidebarState };
@@ -525,8 +525,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private getHtml(): string {
     const webview = this.view!.webview;
-    const nonce = randomUUID().replace(/-/g, "");
-
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "dist", "sidebar.js"),
     );
@@ -534,20 +532,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       vscode.Uri.joinPath(this.extensionUri, "dist", "sidebar.css"),
     );
 
-    return /* html */ `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
-  <link rel="stylesheet" href="${styleUri}">
-  <title>AgentLink</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
-</body>
-</html>`;
+    return renderWebviewShell({
+      title: "AgentLink",
+      cspSource: webview.cspSource,
+      scriptUri: scriptUri.toString(),
+      styleUris: [styleUri.toString()],
+    });
   }
 }
