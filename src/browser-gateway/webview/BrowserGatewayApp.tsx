@@ -76,6 +76,7 @@ import {
   BROWSER_GATEWAY_ASK_AGENT_TAB_ID,
   BROWSER_GATEWAY_ASK_AGENT_TAB_TITLE,
 } from "../askAgentTabs";
+import { useGatewaySnapshotConnection } from "./useGatewaySnapshotConnection";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
@@ -93,19 +94,6 @@ const SIDE_PANE_KEYBOARD_STEP = 32;
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
 const DISCONNECTED_INSTANCE_RETENTION_MS = 3 * 60 * 1_000;
-// The gateway rebroadcasts the full snapshot as often as every 150ms while a
-// turn is streaming. Parsing and re-rendering every event saturates slower
-// (especially mobile) main threads, so stream events are coalesced to the
-// latest payload and applied at most this often.
-const SNAPSHOT_STREAM_COALESCE_MS = 150;
-const SNAPSHOT_STREAM_COALESCE_TOUCH_MS = 500;
-
-function isCoarsePointer(): boolean {
-  return (
-    typeof window.matchMedia === "function" &&
-    window.matchMedia(TOUCH_POINTER_MEDIA_QUERY).matches
-  );
-}
 
 /**
  * Run `callback` after the browser has had a chance to paint the current
@@ -1034,180 +1022,31 @@ export function BrowserGatewayApp({
     return () => window.removeEventListener("resize", syncSidePanePercent);
   }, []);
 
-  useEffect(() => {
-    let closed = false;
-    let eventSource: EventSource | undefined;
-    let snapshotFetchController: AbortController | undefined;
-    const tabId = selectedTabId;
-    const generation = selectedTabGenerationRef.current;
-    const instanceId = isAskAgentSelected ? "" : selectedTabId;
-    let instanceRefreshTimer: ReturnType<typeof setInterval> | undefined;
-    let initialSnapshotTimer: ReturnType<typeof setTimeout> | undefined;
-    let fallbackSnapshotTimer: ReturnType<typeof setInterval> | undefined;
-
-    const stopInitialSnapshotFallback = () => {
-      if (!initialSnapshotTimer) return;
-      clearTimeout(initialSnapshotTimer);
-      initialSnapshotTimer = undefined;
-    };
-
-    const stopFallbackSnapshotPolling = () => {
-      if (!fallbackSnapshotTimer) return;
-      clearInterval(fallbackSnapshotTimer);
-      fallbackSnapshotTimer = undefined;
-    };
-
-    const fetchFallbackSnapshot = async () => {
-      snapshotFetchController?.abort();
-      const controller = new AbortController();
-      snapshotFetchController = controller;
-      try {
-        const response = await fetch(buildSnapshotApiPath(), {
-          credentials: "same-origin",
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          if (!closed) {
-            setStatus(
-              `Realtime stream disconnected — snapshot failed: ${response.status}`,
-            );
-          }
-          return;
-        }
-        const data = await readGatewaySnapshotResponse(response);
-        if (!closed && commitSnapshot(data.snapshot, tabId, generation)) {
-          if (data.askAgentCapabilities) {
-            setAskAgentCapabilities(data.askAgentCapabilities);
-          }
-          setStatus("Connected (fallback polling)");
-        }
-      } catch (err) {
-        if (!closed && !controller.signal.aborted) {
-          setStatus(
-            `Realtime stream disconnected — retrying… (${String(err)})`,
-          );
-        }
-      } finally {
-        if (snapshotFetchController === controller) {
-          snapshotFetchController = undefined;
-        }
-      }
-    };
-
-    const startFallbackSnapshotPolling = () => {
-      if (fallbackSnapshotTimer) return;
-      void fetchFallbackSnapshot();
-      fallbackSnapshotTimer = setInterval(() => {
-        void fetchFallbackSnapshot();
-      }, 2_000);
-    };
-
-    const startRealtimeStream = (streamInstanceId: string) => {
-      eventSource = new EventSource(
-        buildEventsApiPath(streamInstanceId, isAskAgentSelected),
-      );
-      eventSource.onopen = () => {
-        stopFallbackSnapshotPolling();
-        setStatus("Connected");
-      };
-      eventSource.onerror = () => {
-        stopInitialSnapshotFallback();
-        setStatus("Realtime stream disconnected — retrying…");
-        startFallbackSnapshotPolling();
-      };
-      eventSource.addEventListener("snapshot", applySnapshotEvent);
-      eventSource.addEventListener("update", applySnapshotEvent);
-    };
-
-    // Coalesce stream events: only the newest payload matters (every event is
-    // a full snapshot), and parsing + rendering each one keeps slower devices
-    // busy enough that taps and scrolling stall while a turn is streaming.
-    const streamCoalesceMs = isCoarsePointer()
-      ? SNAPSHOT_STREAM_COALESCE_TOUCH_MS
-      : SNAPSHOT_STREAM_COALESCE_MS;
-    let pendingStreamData: string | null = null;
-    let streamCoalesceTimer: ReturnType<typeof setTimeout> | undefined;
-    let lastStreamApplyAt = 0;
-
-    const applyPendingStreamData = () => {
-      streamCoalesceTimer = undefined;
-      if (closed || pendingStreamData === null) return;
-      const data = pendingStreamData;
-      pendingStreamData = null;
-      lastStreamApplyAt = Date.now();
-      try {
-        const next = JSON.parse(data) as GatewaySnapshot;
-        if (!commitSnapshot(next, tabId, generation)) return;
-        snapshotFetchController?.abort();
-        snapshotFetchController = undefined;
-        stopInitialSnapshotFallback();
-        stopFallbackSnapshotPolling();
-        setStatus("Connected");
-      } catch (err) {
-        setStatus(`Stream parse error: ${String(err)}`);
-      }
-    };
-
-    const applySnapshotEvent = (event: MessageEvent<string>) => {
-      pendingStreamData = event.data;
-      if (streamCoalesceTimer !== undefined) return;
-      const elapsed = Date.now() - lastStreamApplyAt;
-      if (elapsed >= streamCoalesceMs) {
-        applyPendingStreamData();
-        return;
-      }
-      streamCoalesceTimer = setTimeout(
-        applyPendingStreamData,
-        streamCoalesceMs - elapsed,
-      );
-    };
-
-    startRealtimeStream(instanceId);
-    initialSnapshotTimer = setTimeout(() => {
-      initialSnapshotTimer = undefined;
-      void fetchFallbackSnapshot();
-    }, 500);
-    void fetchModes(instanceId);
-    void fetchModels(instanceId, isAskAgentSelected);
-    void fetchSlashCommands(instanceId, isAskAgentSelected);
-    if (!isAskAgentSelected) {
-      void fetchSessions(instanceId, false);
-      void fetchDebugInfo(instanceId);
-    }
-    void fetchInstances({ commitSelection: false });
-    instanceRefreshTimer = setInterval(() => {
-      void fetchInstances();
-    }, 5_000);
-
-    return () => {
-      closed = true;
-      if (instanceRefreshTimer) {
-        clearInterval(instanceRefreshTimer);
-      }
-      if (streamCoalesceTimer !== undefined) {
-        clearTimeout(streamCoalesceTimer);
-        streamCoalesceTimer = undefined;
-      }
-      pendingStreamData = null;
-      snapshotFetchController?.abort();
-      snapshotFetchController = undefined;
-      stopInitialSnapshotFallback();
-      stopFallbackSnapshotPolling();
-      eventSource?.removeEventListener("snapshot", applySnapshotEvent);
-      eventSource?.removeEventListener("update", applySnapshotEvent);
-      eventSource?.close();
-    };
-  }, [
-    buildEventsApiPath,
-    buildSnapshotApiPath,
-    commitSnapshot,
-    isAskAgentSelected,
-    selectedTabId,
+  useGatewaySnapshotConnection({
+    authToken,
+    tabId: selectedTabId,
+    generation: selectedTabGenerationRef.current,
+    instanceId: isAskAgentSelected ? "" : selectedTabId,
+    askAgentSelected: isAskAgentSelected,
     routeByInstance,
-  ]);
+    streamCoalesceMs:
+      typeof window.matchMedia === "function" &&
+      window.matchMedia(TOUCH_POINTER_MEDIA_QUERY).matches
+        ? 500
+        : 150,
+    buildSnapshotApiPath,
+    buildEventsApiPath,
+    readSnapshotResponse: readGatewaySnapshotResponse,
+    commitSnapshot,
+    setAskAgentCapabilities,
+    setStatus,
+    fetchModes,
+    fetchModels,
+    fetchSlashCommands,
+    fetchSessions,
+    fetchDebugInfo,
+    fetchInstances,
+  });
 
   // Re-fetch the model list when the gateway signals a model-metadata change
   // (e.g. Anthropic dynamic capability refresh). Keeps browser models in parity

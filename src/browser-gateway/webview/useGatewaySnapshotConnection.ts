@@ -1,0 +1,238 @@
+import { useEffect } from "preact/hooks";
+
+export interface GatewaySnapshotReadResult<TSnapshot, TCapability> {
+  snapshot: TSnapshot;
+  askAgentCapabilities?: TCapability[];
+}
+
+export interface GatewaySnapshotConnectionOptions<TSnapshot, TCapability> {
+  authToken: string;
+  tabId: string;
+  generation: number;
+  instanceId: string;
+  askAgentSelected: boolean;
+  routeByInstance: boolean;
+  streamCoalesceMs: number;
+  buildSnapshotApiPath: () => string;
+  buildEventsApiPath: (instanceId: string, askAgentSelected: boolean) => string;
+  readSnapshotResponse: (
+    response: Response,
+  ) => Promise<GatewaySnapshotReadResult<TSnapshot, TCapability>>;
+  commitSnapshot: (
+    snapshot: TSnapshot,
+    tabId: string,
+    generation: number,
+  ) => boolean;
+  setAskAgentCapabilities: (capabilities: TCapability[]) => void;
+  setStatus: (status: string) => void;
+  fetchModes: (instanceId: string) => Promise<unknown>;
+  fetchModels: (
+    instanceId: string,
+    askAgentSelected: boolean,
+  ) => Promise<unknown>;
+  fetchSlashCommands: (
+    instanceId: string,
+    askAgentSelected: boolean,
+  ) => Promise<unknown>;
+  fetchSessions: (
+    instanceId: string,
+    askAgentSelected: boolean,
+  ) => Promise<unknown>;
+  fetchDebugInfo: (instanceId: string) => Promise<unknown>;
+  fetchInstances: (options?: { commitSelection?: boolean }) => Promise<unknown>;
+}
+
+export function useGatewaySnapshotConnection<TSnapshot, TCapability>(
+  options: GatewaySnapshotConnectionOptions<TSnapshot, TCapability>,
+): void {
+  const {
+    authToken,
+    tabId,
+    generation,
+    instanceId,
+    askAgentSelected,
+    routeByInstance,
+    streamCoalesceMs,
+    buildSnapshotApiPath,
+    buildEventsApiPath,
+    readSnapshotResponse,
+    commitSnapshot,
+    setAskAgentCapabilities,
+    setStatus,
+    fetchModes,
+    fetchModels,
+    fetchSlashCommands,
+    fetchSessions,
+    fetchDebugInfo,
+    fetchInstances,
+  } = options;
+
+  useEffect(() => {
+    let closed = false;
+    let eventSource: EventSource | undefined;
+    let snapshotFetchController: AbortController | undefined;
+    let instanceRefreshTimer: ReturnType<typeof setInterval> | undefined;
+    let initialSnapshotTimer: ReturnType<typeof setTimeout> | undefined;
+    let fallbackSnapshotTimer: ReturnType<typeof setInterval> | undefined;
+
+    const stopInitialSnapshotFallback = () => {
+      if (!initialSnapshotTimer) return;
+      clearTimeout(initialSnapshotTimer);
+      initialSnapshotTimer = undefined;
+    };
+
+    const stopFallbackSnapshotPolling = () => {
+      if (!fallbackSnapshotTimer) return;
+      clearInterval(fallbackSnapshotTimer);
+      fallbackSnapshotTimer = undefined;
+    };
+
+    const fetchFallbackSnapshot = async () => {
+      snapshotFetchController?.abort();
+      const controller = new AbortController();
+      snapshotFetchController = controller;
+      try {
+        const response = await fetch(buildSnapshotApiPath(), {
+          credentials: "same-origin",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          if (!closed) {
+            setStatus(
+              `Realtime stream disconnected — snapshot failed: ${response.status}`,
+            );
+          }
+          return;
+        }
+        const data = await readSnapshotResponse(response);
+        if (!closed && commitSnapshot(data.snapshot, tabId, generation)) {
+          if (data.askAgentCapabilities) {
+            setAskAgentCapabilities(data.askAgentCapabilities);
+          }
+          setStatus("Connected (fallback polling)");
+        }
+      } catch (err) {
+        if (!closed && !controller.signal.aborted) {
+          setStatus(
+            `Realtime stream disconnected — retrying… (${String(err)})`,
+          );
+        }
+      } finally {
+        if (snapshotFetchController === controller) {
+          snapshotFetchController = undefined;
+        }
+      }
+    };
+
+    const startFallbackSnapshotPolling = () => {
+      if (fallbackSnapshotTimer) return;
+      void fetchFallbackSnapshot();
+      fallbackSnapshotTimer = setInterval(() => {
+        void fetchFallbackSnapshot();
+      }, 2_000);
+    };
+
+    let pendingStreamData: string | null = null;
+    let streamCoalesceTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastStreamApplyAt = 0;
+
+    const applyPendingStreamData = () => {
+      streamCoalesceTimer = undefined;
+      if (closed || pendingStreamData === null) return;
+      const data = pendingStreamData;
+      pendingStreamData = null;
+      lastStreamApplyAt = Date.now();
+      try {
+        const next = JSON.parse(data) as TSnapshot;
+        if (!commitSnapshot(next, tabId, generation)) return;
+        snapshotFetchController?.abort();
+        snapshotFetchController = undefined;
+        stopInitialSnapshotFallback();
+        stopFallbackSnapshotPolling();
+        setStatus("Connected");
+      } catch (err) {
+        setStatus(`Stream parse error: ${String(err)}`);
+      }
+    };
+
+    const applySnapshotEvent = (event: MessageEvent<string>) => {
+      pendingStreamData = event.data;
+      if (streamCoalesceTimer !== undefined) return;
+      const elapsed = Date.now() - lastStreamApplyAt;
+      if (elapsed >= streamCoalesceMs) {
+        applyPendingStreamData();
+        return;
+      }
+      streamCoalesceTimer = setTimeout(
+        applyPendingStreamData,
+        streamCoalesceMs - elapsed,
+      );
+    };
+
+    eventSource = new EventSource(
+      buildEventsApiPath(instanceId, askAgentSelected),
+    );
+    eventSource.onopen = () => {
+      if (closed) return;
+      stopFallbackSnapshotPolling();
+      setStatus("Connected");
+    };
+    eventSource.onerror = () => {
+      if (closed) return;
+      stopInitialSnapshotFallback();
+      setStatus("Realtime stream disconnected — retrying…");
+      startFallbackSnapshotPolling();
+    };
+    eventSource.addEventListener("snapshot", applySnapshotEvent);
+    eventSource.addEventListener("update", applySnapshotEvent);
+
+    initialSnapshotTimer = setTimeout(() => {
+      initialSnapshotTimer = undefined;
+      void fetchFallbackSnapshot();
+    }, 500);
+    void fetchModes(instanceId);
+    void fetchModels(instanceId, askAgentSelected);
+    void fetchSlashCommands(instanceId, askAgentSelected);
+    if (!askAgentSelected) {
+      void fetchSessions(instanceId, false);
+      void fetchDebugInfo(instanceId);
+    }
+    void fetchInstances({ commitSelection: false });
+    instanceRefreshTimer = setInterval(() => {
+      void fetchInstances();
+    }, 5_000);
+
+    return () => {
+      closed = true;
+      if (instanceRefreshTimer) {
+        clearInterval(instanceRefreshTimer);
+      }
+      if (streamCoalesceTimer !== undefined) {
+        clearTimeout(streamCoalesceTimer);
+        streamCoalesceTimer = undefined;
+      }
+      pendingStreamData = null;
+      snapshotFetchController?.abort();
+      snapshotFetchController = undefined;
+      stopInitialSnapshotFallback();
+      stopFallbackSnapshotPolling();
+      if (eventSource) {
+        eventSource.onopen = null;
+        eventSource.onerror = null;
+        eventSource.removeEventListener("snapshot", applySnapshotEvent);
+        eventSource.removeEventListener("update", applySnapshotEvent);
+        eventSource.close();
+      }
+    };
+  }, [
+    buildEventsApiPath,
+    buildSnapshotApiPath,
+    commitSnapshot,
+    askAgentSelected,
+    tabId,
+    routeByInstance,
+  ]);
+}
