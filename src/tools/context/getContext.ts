@@ -10,7 +10,7 @@ import type {
 } from "../../core/capabilities/readSearch.js";
 
 import { SYMBOL_KIND_NAMES } from "../languageFeatures.js";
-import type { ToolResult } from "../../shared/types.js";
+import { jsonResult, type ToolResult } from "../../shared/types.js";
 import path from "node:path";
 
 export interface GetContextParams {
@@ -52,7 +52,7 @@ export async function handleGetContext(
 
     const rawLimit = Math.trunc(params.limit ?? DEFAULT_LIMIT);
     if (!Number.isFinite(rawLimit) || rawLimit <= 0) {
-      return textResult({
+      return jsonResult({
         error: `Invalid limit: ${params.limit}. Must be a positive number.`,
         path: params.path,
       });
@@ -82,7 +82,7 @@ export async function handleGetContext(
       endLine: offset - 1,
     };
     if (offset > totalLines) {
-      return textResult({
+      return jsonResult({
         path: relPath,
         total_lines: totalLines,
         showing: "0-0",
@@ -126,13 +126,13 @@ export async function handleGetContext(
       result.content = content;
     }
 
-    return textResult(result, true);
+    return jsonResult(result, true);
   } catch (err) {
     if (typeof err === "object" && err !== null && "content" in err) {
       return err as ToolResult;
     }
     const message = err instanceof Error ? err.message : String(err);
-    return textResult({ error: message, path: params.path });
+    return jsonResult({ error: message, path: params.path });
   }
 }
 
@@ -303,15 +303,4 @@ function getVscodeContextDocument(document: ContextResolvedDocument): {
     throw new Error("VS Code context document is unavailable.");
   }
   return { uri: hostDocument.uri, document: hostDocument.document };
-}
-
-function textResult(payload: unknown, pretty = false): ToolResult {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(payload, null, pretty ? 2 : undefined),
-      },
-    ],
-  };
 }

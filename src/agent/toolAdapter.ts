@@ -49,6 +49,7 @@ import type { TodoItem } from "./todoTool.js";
 import {
   errorResult,
   handleToolError,
+  jsonResult,
   type ToolResult,
 } from "../shared/types.js";
 import { getToolsForMode } from "./toolPermissions.js";
@@ -924,12 +925,6 @@ export function getAgentTools(
  */
 export type QuestionResponse = UserQuestionResponse;
 
-function jsonTextResult(value: unknown): ToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
-  };
-}
-
 export async function buildAskUserToolResult(args: {
   context: string;
   questions: Question[];
@@ -1172,10 +1167,13 @@ function discoverMcpTools(
 function mcpDiscoveryResultToToolResult(
   result: ReturnType<McpToolDiscoveryProvider["discoverTools"]>,
 ): ToolResult {
-  return jsonTextResult({
-    ...result,
-    count: result.tools.length,
-  });
+  return jsonResult(
+    {
+      ...result,
+      count: result.tools.length,
+    },
+    true,
+  );
 }
 
 function createMcpToolDiscoveryProvider(

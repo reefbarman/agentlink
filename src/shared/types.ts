@@ -113,11 +113,21 @@ export interface RevertRecoveryNotice {
   message: string;
 }
 
+/** Create a ToolResult containing a JSON-serialized text payload. */
+export function jsonResult(payload: unknown, pretty = false): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(payload, null, pretty ? 2 : undefined),
+      },
+    ],
+  };
+}
+
 /** Create a successful ToolResult from a JSON-serializable payload. */
 export function successResult(payload: Record<string, unknown>): ToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-  };
+  return jsonResult(payload, true);
 }
 
 /** Create an error ToolResult from a message string. */
@@ -125,11 +135,7 @@ export function errorResult(
   message: string,
   extra?: Record<string, unknown>,
 ): ToolResult {
-  return {
-    content: [
-      { type: "text", text: JSON.stringify({ error: message, ...extra }) },
-    ],
-  };
+  return jsonResult({ error: message, ...extra });
 }
 
 /** Wrap a caught error into a ToolResult. */

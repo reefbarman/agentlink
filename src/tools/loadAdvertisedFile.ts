@@ -3,7 +3,7 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 
 import type { AdvertisedArtifactProvider } from "../core/capabilities/readSearch.js";
-import type { ToolResult } from "../shared/types.js";
+import { errorResult, jsonResult, type ToolResult } from "../shared/types.js";
 import { resolveAndValidatePath } from "../util/paths.js";
 
 function normalizeExistingPath(filePath: string): string {
@@ -17,20 +17,6 @@ function normalizeExistingPath(filePath: string): string {
 export interface AllowedAdvertisedFile {
   name: string;
   filePath: string;
-}
-
-function errorResult(message: string, filePath?: string): ToolResult {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify({
-          error: message,
-          ...(filePath ? { path: filePath } : {}),
-        }),
-      },
-    ],
-  };
 }
 
 function createLegacyAdvertisedArtifactProvider(): AdvertisedArtifactProvider {
@@ -75,31 +61,26 @@ export async function loadAdvertisedFile(params: {
     if (!allowed) {
       return errorResult(
         `${params.kind[0].toUpperCase()}${params.kind.slice(1)} path is not in the current session's advertised ${params.allowlistLabel} allowlist`,
-        params.path,
+        params.path ? { path: params.path } : undefined,
       );
     }
 
     const raw = await artifactProvider.readTextFile(absolutePath);
     const content = params.contentTransform?.(raw) ?? raw;
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              [params.nameProperty]: allowed.name,
-              [params.pathProperty]: absolutePath,
-              content,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+    return jsonResult(
+      {
+        [params.nameProperty]: allowed.name,
+        [params.pathProperty]: absolutePath,
+        content,
+      },
+      true,
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return errorResult(message, params.path);
+    return errorResult(
+      message,
+      params.path ? { path: params.path } : undefined,
+    );
   }
 }

@@ -1,5 +1,5 @@
 import type { LanguagePositionParams } from "../core/capabilities/language.js";
-import type { ToolResult } from "../shared/types.js";
+import { jsonResult, type ToolResult } from "../shared/types.js";
 
 export interface LanguageToolOptions<
   TProvider,
@@ -42,12 +42,6 @@ export type PositionLanguageToolHandler<
   sessionId: string,
   providers?: TProviders,
 ) => Promise<ToolResult>;
-
-function jsonResult(payload: Record<string, unknown>): ToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload) }],
-  };
-}
 
 function isToolResult(error: unknown): error is ToolResult {
   return typeof error === "object" && error !== null && "content" in error;

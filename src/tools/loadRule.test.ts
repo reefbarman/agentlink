@@ -98,6 +98,20 @@ describe("handleLoadRule", () => {
     });
   });
 
+  it("omits an empty path from errors", async () => {
+    const result = await handleLoadRule(
+      { path: "" },
+      {} as never,
+      {} as never,
+      "session-1",
+      [],
+    );
+
+    expect(textOf(result)).toBe(
+      '{"error":"Rule path is not in the current session\'s advertised rule allowlist"}',
+    );
+  });
+
   it("rejects paths outside the advertised rule allowlist", async () => {
     const rulePath = path.join(tmpDir, ".agentlink", "rules", "security.md");
     fs.mkdirSync(path.dirname(rulePath), { recursive: true });
