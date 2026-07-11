@@ -28,6 +28,7 @@ import {
   setStoredAnthropicApiKey,
 } from "./agent/clientFactory.js";
 import { IndexerManager } from "./indexer/IndexerManager.js";
+import { registerIndexCommands } from "./indexer/indexCommands.js";
 import { ChatViewProvider } from "./agent/ChatViewProvider.js";
 import { AgentSessionManager } from "./agent/AgentSessionManager.js";
 import {
@@ -1696,18 +1697,7 @@ export function activate(context: vscode.ExtensionContext): void {
       indexerManager.startIndexing();
     }
 
-    // Register index commands
-    context.subscriptions.push(
-      vscode.commands.registerCommand("agentlink.rebuildIndex", () =>
-        indexerManager?.startIndexing(true),
-      ),
-      vscode.commands.registerCommand("agentlink.cancelIndex", () =>
-        indexerManager?.cancelIndexing(),
-      ),
-      vscode.commands.registerCommand("agentlink.resumeIndex", () =>
-        indexerManager?.startIndexing(false),
-      ),
-    );
+    context.subscriptions.push(...registerIndexCommands(() => indexerManager));
   }
 
   // Cleanup on deactivation
