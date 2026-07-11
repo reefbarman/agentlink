@@ -707,7 +707,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.emitSnapshot();
   }
 
-  private emitSnapshot(): void {
+  createSnapshotPublication(): BrowserGatewaySnapshotPublication {
     const snapshotStartedAt = this.streamingMetrics.enabled
       ? performance.now()
       : 0;
@@ -716,14 +716,14 @@ export class BrowserGatewayService implements vscode.Disposable {
     const serializationStartedAt = this.streamingMetrics.enabled
       ? performance.now()
       : 0;
-    this.lastSerializedSnapshot = JSON.stringify(snapshot);
-    const bytes = this.recordSerialization(
-      this.lastSerializedSnapshot,
-      serializationStartedAt,
-    );
-    this.onDidChangeEmitter.fire(
-      this.createPublication(snapshot, this.lastSerializedSnapshot, bytes),
-    );
+    const serialized = JSON.stringify(snapshot);
+    const bytes = this.recordSerialization(serialized, serializationStartedAt);
+    this.lastSerializedSnapshot = serialized;
+    return this.createPublication(snapshot, serialized, bytes);
+  }
+
+  private emitSnapshot(): void {
+    this.onDidChangeEmitter.fire(this.createSnapshotPublication());
   }
 
   private emitSnapshotIfChanged(): void {

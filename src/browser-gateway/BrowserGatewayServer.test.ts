@@ -1,3 +1,5 @@
+import * as http from "http";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BrowserGatewayServer } from "./BrowserGatewayServer.js";
@@ -284,6 +286,208 @@ describe("BrowserGatewayServer", () => {
       });
     } finally {
       await Promise.all(readers.map((reader) => reader.cancel()));
+      await server.stop();
+      service.dispose();
+      hub.dispose();
+    }
+  });
+
+  it("preserves SSE headers and supersedes stale connect-time snapshots", async () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => ({
+        cssVariables: {},
+        colorScheme: "dark",
+        themeLabel: "Dark",
+        source: "vscode-theme-api",
+      }),
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+    );
+    const server = new BrowserGatewayServer(
+      service,
+      makeChatViewProviderStub() as never,
+      "test-token",
+      "connect-race-instance",
+      "Connect Race Workspace",
+      "/workspace/connect-race",
+      vi.fn(),
+    );
+    const createInitial = service.createSnapshotPublication.bind(service);
+    vi.spyOn(service, "createSnapshotPublication").mockImplementationOnce(
+      () => {
+        const stale = createInitial();
+        hub.publishApproval({
+          kind: "write",
+          id: "connect-time-approval",
+          filePath: "src/connect.ts",
+          writeOperation: "modify",
+        });
+        return stale;
+      },
+    );
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+    try {
+      const port = await server.start(0);
+      const response = await fetch(`http://127.0.0.1:${port}/events`);
+      expect(response.headers.get("content-type")).toBe("text/event-stream");
+      expect(response.headers.get("cache-control")).toBe(
+        "no-cache, no-transform",
+      );
+      expect(response.headers.get("connection")).toBe("keep-alive");
+      expect(response.headers.get("x-accel-buffering")).toBe("no");
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      reader = response.body!.getReader();
+
+      const first = await reader.read();
+      const chunk = new TextDecoder().decode(first.value);
+      expect(chunk.match(/event: snapshot/g)).toHaveLength(1);
+      expect(chunk).not.toContain("event: update");
+      expect(chunk).toContain('"connect-time-approval"');
+    } finally {
+      await reader?.cancel();
+      await server.stop();
+      service.dispose();
+      hub.dispose();
+    }
+  });
+
+  it("rolls back a failed start before retrying", async () => {
+    const blocker = await new Promise<http.Server>((resolve) => {
+      const candidate = http.createServer();
+      candidate.listen(0, "127.0.0.1", () => resolve(candidate));
+    });
+    const blockedAddress = blocker.address();
+    if (!blockedAddress || typeof blockedAddress === "string") {
+      throw new Error("expected blocked TCP address");
+    }
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => ({
+        cssVariables: {},
+        colorScheme: "dark",
+        themeLabel: "Dark",
+        source: "vscode-theme-api",
+      }),
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+    );
+    const server = new BrowserGatewayServer(
+      service,
+      makeChatViewProviderStub() as never,
+      "test-token",
+      "failed-start-instance",
+      "Failed Start Workspace",
+      "/workspace/failed-start",
+      vi.fn(),
+    );
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+    try {
+      await expect(server.start(blockedAddress.port)).rejects.toMatchObject({
+        code: "EADDRINUSE",
+      });
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+
+      const port = await server.start(0);
+      const response = await fetch(`http://127.0.0.1:${port}/events`);
+      reader = response.body!.getReader();
+      await reader.read();
+      hub.publishApproval({
+        kind: "write",
+        id: "single-update-after-retry",
+        filePath: "src/retry.ts",
+        writeOperation: "modify",
+      });
+      const update = await reader.read();
+      const chunk = new TextDecoder().decode(update.value);
+      expect(chunk.match(/event: update/g)).toHaveLength(1);
+      expect(chunk).toContain('"single-update-after-retry"');
+    } finally {
+      if (blocker.listening) {
+        await new Promise<void>((resolve) => blocker.close(() => resolve()));
+      }
+      await reader?.cancel();
+      await server.stop();
+      service.dispose();
+      hub.dispose();
+    }
+  });
+
+  it("recreates the SSE hub on restart and reconnects with current full state", async () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => ({
+        cssVariables: {},
+        colorScheme: "dark",
+        themeLabel: "Dark",
+        source: "vscode-theme-api",
+      }),
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+    );
+    const server = new BrowserGatewayServer(
+      service,
+      makeChatViewProviderStub() as never,
+      "test-token",
+      "restart-instance",
+      "Restart Workspace",
+      "/workspace/restart",
+      vi.fn(),
+    );
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+    try {
+      let port = await server.start(0);
+      let response = await fetch(`http://127.0.0.1:${port}/events`);
+      reader = response.body!.getReader();
+      await reader.read();
+      await reader.cancel();
+      reader = undefined;
+      await server.stop();
+      await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
+
+      hub.publishApproval({
+        kind: "write",
+        id: "approval-while-stopped",
+        filePath: "src/reconnect.ts",
+        writeOperation: "modify",
+      });
+
+      port = await server.start(0);
+      response = await fetch(`http://127.0.0.1:${port}/events`);
+      reader = response.body!.getReader();
+      const reconnected = await reader.read();
+      const snapshotChunk = new TextDecoder().decode(reconnected.value);
+      expect(snapshotChunk).toContain("event: snapshot");
+      expect(snapshotChunk).toContain('"approval-while-stopped"');
+
+      hub.publishApprovalIdle();
+      const update = await reader.read();
+      const updateChunk = new TextDecoder().decode(update.value);
+      expect(updateChunk).toContain("event: update");
+      expect(updateChunk).toContain('"approval":null');
+    } finally {
+      await reader?.cancel();
       await server.stop();
       service.dispose();
       hub.dispose();

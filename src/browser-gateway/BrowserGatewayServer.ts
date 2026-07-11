@@ -36,10 +36,10 @@ import {
   type BrowserGatewayRouteMatch,
 } from "./browserGatewayHttpRouter.js";
 import { readJsonBody } from "./nodeHttpPrimitives.js";
+import { SseHub, type SsePublication } from "./SseHub.js";
 import {
   getDevelopmentStreamingBaselineMetrics,
   type StreamingBaselineMetrics,
-  utf8ByteLength,
 } from "../shared/streamingBaselineMetrics.js";
 
 export type BrowserGatewaySnapshot = ReturnType<
@@ -60,11 +60,7 @@ const MAX_BROWSER_DIFF_DETAIL_CHARS = 2_000_000;
 export class BrowserGatewayServer implements vscode.Disposable {
   private server: http.Server | null = null;
   private port: number | null = null;
-  private readonly sseClients = new Set<http.ServerResponse>();
-  private readonly sseKeepaliveTimers = new Map<
-    http.ServerResponse,
-    NodeJS.Timeout
-  >();
+  private sseHub: SseHub<BrowserGatewaySnapshot> | null = null;
   private readonly disposables: vscode.Disposable[] = [];
   private registryHeartbeatTimer: NodeJS.Timeout | undefined;
   private startedAtIso: string | null = null;
@@ -90,6 +86,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return this.port;
     }
 
+    this.sseHub = this.createSseHub();
     this.server = http.createServer((req, res) => {
       this.handleRequest(req, res);
     });
@@ -106,51 +103,56 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     // Let the service pause its poll when no browser client is connected.
     this.gatewayService.setHasActiveClientsProbe(
-      () => this.sseClients.size > 0,
+      () => (this.sseHub?.size ?? 0) > 0,
     );
 
-    await new Promise<void>((resolve, reject) => {
-      const onError = (err: Error) => {
-        this.server?.off("listening", onListening);
-        reject(err);
-      };
-      const onListening = () => {
-        this.server?.off("error", onError);
-        resolve();
-      };
-      this.server!.once("error", onError);
-      this.server!.once("listening", onListening);
-      this.server!.listen(port, "127.0.0.1");
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (err: Error) => {
+          this.server?.off("listening", onListening);
+          reject(err);
+        };
+        const onListening = () => {
+          this.server?.off("error", onError);
+          resolve();
+        };
+        this.server!.once("error", onError);
+        this.server!.once("listening", onListening);
+        this.server!.listen(port, "127.0.0.1");
+      });
 
-    this.server.on("error", (err) => {
-      this.log(`[browser-gateway] server error: ${err}`);
-    });
+      this.server.on("error", (err) => {
+        this.log(`[browser-gateway] server error: ${err}`);
+      });
 
-    const address = this.server.address();
-    this.port = typeof address === "object" && address ? address.port : port;
-    const url = `http://127.0.0.1:${this.port}`;
-    const startedAt = new Date().toISOString();
-    this.startedAtIso = startedAt;
-    await writeBrowserGatewayDiscovery({
-      pid: process.pid,
-      port: this.port,
-      url,
-      protocolVersion: 1,
-      startedAt,
-      authToken: this.authToken,
-    });
-    const theme = this.gatewayService.getCurrentThemeSnapshot();
-    this.lastPersistedThemeSnapshot = JSON.stringify(theme);
-    await writeBrowserGatewayThemeCache(theme).catch((err: unknown) => {
-      this.log(`[browser-gateway] failed to write theme cache: ${err}`);
-    });
-    await this.upsertCurrentRegistryRecord(theme);
-    this.startRegistryHeartbeat();
-    this.log(
-      `[browser-gateway] listening on ${url} instanceId=${this.instanceId} pid=${process.pid} workspace=${JSON.stringify(this.workspaceName)} path=${JSON.stringify(this.workspacePath)} registry=${getBrowserGatewayRegistryPath()}`,
-    );
-    return this.port;
+      const address = this.server.address();
+      this.port = typeof address === "object" && address ? address.port : port;
+      const url = `http://127.0.0.1:${this.port}`;
+      const startedAt = new Date().toISOString();
+      this.startedAtIso = startedAt;
+      await writeBrowserGatewayDiscovery({
+        pid: process.pid,
+        port: this.port,
+        url,
+        protocolVersion: 1,
+        startedAt,
+        authToken: this.authToken,
+      });
+      const theme = this.gatewayService.getCurrentThemeSnapshot();
+      this.lastPersistedThemeSnapshot = JSON.stringify(theme);
+      await writeBrowserGatewayThemeCache(theme).catch((err: unknown) => {
+        this.log(`[browser-gateway] failed to write theme cache: ${err}`);
+      });
+      await this.upsertCurrentRegistryRecord(theme);
+      this.startRegistryHeartbeat();
+      this.log(
+        `[browser-gateway] listening on ${url} instanceId=${this.instanceId} pid=${process.pid} workspace=${JSON.stringify(this.workspaceName)} path=${JSON.stringify(this.workspacePath)} registry=${getBrowserGatewayRegistryPath()}`,
+      );
+      return this.port;
+    } catch (error) {
+      await this.rollbackFailedStart();
+      throw error;
+    }
   }
 
   getUrl(): string | null {
@@ -222,36 +224,44 @@ export class BrowserGatewayServer implements vscode.Disposable {
   }
 
   async stop(): Promise<void> {
-    await clearBrowserGatewayDiscovery();
+    await this.teardownLocalServer();
+    await this.clearExternalRegistration();
+  }
+
+  dispose(): void {
+    void this.stop();
+  }
+
+  private async rollbackFailedStart(): Promise<void> {
+    await this.teardownLocalServer();
+    await this.clearExternalRegistration();
+  }
+
+  private async teardownLocalServer(): Promise<void> {
     if (this.registryHeartbeatTimer) {
       clearInterval(this.registryHeartbeatTimer);
       this.registryHeartbeatTimer = undefined;
     }
-    await removeBrowserGatewayInstance(this.instanceId);
     this.gatewayService.setHasActiveClientsProbe(undefined);
-    for (const disposable of this.disposables) {
-      disposable.dispose();
-    }
+    for (const disposable of this.disposables) disposable.dispose();
     this.disposables.length = 0;
-
-    for (const client of this.sseClients) {
-      this.removeSseClient(client);
+    this.sseHub?.dispose();
+    const server = this.server;
+    if (server?.listening) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-    this.sseClients.clear();
-
-    if (this.server) {
-      await new Promise<void>((resolve) => {
-        this.server!.close(() => resolve());
-      });
-      this.server = null;
-    }
+    this.server = null;
+    this.sseHub = null;
     this.port = null;
     this.startedAtIso = null;
     this.lastPersistedThemeSnapshot = "";
   }
 
-  dispose(): void {
-    void this.stop();
+  private async clearExternalRegistration(): Promise<void> {
+    await Promise.allSettled([
+      clearBrowserGatewayDiscovery(),
+      removeBrowserGatewayInstance(this.instanceId),
+    ]);
   }
 
   private handleRequest(
@@ -331,9 +341,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
           this.handleDiffDetailRequest(req, rawUrl, res);
         },
       ),
-      route("GET", pathExact("/events"), ({ req, res }) => {
-        this.handleSse(req, res);
-      }),
+      route(
+        "GET",
+        pathExact("/events"),
+        ({ req, res }) => this.handleSse(req, res),
+        internal("SSE subscription failed"),
+      ),
       route(
         "POST",
         rawExact("/api/approval"),
@@ -590,111 +603,68 @@ export class BrowserGatewayServer implements vscode.Disposable {
     ];
   }
 
-  private handleSse(req: http.IncomingMessage, res: http.ServerResponse): void {
-    req.socket.setTimeout(0);
-    res.socket?.setTimeout(0);
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-      "Access-Control-Allow-Origin": "*",
-    });
-    res.flushHeaders?.();
-
-    const snapshot = this.getSnapshot();
-    const { serialized } = this.serializeSnapshot(snapshot);
-    if (!this.writeSseChunk(res, `event: snapshot\ndata: ${serialized}\n\n`)) {
+  private async handleSse(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const sseHub = this.sseHub;
+    if (!sseHub) {
+      this.writeJson(res, 503, { error: "service_unavailable" });
       return;
     }
-    this.sseClients.add(res);
-    this.recordSseClientCount();
-    this.sseKeepaliveTimers.set(
-      res,
-      setInterval(() => {
-        if (!this.writeSseChunk(res, `: keepalive ${Date.now()}\n\n`)) {
-          this.removeSseClient(res);
-        }
-      }, SSE_KEEPALIVE_INTERVAL_MS),
+    await sseHub.subscribe(req, res, () =>
+      this.toSsePublication(this.gatewayService.createSnapshotPublication()),
     );
-
-    const removeClient = () => {
-      this.removeSseClient(res);
-    };
-
-    req.on("close", removeClient);
-    res.on("close", removeClient);
-    res.on("error", removeClient);
   }
 
   private broadcast(publication: BrowserGatewaySnapshotPublication): void {
+    const result = this.sseHub?.broadcast(
+      this.toSsePublication(publication),
+    ) ?? {
+      attempted: 0,
+      delivered: 0,
+    };
     if (this.streamingMetrics.enabled) {
       this.streamingMetrics.record({
         type: "broadcast",
         surface: "vscode-gateway",
-        clientCount: this.sseClients.size,
+        clientCount: result.attempted,
         bytes: publication.bytes,
       });
     }
-    const chunk = `event: update\ndata: ${publication.serialized}\n\n`;
-    for (const client of this.sseClients) {
-      if (!this.writeSseChunk(client, chunk)) {
-        this.removeSseClient(client);
-      }
-    }
   }
 
-  private serializeSnapshot(payload: unknown): {
-    serialized: string;
-    bytes: number | undefined;
-  } {
-    const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
-    const serialized = JSON.stringify(payload);
-    if (!this.streamingMetrics.enabled) return { serialized, bytes: undefined };
-    const bytes = utf8ByteLength(serialized);
-    this.streamingMetrics.record({
-      type: "serialization",
-      surface: "vscode-gateway",
-      durationMs: performance.now() - startedAt,
-      bytes,
+  private createSseHub(): SseHub<BrowserGatewaySnapshot> {
+    return new SseHub({
+      serialize: JSON.stringify,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+        "Access-Control-Allow-Origin": "*",
+      },
+      keepaliveIntervalMs: SSE_KEEPALIVE_INTERVAL_MS,
+      onClientCountChanged: (clientCount) => {
+        if (!this.streamingMetrics.enabled) return;
+        this.streamingMetrics.record({
+          type: "sse_clients",
+          surface: "vscode-gateway",
+          clientCount,
+        });
+      },
     });
-    return { serialized, bytes };
   }
 
-  private writeSseChunk(client: http.ServerResponse, chunk: string): boolean {
-    if (client.destroyed || client.writableEnded) return false;
-    try {
-      client.write(chunk);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private removeSseClient(client: http.ServerResponse): void {
-    const removed = this.sseClients.delete(client);
-    if (removed) this.recordSseClientCount();
-    const keepaliveTimer = this.sseKeepaliveTimers.get(client);
-    if (keepaliveTimer) {
-      clearInterval(keepaliveTimer);
-      this.sseKeepaliveTimers.delete(client);
-    }
-    if (!client.destroyed && !client.writableEnded) {
-      try {
-        client.end();
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  private recordSseClientCount(): void {
-    if (!this.streamingMetrics.enabled) return;
-    this.streamingMetrics.record({
-      type: "sse_clients",
-      surface: "vscode-gateway",
-      clientCount: this.sseClients.size,
-    });
+  private toSsePublication(
+    publication: BrowserGatewaySnapshotPublication,
+  ): SsePublication<BrowserGatewaySnapshot> {
+    return {
+      revision: publication.revision,
+      value: publication.snapshot,
+      serialized: publication.serialized,
+      bytes: publication.bytes,
+    };
   }
 
   private async handleInstancesRequest(

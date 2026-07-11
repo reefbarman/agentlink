@@ -133,6 +133,39 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("creates revisioned initial publications through the shared producer sequence", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+    );
+
+    const initial = service.createSnapshotPublication();
+    hub.publishApproval({
+      kind: "write",
+      id: "approval-after-initial",
+      filePath: "src/file.ts",
+      writeOperation: "modify",
+    });
+    const next = service.createSnapshotPublication();
+
+    expect([initial.revision, next.revision]).toEqual([1, 3]);
+    expect(initial.serialized).toBe(JSON.stringify(initial.snapshot));
+    expect(initial.bytes).toBe(Buffer.byteLength(initial.serialized, "utf8"));
+    expect(next.serialized).toBe(JSON.stringify(next.snapshot));
+    expect(next.bytes).toBe(Buffer.byteLength(next.serialized, "utf8"));
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("tracks approval and question state from hub events", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();
