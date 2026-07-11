@@ -85,6 +85,7 @@ import type {
 } from "../approvals/webview/types.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { AgentToolCallTracker } from "./AgentToolCallTracker.js";
+import { DeltaBufferFlusher } from "./DeltaBufferFlusher.js";
 import { DIFF_VIEW_URI_SCHEME } from "../integrations/diffViewContentProvider.js";
 import { getRelativePath } from "../util/paths.js";
 import {
@@ -924,11 +925,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private condenseStartTimes = new Map<string, number>();
   private bgUpdateTimer: ReturnType<typeof setTimeout> | null = null;
-  // Buffers for coalescing high-frequency streaming deltas before postMessage IPC.
-  private textDeltaBuffer = new Map<string, string>();
-  private thinkingDeltaBuffer = new Map<string, Map<string, string>>();
-  private toolInputDeltaBuffer = new Map<string, Map<string, string>>();
-  private deltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly deltaBufferFlusher: DeltaBufferFlusher;
   private streamDropCounts = {
     sessionMismatch: 0,
     streamingFalse: 0,
@@ -992,6 +989,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }),
       this.uiEventHub,
     ]);
+    this.deltaBufferFlusher = new DeltaBufferFlusher({
+      emit: (message) => this.postMessage(message),
+      isBackgroundSession: (sessionId) =>
+        Boolean(this.sessionManager?.getSession(sessionId)?.background),
+    });
     this.mcpHub = new McpClientHub(globalState);
     this.askAgentMcpHub = new McpClientHub(globalState, "ask-agent");
 
@@ -3678,57 +3680,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }, 150);
   }
 
-  /**
-   * Flush all buffered streaming deltas to the webview immediately.
-   * Called on a timer (scheduleDeltaFlush) and synchronously before done/error.
-   */
-  private flushDeltaBuffers(): void {
-    this.deltaFlushTimer = null;
-    for (const [sessionId, text] of this.textDeltaBuffer) {
-      this.postMessage({ type: "agentTextDelta", sessionId, text });
-    }
-    this.textDeltaBuffer.clear();
-    for (const [sessionId, byId] of this.thinkingDeltaBuffer) {
-      for (const [thinkingId, text] of byId) {
-        this.postMessage({
-          type: "agentThinkingDelta",
-          sessionId,
-          thinkingId,
-          text,
-        });
-      }
-    }
-    this.thinkingDeltaBuffer.clear();
-    for (const [sessionId, byId] of this.toolInputDeltaBuffer) {
-      const isBackground = Boolean(
-        this.sessionManager?.getSession(sessionId)?.background,
-      );
-      for (const [toolCallId, partialJson] of byId) {
-        this.postMessage({
-          type: isBackground ? "agentBgToolInputDelta" : "agentToolInputDelta",
-          sessionId,
-          toolCallId,
-          partialJson,
-        });
-      }
-    }
-    this.toolInputDeltaBuffer.clear();
-  }
-
-  /** Schedule a delta flush ~16ms from now (idempotent). */
-  private scheduleDeltaFlush(): void {
-    if (this.deltaFlushTimer !== null) return;
-    this.deltaFlushTimer = setTimeout(() => this.flushDeltaBuffers(), 16);
-  }
-
-  /** Cancel any pending flush timer and drain buffers immediately. */
-  private flushDeltaBuffersNow(): void {
-    if (this.deltaFlushTimer !== null) {
-      clearTimeout(this.deltaFlushTimer);
-    }
-    this.flushDeltaBuffers();
-  }
-
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
 
@@ -5808,15 +5759,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             text: event.text,
           });
         } else {
-          const tMap =
-            this.thinkingDeltaBuffer.get(sessionId) ??
-            new Map<string, string>();
-          tMap.set(
+          this.deltaBufferFlusher.appendThinking(
+            sessionId,
             event.thinkingId,
-            (tMap.get(event.thinkingId) ?? "") + event.text,
+            event.text,
           );
-          this.thinkingDeltaBuffer.set(sessionId, tMap);
-          this.scheduleDeltaFlush();
         }
         break;
 
@@ -5824,7 +5771,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.log(`[agent] thinking_end id=${event.thinkingId}`);
         // Flush buffered thinking deltas before marking complete so content
         // arrives at the webview before the block is sealed.
-        this.flushDeltaBuffersNow();
+        this.deltaBufferFlusher.flushNow();
         this.postMessage({
           type: isBackground ? "agentBgThinkingEnd" : "agentThinkingEnd",
           sessionId,
@@ -5841,11 +5788,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             text: event.text,
           });
         } else {
-          this.textDeltaBuffer.set(
-            sessionId,
-            (this.textDeltaBuffer.get(sessionId) ?? "") + event.text,
-          );
-          this.scheduleDeltaFlush();
+          this.deltaBufferFlusher.appendText(sessionId, event.text);
         }
         // Keep bg strip in sync with streaming text (throttled to avoid flooding)
         if (isBackground) {
@@ -5859,7 +5802,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         );
         // Flush buffered text deltas before the tool card so pre-tool text
         // arrives at the webview before agentToolStart, preserving natural order.
-        this.flushDeltaBuffersNow();
+        this.deltaBufferFlusher.flushNow();
         this.postMessage({
           type: isBackground ? "agentBgToolStart" : "agentToolStart",
           sessionId,
@@ -5873,14 +5816,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case "tool_input_delta":
-        const iMap =
-          this.toolInputDeltaBuffer.get(sessionId) ?? new Map<string, string>();
-        iMap.set(
+        this.deltaBufferFlusher.appendToolInput(
+          sessionId,
           event.toolCallId,
-          (iMap.get(event.toolCallId) ?? "") + event.partialJson,
+          event.partialJson,
         );
-        this.toolInputDeltaBuffer.set(sessionId, iMap);
-        this.scheduleDeltaFlush();
         break;
 
       case "checkpoint_created":
@@ -5916,7 +5856,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // Convert tool result content to a string for the webview
         // Flush buffered tool input deltas before marking the tool complete
         // so the webview sees the full input JSON before the result arrives.
-        this.flushDeltaBuffersNow();
+        this.deltaBufferFlusher.flushNow();
         const resultText = event.result
           .map((c) => (c.type === "text" ? c.text : `[${c.type}]`))
           .join("\n");
@@ -6032,7 +5972,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case "error": {
-        this.flushDeltaBuffersNow();
+        this.deltaBufferFlusher.flushNow();
         this.log(
           `[agent] error: ${event.error} (retryable=${event.retryable}, code=${event.code ?? "none"})`,
         );
@@ -6155,7 +6095,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case "done":
-        this.flushDeltaBuffersNow();
+        this.deltaBufferFlusher.flushNow();
         // Clean up any lingering agent tool calls from the sidebar tracker
         this.toolCallTracker?.clearAgentCalls(sessionId);
         this.log(
