@@ -10,6 +10,7 @@ import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
 import { createHash } from "crypto";
+import { Semaphore } from "../util/Semaphore.js";
 import type { IndexCache } from "./types.js";
 import {
   STRUCTURAL_GRAPH_CACHE_VERSION,
@@ -197,27 +198,6 @@ export interface DiffResult {
   errors: string[];
 }
 
-/** Simple concurrency limiter (like p-limit) */
-function pLimit(concurrency: number) {
-  let active = 0;
-  const queue: Array<() => void> = [];
-
-  return <T>(fn: () => Promise<T>): Promise<T> =>
-    new Promise<T>((resolve, reject) => {
-      const run = () => {
-        active++;
-        fn()
-          .then(resolve, reject)
-          .finally(() => {
-            active--;
-            if (queue.length > 0) queue.shift()!();
-          });
-      };
-      if (active < concurrency) run();
-      else queue.push(run);
-    });
-}
-
 const IO_CONCURRENCY = 10;
 
 /**
@@ -314,51 +294,54 @@ export async function scanFiles(
   }
 
   // Phase 2: Async I/O with concurrency limiting
-  const limit = pLimit(IO_CONCURRENCY);
+  const semaphore = new Semaphore(IO_CONCURRENCY);
   let scanned = 0;
 
-  const scanPromises = candidates.map(({ absPath, relPath }) =>
-    limit(async () => {
+  const scanPromises = candidates.map(async ({ absPath, relPath }) => {
+    const release = await semaphore.acquire();
+    try {
+      const stat = await fsp.stat(absPath);
+      if (!stat.isFile()) return;
+      if (stat.size > MAX_FILE_SIZE || stat.size === 0) return;
+
+      // Fast path: stat-based skip
+      const cached = cache.files[relPath];
+      if (
+        cached &&
+        cached.mtimeMs !== undefined &&
+        cached.size !== undefined &&
+        cached.mtimeMs === stat.mtimeMs &&
+        cached.size === stat.size
+      ) {
+        return;
+      }
+
+      // Slow path: read + hash
+      const content = await fsp.readFile(absPath, "utf-8");
+      if (isBinaryContent(content)) return;
+
+      const hash = hashContent(content);
+
+      if (cached && cached.hash === hash) {
+        cached.mtimeMs = stat.mtimeMs;
+        cached.size = stat.size;
+        return;
+      }
+
+      toIndexPaths.push({ absPath, relPath });
+    } catch (err) {
+      errors.push(`Failed to scan ${relPath}: ${err}`);
+    } finally {
       try {
-        const stat = await fsp.stat(absPath);
-        if (!stat.isFile()) return;
-        if (stat.size > MAX_FILE_SIZE || stat.size === 0) return;
-
-        // Fast path: stat-based skip
-        const cached = cache.files[relPath];
-        if (
-          cached &&
-          cached.mtimeMs !== undefined &&
-          cached.size !== undefined &&
-          cached.mtimeMs === stat.mtimeMs &&
-          cached.size === stat.size
-        ) {
-          return;
-        }
-
-        // Slow path: read + hash
-        const content = await fsp.readFile(absPath, "utf-8");
-        if (isBinaryContent(content)) return;
-
-        const hash = hashContent(content);
-
-        if (cached && cached.hash === hash) {
-          cached.mtimeMs = stat.mtimeMs;
-          cached.size = stat.size;
-          return;
-        }
-
-        toIndexPaths.push({ absPath, relPath });
-      } catch (err) {
-        errors.push(`Failed to scan ${relPath}: ${err}`);
-      } finally {
         scanned++;
         if (scanned % 100 === 0) {
           onProgress?.(scanned, candidates.length);
         }
+      } finally {
+        release();
       }
-    }),
-  );
+    }
+  });
 
   await Promise.all(scanPromises);
   onProgress?.(candidates.length, candidates.length);
@@ -394,27 +377,28 @@ export async function readFilesBatch(
   errors: string[],
 ): Promise<FileWithContent[]> {
   const result: FileWithContent[] = [];
-  const limit = pLimit(IO_CONCURRENCY);
+  const semaphore = new Semaphore(IO_CONCURRENCY);
 
-  const promises = paths.map(({ absPath, relPath }) =>
-    limit(async () => {
-      try {
-        const stat = await fsp.stat(absPath);
-        const content = await fsp.readFile(absPath, "utf-8");
-        const hash = hashContent(content);
-        result.push({
-          absPath,
-          relPath,
-          content,
-          hash,
-          mtimeMs: stat.mtimeMs,
-          size: stat.size,
-        });
-      } catch (err) {
-        errors.push(`Failed to read ${relPath}: ${err}`);
-      }
-    }),
-  );
+  const promises = paths.map(async ({ absPath, relPath }) => {
+    const release = await semaphore.acquire();
+    try {
+      const stat = await fsp.stat(absPath);
+      const content = await fsp.readFile(absPath, "utf-8");
+      const hash = hashContent(content);
+      result.push({
+        absPath,
+        relPath,
+        content,
+        hash,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+      });
+    } catch (err) {
+      errors.push(`Failed to read ${relPath}: ${err}`);
+    } finally {
+      release();
+    }
+  });
 
   await Promise.all(promises);
   return result;

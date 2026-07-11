@@ -12,13 +12,38 @@ import {
   isBinaryContent,
   loadCache,
   loadStructuralCache,
+  readFilesBatch,
+  scanFiles,
   writeCache,
   writeStructuralCache,
 } from "./workerLib.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { IndexCache } from "./types.js";
 import type { StructuralGraphCache } from "./structuralGraph.js";
+
+const ioMocks = vi.hoisted(() => ({
+  stat: vi.fn<typeof import("fs/promises").stat>(),
+  readFile: vi.fn<typeof import("fs/promises").readFile>(),
+  actualStat: undefined as typeof import("fs/promises").stat | undefined,
+  actualReadFile: undefined as
+    | typeof import("fs/promises").readFile
+    | undefined,
+}));
+
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  ioMocks.actualStat = actual.stat;
+  ioMocks.actualReadFile = actual.readFile;
+  ioMocks.stat.mockImplementation(actual.stat);
+  ioMocks.readFile.mockImplementation(actual.readFile);
+  return {
+    ...actual,
+    default: { ...actual, stat: ioMocks.stat, readFile: ioMocks.readFile },
+    stat: ioMocks.stat,
+    readFile: ioMocks.readFile,
+  };
+});
 
 // --- isBinaryContent ---
 
@@ -400,5 +425,140 @@ describe("diffFiles", () => {
     expect(result.toIndex[0].hash).toBe(hashContent(content));
     expect(result.toIndex[0].absPath).toBe(f1);
     expect(result.toIndex[0].relPath).toBe("foo.ts");
+  });
+});
+
+// --- async file scanning and reading ---
+
+describe("scanFiles / readFilesBatch", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "workerlib-async-"));
+    ioMocks.stat.mockReset();
+    ioMocks.stat.mockImplementation(ioMocks.actualStat!);
+    ioMocks.readFile.mockReset();
+    ioMocks.readFile.mockImplementation(ioMocks.actualReadFile!);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeFile(relPath: string, content: string): string {
+    const absPath = path.join(tmpDir, relPath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    fs.writeFileSync(absPath, content, "utf-8");
+    return absPath;
+  }
+
+  it("continues scanning after file errors and reports final progress", async () => {
+    const validPath = writeFile("valid.ts", "export const valid = true;");
+    const missingPath = path.join(tmpDir, "missing.ts");
+    const progress: Array<[number, number]> = [];
+
+    const result = await scanFiles(
+      [missingPath, validPath],
+      tmpDir,
+      { version: 1, files: {} },
+      (scanned, total) => progress.push([scanned, total]),
+    );
+
+    expect(result.toIndexPaths).toEqual([
+      { absPath: validPath, relPath: "valid.ts" },
+    ]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("missing.ts");
+    expect(progress).toEqual([[2, 2]]);
+  });
+
+  it("admits at most ten reads and starts queued work in input order", async () => {
+    const paths = Array.from({ length: 12 }, (_, index) => ({
+      absPath: path.join(tmpDir, `file-${index}.ts`),
+      relPath: `file-${index}.ts`,
+    }));
+    const pendingStats: Array<{
+      path: string;
+      resolve: (value: { mtimeMs: number; size: number }) => void;
+    }> = [];
+    ioMocks.stat.mockImplementation(
+      (file) =>
+        new Promise((resolve) => {
+          pendingStats.push({
+            path: String(file),
+            resolve: resolve as (value: {
+              mtimeMs: number;
+              size: number;
+            }) => void,
+          });
+        }) as ReturnType<typeof import("fs/promises").stat>,
+    );
+    ioMocks.readFile.mockResolvedValue("content");
+
+    const resultPromise = readFilesBatch(paths, []);
+    await vi.waitFor(() => expect(pendingStats).toHaveLength(10));
+    expect(pendingStats.map(({ path: file }) => path.basename(file))).toEqual(
+      paths.slice(0, 10).map(({ relPath }) => relPath),
+    );
+
+    pendingStats[0].resolve({ mtimeMs: 1, size: 7 });
+    await vi.waitFor(() => expect(pendingStats).toHaveLength(11));
+    expect(path.basename(pendingStats[10].path)).toBe("file-10.ts");
+
+    pendingStats[1].resolve({ mtimeMs: 1, size: 7 });
+    await vi.waitFor(() => expect(pendingStats).toHaveLength(12));
+    expect(path.basename(pendingStats[11].path)).toBe("file-11.ts");
+
+    for (const pending of pendingStats.slice(2)) {
+      pending.resolve({ mtimeMs: 1, size: 7 });
+    }
+
+    await expect(resultPromise).resolves.toHaveLength(12);
+  });
+
+  it("preserves empty scan and batch results", async () => {
+    const progress = vi.fn();
+
+    await expect(
+      scanFiles([], tmpDir, { version: 1, files: {} }, progress),
+    ).resolves.toEqual({ toIndexPaths: [], staleRelPaths: [], errors: [] });
+    expect(progress).toHaveBeenCalledOnce();
+    expect(progress).toHaveBeenCalledWith(0, 0);
+    await expect(readFilesBatch([], [])).resolves.toEqual([]);
+  });
+
+  it("propagates progress callback errors after releasing worker permits", async () => {
+    const files = Array.from({ length: 100 }, (_, index) =>
+      writeFile(`file-${index}.ts`, `export const value${index} = ${index};`),
+    );
+
+    await expect(
+      scanFiles(files, tmpDir, { version: 1, files: {} }, () => {
+        throw new Error("progress failed");
+      }),
+    ).rejects.toThrow("progress failed");
+  });
+
+  it("continues reading a batch after file errors", async () => {
+    const validPath = writeFile("valid.ts", "export const valid = true;");
+    const errors: string[] = [];
+
+    const result = await readFilesBatch(
+      [
+        { absPath: path.join(tmpDir, "missing.ts"), relPath: "missing.ts" },
+        { absPath: validPath, relPath: "valid.ts" },
+      ],
+      errors,
+    );
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        absPath: validPath,
+        relPath: "valid.ts",
+        content: "export const valid = true;",
+      }),
+    ]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("missing.ts");
   });
 });
