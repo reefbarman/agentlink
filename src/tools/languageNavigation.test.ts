@@ -129,6 +129,25 @@ describe("language navigation handlers", () => {
     });
   });
 
+  it("converts provider errors to the established path-scoped payload", async () => {
+    const goToDefinition = vi.fn(async () => {
+      throw new Error("definition failed");
+    });
+
+    const result = await handleGoToDefinition(params, "session-1", {
+      navigationProvider: {
+        goToDefinition,
+        goToImplementation: vi.fn(),
+        goToTypeDefinition: vi.fn(),
+      },
+    });
+
+    expect(textPayload(result)).toEqual({
+      error: "definition failed",
+      path: "src/file.ts",
+    });
+  });
+
   it("preserves ToolResult rejections from providers", async () => {
     const rejectedResult = {
       content: [
