@@ -25,6 +25,10 @@
     {
       "pattern": "npx oxfmt",
       "mode": "prefix"
+    },
+    {
+      "pattern": "npx @vscode/vsce ls",
+      "mode": "prefix"
     }
   ],
   "pathRules": [
