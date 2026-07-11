@@ -90,6 +90,7 @@ import {
   type BrowserForegroundSnapshot,
 } from "./browserForegroundSnapshot.js";
 import { DeltaBufferFlusher } from "./DeltaBufferFlusher.js";
+import { ProjectedForegroundStore } from "./ProjectedForegroundStore.js";
 import { DIFF_VIEW_URI_SCHEME } from "../integrations/diffViewContentProvider.js";
 import { getRelativePath } from "../util/paths.js";
 import {
@@ -100,9 +101,7 @@ import { detectQuestionFromAssistantText } from "./webview/questionDetection.js"
 import type { DetectedQuestion } from "../shared/questionDetection.js";
 import {
   agentMessagesToChatMessages,
-  initialState,
   reducer,
-  shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
   type AppState,
   type LoadedInstructionDebugInfo,
@@ -964,12 +963,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private readonly uiPublisher: AgentUiPublisher;
   private browserGatewayThemeSnapshot: BrowserGatewayThemeSnapshot | null =
     null;
-  private projectedForegroundState: AppState = {
-    ...initialState,
-  };
-  private projectedForegroundSessionId: string | null = null;
-  private projectedForegroundLoadingSessionId: string | null = null;
-  private projectedForegroundStreaming = false;
+  private readonly projectedForegroundStore = new ProjectedForegroundStore();
   private projectedDetectRequest: {
     requestId: string;
     messageId: string;
@@ -4965,12 +4959,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private get projectedForegroundState(): AppState {
+    return this.projectedForegroundStore.state;
+  }
+
+  private set projectedForegroundState(state: AppState) {
+    this.projectedForegroundStore.replaceState(state);
+  }
+
   private applyProjectedAction(action: Parameters<typeof reducer>[1]): void {
-    this.projectedForegroundState = reducer(
-      this.projectedForegroundState,
-      action,
-    );
-    this.projectedForegroundStreaming = this.projectedForegroundState.streaming;
+    this.projectedForegroundStore.apply(action);
   }
 
   private maybeStartProjectedDetectedQuestionRequest(): void {
@@ -5103,12 +5101,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private resetProjectedForegroundState(): void {
-    this.projectedForegroundState = {
-      ...initialState,
-    };
-    this.projectedForegroundSessionId = null;
-    this.projectedForegroundLoadingSessionId = null;
-    this.projectedForegroundStreaming = false;
+    this.projectedForegroundStore.reset();
     this.projectedDetectRequest = null;
     this.projectedLastDetectKey = null;
     this.detectRequestInputs.clear();
@@ -5122,7 +5115,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const shouldHydrate = this.projectedForegroundSessionId !== session.id;
+    const shouldHydrate =
+      this.projectedForegroundStore.sessionId !== session.id;
     if (!shouldHydrate) return;
 
     const allMessages =
@@ -5130,32 +5124,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       "function"
         ? session.getAllMessages()
         : [];
-    this.projectedForegroundState = {
-      ...initialState,
-    };
-    this.projectedForegroundSessionId = session.id;
-    this.projectedForegroundLoadingSessionId = null;
-    this.projectedForegroundStreaming = false;
+    this.projectedForegroundStore.hydrate(
+      {
+        type: "LOAD_SESSION",
+        sessionId: session.id,
+        title: session.title,
+        mode: session.mode,
+        model: session.model,
+        messages: agentMessagesToChatMessages(allMessages),
+        lastInputTokens: session.lastInputTokens,
+        lastOutputTokens: session.lastOutputTokens,
+        checkpoints: this.getSessionCheckpoints(session.id),
+        userTurnOffset: 0,
+        hasMoreBefore: false,
+      },
+      session.estimatedTotalUsed,
+    );
     this.projectedDetectRequest = null;
     this.projectedLastDetectKey = null;
     this.detectRequestInputs.clear();
-    this.projectedForegroundState = reducer(this.projectedForegroundState, {
-      type: "LOAD_SESSION",
-      sessionId: session.id,
-      title: session.title,
-      mode: session.mode,
-      model: session.model,
-      messages: agentMessagesToChatMessages(allMessages),
-      lastInputTokens: session.lastInputTokens,
-      lastOutputTokens: session.lastOutputTokens,
-      checkpoints: this.getSessionCheckpoints(session.id),
-      userTurnOffset: 0,
-      hasMoreBefore: false,
-    });
-    this.projectedForegroundState = reducer(this.projectedForegroundState, {
-      type: "TOKEN_ESTIMATE",
-      estimatedTotalUsed: session.estimatedTotalUsed,
-    });
   }
 
   private formatRevertRecoveryNoticeForSession(
@@ -5172,7 +5159,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const extMsg = msg as unknown as ExtensionMessage;
 
     if (extMsg.type === "stateUpdate") {
-      this.projectedForegroundSessionId = extMsg.state.sessionId;
+      this.projectedForegroundStore.setSessionId(extMsg.state.sessionId);
       if (!extMsg.state.sessionId) {
         this.resetProjectedForegroundState();
         return;
@@ -5217,7 +5204,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       shouldDropSessionScopedEvent(
         extMsg.type,
         eventSessionId,
-        this.projectedForegroundSessionId,
+        this.projectedForegroundStore.sessionId,
         isBackgroundEvent,
       )
     ) {
@@ -5225,7 +5212,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     const dropIfNotStreaming = (): boolean => {
-      if (this.projectedForegroundStreaming) return false;
+      if (this.projectedForegroundStore.isStreaming) return false;
       const liveFg = this.sessionManager?.getForegroundSession();
       const liveStreaming = Boolean(
         liveFg &&
@@ -5234,7 +5221,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           liveFg.status === "awaiting_approval"),
       );
       if (liveStreaming) {
-        this.projectedForegroundStreaming = true;
+        this.projectedForegroundStore.setStreaming(true);
         return false;
       }
       return true;
@@ -5469,11 +5456,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentSessionLoaded": {
-        this.projectedForegroundLoadingSessionId = extMsg.sessionId;
-        if (extMsg.hasMoreBefore !== true) {
-          this.projectedForegroundLoadingSessionId = null;
-        }
-        this.projectedForegroundSessionId = extMsg.sessionId;
+        this.projectedForegroundStore.beginSessionLoad(
+          extMsg.sessionId,
+          extMsg.hasMoreBefore,
+        );
         this.applyProjectedAction({
           type: "LOAD_SESSION",
           sessionId: extMsg.sessionId,
@@ -5492,16 +5478,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentSessionChunk": {
         if (
-          !shouldAcceptSessionChunk(
+          !this.projectedForegroundStore.acceptSessionChunk(
             extMsg.sessionId,
-            this.projectedForegroundSessionId,
-            this.projectedForegroundLoadingSessionId,
+            extMsg.hasMoreBefore,
           )
         ) {
           break;
-        }
-        if (extMsg.hasMoreBefore !== true) {
-          this.projectedForegroundLoadingSessionId = null;
         }
         this.applyProjectedAction({
           type: "PREPEND_SESSION_CHUNK",
