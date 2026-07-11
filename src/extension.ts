@@ -19,6 +19,7 @@ import {
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
+import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
 import { registerCodexAuthCommands } from "./agent/codexAuthCommands.js";
 import { runLegacyAgentIntegrationCleanup } from "./util/legacyAgentIntegrationCleanup.js";
 
@@ -1496,32 +1497,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // Commands
   context.subscriptions.push(
     ...registerDiffViewCommands(),
-    vscode.commands.registerCommand("agentlink.addTrustedCommand", () =>
-      addTrustedCommandViaUI(),
-    ),
-    vscode.commands.registerCommand("agentLink.focusApproval", () =>
-      approvalPanel.focusApproval(),
-    ),
-    vscode.commands.registerCommand("agentlink.cancelToolCall", (id: string) =>
-      toolCallTracker.cancelCall(id),
-    ),
-    vscode.commands.registerCommand(
-      "agentlink.continueToolCallInBackground",
-      (id: string) => toolCallTracker.continueInBackground(id),
-    ),
-    vscode.commands.registerCommand(
-      "agentlink.completeToolCall",
-      (id: string) => toolCallTracker.completeCall(id),
-    ),
-    vscode.commands.registerCommand("agentlink.clearSessionApprovals", () => {
-      for (const s of approvalManager.getActiveSessions()) {
-        approvalManager.clearSession(s.id);
-      }
-      approvalManager.resetWriteApproval();
-      approvalManager.resetAgentWriteApproval();
-      vscode.window.showInformationMessage(
-        "All built-in agent session approvals cleared.",
-      );
+    ...registerAgentActivityCommands({
+      addTrustedCommand: addTrustedCommandViaUI,
+      approvalPanel,
+      toolCallTracker,
+      approvalManager,
     }),
     vscode.commands.registerCommand(
       "agentlink.restartBrowserGateway",
