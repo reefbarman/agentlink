@@ -1119,7 +1119,7 @@ Use this when wiring a real ACP stdio agent:
 
 Background runs enforce explicit safety limits:
 
-- Max concurrent background sessions (spawn rejection with deterministic error)
+- Configurable concurrent background sessions (extra launches queue until a slot is available)
 - Task-class soft `maxToolCalls` / `maxApiTurns` routing policy where configured
 - Tool profiles such as `review` and `readonly-research` for constrained read-only work
 - Foreground cancellation via `kill_background_agent`
@@ -1313,6 +1313,7 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 | `agentlink.bgSummary.mode`                     | `agent`                    | How background-agent status snippets are summarized (`agent`, `openai`, `heuristic`)                             |
 | `agentlink.background.defaultAgent`            | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                      |
 | `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                    |
+| `agentlink.background.maxConcurrent`           | `3`                        | Max background agents running at once (also caps per-root and per-provider concurrency); extra launches queue    |
 | `agentlink.semanticSearchEnabled`              | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                      |
 | `agentlink.qdrantUrl`                          | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                 |
 | `agentlink.autoIndex`                          | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                     |

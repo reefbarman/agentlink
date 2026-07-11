@@ -358,10 +358,13 @@ export class AgentSessionManager {
     });
     this.fleetScheduler = new FleetScheduler({
       maxConcurrent: this.bgDefaults.maxConcurrent,
-      maxConcurrentPerRoot: this.bgDefaults.maxConcurrentPerRoot ?? 2,
-      maxConcurrentPerProvider: this.bgDefaults.maxConcurrentPerProvider ?? 2,
+      maxConcurrentPerRoot:
+        this.bgDefaults.maxConcurrentPerRoot ?? this.bgDefaults.maxConcurrent,
+      maxConcurrentPerProvider:
+        this.bgDefaults.maxConcurrentPerProvider ??
+        this.bgDefaults.maxConcurrent,
       maxDepth: this.bgDefaults.maxDepth ?? 2,
-      maxChildrenPerParent: this.bgDefaults.maxChildrenPerParent ?? 2,
+      maxChildrenPerParent: this.bgDefaults.maxChildrenPerParent ?? 4,
     });
 
     // Initialize checkpoint manager asynchronously — failures are non-fatal

@@ -17,6 +17,7 @@ import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
+import { normalizeBackgroundMaxConcurrent } from "./agent/background/backgroundConcurrency.js";
 import { addTrustedCommandViaUi } from "./agent/trustedCommandFlow.js";
 import { registerCodexAuthCommands } from "./agent/codexAuthCommands.js";
 import { createCodexAuthFlows } from "./agent/codexAuthFlows.js";
@@ -476,6 +477,9 @@ export function activate(context: vscode.ExtensionContext): void {
     void publishBrowserGatewayModelCatalog();
     void grantBrowserGatewayModelCredentials();
   };
+  const bgMaxConcurrent = normalizeBackgroundMaxConcurrent(
+    getConfig<number>("background.maxConcurrent"),
+  );
   agentSessionManager = new AgentSessionManager(
     agentConfig,
     workspaceCwd,
@@ -483,6 +487,7 @@ export function activate(context: vscode.ExtensionContext): void {
     isDevMode,
     sessionStore,
     log,
+    { maxConcurrent: bgMaxConcurrent },
   );
   browserGatewayService = new BrowserGatewayService(
     chatViewProvider.getUiEventHub(),
