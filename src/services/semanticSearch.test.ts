@@ -10,6 +10,8 @@ import {
   semanticSearch,
 } from "./semanticSearch.js";
 
+import { EMBEDDING_MODEL } from "../indexer/embeddingConfig.js";
+
 vi.mock("vscode", () => ({
   Uri: {
     file: (fsPath: string) => ({ fsPath }),
@@ -601,6 +603,10 @@ describe("semantic search auth", () => {
     );
     expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
       Authorization: "Bearer oauth-token",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      model: EMBEDDING_MODEL,
+      input: "oauth embeddings",
     });
   });
 

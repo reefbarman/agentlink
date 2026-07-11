@@ -61,7 +61,7 @@ import type {
   Chunk,
   ChunkGranularity,
 } from "./types.js";
-import { EMBEDDING_DIM, EMBEDDING_MODEL } from "./types.js";
+import { createEmbeddingRequest, EMBEDDING_DIM } from "./embeddingConfig.js";
 import { sleep } from "../util/sleep.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 
@@ -911,10 +911,7 @@ async function embedBatchWithRetry(
         "Content-Type": "application/json",
         Authorization: `Bearer ${bearerToken}`,
       },
-      body: JSON.stringify({
-        model: EMBEDDING_MODEL,
-        input: texts,
-      }),
+      body: JSON.stringify(createEmbeddingRequest(texts)),
     });
 
     if (response.ok) {

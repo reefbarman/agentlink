@@ -163,10 +163,3 @@ export interface Chunk {
    */
   embeddingContent?: string;
 }
-
-// ============================================================
-// Embedding dimension constant
-// ============================================================
-
-export const EMBEDDING_DIM = 1536;
-export const EMBEDDING_MODEL = "text-embedding-3-small";

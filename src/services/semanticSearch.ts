@@ -18,6 +18,7 @@ import {
 } from "../util/ripgrep.js";
 import { sleep } from "../util/sleep.js";
 import { getAlCollectionName } from "../indexer/collectionName.js";
+import { createEmbeddingRequest } from "../indexer/embeddingConfig.js";
 
 import { type ToolResult } from "../shared/types.js";
 import { getSemanticReadinessMessage } from "../shared/semanticReadiness.js";
@@ -178,10 +179,7 @@ async function generateEmbedding(
           "Content-Type": "application/json",
           Authorization: `Bearer ${auth.bearerToken}`,
         },
-        body: JSON.stringify({
-          model: "text-embedding-3-small",
-          input: text,
-        }),
+        body: JSON.stringify(createEmbeddingRequest(text)),
       });
     } catch (error) {
       if (attempt < EMBEDDING_MAX_RETRIES) {
