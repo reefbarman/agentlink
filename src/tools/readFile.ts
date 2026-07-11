@@ -1,7 +1,7 @@
+import type { Dirent } from "fs";
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as path from "path";
-import * as syncFs from "fs";
 
 import type {
   ReadFileEnrichmentProvider,
@@ -313,13 +313,30 @@ export async function getSymbolOutline(
 
 // --- Friendly errors ---
 
-export function findLikelyPathSuggestions(
+const DEFAULT_SUGGESTION_DIRECTORY_BUDGET = 200;
+
+export interface PathSuggestionOptions {
+  limit?: number;
+  directoryBudget?: number;
+  workspaceRoot?: string;
+}
+
+export async function findLikelyPathSuggestions(
   inputPath: string,
-  limit = 5,
-): string[] {
-  const workspaceRoot = tryGetFirstWorkspaceRoot();
+  optionsOrLimit: PathSuggestionOptions | number = {},
+): Promise<string[]> {
+  const options =
+    typeof optionsOrLimit === "number"
+      ? { limit: optionsOrLimit }
+      : optionsOrLimit;
+  const workspaceRoot = options.workspaceRoot ?? tryGetFirstWorkspaceRoot();
   if (!workspaceRoot) return [];
 
+  const limit = Math.max(0, options.limit ?? 5);
+  const directoryBudget = Math.max(
+    0,
+    options.directoryBudget ?? DEFAULT_SUGGESTION_DIRECTORY_BUDGET,
+  );
   const normalizedInput = inputPath.replace(/\\/g, "/");
   const basename = path.posix.basename(normalizedInput);
   const suffix = normalizedInput.startsWith("./")
@@ -327,12 +344,18 @@ export function findLikelyPathSuggestions(
     : normalizedInput;
   const suggestions = new Set<string>();
   const stack = [workspaceRoot];
+  let directoriesRead = 0;
 
-  while (stack.length > 0 && suggestions.size < limit) {
+  while (
+    stack.length > 0 &&
+    suggestions.size < limit &&
+    directoriesRead < directoryBudget
+  ) {
     const current = stack.pop()!;
-    let entries: syncFs.Dirent[];
+    directoriesRead += 1;
+    let entries: Dirent<string>[];
     try {
-      entries = syncFs.readdirSync(current, { withFileTypes: true });
+      entries = await fs.readdir(current, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -361,10 +384,10 @@ export function findLikelyPathSuggestions(
   return [...suggestions];
 }
 
-export function buildReadFileError(
+export async function buildReadFileError(
   err: unknown,
   inputPath: string,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   if (!(err instanceof Error)) {
     return { error: String(err), path: inputPath };
   }
@@ -373,7 +396,7 @@ export function buildReadFileError(
   switch (code) {
     case "ENOENT": {
       const workspaceRoot = tryGetFirstWorkspaceRoot();
-      const suggestions = findLikelyPathSuggestions(inputPath);
+      const suggestions = await findLikelyPathSuggestions(inputPath);
       return {
         error: `File not found: ${inputPath}. Working directory: ${workspaceRoot ?? "(no workspace)"}`,
         path: inputPath,
@@ -927,7 +950,7 @@ export async function handleReadFile(
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
   } catch (err) {
-    const errorPayload = buildReadFileError(err, params.path);
+    const errorPayload = await buildReadFileError(err, params.path);
 
     if (
       params.auto_follow_suggestion &&

@@ -1,4 +1,4 @@
-import * as fs from "fs";
+import * as fs from "fs/promises";
 import * as path from "path";
 
 import type {
@@ -142,18 +142,17 @@ function addDefaultExcludeGlobs(args: string[]): void {
   }
 }
 
-function addFilePatternArgs(
+async function addFilePatternArgs(
   args: string[],
   dirPath: string,
   filePattern?: string,
   defaultSearchTarget: string = dirPath,
-): string {
-  let searchTarget = defaultSearchTarget;
+): Promise<string> {
   if (!filePattern) {
-    return searchTarget;
+    return defaultSearchTarget;
   }
 
-  const resolvedFile = resolveFilePatternAsPath(filePattern, dirPath);
+  const resolvedFile = await resolveFilePatternAsPath(filePattern, dirPath);
   if (resolvedFile) {
     return resolvedFile;
   }
@@ -161,7 +160,7 @@ function addFilePatternArgs(
   for (const glob of expandSimpleBraceGlob(filePattern)) {
     args.push("--glob", glob);
   }
-  return searchTarget;
+  return defaultSearchTarget;
 }
 
 /**
@@ -171,10 +170,10 @@ function addFilePatternArgs(
  * A pattern is treated as a literal file path when it contains a path separator
  * (`/` or `\`) and does NOT contain any glob metacharacters (`*`, `?`, `[`, `{`).
  */
-export function resolveFilePatternAsPath(
+export async function resolveFilePatternAsPath(
   filePattern: string,
   searchDir: string,
-): string | undefined {
+): Promise<string | undefined> {
   if (!filePattern.includes("/") && !filePattern.includes("\\")) {
     return undefined; // bare filename — valid glob usage
   }
@@ -196,7 +195,7 @@ export function resolveFilePatternAsPath(
     return undefined;
   }
   try {
-    const stat = fs.statSync(candidate);
+    const stat = await fs.stat(candidate);
     if (stat.isFile()) {
       return candidate;
     }
@@ -258,7 +257,7 @@ export async function handleSearchFiles(
     let pathIsFile = false;
 
     try {
-      const stat = fs.statSync(resolvedPath);
+      const stat = await fs.stat(resolvedPath);
       if (stat.isFile()) {
         pathIsFile = true;
         searchDir = path.dirname(resolvedPath);
@@ -362,7 +361,7 @@ export async function handleSearchFiles(
     // Handle file_pattern: if it looks like a literal file path that exists,
     // use it as the search target instead of --glob to avoid glob matching issues.
     // Normalize simple brace globs like src/**/*.{ts,tsx} into multiple --glob args.
-    const searchTarget = addFilePatternArgs(
+    const searchTarget = await addFilePatternArgs(
       args,
       searchDir,
       params.file_pattern,
@@ -506,7 +505,7 @@ async function searchFilesOnly(
     args.push("--multiline", "--multiline-dotall");
   if (needsPcre2(sanitized)) args.push("--pcre2");
   addDefaultExcludeGlobs(args);
-  const searchTarget = addFilePatternArgs(
+  const searchTarget = await addFilePatternArgs(
     args,
     searchDir,
     params.file_pattern,
@@ -582,7 +581,7 @@ async function searchCount(
     args.push("--multiline", "--multiline-dotall");
   if (needsPcre2(sanitized)) args.push("--pcre2");
   addDefaultExcludeGlobs(args);
-  const searchTarget = addFilePatternArgs(
+  const searchTarget = await addFilePatternArgs(
     args,
     searchDir,
     params.file_pattern,
