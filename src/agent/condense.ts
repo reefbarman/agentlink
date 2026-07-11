@@ -38,6 +38,13 @@ import {
 import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import { truncateMiddle } from "../util/truncateMiddle.js";
+import {
+  buildDeterministicFallbackSummary,
+  extractCondenseResumeAnchor,
+  renderDeterministicSections,
+} from "./condensePrompt.js";
+
+export { renderDeterministicSections } from "./condensePrompt.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -384,7 +391,7 @@ export function getEffectiveHistory(messages: AgentMessage[]): AgentMessage[] {
   const laterMessages = fromSummary.slice(1);
   const canonicalUserMessages = extractCanonicalUserMessages(messages);
   const pendingTasks = extractPendingTasksHeuristic(messages);
-  const resumeAnchor = extractResumeAnchor({
+  const resumeAnchor = extractCondenseResumeAnchor({
     userMessages: canonicalUserMessages,
     pendingTasks,
   });
@@ -599,113 +606,6 @@ function extractPendingTasksHeuristic(messages: AgentMessage[]): string[] {
   return [...new Set(candidates)].slice(-6);
 }
 
-function extractResumeAnchor(options: {
-  userMessages: string[];
-  pendingTasks: string[];
-}): { latestUserMessage: string; currentTask: string } {
-  const latestUserMessage =
-    options.userMessages[options.userMessages.length - 1] ??
-    "Unknown from transcript";
-  const currentTask =
-    options.pendingTasks[options.pendingTasks.length - 1] ??
-    "Unknown from transcript";
-  return { latestUserMessage, currentTask };
-}
-
-export function renderDeterministicSections(options: {
-  userMessages: string[];
-  pendingTasks: string[];
-  resumeAnchor: {
-    latestUserMessage: string;
-    currentTask: string;
-  };
-  preservedContext?: {
-    toolNames: string[];
-    mcpServerNames?: string[];
-    activeSkills?: string[];
-  };
-}): string {
-  const userLines =
-    options.userMessages.length > 0
-      ? options.userMessages.map((m, i) => `${i + 1}. "${m}"`).join("\n")
-      : "1. None";
-
-  const pendingLines =
-    options.pendingTasks.length > 0
-      ? options.pendingTasks.map((t) => `- ${t}`).join("\n")
-      : "- None explicitly identified";
-
-  const toolLines = options.preservedContext?.toolNames?.length
-    ? options.preservedContext.toolNames.map((name) => `- ${name}`).join("\n")
-    : "- Unknown";
-
-  const serverLines = options.preservedContext?.mcpServerNames?.length
-    ? options.preservedContext.mcpServerNames
-        .map((name) => `- ${name}`)
-        .join("\n")
-    : "- None";
-  const skillLines = options.preservedContext?.activeSkills?.length
-    ? options.preservedContext.activeSkills
-        .map((name) => `- ${name}`)
-        .join("\n")
-    : "- None";
-
-  return [
-    "<system-reminder>",
-    "## Resume Anchor (deterministic)",
-    `- Latest user message: "${options.resumeAnchor.latestUserMessage}"`,
-    `- Continue from this task: "${options.resumeAnchor.currentTask}"`,
-    "",
-    "## Canonical User Messages (deterministic)",
-    userLines,
-    "",
-    "## Pending Tasks (deterministic heuristic)",
-    pendingLines,
-    "",
-    "## Preserved Runtime Context (reattached outside transcript)",
-    "### Available tool names",
-    toolLines,
-    "",
-    "### MCP servers with exposed tools",
-    serverLines,
-    "",
-    "### Active loaded skills",
-    skillLines,
-    "</system-reminder>",
-  ].join("\n");
-}
-
-function buildDeterministicFallbackSummary(options: {
-  userMessages: string[];
-  pendingTasks: string[];
-  resumeAnchor: {
-    latestUserMessage: string;
-    currentTask: string;
-  };
-}): string {
-  const allUserMessages =
-    options.userMessages.length > 0
-      ? options.userMessages.map((m) => `- "${m}"`).join("\n")
-      : "- None";
-  const pendingTasks =
-    options.pendingTasks.length > 0
-      ? options.pendingTasks.map((t) => `- ${t}`).join("\n")
-      : "- None explicitly identified";
-
-  return [
-    "1. **Primary Request and Intent**: Continue the active work captured in the latest user message and pending task anchor.",
-    "2. **Key Technical Concepts**: Unknown from transcript.",
-    "3. **Files and Code Sections**: Unknown from transcript.",
-    "4. **Errors and Fixes**: Unknown from transcript.",
-    "5. **Problem Solving**: Use the deterministic resume anchor and canonical user messages below as the source of truth.",
-    `6. **All User Messages**:\n${allUserMessages}`,
-    "7. **User Corrections & Behavioral Directives**: Unknown from transcript.",
-    `8. **Pending Tasks**:\n${pendingTasks}`,
-    `9. **Current Work**: Continue from this task: "${options.resumeAnchor.currentTask}". Latest user message: "${options.resumeAnchor.latestUserMessage}".`,
-    `10. **Optional Next Step**: Resume work on "${options.resumeAnchor.currentTask}".`,
-  ].join("\n\n");
-}
-
 function sourceWindowHash(messages: AgentMessage[]): string {
   const basis = messages
     .map(
@@ -896,7 +796,7 @@ export async function summarizeConversation(
   const hadPriorSummaryInInput = toSummarize.some((m) => m.isSummary);
   const canonicalUserMessages = extractCanonicalUserMessages(toSummarize);
   const pendingTasks = extractPendingTasksHeuristic(toSummarize);
-  const resumeAnchor = extractResumeAnchor({
+  const resumeAnchor = extractCondenseResumeAnchor({
     userMessages: canonicalUserMessages,
     pendingTasks,
   });
