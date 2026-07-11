@@ -72,6 +72,7 @@ import {
   inferBackgroundDisplayStatus,
   pickBackgroundDisplayStatus,
 } from "./backgroundDisplayStatus.js";
+import { BackgroundSummaryScheduler } from "./BackgroundSummaryScheduler.js";
 import {
   parseFleetResultEnvelope,
   planFleetWorkflow,
@@ -227,8 +228,7 @@ export class AgentSessionManager {
       startedAt: number;
     }
   >();
-  /** Current heuristic phase bucket per background session. */
-  private bgPhase = new Map<string, string>();
+  private readonly bgSummaryScheduler = new BackgroundSummaryScheduler();
   private bgLaunchQueue: Array<{
     sessionId: string;
     start: () => Promise<void>;
@@ -3705,75 +3705,18 @@ export class AgentSessionManager {
     errorMessage?: string;
     statusDetail?: string;
   }): void {
-    const nextPhase = inferBackgroundDisplayStatus({
+    const trigger = this.bgSummaryScheduler.evaluate(args);
+    if (!trigger) return;
+
+    void this.tryRefreshBgSummary({
+      sessionId: args.sessionId,
+      trigger,
       status: args.status,
       currentTool: args.currentTool,
       streamingText: args.streamingText,
       resultText: args.resultText,
       errorMessage: args.errorMessage,
-      statusDetail: args.statusDetail,
     });
-
-    const prevPhase = this.bgPhase.get(args.sessionId);
-    if (prevPhase !== nextPhase) {
-      this.bgPhase.set(args.sessionId, nextPhase);
-      void this.tryRefreshBgSummary({
-        sessionId: args.sessionId,
-        trigger: "phase_change",
-        status: args.status,
-        currentTool: args.currentTool,
-        streamingText: args.streamingText,
-        resultText: args.resultText,
-        errorMessage: args.errorMessage,
-      });
-      return;
-    }
-
-    if (args.event.type === "tool_result") {
-      const name = args.event.toolName.toLowerCase();
-      const important =
-        name.includes("execute_command") ||
-        name.includes("apply_diff") ||
-        name.includes("write_file") ||
-        name.includes("ask_user");
-      if (important) {
-        void this.tryRefreshBgSummary({
-          sessionId: args.sessionId,
-          trigger: "important_tool",
-          status: args.status,
-          currentTool: args.currentTool,
-          streamingText: args.streamingText,
-          resultText: args.resultText,
-          errorMessage: args.errorMessage,
-        });
-      }
-      return;
-    }
-
-    if (args.event.type === "error") {
-      void this.tryRefreshBgSummary({
-        sessionId: args.sessionId,
-        trigger: "error",
-        status: args.status,
-        currentTool: args.currentTool,
-        streamingText: args.streamingText,
-        resultText: args.resultText,
-        errorMessage: args.errorMessage,
-      });
-      return;
-    }
-
-    if (args.event.type === "done") {
-      void this.tryRefreshBgSummary({
-        sessionId: args.sessionId,
-        trigger: "done",
-        status: args.status,
-        currentTool: args.currentTool,
-        streamingText: args.streamingText,
-        resultText: args.resultText,
-        errorMessage: args.errorMessage,
-      });
-    }
   }
 
   private getProjectedBgStatus(session: AgentSession): {
