@@ -1,11 +1,23 @@
-export type CoreReasoningEffort =
-  | "none"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max";
+export const CORE_REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type CoreReasoningEffort = (typeof CORE_REASONING_EFFORTS)[number];
+
+export function isCoreReasoningEffort(
+  value: unknown,
+): value is CoreReasoningEffort {
+  return (
+    typeof value === "string" &&
+    (CORE_REASONING_EFFORTS as readonly string[]).includes(value)
+  );
+}
 
 export interface CoreModelCatalogEntry {
   id: string;

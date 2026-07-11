@@ -16,6 +16,7 @@ import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
 import type { AgentMode } from "./modes.js";
+import type { ReasoningEffort } from "./providers/types.js";
 import type { Question } from "./webview/types.js";
 import {
   buildAskUserToolResult,
@@ -854,6 +855,21 @@ export class AgentSessionManager {
 
   getSession(id: string): AgentSession | undefined {
     return this.sessions.get(id);
+  }
+
+  setForegroundReasoningEffort(effort: ReasoningEffort): boolean {
+    const session = this.getForegroundSession();
+    if (!session) return false;
+
+    session.reasoningEffort = effort;
+    if (effort === "none") {
+      session.thinkingBudget = 0;
+    } else if (session.thinkingBudget === 0) {
+      session.thinkingBudget = this.config.thinkingBudget;
+    }
+    this.saveSession(session.id);
+    this.onSessionsChanged?.();
+    return true;
   }
 
   saveAllSessions(): void {

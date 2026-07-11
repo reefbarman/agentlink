@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
+import { isCoreReasoningEffort } from "../core/modelCatalog.js";
 import { providerRegistry, queryProviderUsage } from "./providers/index.js";
 import type { ModelProvider } from "./providers/types.js";
 import type {
@@ -111,6 +112,14 @@ import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
 type RawDisplayImage = { name: string; mimeType: string; base64: string };
 type RawDisplayDocument = { name: string; mimeType: string; base64?: string };
+
+export function resolveReasoningEffortMessage(
+  value: unknown,
+  thinkingEnabled: unknown,
+): import("./providers/types.js").ReasoningEffort | undefined {
+  if (isCoreReasoningEffort(value)) return value;
+  return thinkingEnabled === false ? "none" : undefined;
+}
 
 function hasFinalContinueAction(message: ChatMessage): boolean {
   return Boolean(
@@ -2536,12 +2545,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ): { ok: boolean } {
     const fg = this.sessionManager?.getForegroundSession();
     if (!fg || !this.sessionManager) return { ok: false };
-    fg.reasoningEffort = effort;
-    if (effort === "none") {
-      fg.thinkingBudget = 0;
-    } else if (fg.thinkingBudget === 0) {
-      fg.thinkingBudget = this.sessionManager.getConfig().thinkingBudget;
+    this.ensureProjectedForegroundSession(fg);
+    if (!this.sessionManager.setForegroundReasoningEffort(effort)) {
+      return { ok: false };
     }
+    this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
     this.sendInitialState();
     this.log(`Reasoning effort changed: ${effort}`);
     return { ok: true };
@@ -3793,11 +3801,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const text = msg.text as string;
         const mode = (msg.mode as string) ?? "code";
         const sessionId = msg.sessionId as string | undefined;
-        const reasoningEffort =
-          (msg.reasoningEffort as
-            | import("./providers/types.js").ReasoningEffort
-            | undefined) ??
-          (msg.thinkingEnabled === false ? "none" : undefined);
+        const reasoningEffort = resolveReasoningEffortMessage(
+          msg.reasoningEffort,
+          msg.thinkingEnabled,
+        );
         const thinkingEnabled = reasoningEffort
           ? reasoningEffort !== "none"
           : msg.thinkingEnabled !== false;
@@ -3934,6 +3941,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 this.approvalManager?.getAgentWriteApprovalState(fg.id),
             },
           });
+        }
+        break;
+      }
+
+      case "agentSetReasoningEffort": {
+        const effort = msg.effort;
+        if (isCoreReasoningEffort(effort)) {
+          this.submitBrowserSetReasoningEffort(effort);
         }
         break;
       }

@@ -2002,9 +2002,16 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [clampApprovalPanelHeight, stopApprovalResize],
   );
 
-  const handleSetReasoningEffort = useCallback((effort: ReasoningEffort) => {
-    dispatch({ type: "SET_REASONING_EFFORT", effort });
-  }, []);
+  const handleSetReasoningEffort = useCallback(
+    (effort: ReasoningEffort) => {
+      dispatch({ type: "SET_REASONING_EFFORT", effort });
+      vscodeApi.postMessage({
+        command: "agentSetReasoningEffort",
+        effort,
+      });
+    },
+    [vscodeApi],
+  );
 
   const handleExportTranscript = useCallback(() => {
     vscodeApi.postMessage({

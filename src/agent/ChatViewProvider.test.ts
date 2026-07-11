@@ -251,11 +251,65 @@ describe("checkpoint revert failure messages", () => {
   });
 });
 
+describe("reasoning effort message validation", () => {
+  it("accepts supported values and rejects malformed agentSend values", async () => {
+    const { resolveReasoningEffortMessage } =
+      await import("./ChatViewProvider.js");
+
+    expect(resolveReasoningEffortMessage("max", true)).toBe("max");
+    expect(resolveReasoningEffortMessage("unsupported", true)).toBeUndefined();
+    expect(
+      resolveReasoningEffortMessage({ effort: "high" }, true),
+    ).toBeUndefined();
+    expect(resolveReasoningEffortMessage("unsupported", false)).toBe("none");
+  });
+});
+
 describe("ChatViewProvider session state sync", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
     mockGetConfiguration.mockClear();
+  });
+
+  it("keeps browser reasoning snapshots in sync with the live session", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const session = {
+      id: "session-1",
+      title: "Session 1",
+      mode: "code",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      thinkingBudget: 1024,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      estimatedTotalUsed: 0,
+      getAllMessages: () => [],
+    };
+    const setForegroundReasoningEffort = vi.fn((effort: string) => {
+      session.reasoningEffort = effort;
+      return true;
+    });
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      setForegroundReasoningEffort,
+      getConfig: vi.fn(() => ({ thinkingBudget: 1024 })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    } as never);
+
+    expect(provider.submitBrowserSetReasoningEffort("max")).toEqual({
+      ok: true,
+    });
+    expect(setForegroundReasoningEffort).toHaveBeenCalledWith("max");
+    expect(session.reasoningEffort).toBe("max");
+    expect(provider.getBrowserProjectedForegroundState()?.reasoningEffort).toBe(
+      "max",
+    );
   });
 
   it("rejects non-MCP native tools from the Ask Agent MCP bridge", async () => {

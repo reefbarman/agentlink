@@ -177,6 +177,33 @@ describe("AgentSessionManager host injection", () => {
     ]);
   });
 
+  it("persists foreground reasoning effort changes immediately", async () => {
+    const savedRecords: PersistedSessionRecord[] = [];
+    const store = {
+      saveSession: vi.fn(async (args: { session: PersistedSessionRecord }) => {
+        savedRecords.push(args.session);
+        return { ok: true, revision: String(savedRecords.length) };
+      }),
+      list: vi.fn(() => []),
+    };
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), thinkingBudget: 1024 },
+      "/tmp",
+      undefined,
+      false,
+      store as any,
+    );
+    const session = await mgr.createForegroundSession("code");
+    session.thinkingBudget = 0;
+
+    expect(mgr.setForegroundReasoningEffort("max")).toBe(true);
+    await flushPromises();
+
+    expect(session.reasoningEffort).toBe("max");
+    expect(session.thinkingBudget).toBe(1024);
+    expect(savedRecords.at(-1)?.metadata.reasoningEffort).toBe("max");
+  });
+
   it("does not persist empty foreground sessions during shutdown", async () => {
     const store = {
       save: vi.fn(),
