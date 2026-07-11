@@ -804,6 +804,79 @@ describe("TerminalManager terminal selection", () => {
     );
   });
 
+  it("retroactively marks sendText background output as captured on completion", async () => {
+    const manager = new TerminalManager();
+    vi.spyOn(
+      manager as unknown as {
+        waitForShellIntegration: (terminal: unknown) => Promise<boolean>;
+      },
+      "waitForShellIntegration",
+    ).mockResolvedValue(false);
+    const endListeners: Array<
+      Parameters<typeof vscode.window.onDidEndTerminalShellExecution>[0]
+    > = [];
+    vi.spyOn(
+      vscode.window,
+      "onDidEndTerminalShellExecution",
+    ).mockImplementation((listener) => {
+      endListeners.push(listener);
+      return { dispose: vi.fn() };
+    });
+
+    let managed!: MockManagedTerminal;
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => {
+      managed = {
+        id: "term_retroactive_capture",
+        name,
+        cwd,
+        busy: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundRunning: false,
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal: {
+          show: vi.fn(),
+          sendText: vi.fn(),
+          dispose: vi.fn(),
+        },
+      };
+      (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+        managed,
+      ];
+      return managed;
+    });
+
+    const result = await manager.executeCommand({
+      command: "npm run dev",
+      cwd: "/workspace",
+      background: true,
+    });
+    expect(result.execution_mode).toBe("send_text");
+    expect(endListeners).toHaveLength(1);
+
+    managed.outputBuffer = "captured later";
+    endListeners[0]({
+      terminal: managed.terminal as never,
+      shellIntegration: {} as never,
+      execution: {} as never,
+      exitCode: 3,
+    });
+
+    expect(manager.getBackgroundState(managed.id)).toMatchObject({
+      is_running: false,
+      exit_code: 3,
+      output: "captured later",
+      output_captured: true,
+    });
+  });
+
   it("marks captured background commands finished when Ctrl+C returns the prompt without an exit marker", async () => {
     const manager = new TerminalManager();
     const executeCommand = vi.fn(() => ({

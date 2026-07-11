@@ -5,6 +5,11 @@ import type {
   TerminalExecuteOptions,
 } from "../core/capabilities/terminal.js";
 import { cleanTerminalOutput, cleanTerminalRawOutput } from "../util/ansi.js";
+import {
+  createTerminalMarkerTracker,
+  findAndStripTerminalMarker,
+  registerTerminalCompletionListeners,
+} from "./terminalCompletion.js";
 
 import { buildAgentExecutionEnv } from "../process/agentExecutionPolicy.js";
 
@@ -142,64 +147,6 @@ export type CommandResult = TerminalCommandResult;
 export type ExecuteOptions = TerminalExecuteOptions;
 
 const SHELL_INTEGRATION_TIMEOUT = 15000; // 15 seconds (WSL2 / heavy shell configs can be slow)
-
-/** OSC 633;D completion marker emitted by VS Code shell integration */
-// oxlint-disable-next-line no-control-regex -- intentionally matching ANSI escape sequences
-const MARKER_RE = /\x1b\]633;D(?:;(\d+))?(?:\x07|\x1b\\)/;
-
-/** Prompt-start markers emitted when the shell has returned to an interactive prompt. */
-// oxlint-disable-next-line no-control-regex -- intentionally matching ANSI escape sequences
-const PROMPT_MARKER_RE = /\x1b\](?:633|133);A(?:;[^\x07\x1b]*)?(?:\x07|\x1b\\)/;
-
-// oxlint-disable-next-line no-control-regex -- intentionally matching terminal control chars
-const INTERRUPTED_TAIL_RE = /(?:\x03|\^C)\s*$/;
-
-type ShellCompletionMarker = {
-  exitCode: number | null;
-  stripped: string;
-  source: "exit" | "prompt";
-};
-
-/**
- * Check the output buffer for a shell-integration completion marker.
- * If found, strips the marker from the buffer, returns the parsed exit code.
- * @param buffer The output buffer to scan
- * @param fromPos Start scanning from this position (with 20-char overlap for split markers)
- * @returns `{ exitCode, stripped }` if found, `undefined` otherwise
- */
-function findAndStripMarker(
-  buffer: string,
-  fromPos: number,
-): ShellCompletionMarker | undefined {
-  const searchFrom = Math.max(0, fromPos - 20);
-  const region = buffer.slice(searchFrom);
-  const exitMatch = region.match(MARKER_RE);
-  const promptMatch = region.match(PROMPT_MARKER_RE);
-  if (!exitMatch && !promptMatch) return undefined;
-
-  const exitIdx =
-    exitMatch?.index !== undefined ? searchFrom + exitMatch.index : undefined;
-  const promptIdx =
-    promptMatch?.index !== undefined
-      ? searchFrom + promptMatch.index
-      : undefined;
-  const useExit =
-    exitIdx !== undefined && (promptIdx === undefined || exitIdx <= promptIdx);
-  const match = useExit ? exitMatch! : promptMatch!;
-
-  // Use the match index within the region to find the exact marker position,
-  // rather than lastIndexOf on the full buffer which could find a stale marker.
-  const markerIdx = useExit ? exitIdx! : promptIdx!;
-  const stripped = markerIdx >= 0 ? buffer.slice(0, markerIdx) : buffer;
-  const exitCode = useExit
-    ? match[1] !== undefined
-      ? parseInt(match[1], 10)
-      : null
-    : INTERRUPTED_TAIL_RE.test(stripped)
-      ? 130
-      : null;
-  return { exitCode, stripped, source: useExit ? "exit" : "prompt" };
-}
 
 let nextTerminalId = 1;
 
@@ -997,7 +944,7 @@ export class TerminalManager {
     let lastMarkerCheckPos = 0;
 
     const checkForMarker = (source: "stream" | "poll"): boolean => {
-      const result = findAndStripMarker(
+      const result = findAndStripTerminalMarker(
         managed.outputBuffer,
         lastMarkerCheckPos,
       );
@@ -1123,7 +1070,7 @@ export class TerminalManager {
     clearInterval(markerPoll);
 
     // Strip any remaining completion marker from output (safety net)
-    const leftover = findAndStripMarker(managed.outputBuffer, 0);
+    const leftover = findAndStripTerminalMarker(managed.outputBuffer, 0);
     if (leftover) {
       managed.outputBuffer = leftover.stripped;
     }
@@ -1276,7 +1223,6 @@ export class TerminalManager {
     // Helper to finalize background state
     const finalize = (source: string) => {
       if (!managed.backgroundRunning) return;
-      clearInterval(markerPoll);
       this.finishBackgroundCommand(managed, commandId, {
         normalizeOutput: true,
       });
@@ -1285,57 +1231,37 @@ export class TerminalManager {
       );
     };
 
-    // Listen for shell execution end event
-    const exitDisposable = vscode.window.onDidEndTerminalShellExecution((e) => {
-      if (execution && e.execution === execution) {
-        logBg(`END_EVENT exitCode=${e.exitCode}`);
-        managed.backgroundExitCode = e.exitCode ?? null;
+    const completionListeners = registerTerminalCompletionListeners({
+      terminal: managed.terminal,
+      getExecution: () => execution,
+      subscribeEnd: (listener) =>
+        vscode.window.onDidEndTerminalShellExecution(listener),
+      subscribeClose: (listener) => vscode.window.onDidCloseTerminal(listener),
+      onEnd: (exitCode) => {
+        logBg(`END_EVENT exitCode=${exitCode}`);
+        managed.backgroundExitCode = exitCode ?? null;
         finalize("exitEvent");
-      }
-    });
-
-    // Listen for terminal close
-    const closeDisposable = vscode.window.onDidCloseTerminal((t) => {
-      if (t === managed.terminal) {
+      },
+      onClose: () => {
         logBg("TERMINAL_CLOSED");
         finalize("terminalClosed");
-      }
+      },
     });
-
-    managed.backgroundDisposables.push(exitDisposable, closeDisposable);
-
-    // Marker polling — catches completion markers in the output buffer
-    let lastMarkerCheckPos = 0;
-    const checkForMarker = (): boolean => {
-      const result = findAndStripMarker(
-        managed.outputBuffer,
-        lastMarkerCheckPos,
-      );
-      if (result) {
+    const markerTracker = createTerminalMarkerTracker({
+      getBuffer: () => managed.outputBuffer,
+      setBuffer: (buffer) => {
+        managed.outputBuffer = buffer;
+      },
+      isActive: () => managed.backgroundRunning,
+      onMarker: (marker) => {
         logBg(
-          `MARKER_FOUND marker=${result.source} exitCode=${result.exitCode ?? "none"}`,
+          `MARKER_FOUND marker=${marker.source} exitCode=${marker.exitCode ?? "none"}`,
         );
-        managed.outputBuffer = result.stripped;
-        managed.backgroundExitCode = result.exitCode;
+        managed.backgroundExitCode = marker.exitCode;
         finalize("marker");
-        return true;
-      }
-      lastMarkerCheckPos = managed.outputBuffer.length;
-      return false;
-    };
-
-    const markerPoll = setInterval(() => {
-      if (!managed.backgroundRunning) {
-        clearInterval(markerPoll);
-        return;
-      }
-      if (managed.outputBuffer.length > lastMarkerCheckPos) {
-        checkForMarker();
-      }
-    }, 500);
-    managed.backgroundDisposables.push({
-      dispose: () => clearInterval(markerPoll),
+      },
     });
+    managed.backgroundDisposables.push(...completionListeners, markerTracker);
   }
 
   private executeBackground(
@@ -1364,7 +1290,6 @@ export class TerminalManager {
     // Helper to clean up background state and dispose listeners
     const finalize = (source: string) => {
       if (!managed.backgroundRunning) return;
-      clearInterval(markerPoll);
       this.finishBackgroundCommand(managed, execTag, {
         normalizeOutput: true,
       });
@@ -1378,16 +1303,16 @@ export class TerminalManager {
     const shellIntegration = managed.terminal.shellIntegration;
     let execution: vscode.TerminalShellExecution | undefined;
 
-    // Listen for shell execution end event as primary completion signal.
-    // Shell-integrated commands match the exact execution so a delayed event
-    // from a prior command cannot finalize this command early.
-    const exitDisposable = vscode.window.onDidEndTerminalShellExecution((e) => {
-      if (
-        (execution && e.execution === execution) ||
-        (!shellIntegration && e.terminal === managed.terminal)
-      ) {
-        logBg(`END_EVENT exitCode=${e.exitCode}`);
-        managed.backgroundExitCode = e.exitCode ?? null;
+    const completionListeners = registerTerminalCompletionListeners({
+      terminal: managed.terminal,
+      getExecution: () => execution,
+      allowTerminalFallback: !shellIntegration,
+      subscribeEnd: (listener) =>
+        vscode.window.onDidEndTerminalShellExecution(listener),
+      subscribeClose: (listener) => vscode.window.onDidCloseTerminal(listener),
+      onEnd: (exitCode) => {
+        logBg(`END_EVENT exitCode=${exitCode}`);
+        managed.backgroundExitCode = exitCode ?? null;
         // If we used sendText but shell integration picked up the execution,
         // retroactively mark output as captured since the stream may have data
         if (
@@ -1397,52 +1322,27 @@ export class TerminalManager {
           managed.backgroundOutputCaptured = true;
         }
         finalize("exitEvent");
-      }
-    });
-
-    // Listen for terminal close
-    const closeDisposable = vscode.window.onDidCloseTerminal((t) => {
-      if (t === managed.terminal) {
+      },
+      onClose: () => {
         logBg("TERMINAL_CLOSED");
         finalize("terminalClosed");
-      }
+      },
     });
-
-    managed.backgroundDisposables.push(exitDisposable, closeDisposable);
-
-    // --- Independent marker polling (catches markers if stream hangs) ---
-    let lastMarkerCheckPos = 0;
-
-    const checkForMarker = (): boolean => {
-      const result = findAndStripMarker(
-        managed.outputBuffer,
-        lastMarkerCheckPos,
-      );
-      if (result) {
+    const markerTracker = createTerminalMarkerTracker({
+      getBuffer: () => managed.outputBuffer,
+      setBuffer: (buffer) => {
+        managed.outputBuffer = buffer;
+      },
+      isActive: () => managed.backgroundRunning,
+      onMarker: (marker) => {
         logBg(
-          `MARKER_FOUND marker=${result.source} exitCode=${result.exitCode ?? "none"}`,
+          `MARKER_FOUND marker=${marker.source} exitCode=${marker.exitCode ?? "none"}`,
         );
-        managed.outputBuffer = result.stripped;
-        managed.backgroundExitCode = result.exitCode;
+        managed.backgroundExitCode = marker.exitCode;
         finalize("marker");
-        return true;
-      }
-      lastMarkerCheckPos = managed.outputBuffer.length;
-      return false;
-    };
-
-    const markerPoll = setInterval(() => {
-      if (!managed.backgroundRunning) {
-        clearInterval(markerPoll);
-        return;
-      }
-      if (managed.outputBuffer.length > lastMarkerCheckPos) {
-        checkForMarker();
-      }
-    }, 500);
-    managed.backgroundDisposables.push({
-      dispose: () => clearInterval(markerPoll),
+      },
     });
+    managed.backgroundDisposables.push(...completionListeners, markerTracker);
 
     if (shellIntegration) {
       managed.backgroundOutputCaptured = true;
@@ -1471,7 +1371,7 @@ export class TerminalManager {
             text: data,
             timestamp: Date.now(),
           });
-          if (checkForMarker()) break;
+          if (markerTracker.check()) break;
         }
         logBg(`STREAM_DONE chunks=${chunks}`);
       })();
