@@ -12,6 +12,7 @@ import type {
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
+import { DEFAULT_DIAGNOSTIC_DELAY_MS } from "../core/capabilities/editReview.js";
 
 function getWriteRiskWarnings(
   relPath: string,
@@ -86,7 +87,7 @@ export async function handleWriteFile(
       relativePath: relPath,
       content: params.content,
       outsideWorkspace: !inWorkspace,
-      diagnosticDelay: providers.diagnosticDelay ?? 1500,
+      diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
       approvalPanel,
       onApprovalRequest,
       sessionId,

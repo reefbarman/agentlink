@@ -39,6 +39,7 @@ import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvide
 import { FindReplacePreviewPanel } from "../../findReplace/FindReplacePreviewPanel.js";
 import type { WriteApprovalResponse } from "../../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "../../tools/pathAccessUI.js";
+import { getConfiguredMasterBypass } from "./agentLinkConfig.js";
 import { getRelativePath } from "../../util/paths.js";
 import { resolveAndValidatePath } from "../../util/paths.js";
 import { withFileLock } from "../../util/fileLock.js";
@@ -279,9 +280,7 @@ export function createVscodeMultiFileEditReviewProvider(
           changes: file.replacements.length,
         }));
 
-        const masterBypass = vscode.workspace
-          .getConfiguration("agentlink")
-          .get<boolean>("masterBypass", false);
+        const masterBypass = getConfiguredMasterBypass();
         const touchesProtectedMemoryPath = anyMemoryProtectedPath(
           params.files.map((file) => file.absolutePath),
         );
@@ -604,9 +603,7 @@ export function createVscodeRenameSymbolProvider(
         });
       }
 
-      const masterBypass = vscode.workspace
-        .getConfiguration("agentlink")
-        .get<boolean>("masterBypass", false);
+      const masterBypass = getConfiguredMasterBypass();
       const touchesProtectedMemoryPath = anyMemoryProtectedPath(
         entries.map(([entryUri]) => entryUri.fsPath),
       );
@@ -749,9 +746,7 @@ export function createVscodeWriteApprovalPolicyProvider(
 ): WriteApprovalPolicyProvider {
   return {
     canAutoApprove(query: WriteApprovalQuery) {
-      const masterBypass = vscode.workspace
-        .getConfiguration("agentlink")
-        .get<boolean>("masterBypass", false);
+      const masterBypass = getConfiguredMasterBypass();
       const isArchitectPlanFile =
         query.mode === "architect" &&
         query.inWorkspace &&

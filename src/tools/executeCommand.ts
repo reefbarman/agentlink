@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as os from "os";
 
+import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js";
+
 import { getWorkspaceRoots, tryGetFirstWorkspaceRoot } from "../util/paths.js";
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
@@ -116,9 +118,7 @@ export async function handleExecuteCommand(
     }
 
     // Master bypass check
-    const masterBypass = vscode.workspace
-      .getConfiguration("agentlink")
-      .get<boolean>("masterBypass", false);
+    const masterBypass = getConfiguredMasterBypass();
 
     let commandToRun = params.command;
     let commandEditedByUser = false;

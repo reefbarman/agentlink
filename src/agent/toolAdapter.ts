@@ -105,6 +105,7 @@ import {
 } from "../adapters/vscode/readSearchCapabilities.js";
 import { createVscodeTerminalProvider } from "../adapters/vscode/terminalCapabilities.js";
 import { createVscodeWorktreeAgentLaunchProvider } from "../adapters/vscode/worktreeAgentLaunchCapabilities.js";
+import { getConfiguredDiagnosticDelay } from "../adapters/vscode/agentLinkConfig.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleLoadSkill } from "../tools/loadSkill.js";
 import { handleOpenFile } from "../tools/openFile.js";
@@ -2030,9 +2031,7 @@ export async function dispatchToolCall(
           writeApprovalPolicyProvider:
             ctx.writeApprovalPolicyProvider ??
             createVscodeWriteApprovalPolicyProvider(approvalManager),
-          diagnosticDelay: vscode.workspace
-            .getConfiguration("agentlink")
-            .get<number>("diagnosticDelay", 1500),
+          diagnosticDelay: getConfiguredDiagnosticDelay(),
         },
       );
     case "generate_image":
@@ -2057,9 +2056,7 @@ export async function dispatchToolCall(
           writeApprovalPolicyProvider:
             ctx.writeApprovalPolicyProvider ??
             createVscodeWriteApprovalPolicyProvider(approvalManager),
-          diagnosticDelay: vscode.workspace
-            .getConfiguration("agentlink")
-            .get<number>("diagnosticDelay", 1500),
+          diagnosticDelay: getConfiguredDiagnosticDelay(),
         },
       );
     case "find_and_replace":

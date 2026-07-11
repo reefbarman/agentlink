@@ -15,6 +15,7 @@ import type {
   EditReviewResult,
   WriteApprovalPolicyProvider,
 } from "../core/capabilities/editReview.js";
+import { DEFAULT_DIAGNOSTIC_DELAY_MS } from "../core/capabilities/editReview.js";
 
 interface SearchReplaceBlock {
   search: string;
@@ -797,7 +798,7 @@ export async function handleApplyDiff(
       relativePath: relPath,
       content: newContent,
       outsideWorkspace: !inWorkspace,
-      diagnosticDelay: providers.diagnosticDelay ?? 1500,
+      diagnosticDelay: providers.diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
       approvalPanel,
       onApprovalRequest,
       sessionId,

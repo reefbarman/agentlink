@@ -8,6 +8,7 @@ import type {
   WriteApprovalResponse,
 } from "../approvals/ApprovalPanelProvider.js";
 
+import { DEFAULT_DIAGNOSTIC_DELAY_MS } from "../core/capabilities/editReview.js";
 import { DIFF_VIEW_URI_SCHEME } from "../extension.js";
 import type { OnApprovalRequest } from "../shared/types.js";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
@@ -231,7 +232,7 @@ export class DiffViewProvider {
   readonly requestId: string;
 
   constructor(diagnosticDelay?: number, requestId?: string) {
-    this.diagnosticDelay = diagnosticDelay ?? 1500;
+    this.diagnosticDelay = diagnosticDelay ?? DEFAULT_DIAGNOSTIC_DELAY_MS;
     this.requestId = requestId ?? randomUUID();
   }
 

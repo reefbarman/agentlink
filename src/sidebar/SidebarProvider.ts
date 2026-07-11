@@ -18,6 +18,7 @@ import type {
 import { deleteFeedback, readFeedback } from "../util/feedbackStore.js";
 
 import { editRuleViaQuickPick } from "./editRuleQuickPick.js";
+import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js";
 import { randomUUID } from "crypto";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
@@ -517,15 +518,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         writeRules: this.approvalManager!.getWriteRules(s.id).session,
       }));
     }
-    this.state.masterBypass = this.getMasterBypass();
+    this.state.masterBypass = getConfiguredMasterBypass();
     // Send state via postMessage instead of full HTML replacement
     this.view?.webview.postMessage({ type: "stateUpdate", state: this.state });
-  }
-
-  private getMasterBypass(): boolean {
-    return vscode.workspace
-      .getConfiguration("agentlink")
-      .get<boolean>("masterBypass", false);
   }
 
   private getHtml(): string {

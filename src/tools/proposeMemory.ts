@@ -27,6 +27,7 @@ import type { OnApprovalRequest, ToolResult } from "../shared/types.js";
 import { errorResult, successResult } from "../shared/types.js";
 
 import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
+import { getConfiguredDiagnosticDelay } from "../adapters/vscode/agentLinkConfig.js";
 
 type ProposeMemoryParams = MemoryProposalParams;
 type Target = MemoryProposalTarget;
@@ -115,9 +116,7 @@ async function reviewProposedContentInDiff(
   rejectionReason?: string;
   followUp?: string;
 }> {
-  const diagnosticDelay = vscode.workspace
-    .getConfiguration("agentlink")
-    .get<number>("diagnosticDelay", 1500);
+  const diagnosticDelay = getConfiguredDiagnosticDelay();
 
   return await withFileLock(target.filePath, async () => {
     const diffView = new DiffViewProvider(diagnosticDelay, requestId);
@@ -180,9 +179,7 @@ async function reviewMemoryProposalInDiff(
   rejectionReason?: string;
   followUp?: string;
 }> {
-  const diagnosticDelay = vscode.workspace
-    .getConfiguration("agentlink")
-    .get<number>("diagnosticDelay", 1500);
+  const diagnosticDelay = getConfiguredDiagnosticDelay();
 
   return await withFileLock(target.filePath, async () => {
     const diffView = new DiffViewProvider(diagnosticDelay);

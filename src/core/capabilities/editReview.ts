@@ -1,5 +1,7 @@
 import type { OnApprovalRequest, ToolResult } from "../../shared/types.js";
 
+export const DEFAULT_DIAGNOSTIC_DELAY_MS = 1_500;
+
 export interface EditorRevealParams {
   absolutePath: string;
   line?: number;
