@@ -19,7 +19,10 @@ import {
 } from "./browserGatewayRegistry.js";
 
 import type { BrowserGatewayInstanceStatusSummary } from "./protocol.js";
-import type { BrowserGatewayService } from "./BrowserGatewayService.js";
+import type {
+  BrowserGatewayService,
+  BrowserGatewaySnapshotPublication,
+} from "./BrowserGatewayService.js";
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { DecisionMessage } from "../approvals/webview/types.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
@@ -85,9 +88,9 @@ export class BrowserGatewayServer implements vscode.Disposable {
     this.server.headersTimeout = 0;
 
     this.disposables.push(
-      this.gatewayService.onDidChange(() => {
-        void this.persistCurrentThemeSnapshot();
-        this.broadcast(this.getSnapshot());
+      this.gatewayService.onDidChange((publication) => {
+        void this.persistCurrentThemeSnapshot(publication.snapshot.theme);
+        this.broadcast(publication);
       }),
     );
 
@@ -193,9 +196,10 @@ export class BrowserGatewayServer implements vscode.Disposable {
     }, REGISTRY_HEARTBEAT_INTERVAL_MS);
   }
 
-  private async persistCurrentThemeSnapshot(): Promise<void> {
+  private async persistCurrentThemeSnapshot(
+    theme = this.gatewayService.getCurrentThemeSnapshot(),
+  ): Promise<void> {
     if (this.port === null) return;
-    const theme = this.gatewayService.getCurrentThemeSnapshot();
     const serializedTheme = JSON.stringify(theme);
     if (serializedTheme === this.lastPersistedThemeSnapshot) return;
     this.lastPersistedThemeSnapshot = serializedTheme;
@@ -1014,17 +1018,16 @@ export class BrowserGatewayServer implements vscode.Disposable {
     res.on("error", removeClient);
   }
 
-  private broadcast(payload: unknown): void {
-    const { serialized, bytes } = this.serializeSnapshot(payload);
+  private broadcast(publication: BrowserGatewaySnapshotPublication): void {
     if (this.streamingMetrics.enabled) {
       this.streamingMetrics.record({
         type: "broadcast",
         surface: "vscode-gateway",
         clientCount: this.sseClients.size,
-        bytes,
+        bytes: publication.bytes,
       });
     }
-    const chunk = `event: update\ndata: ${serialized}\n\n`;
+    const chunk = `event: update\ndata: ${publication.serialized}\n\n`;
     for (const client of this.sseClients) {
       if (!this.writeSseChunk(client, chunk)) {
         this.removeSseClient(client);

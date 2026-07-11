@@ -103,6 +103,36 @@ function makePollService(hub: InMemoryAgentUiEventHub): BrowserGatewayService {
 }
 
 describe("BrowserGatewayService", () => {
+  it("publishes monotonic snapshots with their prebuilt wire payload", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makePollService(hub);
+    const publications = vi.fn();
+    const subscription = service.onDidChange(publications);
+
+    hub.publishApproval({
+      kind: "write",
+      id: "approval-1",
+      filePath: "src/file.ts",
+      writeOperation: "modify",
+    });
+    hub.publishApprovalIdle();
+
+    expect(publications).toHaveBeenCalledTimes(2);
+    const [first, second] = publications.mock.calls.map(
+      ([publication]) =>
+        publication as Parameters<Parameters<typeof service.onDidChange>[0]>[0],
+    );
+    expect([first.revision, second.revision]).toEqual([1, 2]);
+    expect(first.serialized).toBe(JSON.stringify(first.snapshot));
+    expect(first.bytes).toBe(Buffer.byteLength(first.serialized, "utf8"));
+    expect(second.serialized).toBe(JSON.stringify(second.snapshot));
+    expect(second.bytes).toBe(Buffer.byteLength(second.serialized, "utf8"));
+
+    subscription.dispose();
+    service.dispose();
+    hub.dispose();
+  });
+
   it("tracks approval and question state from hub events", () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();

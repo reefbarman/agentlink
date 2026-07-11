@@ -276,8 +276,8 @@ describe("BrowserGatewayServer", () => {
       await Promise.all(readers.map((reader) => reader.read()));
 
       expect(recorder.summarize("vscode-gateway")).toMatchObject({
-        snapshotBuilds: 2,
-        serializations: 2,
+        snapshotBuilds: 1,
+        serializations: 1,
         broadcasts: 1,
         broadcastDeliveries: 2,
         connectedClientsMax: 2,

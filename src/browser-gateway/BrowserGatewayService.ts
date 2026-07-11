@@ -176,6 +176,13 @@ export interface BrowserGatewaySnapshotState {
   modelsVersion: number;
 }
 
+export interface BrowserGatewaySnapshotPublication {
+  readonly revision: number;
+  readonly snapshot: BrowserGatewaySnapshotState;
+  readonly serialized: string;
+  readonly bytes: number;
+}
+
 function isSameOrNestedPath(pathValue: string, candidateRoot: string): boolean {
   const normalizedPath = pathValue.replace(/\\/g, "/").replace(/\/+$/, "");
   const normalizedRoot = candidateRoot.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -230,9 +237,10 @@ function getBrowserGatewayRepositoryInfo(): BrowserGatewayRepositoryInfo | null 
 export class BrowserGatewayService implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly onDidChangeEmitter =
-    new vscode.EventEmitter<BrowserGatewaySnapshotState>();
+    new vscode.EventEmitter<BrowserGatewaySnapshotPublication>();
   private pollTimer: ReturnType<typeof setInterval> | undefined;
   private lastSerializedSnapshot = "";
+  private snapshotRevision = 0;
   // Optional probe, set by the gateway server, reporting whether any browser
   // client is currently connected. When no client is listening, the 150ms poll
   // skips the snapshot build+serialize entirely — newly-connected clients are
@@ -587,6 +595,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.urlElicitation = undefined;
     this.recentEvents = [];
     this.lastSerializedSnapshot = "";
+    this.snapshotRevision = 0;
     this.onDidChangeEmitter.dispose();
   }
 
@@ -708,11 +717,13 @@ export class BrowserGatewayService implements vscode.Disposable {
       ? performance.now()
       : 0;
     this.lastSerializedSnapshot = JSON.stringify(snapshot);
-    this.recordSerialization(
+    const bytes = this.recordSerialization(
       this.lastSerializedSnapshot,
       serializationStartedAt,
     );
-    this.onDidChangeEmitter.fire(snapshot);
+    this.onDidChangeEmitter.fire(
+      this.createPublication(snapshot, this.lastSerializedSnapshot, bytes),
+    );
   }
 
   private emitSnapshotIfChanged(): void {
@@ -731,12 +742,14 @@ export class BrowserGatewayService implements vscode.Disposable {
       ? performance.now()
       : 0;
     const serialized = JSON.stringify(snapshot);
-    this.recordSerialization(serialized, serializationStartedAt);
+    const bytes = this.recordSerialization(serialized, serializationStartedAt);
     if (serialized === this.lastSerializedSnapshot) {
       return;
     }
     this.lastSerializedSnapshot = serialized;
-    this.onDidChangeEmitter.fire(snapshot);
+    this.onDidChangeEmitter.fire(
+      this.createPublication(snapshot, serialized, bytes),
+    );
   }
 
   private recordSnapshotBuild(
@@ -752,13 +765,30 @@ export class BrowserGatewayService implements vscode.Disposable {
     });
   }
 
-  private recordSerialization(serialized: string, startedAt: number): void {
-    if (!this.streamingMetrics.enabled) return;
-    this.streamingMetrics.record({
-      type: "serialization",
-      surface: "vscode-gateway",
-      durationMs: performance.now() - startedAt,
-      bytes: utf8ByteLength(serialized),
-    });
+  private createPublication(
+    snapshot: BrowserGatewaySnapshotState,
+    serialized: string,
+    bytes: number,
+  ): BrowserGatewaySnapshotPublication {
+    this.snapshotRevision += 1;
+    return {
+      revision: this.snapshotRevision,
+      snapshot,
+      serialized,
+      bytes,
+    };
+  }
+
+  private recordSerialization(serialized: string, startedAt: number): number {
+    const bytes = utf8ByteLength(serialized);
+    if (this.streamingMetrics.enabled) {
+      this.streamingMetrics.record({
+        type: "serialization",
+        surface: "vscode-gateway",
+        durationMs: performance.now() - startedAt,
+        bytes,
+      });
+    }
+    return bytes;
   }
 }
