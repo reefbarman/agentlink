@@ -28,6 +28,13 @@ import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { DecisionMessage } from "../approvals/webview/types.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 import { writeBrowserGatewayThemeCache } from "./browserGatewayThemeCache.js";
+import {
+  BrowserGatewayHttpRouter,
+  type BrowserGatewayHttpMethod,
+  type BrowserGatewayHttpRoute,
+  type BrowserGatewayRouteErrorPolicy,
+  type BrowserGatewayRouteMatch,
+} from "./browserGatewayHttpRouter.js";
 import { readJsonBody } from "./nodeHttpPrimitives.js";
 import {
   getDevelopmentStreamingBaselineMetrics,
@@ -62,6 +69,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
   private registryHeartbeatTimer: NodeJS.Timeout | undefined;
   private startedAtIso: string | null = null;
   private lastPersistedThemeSnapshot = "";
+  private httpRouter: BrowserGatewayHttpRouter | undefined;
 
   constructor(
     private readonly gatewayService: BrowserGatewayService,
@@ -250,737 +258,336 @@ export class BrowserGatewayServer implements vscode.Disposable {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): void {
-    const method = req.method ?? "GET";
-    const url = req.url ?? "/";
-    const pathOnly = url.split("?", 1)[0] ?? url;
+    this.getHttpRouter().dispatch(req, res);
+  }
 
-    if (method === "GET" && url === "/health") {
-      this.writeJson(res, 200, { status: "ok" });
-      return;
-    }
+  private getHttpRouter(): BrowserGatewayHttpRouter {
+    this.httpRouter ??= new BrowserGatewayHttpRouter(this.createHttpRoutes(), {
+      writeJson: (res, status, body) => this.writeJson(res, status, body),
+      log: (message) => this.log(message),
+    });
+    return this.httpRouter;
+  }
 
-    if (method === "GET" && pathOnly === "/api/ui-state") {
-      this.writeJson(res, 200, this.getSnapshot());
-      return;
-    }
+  private createHttpRoutes(): readonly BrowserGatewayHttpRoute[] {
+    const none = { kind: "none" } as const;
+    const internal = (logLabel: string): BrowserGatewayRouteErrorPolicy => ({
+      kind: "internal",
+      logLabel,
+    });
+    const json = (logLabel: string): BrowserGatewayRouteErrorPolicy => ({
+      kind: "invalid-json-or-internal",
+      logLabel,
+    });
+    const match = (
+      kind: BrowserGatewayRouteMatch["kind"],
+      value: string,
+    ): BrowserGatewayRouteMatch => ({ kind, value });
+    const route = (
+      method: BrowserGatewayHttpMethod,
+      routeMatch: BrowserGatewayRouteMatch,
+      invoke: BrowserGatewayHttpRoute["invoke"],
+      error: BrowserGatewayRouteErrorPolicy = none,
+      authorize?: BrowserGatewayHttpRoute["authorize"],
+    ): BrowserGatewayHttpRoute => ({
+      method,
+      match: routeMatch,
+      error,
+      authorize,
+      invoke,
+    });
+    const rawExact = (value: string): BrowserGatewayRouteMatch =>
+      match("raw-exact", value);
+    const pathExact = (value: string): BrowserGatewayRouteMatch =>
+      match("path-exact", value);
 
-    if (method === "GET" && pathOnly === "/api/instance-status") {
-      if (!this.isAuthorized(req)) {
-        this.writeJson(res, 401, { error: "unauthorized" });
-        return;
-      }
-      this.writeJson(res, 200, this.gatewayService.getInstanceStatusSummary());
-      return;
-    }
-
-    if (method === "GET" && pathOnly === "/api/instances") {
-      void this.handleInstancesRequest(res);
-      return;
-    }
-
-    if (method === "GET" && pathOnly.startsWith("/api/diff/")) {
-      this.handleDiffDetailRequest(req, url, res);
-      return;
-    }
-
-    if (method === "GET" && pathOnly === "/events") {
-      this.handleSse(req, res);
-      return;
-    }
-
-    if (method === "POST" && url === "/api/approval") {
-      void this.handleApprovalAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] approval action failed: ${err}`);
-        if (!res.headersSent) {
+    return [
+      route("GET", rawExact("/health"), ({ res }) => {
+        this.writeJson(res, 200, { status: "ok" });
+      }),
+      route("GET", pathExact("/api/ui-state"), ({ res }) => {
+        this.writeJson(res, 200, this.getSnapshot());
+      }),
+      route(
+        "GET",
+        pathExact("/api/instance-status"),
+        ({ res }) => {
           this.writeJson(
             res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
+            200,
+            this.gatewayService.getInstanceStatusSummary(),
           );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/suggest-regex") {
-      void this.handleSuggestRegexAction(req, res).catch((err: unknown) => {
-        this.log(`[browser-gateway] suggest-regex action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
+        },
+        none,
+        ({ req }) => this.isAuthorized(req),
+      ),
+      route("GET", pathExact("/api/instances"), ({ res }) => {
+        void this.handleInstancesRequest(res);
+      }),
+      route(
+        "GET",
+        match("path-prefix", "/api/diff/"),
+        ({ req, rawUrl, res }) => {
+          this.handleDiffDetailRequest(req, rawUrl, res);
+        },
+      ),
+      route("GET", pathExact("/events"), ({ req, res }) => {
+        this.handleSse(req, res);
+      }),
+      route(
+        "POST",
+        rawExact("/api/approval"),
+        ({ req, res }) => this.handleApprovalAction(req, res),
+        json("approval action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/suggest-regex"),
+        ({ req, res }) => this.handleSuggestRegexAction(req, res),
+        json("suggest-regex action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/question"),
+        ({ req, res }) => this.handleQuestionAction(req, res),
+        json("question action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/url-elicitation"),
+        ({ req, res }) => this.handleUrlElicitationAction(req, res),
+        json("url elicitation action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/question-progress"),
+        ({ req, res }) => this.handleQuestionProgressAction(req, res),
+        json("question-progress action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/send"),
+        ({ req, res }) => this.handleSendAction(req, res),
+        json("send action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/queue/steer"),
+        ({ req, res }) => this.handleQueueSteerAction(req, res),
+        json("queue steer action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/queue/interject"),
+        ({ req, res }) => this.handleQueueInterjectAction(req, res),
+        json("queue interject action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/mode"),
+        ({ req, res }) => this.handleModeAction(req, res),
+        json("mode action failed"),
+      ),
+      route(
+        "GET",
+        rawExact("/api/slash-commands"),
+        ({ req, res }) => this.handleSlashCommandsRequest(req, res),
+        internal("slash commands request failed"),
+      ),
+      route(
+        "GET",
+        match("raw-prefix", "/api/search-files"),
+        ({ req, rawUrl, res }) =>
+          this.handleSearchFilesRequest(req, rawUrl, res),
+        internal("file search request failed"),
+      ),
+      route(
+        "GET",
+        rawExact("/api/modes"),
+        ({ req, res }) => this.handleModesRequest(req, res),
+        internal("modes request failed"),
+      ),
+      route(
+        "GET",
+        rawExact("/api/models"),
+        ({ req, res }) => this.handleModelsRequest(req, res),
+        internal("models request failed"),
+      ),
+      route(
+        "GET",
+        rawExact("/api/sessions"),
+        ({ req, res }) => this.handleSessionsRequest(req, res),
+        internal("sessions request failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/model"),
+        ({ req, res }) => this.handleModelAction(req, res),
+        json("model action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/write-approval"),
+        ({ req, res }) => this.handleWriteApprovalAction(req, res),
+        json("write approval action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/thinking"),
+        ({ req, res }) => this.handleThinkingAction(req, res),
+        json("thinking action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/attach-file"),
+        ({ req, res }) => this.handleAttachFileAction(req, res),
+        json("attach file action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/session/new"),
+        ({ req, res }) => this.handleSessionNewAction(req, res),
+        json("session new action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/session/load"),
+        ({ req, res }) => this.handleSessionLoadAction(req, res),
+        json("session load action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/session/delete"),
+        ({ req, res }) => this.handleSessionDeleteAction(req, res),
+        json("session delete action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/session/rename"),
+        ({ req, res }) => this.handleSessionRenameAction(req, res),
+        json("session rename action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/session/copy-first-prompt"),
+        ({ req, res }) => this.handleSessionCopyFirstPromptAction(req, res),
+        json("session copy first prompt action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/debug/refresh"),
+        ({ req, res }) => this.handleDebugRefreshAction(req, res),
+        internal("debug refresh action failed"),
+      ),
+      route(
+        "GET",
+        rawExact("/internal/ask-agent/mcp-tools"),
+        ({ req, res }) => this.handleAskAgentMcpTools(req, res),
+        internal("ask-agent mcp tools failed"),
+      ),
+      route(
+        "GET",
+        pathExact("/internal/ask-agent/mcp-status"),
+        ({ req, res }) => this.handleAskAgentMcpStatus(req, res),
+        internal("ask-agent mcp status failed"),
+      ),
+      route(
+        "GET",
+        pathExact("/internal/ask-agent/mcp-config"),
+        ({ req, pathOnly, res }) =>
+          this.handleMcpConfigSnapshot(
+            req,
+            `${pathOnly}?profile=ask-agent`,
             res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/question") {
-      void this.handleQuestionAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] question action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/url-elicitation") {
-      void this.handleUrlElicitationAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] url elicitation action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/question-progress") {
-      void this.handleQuestionProgressAction(req, res).catch((err: unknown) => {
-        this.log(`[browser-gateway] question-progress action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/send") {
-      void this.handleSendAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] send action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/queue/steer") {
-      void this.handleQueueSteerAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] queue steer action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/queue/interject") {
-      void this.handleQueueInterjectAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] queue interject action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/mode") {
-      void this.handleModeAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] mode action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "GET" && url === "/api/slash-commands") {
-      void this.handleSlashCommandsRequest(req, res).catch((err) => {
-        this.log(`[browser-gateway] slash commands request failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "GET" && url.startsWith("/api/search-files")) {
-      void this.handleSearchFilesRequest(req, url, res).catch((err) => {
-        this.log(`[browser-gateway] file search request failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "GET" && url === "/api/modes") {
-      void this.handleModesRequest(req, res).catch((err) => {
-        this.log(`[browser-gateway] modes request failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "GET" && url === "/api/models") {
-      void this.handleModelsRequest(req, res).catch((err) => {
-        this.log(`[browser-gateway] models request failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "GET" && url === "/api/sessions") {
-      void this.handleSessionsRequest(req, res).catch((err) => {
-        this.log(`[browser-gateway] sessions request failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/model") {
-      void this.handleModelAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] model action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/write-approval") {
-      void this.handleWriteApprovalAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] write approval action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/thinking") {
-      void this.handleThinkingAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] thinking action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/attach-file") {
-      void this.handleAttachFileAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] attach file action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/session/new") {
-      void this.handleSessionNewAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] session new action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/session/load") {
-      void this.handleSessionLoadAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] session load action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/session/delete") {
-      void this.handleSessionDeleteAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] session delete action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/session/rename") {
-      void this.handleSessionRenameAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] session rename action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/session/copy-first-prompt") {
-      void this.handleSessionCopyFirstPromptAction(req, res).catch((err) => {
-        this.log(
-          `[browser-gateway] session copy first prompt action failed: ${err}`,
-        );
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/debug/refresh") {
-      void this.handleDebugRefreshAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] debug refresh action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "GET" && url === "/internal/ask-agent/mcp-tools") {
-      void this.handleAskAgentMcpTools(req, res).catch((err) => {
-        this.log(`[browser-gateway] ask-agent mcp tools failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "GET" && pathOnly === "/internal/ask-agent/mcp-status") {
-      void this.handleAskAgentMcpStatus(req, res).catch((err) => {
-        this.log(`[browser-gateway] ask-agent mcp status failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "GET" && pathOnly === "/internal/ask-agent/mcp-config") {
-      void this.handleMcpConfigSnapshot(
-        req,
-        `${pathOnly}?profile=ask-agent`,
-        res,
-      ).catch((err) => {
-        this.log(`[browser-gateway] ask-agent mcp config failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      pathOnly === "/internal/ask-agent/mcp-config/server"
-    ) {
-      void this.handleMcpConfigServer(req, res).catch((err) => {
-        this.log(`[browser-gateway] ask-agent mcp config save failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (
-      method === "DELETE" &&
-      pathOnly === "/internal/ask-agent/mcp-config/server"
-    ) {
-      void this.handleMcpConfigRemove(req, res).catch((err) => {
-        this.log(
-          `[browser-gateway] ask-agent mcp config remove failed: ${err}`,
-        );
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      pathOnly === "/internal/ask-agent/mcp-config/open-raw"
-    ) {
-      void this.handleMcpConfigOpenRaw(req, res).catch((err) => {
-        this.log(
-          `[browser-gateway] ask-agent mcp config raw open failed: ${err}`,
-        );
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && pathOnly === "/internal/ask-agent/mcp-refresh") {
-      void this.handleAskAgentMcpRefresh(req, res).catch((err) => {
-        this.log(`[browser-gateway] ask-agent mcp refresh failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && pathOnly === "/internal/ask-agent/mcp-tool") {
-      void this.handleAskAgentMcpTool(req, res).catch((err) => {
-        this.log(`[browser-gateway] ask-agent mcp tool failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "GET" && pathOnly === "/api/mcp/config") {
-      void this.handleMcpConfigSnapshot(req, url, res).catch((err) => {
-        this.log(`[browser-gateway] mcp config snapshot failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && pathOnly === "/api/mcp/config/server") {
-      void this.handleMcpConfigServer(req, res).catch((err) => {
-        this.log(`[browser-gateway] mcp config save failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "DELETE" && pathOnly === "/api/mcp/config/server") {
-      void this.handleMcpConfigRemove(req, res).catch((err) => {
-        this.log(`[browser-gateway] mcp config remove failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && pathOnly === "/api/mcp/config/open-raw") {
-      void this.handleMcpConfigOpenRaw(req, res).catch((err) => {
-        this.log(`[browser-gateway] mcp config raw open failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && pathOnly === "/api/mcp/action") {
-      void this.handleMcpAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] mcp action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/stop") {
-      void this.handleStopAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] stop action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/background/stop") {
-      void this.handleBackgroundStopAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] background stop action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/background/action") {
-      void this.handleBackgroundAction(req, res).catch((err) => {
-        this.log(`[browser-gateway] background action failed: ${err}`);
-        if (!res.headersSent) {
-          this.writeJson(res, 500, { error: "internal_error" });
-        }
-      });
-      return;
-    }
-
-    if (method === "POST" && url === "/api/background/open-transcript") {
-      void this.handleBackgroundOpenTranscriptAction(req, res).catch((err) => {
-        this.log(
-          `[browser-gateway] background open transcript action failed: ${err}`,
-        );
-        if (!res.headersSent) {
-          this.writeJson(
-            res,
-            String(err) === "Error: invalid_json" ? 400 : 500,
-            {
-              error:
-                String(err) === "Error: invalid_json"
-                  ? "invalid_json"
-                  : "internal_error",
-            },
-          );
-        }
-      });
-      return;
-    }
-
-    this.writeJson(res, 404, { error: "not_found" });
+          ),
+        internal("ask-agent mcp config failed"),
+      ),
+      route(
+        "POST",
+        pathExact("/internal/ask-agent/mcp-config/server"),
+        ({ req, res }) => this.handleMcpConfigServer(req, res),
+        json("ask-agent mcp config save failed"),
+      ),
+      route(
+        "DELETE",
+        pathExact("/internal/ask-agent/mcp-config/server"),
+        ({ req, res }) => this.handleMcpConfigRemove(req, res),
+        json("ask-agent mcp config remove failed"),
+      ),
+      route(
+        "POST",
+        pathExact("/internal/ask-agent/mcp-config/open-raw"),
+        ({ req, res }) => this.handleMcpConfigOpenRaw(req, res),
+        json("ask-agent mcp config raw open failed"),
+      ),
+      route(
+        "POST",
+        pathExact("/internal/ask-agent/mcp-refresh"),
+        ({ req, res }) => this.handleAskAgentMcpRefresh(req, res),
+        internal("ask-agent mcp refresh failed"),
+      ),
+      route(
+        "POST",
+        pathExact("/internal/ask-agent/mcp-tool"),
+        ({ req, res }) => this.handleAskAgentMcpTool(req, res),
+        json("ask-agent mcp tool failed"),
+      ),
+      route(
+        "GET",
+        pathExact("/api/mcp/config"),
+        ({ req, rawUrl, res }) =>
+          this.handleMcpConfigSnapshot(req, rawUrl, res),
+        internal("mcp config snapshot failed"),
+      ),
+      route(
+        "POST",
+        pathExact("/api/mcp/config/server"),
+        ({ req, res }) => this.handleMcpConfigServer(req, res),
+        json("mcp config save failed"),
+      ),
+      route(
+        "DELETE",
+        pathExact("/api/mcp/config/server"),
+        ({ req, res }) => this.handleMcpConfigRemove(req, res),
+        json("mcp config remove failed"),
+      ),
+      route(
+        "POST",
+        pathExact("/api/mcp/config/open-raw"),
+        ({ req, res }) => this.handleMcpConfigOpenRaw(req, res),
+        json("mcp config raw open failed"),
+      ),
+      route(
+        "POST",
+        pathExact("/api/mcp/action"),
+        ({ req, res }) => this.handleMcpAction(req, res),
+        json("mcp action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/stop"),
+        ({ req, res }) => this.handleStopAction(req, res),
+        json("stop action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/background/stop"),
+        ({ req, res }) => this.handleBackgroundStopAction(req, res),
+        json("background stop action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/background/action"),
+        ({ req, res }) => this.handleBackgroundAction(req, res),
+        internal("background action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/background/open-transcript"),
+        ({ req, res }) => this.handleBackgroundOpenTranscriptAction(req, res),
+        json("background open transcript action failed"),
+      ),
+    ];
   }
 
   private handleSse(req: http.IncomingMessage, res: http.ServerResponse): void {
