@@ -21,6 +21,7 @@ import { ConfigStore } from "./approvals/ConfigStore.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
 import { registerCodexAuthCommands } from "./agent/codexAuthCommands.js";
+import { createCodexAuthFlows } from "./agent/codexAuthFlows.js";
 import { runLegacyAgentIntegrationCleanup } from "./util/legacyAgentIntegrationCleanup.js";
 
 import {
@@ -50,12 +51,6 @@ import {
   openAiCodexAuthManager,
   queryCodexCliUsage,
 } from "./agent/providers/index.js";
-import type {
-  CodexRateLimitSnapshot,
-  CodexSubscriptionUsage,
-} from "./agent/providers/codex/CodexCliUsageClient.js";
-import type { CodexCredentials } from "./agent/providers/codex/CodexOAuthManager.js";
-import { CodexOAuthFlowError } from "./agent/providers/codex/CodexOAuthManager.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
 import { BrowserGatewayServer } from "./browser-gateway/BrowserGatewayServer.js";
 import { registerBrowserGatewayCommands } from "./browser-gateway/browserGatewayCommands.js";
@@ -297,267 +292,6 @@ async function addTrustedCommandViaUI(): Promise<void> {
   vscode.window.showInformationMessage(
     `Added trusted command (${scopePick.scope}): ${picked.mode} "${pattern.trim()}"`,
   );
-}
-
-async function promptForCodexAccountLabel(
-  defaultValue = "",
-): Promise<string | undefined> {
-  const label = await vscode.window.showInputBox({
-    title: "Codex Account Label",
-    prompt:
-      "Optional: name this Codex OAuth account (email is used automatically when available).",
-    value: defaultValue,
-    ignoreFocusOut: true,
-  });
-  return label?.trim() || undefined;
-}
-
-async function completeCodexOAuthSignIn(options?: {
-  replaceAccountId?: string;
-  forceLabelPrompt?: boolean;
-}): Promise<{
-  accountLabel: string;
-  accountEmail?: string;
-  action: "added" | "updated" | "replaced";
-  accountId: string;
-} | null> {
-  const authUrl = openAiCodexAuthManager.startAuthorizationFlow();
-  await vscode.env.openExternal(vscode.Uri.parse(authUrl));
-  log("[codex] Opened browser for OAuth sign-in");
-
-  const creds: CodexCredentials =
-    await openAiCodexAuthManager.waitForCallback();
-  const label =
-    options?.forceLabelPrompt || !creds.email
-      ? await promptForCodexAccountLabel(creds.email ?? "")
-      : undefined;
-
-  const result = await openAiCodexAuthManager.saveOAuthCredentials(creds, {
-    replaceAccountId: options?.replaceAccountId,
-    label,
-    makeActive: true,
-  });
-
-  return {
-    accountLabel: result.account.label,
-    accountEmail: result.account.email,
-    action: result.action,
-    accountId: result.account.id,
-  };
-}
-
-async function pickOAuthAccount(
-  title: string,
-  placeHolder: string,
-): Promise<
-  | {
-      id: string;
-      label: string;
-      email?: string;
-      chatgptAccountId?: string;
-      isActive: boolean;
-    }
-  | undefined
-> {
-  const accounts = await openAiCodexAuthManager.listOAuthAccounts();
-  if (accounts.length === 0) {
-    vscode.window.showInformationMessage(
-      "No ChatGPT/Codex OAuth accounts are signed in.",
-    );
-    return undefined;
-  }
-
-  const picked = await vscode.window.showQuickPick(
-    accounts.map((a) => ({
-      label: `${a.isActive ? "$(check) " : ""}${a.label}`,
-      description: a.email ?? a.chatgptAccountId ?? a.id,
-      detail: a.isActive ? "Active account" : undefined,
-      account: a,
-    })),
-    {
-      title,
-      placeHolder,
-      ignoreFocusOut: true,
-    },
-  );
-
-  return picked?.account;
-}
-
-async function manageCodexAccountsFlow(): Promise<void> {
-  const accounts = await openAiCodexAuthManager.listOAuthAccounts();
-  if (accounts.length === 0) {
-    vscode.window.showInformationMessage(
-      "No ChatGPT/Codex OAuth accounts are signed in yet.",
-    );
-    return;
-  }
-
-  const account = await pickOAuthAccount(
-    "Manage ChatGPT/Codex Accounts",
-    "Select an account",
-  );
-  if (!account) return;
-
-  const action = await vscode.window.showQuickPick(
-    [
-      { label: "View subscription usage", value: "usage" },
-      { label: "Set active", value: "setActive" },
-      { label: "Re-sign in / replace", value: "replace" },
-      { label: "Rename label", value: "rename" },
-      { label: "Remove account", value: "remove" },
-    ],
-    {
-      title: `Manage account: ${account.label}`,
-      ignoreFocusOut: true,
-    },
-  );
-
-  if (!action) return;
-
-  if (action.value === "usage") {
-    await showCodexSubscriptionUsage();
-    return;
-  }
-
-  if (action.value === "setActive") {
-    await openAiCodexAuthManager.setActiveOAuthAccount(account.id);
-    vscode.window.showInformationMessage(
-      `Active Codex account set to ${account.label}.`,
-    );
-    return;
-  }
-
-  if (action.value === "replace") {
-    try {
-      const result = await completeCodexOAuthSignIn({
-        replaceAccountId: account.id,
-      });
-      if (!result) return;
-      vscode.window.showInformationMessage(
-        `Updated ChatGPT/Codex account ${result.accountLabel}${
-          result.accountEmail ? ` (${result.accountEmail})` : ""
-        }.`,
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`[codex] Re-sign-in failed: ${message}`);
-      if (err instanceof CodexOAuthFlowError && err.code === "timeout") {
-        vscode.window.showWarningMessage(
-          "OpenAI/Codex sign-in timed out. If the browser flow is still open, close it and try again.",
-        );
-      } else if (
-        err instanceof CodexOAuthFlowError &&
-        err.code === "port_in_use"
-      ) {
-        vscode.window.showErrorMessage(
-          "OpenAI/Codex sign-in couldn't start because port 1455 is already in use. Close other Codex/Roo login flows and try again.",
-        );
-      } else {
-        vscode.window.showErrorMessage(`Codex sign-in failed: ${message}`);
-      }
-    }
-    return;
-  }
-
-  if (action.value === "rename") {
-    const nextLabel = await promptForCodexAccountLabel(account.label);
-    if (!nextLabel) return;
-    await openAiCodexAuthManager.updateOAuthAccountLabel(account.id, nextLabel);
-    vscode.window.showInformationMessage(
-      `Updated account label to ${nextLabel}.`,
-    );
-    return;
-  }
-
-  if (action.value === "remove") {
-    const confirm = await vscode.window.showWarningMessage(
-      `Remove ChatGPT/Codex account ${account.label}?`,
-      { modal: true },
-      "Remove",
-    );
-    if (confirm !== "Remove") return;
-    await openAiCodexAuthManager.removeOAuthAccount(account.id);
-    vscode.window.showInformationMessage(`Removed account ${account.label}.`);
-  }
-}
-
-function formatResetTime(timestamp: number | null): string {
-  if (timestamp === null) return "reset time unavailable";
-  return `resets ${new Date(timestamp * 1_000).toLocaleString()}`;
-}
-
-function rateLimitDetail(snapshot: CodexRateLimitSnapshot): string {
-  const windows = [snapshot.primary, snapshot.secondary]
-    .filter((window) => window !== null)
-    .map(
-      (window) =>
-        `${Math.round(window.usedPercent)}% used · ${formatResetTime(window.resetsAt)}`,
-    );
-  return windows.length > 0 ? windows.join(" · ") : "No window data";
-}
-
-function usageQuickPickItems(usage: CodexSubscriptionUsage): Array<{
-  label: string;
-  description?: string;
-  detail?: string;
-}> {
-  const buckets = usage.rateLimitsByLimitId
-    ? Object.entries(usage.rateLimitsByLimitId)
-    : [[usage.rateLimits.limitId ?? "codex", usage.rateLimits] as const];
-  const items: Array<{
-    label: string;
-    description?: string;
-    detail?: string;
-  }> = buckets.map(([id, snapshot]) => ({
-    label: `$(dashboard) ${snapshot.limitName ?? id}`,
-    description: snapshot.planType ?? undefined,
-    detail: rateLimitDetail(snapshot),
-  }));
-
-  const summary = usage.tokenUsage.summary;
-  if (summary.lifetimeTokens !== null) {
-    items.push({
-      label: "$(symbol-numeric) Lifetime token activity",
-      description: summary.lifetimeTokens.toLocaleString(),
-      ...(summary.peakDailyTokens === null
-        ? {}
-        : {
-            detail: `Peak daily activity: ${summary.peakDailyTokens.toLocaleString()} tokens`,
-          }),
-    });
-  }
-  if (usage.rateLimitResetCredits?.availableCount) {
-    items.push({
-      label: "$(refresh) Rate-limit resets available",
-      description: String(usage.rateLimitResetCredits.availableCount),
-    });
-  }
-  return items;
-}
-
-async function showCodexSubscriptionUsage(): Promise<void> {
-  const result = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: "Reading Codex subscription usage…",
-    },
-    () => queryCodexCliUsage(),
-  );
-
-  if (!result.available) {
-    log(`[codex] Subscription usage unavailable: ${result.reason}`);
-    vscode.window.showInformationMessage(
-      "Codex subscription usage is unavailable. Install and sign in to the Codex CLI to enable it.",
-    );
-    return;
-  }
-
-  await vscode.window.showQuickPick(usageQuickPickItems(result.usage), {
-    title: "Codex Subscription Usage",
-    placeHolder: "Usage is read from the locally installed Codex CLI",
-    ignoreFocusOut: true,
-  });
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -1440,6 +1174,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  const codexAuthFlows = createCodexAuthFlows({
+    authManager: openAiCodexAuthManager,
+    queryUsage: queryCodexCliUsage,
+    log,
+  });
+
   // Commands
   context.subscriptions.push(
     ...registerDiffViewCommands(),
@@ -1488,10 +1228,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     ...registerCodexAuthCommands({
       authManager: openAiCodexAuthManager,
-      completeOAuthSignIn: completeCodexOAuthSignIn,
-      pickOAuthAccount,
-      manageAccounts: manageCodexAccountsFlow,
-      showSubscriptionUsage: showCodexSubscriptionUsage,
+      ...codexAuthFlows,
       log,
     }),
   );
