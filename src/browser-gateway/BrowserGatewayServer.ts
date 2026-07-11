@@ -1,6 +1,7 @@
 import * as http from "http";
 import type * as vscode from "vscode";
 
+import { isCoreReasoningEffort } from "../core/modelCatalog.js";
 import type {
   McpManagerProfile,
   McpManagerScope,
@@ -27,6 +28,7 @@ import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { DecisionMessage } from "../approvals/webview/types.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 import { writeBrowserGatewayThemeCache } from "./browserGatewayThemeCache.js";
+import { readJsonBody } from "./nodeHttpPrimitives.js";
 import {
   getDevelopmentStreamingBaselineMetrics,
   type StreamingBaselineMetrics,
@@ -1164,7 +1166,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = await this.readJsonBody(req);
+    const body = await readJsonBody(req);
     const parsed =
       body && typeof body === "object"
         ? (body as Record<string, unknown>)
@@ -1188,7 +1190,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       subCommand?: string;
       fullCommand?: string;
     } | null;
@@ -1221,7 +1223,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       id?: string;
       answers?: Record<
         string,
@@ -1254,7 +1256,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       id?: string;
       action?: string;
     };
@@ -1283,7 +1285,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       id?: string;
       step?: number;
       answers?: Record<
@@ -1324,7 +1326,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       text?: string;
       id?: string;
       mode?: string;
@@ -1498,7 +1500,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       sessionId?: unknown;
       queueId?: unknown;
       text?: unknown;
@@ -1533,7 +1535,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       sessionId?: unknown;
       queueId?: unknown;
       text?: unknown;
@@ -1568,7 +1570,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       mode?: string;
       reason?: string;
     };
@@ -1664,7 +1666,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       model?: string;
     };
     if (typeof body?.model !== "string" || !body.model.trim()) {
@@ -1691,7 +1693,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       mode?: string;
     };
     if (typeof body?.mode !== "string" || !body.mode.trim()) {
@@ -1714,12 +1716,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       enabled?: boolean;
       effort?: import("../agent/providers/types.js").ReasoningEffort;
     };
     if (typeof body?.effort === "string" && body.effort.trim()) {
-      if (!isReasoningEffort(body.effort)) {
+      if (!isCoreReasoningEffort(body.effort)) {
         this.writeJson(res, 400, { error: "invalid_request" });
         return;
       }
@@ -1762,7 +1764,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as { mode?: string };
+    const body = (await readJsonBody(req)) as { mode?: string };
     const result = await this.chatViewProvider.submitBrowserNewSession(
       body?.mode,
     );
@@ -1782,7 +1784,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as { sessionId?: string };
+    const body = (await readJsonBody(req)) as { sessionId?: string };
     if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
@@ -1803,7 +1805,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as { sessionId?: string };
+    const body = (await readJsonBody(req)) as { sessionId?: string };
     if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
@@ -1824,7 +1826,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       sessionId?: string;
       title?: string;
     };
@@ -1854,7 +1856,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as { sessionId?: string };
+    const body = (await readJsonBody(req)) as { sessionId?: string };
     if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
@@ -1929,7 +1931,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 401, { error: "unauthorized" });
       return;
     }
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       name?: string;
       input?: Record<string, unknown>;
       sessionId?: string;
@@ -1997,7 +1999,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 401, { error: "unauthorized" });
       return;
     }
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       profile?: unknown;
       scope?: unknown;
       server?: unknown;
@@ -2033,7 +2035,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 401, { error: "unauthorized" });
       return;
     }
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       profile?: unknown;
       scope?: unknown;
       serverName?: unknown;
@@ -2064,7 +2066,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 401, { error: "unauthorized" });
       return;
     }
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       profile?: unknown;
       scope?: unknown;
     } | null;
@@ -2090,7 +2092,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       serverName?: string;
       action?: "disable" | "reconnect" | "reauthenticate";
     };
@@ -2121,7 +2123,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       sessionId?: string;
     };
     if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
@@ -2142,7 +2144,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       sessionId?: string;
     };
     if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
@@ -2164,7 +2166,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 401, { error: "unauthorized" });
       return;
     }
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       action?:
         | "steer"
         | "detach"
@@ -2197,7 +2199,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await this.readJsonBody(req)) as {
+    const body = (await readJsonBody(req)) as {
       sessionId?: string;
     };
     if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
@@ -2207,20 +2209,6 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const result = this.chatViewProvider.getBrowserBgTranscript(body.sessionId);
     this.writeJson(res, result.ok ? 200 : 404, result);
-  }
-
-  private async readJsonBody(req: http.IncomingMessage): Promise<unknown> {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const raw = Buffer.concat(chunks).toString("utf-8");
-    if (!raw.trim()) return {};
-    try {
-      return JSON.parse(raw);
-    } catch {
-      throw new Error("invalid_json");
-    }
   }
 
   private isAuthorized(req: http.IncomingMessage): boolean {
@@ -2238,12 +2226,4 @@ export class BrowserGatewayServer implements vscode.Disposable {
     });
     res.end(JSON.stringify(body));
   }
-}
-
-function isReasoningEffort(
-  value: string,
-): value is import("../agent/providers/types.js").ReasoningEffort {
-  return ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
-    value,
-  );
 }

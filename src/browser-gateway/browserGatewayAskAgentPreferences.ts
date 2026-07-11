@@ -3,6 +3,7 @@ import * as os from "os";
 import * as path from "path";
 
 import type { ReasoningEffort } from "../agent/webview/types.js";
+import { isCoreReasoningEffort } from "../core/modelCatalog.js";
 import { randomUUID } from "crypto";
 
 const PREFERENCES_DIR = path.join(os.homedir(), ".agentlink");
@@ -14,18 +15,6 @@ const PREFERENCES_PATH = path.join(
 export interface BrowserGatewayAskAgentPreferencesSnapshot {
   model?: string;
   reasoningEffort?: ReasoningEffort;
-}
-
-function isReasoningEffort(value: unknown): value is ReasoningEffort {
-  return (
-    value === "none" ||
-    value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh" ||
-    value === "max"
-  );
 }
 
 function normalizePreferences(
@@ -41,7 +30,7 @@ function normalizePreferences(
       typeof candidate.model === "string" && candidate.model.trim()
         ? candidate.model.trim()
         : undefined,
-    reasoningEffort: isReasoningEffort(candidate.reasoningEffort)
+    reasoningEffort: isCoreReasoningEffort(candidate.reasoningEffort)
       ? candidate.reasoningEffort
       : undefined,
   };

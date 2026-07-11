@@ -72,11 +72,7 @@ import {
 } from "../browserGatewayAskAgentSessionStore.js";
 import { BrowserGatewayAskAgentPreferencesStore } from "../browserGatewayAskAgentPreferences.js";
 import { BrowserGatewayAskAgentHistoryStore } from "../browserGatewayAskAgentHistory.js";
-import type {
-  ChatMessage,
-  Question,
-  ReasoningEffort,
-} from "../../agent/webview/types.js";
+import type { ChatMessage, Question } from "../../agent/webview/types.js";
 import type {
   ApprovalRequest,
   DecisionMessage,
@@ -144,10 +140,12 @@ import type {
   CoreHostKind,
   CoreSessionScopeDto,
 } from "../../core/sessionProtocol.js";
-import type {
-  CoreModelCatalogEntry,
-  CoreModelCatalogSnapshot,
+import {
+  isCoreReasoningEffort,
+  type CoreModelCatalogEntry,
+  type CoreModelCatalogSnapshot,
 } from "../../core/modelCatalog.js";
+import { readBoundedBody, readJsonBody } from "../nodeHttpPrimitives.js";
 import {
   MAX_MEMORY_NUDGES_PER_SESSION,
   detectMemoryCandidates,
@@ -279,29 +277,10 @@ function parseArgs(argv: string[]): HelperRuntimeOptions {
   };
 }
 
-async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  if (chunks.length === 0) return {};
-  const raw = Buffer.concat(chunks).toString("utf-8").trim();
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw);
-  } catch {
-    throw new Error("invalid_json");
-  }
-}
-
 async function readFormBody(
   req: http.IncomingMessage,
 ): Promise<Record<string, string>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const raw = Buffer.concat(chunks).toString("utf-8");
+  const raw = (await readBoundedBody(req)).toString("utf-8");
   const params = new URLSearchParams(raw);
   const result: Record<string, string> = {};
   for (const [key, value] of params.entries()) {
@@ -398,12 +377,6 @@ function isLoopbackAddress(addr: string | undefined): boolean {
     normalized === "127.0.0.1" ||
     normalized === "::1" ||
     normalized.startsWith("127.")
-  );
-}
-
-function isReasoningEffort(value: string): value is ReasoningEffort {
-  return ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
-    value,
   );
 }
 
@@ -3484,7 +3457,7 @@ export class BrowserGatewayHelper {
       const body = (await readJsonBody(req)) as { effort?: unknown } | null;
       const effort = typeof body?.effort === "string" ? body.effort.trim() : "";
       if (
-        !isReasoningEffort(effort) ||
+        !isCoreReasoningEffort(effort) ||
         !this.askAgentSessionStore.setReasoningEffort(effort)
       ) {
         this.logAskAgentEvent("ask-agent.thinking", {
@@ -5740,9 +5713,9 @@ export class BrowserGatewayHelper {
       typeof model.authenticated === "boolean" &&
       (model.reasoningEfforts === undefined ||
         (Array.isArray(model.reasoningEfforts) &&
-          model.reasoningEfforts.every(isReasoningEffort))) &&
+          model.reasoningEfforts.every(isCoreReasoningEffort))) &&
       (model.defaultReasoningEffort === undefined ||
-        isReasoningEffort(model.defaultReasoningEffort)),
+        isCoreReasoningEffort(model.defaultReasoningEffort)),
     );
   }
 
