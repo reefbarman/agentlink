@@ -12,14 +12,12 @@ import {
 import { registerDiffViewCommands } from "./integrations/diffViewCommands.js";
 import { registerDiffViewContentProvider } from "./integrations/diffViewContentProvider.js";
 import { SidebarProvider } from "./sidebar/SidebarProvider.js";
-import {
-  ApprovalManager,
-  type CommandRule,
-} from "./approvals/ApprovalManager.js";
+import { ApprovalManager } from "./approvals/ApprovalManager.js";
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
+import { addTrustedCommandViaUi } from "./agent/trustedCommandFlow.js";
 import { registerCodexAuthCommands } from "./agent/codexAuthCommands.js";
 import { createCodexAuthFlows } from "./agent/codexAuthFlows.js";
 import { runLegacyAgentIntegrationCleanup } from "./util/legacyAgentIntegrationCleanup.js";
@@ -223,75 +221,6 @@ async function consumeWorktreeStartupIntent(
       `[worktree-agent] failed to consume startup intent: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-}
-
-async function addTrustedCommandViaUI(): Promise<void> {
-  const pattern = await vscode.window.showInputBox({
-    title: "Built-In Agent Trusted Command Pattern",
-    prompt: "Enter a command pattern to trust for built-in agent sessions",
-    ignoreFocusOut: true,
-    validateInput: (v) => (v.trim() ? null : "Pattern cannot be empty"),
-  });
-  if (!pattern) return;
-
-  const modes: Array<vscode.QuickPickItem & { mode: CommandRule["mode"] }> = [
-    {
-      label: "Prefix Match",
-      description: `Trust commands starting with "${pattern.trim()}"`,
-      mode: "prefix",
-    },
-    {
-      label: "Exact Match",
-      description: `Trust only "${pattern.trim()}"`,
-      mode: "exact",
-    },
-    {
-      label: "Regex Match",
-      description: `Trust commands matching /${pattern.trim()}/`,
-      mode: "regex",
-    },
-  ];
-
-  const picked = await vscode.window.showQuickPick(modes, {
-    title: "Match Mode",
-    placeHolder: "How should this pattern match commands?",
-    ignoreFocusOut: true,
-  });
-  if (!picked) return;
-
-  // Scope selection
-  const scopeItems: Array<
-    vscode.QuickPickItem & { scope: "project" | "global" }
-  > = [];
-  const roots = vscode.workspace.workspaceFolders;
-  if (roots && roots.length > 0) {
-    scopeItems.push({
-      label: "$(folder) This Project",
-      description: ".agentlink/agentlink.json",
-      scope: "project",
-    });
-  }
-  scopeItems.push({
-    label: "$(globe) Global",
-    description: "~/.agentlink/agentlink.json",
-    scope: "global",
-  });
-
-  const scopePick = await vscode.window.showQuickPick(scopeItems, {
-    title: "Rule Scope",
-    placeHolder: "Where should this rule be saved?",
-    ignoreFocusOut: true,
-  });
-  if (!scopePick) return;
-
-  approvalManager.addCommandRule(
-    "_global",
-    { pattern: pattern.trim(), mode: picked.mode },
-    scopePick.scope,
-  );
-  vscode.window.showInformationMessage(
-    `Added trusted command (${scopePick.scope}): ${picked.mode} "${pattern.trim()}"`,
-  );
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -1184,7 +1113,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     ...registerDiffViewCommands(),
     ...registerAgentActivityCommands({
-      addTrustedCommand: addTrustedCommandViaUI,
+      addTrustedCommand: () => addTrustedCommandViaUi(approvalManager),
       approvalPanel,
       toolCallTracker,
       approvalManager,
