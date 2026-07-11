@@ -7,9 +7,7 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
-import * as fs from "fs";
-import { fork, spawn, type ChildProcess } from "child_process";
-import picomatch from "picomatch";
+import { fork, type ChildProcess } from "child_process";
 import { openAiCodexAuthManager } from "../agent/providers/index.js";
 import type {
   WorkerToExtensionMessage,
@@ -29,6 +27,10 @@ import {
 import { getWorkspaceRootForPath, getWorkspaceRoots } from "../util/paths.js";
 import { getAlCollectionName } from "./collectionName.js";
 import { DEFAULT_QDRANT_URL, normalizeQdrantUrl } from "./qdrantClient.js";
+import {
+  DEFAULT_INDEX_EXCLUSIONS,
+  IndexableFileDiscovery,
+} from "./IndexableFileDiscovery.js";
 
 // --- Public types ---
 
@@ -57,33 +59,8 @@ export interface IndexStatus {
 // --- Constants ---
 
 const WATCHER_DEBOUNCE_MS = 2000;
-const MAX_FILE_SIZE = 1_000_000; // 1MB
 const QDRANT_BACKGROUND_RETRY_DELAYS_MS = [
   15_000, 30_000, 60_000, 120_000, 300_000,
-];
-// Phase 0 eval fixture exception: keep the resettable workdir git-ignored
-// while still indexing it so structural/semantic tool gains can be measured.
-const EXPLICITLY_INDEXED_IGNORED_PATHS = [
-  "fixtures/agent-eval-workspace/work/**",
-];
-
-const DEFAULT_INDEX_EXCLUSIONS = [
-  "**/node_modules/**",
-  "**/.git/**",
-  "**/dist/**",
-  "**/build/**",
-  "**/.next/**",
-  "**/coverage/**",
-  "**/__pycache__/**",
-  "**/target/**",
-  "**/.venv/**",
-  "**/vendor/**",
-  "**/.claude/**",
-  "**/.codex/**",
-  "**/.agentlink/**",
-  "**/.agents/**",
-  "**/*.min.js",
-  "**/*.map",
 ];
 
 export class IndexerManager implements vscode.Disposable {
@@ -107,6 +84,7 @@ export class IndexerManager implements vscode.Disposable {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private qdrantRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private qdrantRetryAttempt = 0;
+  private readonly fileDiscovery: IndexableFileDiscovery;
 
   // Event emitter for status changes
   private readonly _onStatusChanged = new vscode.EventEmitter<IndexStatus>();
@@ -116,7 +94,9 @@ export class IndexerManager implements vscode.Disposable {
     private readonly extensionUri: vscode.Uri,
     private readonly globalStorageUri: vscode.Uri,
     private readonly log: (msg: string) => void,
-  ) {}
+  ) {
+    this.fileDiscovery = new IndexableFileDiscovery(log);
+  }
 
   // --- Public API ---
 
@@ -231,7 +211,10 @@ export class IndexerManager implements vscode.Disposable {
           this.updateStatus({ state: "idle" });
           return;
         }
-        const files = await this.discoverIndexableFiles(workspaceRoot, config);
+        const files = await this.fileDiscovery.discoverIndexableFiles(
+          workspaceRoot,
+          this.getIndexExclusions(config),
+        );
         discoveredByRoot.set(workspaceRoot, files);
         totalFiles += files.length;
         this.log(
@@ -721,16 +704,17 @@ export class IndexerManager implements vscode.Disposable {
     }> = [];
 
     for (const [workspaceRoot, changes] of changesByRoot) {
-      const added = await this.filterIndexableFiles(
+      const added = await this.fileDiscovery.filterIndexableFiles(
         changes.added,
         workspaceRoot,
         exclusions,
       );
-      const removed = await this.filterExplicitlyIncludedRemovedPaths(
-        changes.removed,
-        workspaceRoot,
-        exclusions,
-      );
+      const removed =
+        await this.fileDiscovery.filterExplicitlyIncludedRemovedPaths(
+          changes.removed,
+          workspaceRoot,
+          exclusions,
+        );
       if (added.length > 0 || removed.length > 0) {
         filteredChanges.push({ workspaceRoot, added, removed });
       }
@@ -822,205 +806,8 @@ export class IndexerManager implements vscode.Disposable {
     }
   }
 
-  private async discoverIndexableFiles(
-    workspaceRoot: string,
-    config: vscode.WorkspaceConfiguration,
-  ): Promise<string[]> {
-    const exclusions = this.getIndexExclusions(config);
-    const excludePattern = `{${exclusions.join(",")}}`;
-    const folder = vscode.workspace.getWorkspaceFolder(
-      vscode.Uri.file(workspaceRoot),
-    );
-    const includePattern = new vscode.RelativePattern(
-      folder ?? workspaceRoot,
-      "**/*",
-    );
-
-    const uris = await vscode.workspace.findFiles(
-      includePattern,
-      excludePattern,
-    );
-    const discovered = uris.map((u) => u.fsPath);
-    return this.filterIndexableFiles(discovered, workspaceRoot, exclusions);
-  }
-
   private getIndexExclusions(config: vscode.WorkspaceConfiguration): string[] {
     return config.get<string[]>("indexExclusions", DEFAULT_INDEX_EXCLUSIONS);
-  }
-
-  private async filterIndexableFiles(
-    files: string[],
-    workspaceRoot: string,
-    exclusions: string[] = DEFAULT_INDEX_EXCLUSIONS,
-  ): Promise<string[]> {
-    const exclusionMatcher = this.buildExclusionMatcher(
-      workspaceRoot,
-      exclusions,
-    );
-
-    const existingFiles = files.filter((filePath) => {
-      try {
-        if (exclusionMatcher(filePath)) return false;
-        const stat = fs.statSync(filePath);
-        return stat.isFile() && stat.size > 0 && stat.size <= MAX_FILE_SIZE;
-      } catch {
-        return false;
-      }
-    });
-
-    const nonIgnoredFiles = await this.filterGitIgnoredPaths(
-      existingFiles,
-      workspaceRoot,
-      {
-        keepIgnored: false,
-      },
-    );
-    const explicitlyIndexedIgnoredFiles = await this.filterGitIgnoredPaths(
-      existingFiles.filter((filePath) =>
-        this.isExplicitlyIndexedIgnoredPath(filePath, workspaceRoot),
-      ),
-      workspaceRoot,
-      { keepIgnored: true },
-    );
-    return [...new Set([...nonIgnoredFiles, ...explicitlyIndexedIgnoredFiles])];
-  }
-
-  private async filterExplicitlyIncludedRemovedPaths(
-    files: string[],
-    workspaceRoot: string,
-    exclusions: string[],
-  ): Promise<string[]> {
-    if (files.length === 0) return files;
-    const exclusionMatcher = this.buildExclusionMatcher(
-      workspaceRoot,
-      exclusions,
-    );
-    return files.filter((filePath) => !exclusionMatcher(filePath));
-  }
-
-  private isExplicitlyIndexedIgnoredPath(
-    filePath: string,
-    workspaceRoot: string,
-  ): boolean {
-    const relPath = path
-      .relative(workspaceRoot, filePath)
-      .split(path.sep)
-      .join("/");
-    return EXPLICITLY_INDEXED_IGNORED_PATHS.some((pattern) =>
-      picomatch(pattern, { dot: true })(relPath),
-    );
-  }
-
-  private buildExclusionMatcher(
-    workspaceRoot: string,
-    exclusions: string[],
-  ): (filePath: string) => boolean {
-    const relativeMatchers = exclusions.map((pattern) =>
-      picomatch(pattern, { dot: true }),
-    );
-    const absoluteMatchers = exclusions
-      .filter((pattern) => path.isAbsolute(pattern))
-      .map((pattern) => picomatch(pattern, { dot: true }));
-
-    return (filePath: string) => {
-      const relPath = path
-        .relative(workspaceRoot, filePath)
-        .split(path.sep)
-        .join("/");
-      if (!relPath || relPath.startsWith("../") || relPath === "..") {
-        return true;
-      }
-
-      if (relativeMatchers.some((matcher) => matcher(relPath))) {
-        return true;
-      }
-
-      const normalizedAbsPath = filePath.split(path.sep).join("/");
-      return absoluteMatchers.some((matcher) => matcher(normalizedAbsPath));
-    };
-  }
-
-  private async filterGitIgnoredPaths(
-    files: string[],
-    workspaceRoot: string,
-    options: { keepIgnored: boolean },
-  ): Promise<string[]> {
-    if (files.length === 0) return files;
-
-    const relPathEntries = files
-      .map((filePath) => {
-        const relPath = path.relative(workspaceRoot, filePath);
-        if (!relPath || relPath.startsWith("..") || path.isAbsolute(relPath)) {
-          return null;
-        }
-        return { filePath, relPath: relPath.split(path.sep).join("/") };
-      })
-      .filter(
-        (entry): entry is { filePath: string; relPath: string } =>
-          entry !== null,
-      );
-
-    if (relPathEntries.length === 0) return [];
-
-    const ignoredRelPaths = await this.getGitIgnoredRelativePaths(
-      relPathEntries.map((entry) => entry.relPath),
-      workspaceRoot,
-    );
-
-    return relPathEntries
-      .filter(
-        (entry) => ignoredRelPaths.has(entry.relPath) === options.keepIgnored,
-      )
-      .map((entry) => entry.filePath);
-  }
-
-  private async getGitIgnoredRelativePaths(
-    relPaths: string[],
-    workspaceRoot: string,
-  ): Promise<Set<string>> {
-    if (relPaths.length === 0) return new Set();
-
-    return new Promise((resolve) => {
-      const child = spawn("git", ["check-ignore", "--stdin", "-z"], {
-        cwd: workspaceRoot,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      const stdoutChunks: Buffer[] = [];
-      const stderrChunks: Buffer[] = [];
-
-      child.stdout.on("data", (chunk: Buffer) => {
-        stdoutChunks.push(chunk);
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        stderrChunks.push(chunk);
-      });
-      child.on("error", (err) => {
-        const code = (err as NodeJS.ErrnoException).code;
-        this.log(
-          `Git ignore filtering unavailable (${String(code ?? err.message)}); indexing non-excluded files only.`,
-        );
-        resolve(new Set());
-      });
-      child.stdin.on("error", () => {
-        // git may exit before consuming all stdin; ignore broken-pipe errors.
-      });
-      child.on("close", (code) => {
-        const output = Buffer.concat(stdoutChunks).toString("utf8");
-        if (code === 0 || code === 1) {
-          resolve(new Set(output.split("\0").filter(Boolean)));
-          return;
-        }
-
-        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
-        this.log(
-          `Git ignore filtering failed (${code ?? "unknown"})${stderr ? `: ${stderr}` : ""}`,
-        );
-        resolve(new Set());
-      });
-
-      child.stdin.end(Buffer.from(relPaths.join("\0") + "\0"));
-    });
   }
 
   private updateStatus(partial: Partial<IndexStatus>): void {
