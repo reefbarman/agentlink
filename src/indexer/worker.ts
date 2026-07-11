@@ -61,7 +61,8 @@ import type {
   Chunk,
   ChunkGranularity,
 } from "./types.js";
-import { createEmbeddingRequest, EMBEDDING_DIM } from "./embeddingConfig.js";
+import { EMBEDDING_DIM } from "./embeddingConfig.js";
+import { requestEmbeddings } from "./embeddingClient.js";
 import { sleep } from "../util/sleep.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 
@@ -904,52 +905,15 @@ async function embedBatchWithRetry(
   bearerToken: string,
   retries = MAX_RETRIES,
 ): Promise<number[][]> {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${bearerToken}`,
-      },
-      body: JSON.stringify(createEmbeddingRequest(texts)),
-    });
-
-    if (response.ok) {
-      const data = (await response.json()) as {
-        data: Array<{ index: number; embedding: number[] }>;
-      };
-      // Sort by index to preserve order
-      data.data.sort((a, b) => a.index - b.index);
-      return data.data.map((d) => d.embedding);
-    }
-
-    if (response.status === 429 && attempt < retries) {
-      // Rate limited — exponential backoff with jitter
-      const delay = Math.min(1000 * 2 ** attempt + Math.random() * 500, 30000);
-      await sleep(delay);
-      continue;
-    }
-
-    if (response.status === 401 && attempt < retries) {
-      bearerToken = await requestEmbeddingAuthRefresh();
-      continue;
-    }
-
-    // Token limit / bad request — bisect and retry each half
-    if (response.status === 400 && texts.length > 1) {
-      const mid = Math.ceil(texts.length / 2);
-      const [left, right] = await Promise.all([
-        embedBatchWithRetry(texts.slice(0, mid), bearerToken, retries),
-        embedBatchWithRetry(texts.slice(mid), bearerToken, retries),
-      ]);
-      return [...left, ...right];
-    }
-
-    const error = await response.text();
-    throw new Error(`OpenAI API error (${response.status}): ${error}`);
-  }
-
-  throw new Error("Unreachable");
+  return requestEmbeddings(texts, bearerToken, {
+    maxRetries: retries,
+    shouldRetryStatus: (status) => status === 429,
+    retryDelayMs: (attempt, random) =>
+      Math.min(1000 * 2 ** attempt + random * 500, 30000),
+    refreshBearerToken: requestEmbeddingAuthRefresh,
+    bisectOnBadRequest: true,
+    sortByIndex: true,
+  });
 }
 
 // ============================================================

@@ -610,6 +610,29 @@ describe("semantic search auth", () => {
     });
   });
 
+  it("preserves the missing embedding data error", async () => {
+    resolveEmbeddingAuth.mockResolvedValue({
+      method: "oauth",
+      bearerToken: "oauth-token",
+      canRefresh: true,
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ data: [] }),
+    });
+
+    const result = await semanticSearch("/workspace", "missing embedding", 5);
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify({
+          error: "OpenAI API returned no embedding data",
+        }),
+      },
+    ]);
+  });
+
   it("retries transient 500 embedding failures", async () => {
     vi.useFakeTimers();
     resolveEmbeddingAuth.mockResolvedValue({

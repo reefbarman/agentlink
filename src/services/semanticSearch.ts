@@ -16,9 +16,8 @@ import {
   getRipgrepBinPath,
   parseRipgrepOutput,
 } from "../util/ripgrep.js";
-import { sleep } from "../util/sleep.js";
 import { getAlCollectionName } from "../indexer/collectionName.js";
-import { createEmbeddingRequest } from "../indexer/embeddingConfig.js";
+import { requestEmbeddings } from "../indexer/embeddingClient.js";
 
 import { type ToolResult } from "../shared/types.js";
 import { getSemanticReadinessMessage } from "../shared/semanticReadiness.js";
@@ -170,51 +169,17 @@ async function generateEmbedding(
   text: string,
   auth: OpenAiCodexResolvedAuth,
 ): Promise<number[]> {
-  for (let attempt = 0; attempt <= EMBEDDING_MAX_RETRIES; attempt++) {
-    let response: Response;
-    try {
-      response = await fetch("https://api.openai.com/v1/embeddings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.bearerToken}`,
-        },
-        body: JSON.stringify(createEmbeddingRequest(text)),
-      });
-    } catch (error) {
-      if (attempt < EMBEDDING_MAX_RETRIES) {
-        const delay = Math.min(500 * 2 ** attempt + Math.random() * 250, 5000);
-        await sleep(delay);
-        continue;
-      }
-      throw error;
-    }
-
-    if (response.ok) {
-      const data = (await response.json()) as {
-        data: Array<{ embedding: number[] }>;
-      };
-      const embedding = data.data?.[0]?.embedding;
-      if (!embedding) {
-        throw new Error("OpenAI API returned no embedding data");
-      }
-      return embedding;
-    }
-
-    if (
-      attempt < EMBEDDING_MAX_RETRIES &&
-      isRetryableEmbeddingStatus(response.status)
-    ) {
-      const delay = Math.min(500 * 2 ** attempt + Math.random() * 250, 5000);
-      await sleep(delay);
-      continue;
-    }
-
-    const error = await response.text();
-    throw new Error(`OpenAI API error (${response.status}): ${error}`);
+  const [embedding] = await requestEmbeddings(text, auth.bearerToken, {
+    maxRetries: EMBEDDING_MAX_RETRIES,
+    retryFetchErrors: true,
+    shouldRetryStatus: isRetryableEmbeddingStatus,
+    retryDelayMs: (attempt, random) =>
+      Math.min(500 * 2 ** attempt + random * 250, 5000),
+  });
+  if (!embedding) {
+    throw new Error("OpenAI API returned no embedding data");
   }
-
-  throw new Error("Unreachable");
+  return embedding;
 }
 
 // --- Qdrant REST API ---
