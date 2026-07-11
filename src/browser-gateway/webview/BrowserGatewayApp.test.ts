@@ -2525,6 +2525,130 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     ).toBe("true");
   });
 
+  it("paints the tab switch immediately and restores cached content after paint", async () => {
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const workspaceSnapshot = createSnapshot();
+    workspaceSnapshot.session.foreground.projectedMessages = [
+      {
+        id: "workspace-msg-1",
+        role: "assistant",
+        content: "Cached workspace transcript",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "Cached workspace transcript" }],
+      },
+    ];
+    let workspaceRequests = 0;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/ask-agent/session")) {
+        return jsonResponse(createAskAgentSessionResponse());
+      }
+      if (url.includes("/api/ui-state")) {
+        workspaceRequests += 1;
+        if (workspaceRequests === 1) return jsonResponse(workspaceSnapshot);
+        // Never resolve again: restored content must come from the tab cache.
+        return await new Promise<Response>(() => undefined);
+      }
+      return jsonResponse({});
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    await screen.findByText("Cached workspace transcript");
+
+    const askAgentTab = screen.getByRole("tab", { name: /Ask Agent/ });
+    fireEvent.click(askAgentTab);
+    expect(askAgentTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByText("Cached workspace transcript")).toBeNull();
+
+    const workspaceTab = screen.getByRole("tab", { name: /Workspace/ });
+    fireEvent.click(workspaceTab);
+    // The switch itself commits synchronously with a lightweight loading
+    // state; the cached transcript mounts a paint later.
+    expect(workspaceTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Loading session…")).toBeTruthy();
+    expect(await screen.findByText("Cached workspace transcript")).toBeTruthy();
+  });
+
+  it("coalesces rapid realtime stream updates to the latest payload", async () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        h(BrowserGatewayApp, {
+          authToken: "token",
+          currentInstanceId: "instance-1",
+          workspaceName: "Workspace",
+          routeByInstance: true,
+        }),
+      );
+
+      expect(MockEventSource.instances.length).toBeGreaterThan(0);
+      const source = MockEventSource.instances.at(-1)!;
+      const updateListener = source.addEventListener.mock.calls.find(
+        ([eventName]) => eventName === "update",
+      )?.[1];
+      expect(updateListener).toBeTruthy();
+
+      const buildUpdate = (text: string, id: string): string => {
+        const snapshot = createAskAgentSessionResponse().snapshot;
+        snapshot.session.foreground.projectedMessages = [
+          {
+            id,
+            role: "assistant",
+            content: text,
+            timestamp: 1,
+            blocks: [{ type: "text", text }],
+          },
+        ];
+        return JSON.stringify(snapshot);
+      };
+
+      updateListener?.({ data: buildUpdate("First update", "update-1") });
+      await act(async () => {});
+      expect(screen.getByText("First update")).toBeTruthy();
+
+      updateListener?.({ data: buildUpdate("Second update", "update-2") });
+      updateListener?.({ data: buildUpdate("Third update", "update-3") });
+      await act(async () => {});
+      // Both land inside the coalesce window; nothing applies immediately.
+      expect(screen.getByText("First update")).toBeTruthy();
+      expect(screen.queryByText("Second update")).toBeNull();
+      expect(screen.queryByText("Third update")).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      // Only the newest payload is parsed and rendered.
+      expect(screen.getByText("Third update")).toBeTruthy();
+      expect(screen.queryByText("Second update")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps missing instance tabs as disconnected before pruning them", async () => {
     vi.useFakeTimers();
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;

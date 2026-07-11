@@ -93,9 +93,46 @@ const SIDE_PANE_KEYBOARD_STEP = 32;
 const MOBILE_LAYOUT_MEDIA_QUERY = "(max-width: 720px)";
 const TOUCH_POINTER_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
 const DISCONNECTED_INSTANCE_RETENTION_MS = 3 * 60 * 1_000;
+// The gateway rebroadcasts the full snapshot as often as every 150ms while a
+// turn is streaming. Parsing and re-rendering every event saturates slower
+// (especially mobile) main threads, so stream events are coalesced to the
+// latest payload and applied at most this often.
+const SNAPSHOT_STREAM_COALESCE_MS = 150;
+const SNAPSHOT_STREAM_COALESCE_TOUCH_MS = 500;
+
+function isCoarsePointer(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(TOUCH_POINTER_MEDIA_QUERY).matches
+  );
+}
+
+/**
+ * Run `callback` after the browser has had a chance to paint the current
+ * update. Used to let a cheap frame (e.g. the tab switch highlight + loading
+ * state) reach the screen before committing a render heavy enough to block
+ * the main thread.
+ */
+function scheduleAfterNextPaint(callback: () => void): void {
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => {
+      window.setTimeout(callback, 0);
+    });
+  } else {
+    window.setTimeout(callback, 0);
+  }
+}
 const streamingBaselineMetrics = __DEV_BUILD__
   ? getDevelopmentStreamingBaselineMetrics("browser-webview", true)
   : undefined;
+
+function serializeInstancesIgnoringLastSeen(
+  instances: BrowserGatewayInstanceOption[],
+): string {
+  return JSON.stringify(
+    instances.map(({ lastSeenAt: _lastSeenAt, ...rest }) => rest),
+  );
+}
 
 function dedupeBackgroundSessions(sessions: BgSessionInfo[]): BgSessionInfo[] {
   if (sessions.length <= 1) return sessions;
@@ -761,7 +798,23 @@ export function BrowserGatewayApp({
     selectedTabGenerationRef.current = generation;
     selectedTabIdRef.current = tabId;
     snapshotOriginRef.current = { tabId, generation };
-    setSnapshot(snapshotCacheRef.current.get(tabId)?.snapshot ?? null);
+    // Switch to the lightweight loading state first so the tab change paints
+    // immediately; mounting a cached transcript can block the main thread for
+    // long enough (especially on mobile) that the tap appears to do nothing.
+    setSnapshot(null);
+    const cachedSnapshot = snapshotCacheRef.current.get(tabId)?.snapshot;
+    if (cachedSnapshot) {
+      scheduleAfterNextPaint(() => {
+        if (
+          selectedTabIdRef.current !== tabId ||
+          selectedTabGenerationRef.current !== generation
+        ) {
+          return;
+        }
+        // A fresh snapshot may have landed while waiting for the paint; keep it.
+        setSnapshot((current) => current ?? cachedSnapshot);
+      });
+    }
     setLocalDismissedApprovalId(null);
     setLocalDismissedQuestionId(null);
     setSelectedDiffId(null);
@@ -1069,9 +1122,24 @@ export function BrowserGatewayApp({
       eventSource.addEventListener("update", applySnapshotEvent);
     };
 
-    const applySnapshotEvent = (event: MessageEvent<string>) => {
+    // Coalesce stream events: only the newest payload matters (every event is
+    // a full snapshot), and parsing + rendering each one keeps slower devices
+    // busy enough that taps and scrolling stall while a turn is streaming.
+    const streamCoalesceMs = isCoarsePointer()
+      ? SNAPSHOT_STREAM_COALESCE_TOUCH_MS
+      : SNAPSHOT_STREAM_COALESCE_MS;
+    let pendingStreamData: string | null = null;
+    let streamCoalesceTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastStreamApplyAt = 0;
+
+    const applyPendingStreamData = () => {
+      streamCoalesceTimer = undefined;
+      if (closed || pendingStreamData === null) return;
+      const data = pendingStreamData;
+      pendingStreamData = null;
+      lastStreamApplyAt = Date.now();
       try {
-        const next = JSON.parse(event.data) as GatewaySnapshot;
+        const next = JSON.parse(data) as GatewaySnapshot;
         if (!commitSnapshot(next, tabId, generation)) return;
         snapshotFetchController?.abort();
         snapshotFetchController = undefined;
@@ -1081,6 +1149,20 @@ export function BrowserGatewayApp({
       } catch (err) {
         setStatus(`Stream parse error: ${String(err)}`);
       }
+    };
+
+    const applySnapshotEvent = (event: MessageEvent<string>) => {
+      pendingStreamData = event.data;
+      if (streamCoalesceTimer !== undefined) return;
+      const elapsed = Date.now() - lastStreamApplyAt;
+      if (elapsed >= streamCoalesceMs) {
+        applyPendingStreamData();
+        return;
+      }
+      streamCoalesceTimer = setTimeout(
+        applyPendingStreamData,
+        streamCoalesceMs - elapsed,
+      );
     };
 
     startRealtimeStream(instanceId);
@@ -1105,6 +1187,11 @@ export function BrowserGatewayApp({
       if (instanceRefreshTimer) {
         clearInterval(instanceRefreshTimer);
       }
+      if (streamCoalesceTimer !== undefined) {
+        clearTimeout(streamCoalesceTimer);
+        streamCoalesceTimer = undefined;
+      }
+      pendingStreamData = null;
       snapshotFetchController?.abort();
       snapshotFetchController = undefined;
       stopInitialSnapshotFallback();
@@ -1582,8 +1669,16 @@ export function BrowserGatewayApp({
       ) {
         selectTab(nextSelectedTabId);
       }
+      // The 5s refresh usually returns an identical list; skip the app-wide
+      // re-render then. `lastSeenAt` changes every poll but nothing renders it.
+      const previousInstances = instanceOptionsRef.current;
       instanceOptionsRef.current = instances;
-      setInstanceOptions(instances);
+      if (
+        serializeInstancesIgnoringLastSeen(previousInstances) !==
+        serializeInstancesIgnoringLastSeen(instances)
+      ) {
+        setInstanceOptions(instances);
+      }
       return nextSelectedTabId === BROWSER_GATEWAY_ASK_AGENT_TAB_ID
         ? null
         : nextSelectedTabId;

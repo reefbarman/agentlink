@@ -315,6 +315,16 @@ textarea {
   color: var(--vscode-tab-inactiveForeground, var(--ag-muted));
   cursor: pointer;
   opacity: 1;
+  /* Skip double-tap-zoom heuristics so taps register without delay. */
+  touch-action: manipulation;
+}
+
+/* Pressed feedback renders via the compositor even while the main thread is
+   busy, so a tap always looks acknowledged immediately. */
+.instance-tab:active:not(:disabled) {
+  background: var(--vscode-tab-hoverBackground, var(--ag-panel));
+  color: var(--vscode-tab-hoverForeground, var(--ag-text));
+  opacity: 0.75;
 }
 
 .instance-tab:first-child {
