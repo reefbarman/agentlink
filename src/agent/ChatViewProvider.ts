@@ -85,6 +85,10 @@ import type {
 } from "../approvals/webview/types.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { AgentToolCallTracker } from "./AgentToolCallTracker.js";
+import {
+  createBrowserForegroundSnapshot,
+  type BrowserForegroundSnapshot,
+} from "./browserForegroundSnapshot.js";
 import { DeltaBufferFlusher } from "./DeltaBufferFlusher.js";
 import { DIFF_VIEW_URI_SCHEME } from "../integrations/diffViewContentProvider.js";
 import { getRelativePath } from "../util/paths.js";
@@ -5623,108 +5627,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  public getBrowserProjectedForegroundState(): {
-    sessionId: string;
-    mode: string;
-    model: string;
-    streaming: boolean;
-    interrupted?: boolean;
-    statusOverride: string | null;
-    projectedMessages: ChatMessage[];
-    lastInputTokens: number;
-    lastOutputTokens: number;
-    lastCacheReadTokens: number;
-    estimatedTotalUsed: number;
-    thinkingEnabled: boolean;
-    reasoningEffort: import("./providers/types.js").ReasoningEffort;
-    messageQueue: AppState["messageQueue"];
-    questionRequest: AppState["questionRequest"];
-    detectedQuestion: AppState["detectedQuestion"];
-    todos: AppState["todos"];
-    debugInfo: AppState["debugInfo"];
-    systemPrompt: AppState["systemPrompt"];
-    loadedInstructions: AppState["loadedInstructions"];
-    restoringSession: AppState["restoringSession"];
-    contextBudget?: AppState["chatState"]["contextBudget"];
-    condenseThreshold?: AppState["chatState"]["condenseThreshold"];
-    revertRecoveryNotice: AppState["revertRecoveryNotice"];
-  } | null {
+  public getBrowserProjectedForegroundState(): BrowserForegroundSnapshot | null {
     const fg = this.sessionManager?.getForegroundSession();
     if (!fg) return null;
 
     this.ensureProjectedForegroundSession(fg);
 
-    return {
-      sessionId: fg.id,
-      mode: this.projectedForegroundState.chatState.mode,
-      model: this.projectedForegroundState.chatState.model,
-      streaming: this.projectedForegroundState.streaming,
-      interrupted: this.projectedForegroundState.chatState.interrupted,
-      statusOverride: this.projectedForegroundState.statusOverride,
-      projectedMessages: [...this.projectedForegroundState.messages],
-      lastInputTokens: this.projectedForegroundState.lastInputTokens,
-      lastOutputTokens: this.projectedForegroundState.lastOutputTokens,
-      lastCacheReadTokens: this.projectedForegroundState.lastCacheReadTokens,
-      estimatedTotalUsed: this.projectedForegroundState.estimatedTotalUsed,
-      thinkingEnabled: this.projectedForegroundState.thinkingEnabled,
-      reasoningEffort:
-        this.projectedForegroundState.chatState.reasoningEffort ??
-        (this.projectedForegroundState.thinkingEnabled ? "high" : "none"),
-      messageQueue: this.projectedForegroundState.messageQueue.map((entry) => ({
-        ...entry,
-        attachments: entry.attachments ? [...entry.attachments] : undefined,
-        images: entry.images
-          ? entry.images.map((image) => ({ ...image }))
-          : undefined,
-        documents: entry.documents
-          ? entry.documents.map((document) => ({ ...document }))
-          : undefined,
-      })),
-      questionRequest: this.projectedForegroundState.questionRequest
-        ? {
-            id: this.projectedForegroundState.questionRequest.id,
-            context: this.projectedForegroundState.questionRequest.context,
-            questions:
-              this.projectedForegroundState.questionRequest.questions.map(
-                (question) => ({ ...question }),
-              ),
-            ...(this.projectedForegroundState.questionRequest.backgroundTask
-              ? {
-                  backgroundTask:
-                    this.projectedForegroundState.questionRequest
-                      .backgroundTask,
-                }
-              : {}),
-          }
-        : null,
-      detectedQuestion: this.projectedForegroundState.detectedQuestion
-        ? {
-            ...this.projectedForegroundState.detectedQuestion,
-            options: this.projectedForegroundState.detectedQuestion.options.map(
-              (option) => ({ ...option }),
-            ),
-          }
-        : null,
-      todos: this.projectedForegroundState.todos.map((todo) => ({ ...todo })),
-      debugInfo: this.projectedForegroundState.debugInfo
-        ? { ...this.projectedForegroundState.debugInfo }
-        : null,
-      systemPrompt: this.projectedForegroundState.systemPrompt,
-      loadedInstructions: this.projectedForegroundState.loadedInstructions
-        ? this.projectedForegroundState.loadedInstructions.map((item) => ({
-            ...item,
-          }))
-        : null,
-      restoringSession: this.projectedForegroundState.restoringSession,
-      contextBudget: this.projectedForegroundState.chatState.contextBudget
-        ? { ...this.projectedForegroundState.chatState.contextBudget }
-        : undefined,
-      condenseThreshold:
-        this.projectedForegroundState.chatState.condenseThreshold,
-      revertRecoveryNotice: this.projectedForegroundState.revertRecoveryNotice
-        ? { ...this.projectedForegroundState.revertRecoveryNotice }
-        : null,
-    };
+    return createBrowserForegroundSnapshot(
+      fg.id,
+      this.projectedForegroundState,
+    );
   }
 
   public getBrowserMcpStatusInfos(): McpServerInfo[] {
