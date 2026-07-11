@@ -3,13 +3,41 @@ import * as os from "os";
 import * as path from "path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  buildLineStarts,
+  extractStructuralFile,
+  getLineNumberAtOffset,
+} from "./structuralExtractor.js";
 
-import { extractStructuralFile } from "./structuralExtractor.js";
 import { hashContent } from "./workerLib.js";
 
 function normalize(entries: unknown): unknown {
   return JSON.parse(JSON.stringify(entries));
 }
+
+describe("line offset index", () => {
+  it("maps offsets to lines across empty and trailing-newline content", () => {
+    const content = "alpha\n\ngamma\n";
+    const starts = buildLineStarts(content.split("\n"));
+
+    expect(starts).toEqual([0, 6, 7, 13]);
+    expect(
+      [-1, 0, 4, 5, 6, 7, 12, 13, content.length, content.length + 100].map(
+        (offset) => getLineNumberAtOffset(starts, offset),
+      ),
+    ).toEqual([1, 1, 1, 1, 2, 3, 3, 4, 4, 4]);
+  });
+
+  it("handles empty content and CRLF offsets", () => {
+    expect(getLineNumberAtOffset(buildLineStarts([""]), 0)).toBe(1);
+
+    const content = "one\r\ntwo";
+    const starts = buildLineStarts(content.split("\n"));
+    expect(starts).toEqual([0, 5]);
+    expect(getLineNumberAtOffset(starts, 4)).toBe(1);
+    expect(getLineNumberAtOffset(starts, 5)).toBe(2);
+  });
+});
 
 describe("extractStructuralFile", () => {
   let workspaceRoot: string;
@@ -254,6 +282,27 @@ describe("extractStructuralFile", () => {
         line: 1,
       },
     ]);
+  });
+
+  it("indexes many imports with exact early, middle, and late line numbers", () => {
+    const importCount = 10_000;
+    const content = Array.from(
+      { length: importCount },
+      (_, index) => `import value${index} from "package-${index}";`,
+    ).join("\n");
+
+    const entry = extract("src/many-imports.ts", content);
+
+    expect(entry.imports).toHaveLength(importCount);
+    expect(entry.imports[0]).toEqual(
+      expect.objectContaining({ specifier: "package-0", line: 1 }),
+    );
+    expect(entry.imports[4_999]).toEqual(
+      expect.objectContaining({ specifier: "package-4999", line: 5_000 }),
+    );
+    expect(entry.imports[9_999]).toEqual(
+      expect.objectContaining({ specifier: "package-9999", line: 10_000 }),
+    );
   });
 
   it("records metadata and language", () => {

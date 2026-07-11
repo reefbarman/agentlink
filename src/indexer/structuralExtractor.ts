@@ -45,7 +45,8 @@ export function extractStructuralFile(
 ): StructuralFileEntry {
   const language = getLanguage(options.absPath);
   const lines = options.content.split("\n");
-  const imports = extractImports(options.content, lines, options);
+  const lineStarts = buildLineStarts(lines);
+  const imports = extractImports(options.content, lines, lineStarts, options);
   const exports = extractExports(lines, options);
   const symbols = extractSymbols(lines, exports);
 
@@ -65,6 +66,7 @@ export function extractStructuralFile(
 function extractImports(
   content: string,
   lines: string[],
+  lineStarts: number[],
   options: ExtractStructuralFileOptions,
 ): StructuralImport[] {
   const imports: StructuralImport[] = [];
@@ -78,7 +80,7 @@ function extractImports(
       buildImport({
         specifier,
         kind: "static",
-        line: getLineNumberAtOffset(content, match.index ?? 0),
+        line: getLineNumberAtOffset(lineStarts, match.index ?? 0),
         imported: parseImportedNames(importClause),
         options,
       }),
@@ -93,7 +95,7 @@ function extractImports(
       buildImport({
         specifier,
         kind: "reexport",
-        line: getLineNumberAtOffset(content, match.index ?? 0),
+        line: getLineNumberAtOffset(lineStarts, match.index ?? 0),
         imported: parseNamedList(match[1]),
         options,
       }),
@@ -129,12 +131,28 @@ function extractImports(
   return dedupeImports(imports);
 }
 
-function getLineNumberAtOffset(content: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset; i++) {
-    if (content.charCodeAt(i) === 10) line++;
+export function buildLineStarts(lines: string[]): number[] {
+  const starts = Array.from({ length: lines.length }, () => 0);
+  let offset = 0;
+  for (let index = 0; index < lines.length; index++) {
+    starts[index] = offset;
+    offset += lines[index].length + 1;
   }
-  return line;
+  return starts;
+}
+
+export function getLineNumberAtOffset(
+  lineStarts: number[],
+  offset: number,
+): number {
+  let low = 0;
+  let high = lineStarts.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (lineStarts[middle] <= offset) low = middle + 1;
+    else high = middle;
+  }
+  return Math.max(1, low);
 }
 
 function extractExports(
