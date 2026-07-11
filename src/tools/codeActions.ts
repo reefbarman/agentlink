@@ -5,6 +5,7 @@ import type {
 } from "../core/capabilities/language.js";
 
 import { type ToolResult } from "../shared/types.js";
+import { createLanguageToolHandler } from "./languageToolFactory.js";
 
 // --- Get code actions ---
 
@@ -14,53 +15,25 @@ export interface LanguageCodeActionsProviders {
   codeActionsProvider?: LanguageCodeActionsProvider;
 }
 
-function unavailableGetCodeActionsResult(
-  params: GetCodeActionsParams,
-): ToolResult {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify({
-          error:
-            "Language code actions are unavailable in this runtime. Provide a LanguageCodeActionsProvider to enable get_code_actions.",
-          path: params.path,
-          line: params.line,
-          column: params.column,
-        }),
-      },
-    ],
-  };
-}
-
-export async function handleGetCodeActions(
-  params: GetCodeActionsParams,
-  sessionId: string,
-  providers: LanguageCodeActionsProviders = {},
-): Promise<ToolResult> {
-  try {
-    if (!providers.codeActionsProvider) {
-      return unavailableGetCodeActionsResult(params);
-    }
-    return await providers.codeActionsProvider.getCodeActions({
-      ...params,
-      sessionId,
-    });
-  } catch (err) {
-    if (typeof err === "object" && err !== null && "content" in err) {
-      return err as ToolResult;
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ error: message, path: params.path }),
-        },
-      ],
-    };
-  }
-}
+export const handleGetCodeActions = createLanguageToolHandler<
+  LanguageCodeActionsProvider,
+  LanguageCodeActionsProviders,
+  GetCodeActionsParams
+>({
+  getProvider: (providers) => providers.codeActionsProvider,
+  unavailablePayload: (params) => ({
+    error:
+      "Language code actions are unavailable in this runtime. Provide a LanguageCodeActionsProvider to enable get_code_actions.",
+    path: params.path,
+    line: params.line,
+    column: params.column,
+  }),
+  errorPayload: (error, params) => ({
+    error: error instanceof Error ? error.message : String(error),
+    path: params.path,
+  }),
+  invoke: (provider, params) => provider.getCodeActions(params),
+});
 
 // --- Apply code action ---
 
