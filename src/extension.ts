@@ -69,6 +69,7 @@ import { WorktreeAgentIntentStore } from "./worktree/WorktreeAgentIntentStore.js
 import { WorktreeFleetExchangeStore } from "./worktree/WorktreeFleetExchangeStore.js";
 import { createVscodeWorktreeAgentLaunchProvider } from "./adapters/vscode/worktreeAgentLaunchCapabilities.js";
 import { FleetAutomationStore } from "./agent/FleetAutomationStore.js";
+import { createFleetAutomationLifecycle } from "./agent/fleetAutomationLifecycle.js";
 import { installAgentLinkHttpDispatcher } from "./util/httpDispatcher.js";
 import { resolveWorkspaceSessionLocation } from "./agent/workspaceSessionIdentity.js";
 import {
@@ -935,32 +936,15 @@ export function activate(context: vscode.ExtensionContext): void {
   builtinApprovalPanel.onForwardApprovalIdle = () =>
     chatViewProvider.sendApprovalIdle();
 
-  const fleetAutomationStore = new FleetAutomationStore(
-    path.join(context.globalStorageUri.fsPath, "fleet-automations.json"),
-    (workflow) => agentSessionManager.startFleetWorkflow(workflow),
-  );
-  const fleetAutomationReady = fleetAutomationStore.load();
-  const removeFleetAutomationListener =
-    agentSessionManager.addFleetEventListener((_sessionId, event) => {
-      void fleetAutomationReady
-        .then(() => fleetAutomationStore.trigger(event.type))
-        .catch((error) =>
-          log(`[fleet-automation] event trigger failed: ${String(error)}`),
-        );
-    });
-  const fleetAutomationTimer = setInterval(() => {
-    void fleetAutomationReady
-      .then(() => fleetAutomationStore.runDue())
-      .catch((error) =>
-        log(`[fleet-automation] scheduled run failed: ${String(error)}`),
-      );
-  }, 30_000);
-  context.subscriptions.push({
-    dispose: () => {
-      clearInterval(fleetAutomationTimer);
-      removeFleetAutomationListener();
-    },
+  const fleetAutomationLifecycle = createFleetAutomationLifecycle({
+    store: new FleetAutomationStore(
+      path.join(context.globalStorageUri.fsPath, "fleet-automations.json"),
+      (workflow) => agentSessionManager.startFleetWorkflow(workflow),
+    ),
+    events: agentSessionManager,
+    log,
   });
+  context.subscriptions.push(fleetAutomationLifecycle);
 
   // Wire up tool dispatch context (mcpHub provided by ChatViewProvider after initialize)
   agentSessionManager.setToolContext({
@@ -1015,22 +999,11 @@ export function activate(context: vscode.ExtensionContext): void {
       ),
     onStartFleetWorkflow: (callerSessionId, request) =>
       agentSessionManager.startFleetWorkflow(request, callerSessionId),
-    onScheduleFleetAutomation: async (input) => {
-      await fleetAutomationReady;
-      return fleetAutomationStore.schedule(input);
-    },
+    onScheduleFleetAutomation: (input) =>
+      fleetAutomationLifecycle.schedule(input),
     onCollectFleetWorkflow: (workflowId, kind) =>
       agentSessionManager.collectFleetWorkflow(workflowId, kind),
-    onManageFleetAutomations: async ({ action, id }) => {
-      await fleetAutomationReady;
-      if (action === "list") return fleetAutomationStore.list();
-      if (action === "history") return fleetAutomationStore.history(id);
-      if (!id) throw new Error(`${action} requires an automation id`);
-      if (action === "enable") return fleetAutomationStore.setEnabled(id, true);
-      if (action === "disable")
-        return fleetAutomationStore.setEnabled(id, false);
-      return { removed: await fleetAutomationStore.remove(id) };
-    },
+    onManageFleetAutomations: (input) => fleetAutomationLifecycle.manage(input),
     worktreeAgentLaunchProvider: createVscodeWorktreeAgentLaunchProvider({
       globalStorageUri: context.globalStorageUri,
       onApprovalRequest: (request, sessionId) =>
