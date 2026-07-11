@@ -1341,7 +1341,8 @@ describe("AgentSessionManager background agents", () => {
       store,
     );
 
-    const restored = await mgr.restorePersistedBackgroundSessions();
+    const restored =
+      await mgr.restorePersistedBackgroundSessions("foreground-1");
 
     expect(restored).toHaveLength(1);
     expect(restored[0].fleetMetadata).toEqual(
@@ -1360,6 +1361,69 @@ describe("AgentSessionManager background agents", () => {
     expect(saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ expectedRevision: "1" }),
     );
+  });
+
+  it("only restores background sessions from the current foreground tree", async () => {
+    const summaries = ["current-bg", "historical-bg"].map((id) => ({
+      schemaVersion: 1,
+      id,
+      mode: "agent",
+      model: "gpt-5.4-pro",
+      title: id,
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: 1,
+      lastActiveAt: 1,
+      background: true,
+    }));
+    const store = {
+      list: vi.fn(() => []),
+      listAll: vi.fn(() => summaries),
+      readSession: vi.fn(async (id: string) => {
+        const summary = summaries.find((candidate) => candidate.id === id)!;
+        return {
+          ok: true,
+          revision: "1",
+          value: {
+            summary,
+            messages: [],
+            metadata: {
+              mode: summary.mode,
+              model: summary.model,
+              totalInputTokens: 0,
+              totalOutputTokens: 0,
+              fleet: {
+                schemaVersion: 1,
+                placement: "background",
+                task: summary.title,
+                rootSessionId:
+                  id === "current-bg" ? "foreground-1" : "foreground-old",
+                parentSessionId:
+                  id === "current-bg" ? "foreground-1" : "foreground-old",
+                depth: 1,
+                lifecycle: "completed",
+              },
+            },
+          },
+        };
+      }),
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    const restored =
+      await mgr.restorePersistedBackgroundSessions("foreground-1");
+
+    expect(restored.map((session) => session.id)).toEqual(["current-bg"]);
+    expect(mgr.getBgSessionInfos().map((session) => session.id)).toEqual([
+      "current-bg",
+    ]);
   });
 
   it("disables reasoning effort when the background route disables thinking", async () => {

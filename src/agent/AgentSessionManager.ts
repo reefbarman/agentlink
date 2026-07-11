@@ -2502,8 +2502,10 @@ export class AgentSessionManager {
     return session;
   }
 
-  /** Restore durable background records for Agent HQ/browser projections. */
-  async restorePersistedBackgroundSessions(): Promise<AgentSession[]> {
+  /** Restore durable background records belonging to one foreground session. */
+  async restorePersistedBackgroundSessions(
+    rootSessionId?: string,
+  ): Promise<AgentSession[]> {
     if (!this.persistence) return [];
     const restored: AgentSession[] = [];
     for (const summary of this.persistence
@@ -2513,6 +2515,13 @@ export class AgentSessionManager {
       const readResult = await this.persistence.readSession(summary.id);
       if (!readResult.ok) continue;
       const { messages, metadata } = readResult.value;
+      if (
+        rootSessionId &&
+        metadata.fleet?.rootSessionId !== rootSessionId &&
+        metadata.fleet?.parentSessionId !== rootSessionId
+      ) {
+        continue;
+      }
       const providerId = this.host.providers.tryResolveProvider(
         summary.model,
       )?.id;
