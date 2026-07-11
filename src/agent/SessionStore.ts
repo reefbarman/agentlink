@@ -5,11 +5,11 @@ import * as path from "path";
 import type { AgentMessage, SessionInfo } from "./types.js";
 import type {
   CheckpointState,
-  PersistedFleetMetadata,
-  PersistedSessionRunState,
   PersistResult,
+  PersistedFleetMetadata,
   PersistedSessionMetadata,
   PersistedSessionRecord,
+  PersistedSessionRunState,
   PersistenceRevision,
   RevertRecoveryState,
   SessionPersistenceIdentity,
@@ -50,6 +50,11 @@ interface MessagesFile {
   schemaVersion: number;
   messages: AgentMessage[];
 }
+
+type ClassifiedJsonRead<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: "not_found" }
+  | { ok: false; reason: "corrupt" | "io_error"; message: string };
 
 interface MetadataFile {
   schemaVersion: number;
@@ -499,33 +504,23 @@ export class SessionStore implements SessionPersistenceProvider {
   // Internal read/write helpers
   // ---------------------------------------------------------------------------
 
-  private readMessagesFile(
-    sessionId: string,
-  ):
-    | { ok: true; value: MessagesFile }
-    | { ok: false; reason: "not_found" }
-    | { ok: false; reason: "corrupt" | "io_error"; message: string } {
-    const file = path.join(this.historyDir, sessionId, "messages.json");
+  private readJsonFile<T>(
+    file: string,
+    isValid: (value: unknown) => value is T,
+    invalidMessage: string,
+  ): ClassifiedJsonRead<T> {
     try {
-      const raw = fs.readFileSync(file, "utf-8");
-      const parsed = JSON.parse(raw) as MessagesFile;
-      if (!Array.isArray(parsed.messages)) {
-        return {
-          ok: false,
-          reason: "corrupt",
-          message: `Invalid messages file for session ${sessionId}`,
-        };
+      const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf-8"));
+      if (!isValid(parsed)) {
+        return { ok: false, reason: "corrupt", message: invalidMessage };
       }
       return { ok: true, value: parsed };
     } catch (error) {
-      if (this.isNotFoundError(error))
+      if (this.isNotFoundError(error)) {
         return { ok: false, reason: "not_found" };
+      }
       if (error instanceof SyntaxError) {
-        return {
-          ok: false,
-          reason: "corrupt",
-          message: error.message,
-        };
+        return { ok: false, reason: "corrupt", message: error.message };
       }
       return {
         ok: false,
@@ -535,40 +530,31 @@ export class SessionStore implements SessionPersistenceProvider {
     }
   }
 
+  private readMessagesFile(
+    sessionId: string,
+  ): ClassifiedJsonRead<MessagesFile> {
+    return this.readJsonFile(
+      path.join(this.historyDir, sessionId, "messages.json"),
+      (value): value is MessagesFile =>
+        typeof value === "object" &&
+        value !== null &&
+        Array.isArray((value as MessagesFile).messages),
+      `Invalid messages file for session ${sessionId}`,
+    );
+  }
+
   private readMetadataFile(
     sessionId: string,
-  ):
-    | { ok: true; value: MetadataFile }
-    | { ok: false; reason: "not_found" }
-    | { ok: false; reason: "corrupt" | "io_error"; message: string } {
-    const file = path.join(this.historyDir, sessionId, "metadata.json");
-    try {
-      const raw = fs.readFileSync(file, "utf-8");
-      const parsed = JSON.parse(raw) as MetadataFile;
-      if (typeof parsed.mode !== "string" || typeof parsed.model !== "string") {
-        return {
-          ok: false,
-          reason: "corrupt",
-          message: `Invalid metadata file for session ${sessionId}`,
-        };
-      }
-      return { ok: true, value: parsed };
-    } catch (error) {
-      if (this.isNotFoundError(error))
-        return { ok: false, reason: "not_found" };
-      if (error instanceof SyntaxError) {
-        return {
-          ok: false,
-          reason: "corrupt",
-          message: error.message,
-        };
-      }
-      return {
-        ok: false,
-        reason: "io_error",
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
+  ): ClassifiedJsonRead<MetadataFile> {
+    return this.readJsonFile(
+      path.join(this.historyDir, sessionId, "metadata.json"),
+      (value): value is MetadataFile =>
+        typeof value === "object" &&
+        value !== null &&
+        typeof (value as MetadataFile).mode === "string" &&
+        typeof (value as MetadataFile).model === "string",
+      `Invalid metadata file for session ${sessionId}`,
+    );
   }
 
   private readCurrentRevision(

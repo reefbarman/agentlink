@@ -876,6 +876,95 @@ describe("SessionStore", () => {
     );
   });
 
+  it("classifies structurally invalid session files as corrupt", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    await store.saveSession({
+      session: createRecord(),
+      expectedRevision: null,
+    });
+    const sessionDir = path.join(tmpDir, ".agentlink", "history", "session-1");
+    const messagesFile = path.join(sessionDir, "messages.json");
+    const metadataFile = path.join(sessionDir, "metadata.json");
+
+    fs.writeFileSync(messagesFile, JSON.stringify({ messages: null }), "utf-8");
+    await expect(store.readSession("session-1")).resolves.toEqual({
+      ok: false,
+      reason: "corrupt",
+      message: "Invalid messages file for session session-1",
+    });
+
+    fs.writeFileSync(
+      messagesFile,
+      JSON.stringify({ schemaVersion: 1, messages: [] }),
+      "utf-8",
+    );
+    fs.writeFileSync(metadataFile, JSON.stringify({ mode: "code" }), "utf-8");
+    await expect(store.readSession("session-1")).resolves.toEqual({
+      ok: false,
+      reason: "corrupt",
+      message: "Invalid metadata file for session session-1",
+    });
+  });
+
+  it("preserves not-found classification for missing session files", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
+    const store = new SessionStore(tmpDir);
+    await store.saveSession({
+      session: createRecord(),
+      expectedRevision: null,
+    });
+
+    fs.rmSync(
+      path.join(tmpDir, ".agentlink", "history", "session-1", "metadata.json"),
+    );
+
+    await expect(store.readSession("session-1")).resolves.toEqual({
+      ok: false,
+      reason: "not_found",
+    });
+  });
+
+  it.skipIf(process.platform === "freebsd")(
+    "classifies non-syntax session file failures as I/O errors",
+    async () => {
+      tmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "agentlink-session-store-"),
+      );
+      const store = new SessionStore(tmpDir);
+      await store.saveSession({
+        session: createRecord(),
+        expectedRevision: null,
+      });
+      const sessionDir = path.join(
+        tmpDir,
+        ".agentlink",
+        "history",
+        "session-1",
+      );
+      const messagesFile = path.join(sessionDir, "messages.json");
+      const metadataFile = path.join(sessionDir, "metadata.json");
+
+      fs.rmSync(messagesFile);
+      fs.mkdirSync(messagesFile);
+      await expect(store.readSession("session-1")).resolves.toEqual(
+        expect.objectContaining({ ok: false, reason: "io_error" }),
+      );
+
+      fs.rmSync(messagesFile, { recursive: true });
+      fs.writeFileSync(
+        messagesFile,
+        JSON.stringify({ schemaVersion: 1, messages: [] }),
+        "utf-8",
+      );
+      fs.rmSync(metadataFile);
+      fs.mkdirSync(metadataFile);
+      await expect(store.readSession("session-1")).resolves.toEqual(
+        expect.objectContaining({ ok: false, reason: "io_error" }),
+      );
+    },
+  );
+
   it("migrates persisted titles to strip attachment/file content artifacts", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-session-store-"));
 
