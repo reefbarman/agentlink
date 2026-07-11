@@ -9,10 +9,7 @@ import {
   disposeTerminalManager,
   initializeTerminalManager,
 } from "./integrations/TerminalManager.js";
-import {
-  resolveCurrentDiff,
-  showDiffMoreOptions,
-} from "./integrations/DiffViewProvider.js";
+import { registerDiffViewCommands } from "./integrations/diffViewCommands.js";
 import { registerDiffViewContentProvider } from "./integrations/diffViewContentProvider.js";
 import { SidebarProvider } from "./sidebar/SidebarProvider.js";
 import {
@@ -1497,15 +1494,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Commands
   context.subscriptions.push(
-    vscode.commands.registerCommand("agentlink.acceptDiff", () =>
-      resolveCurrentDiff("accept"),
-    ),
-    vscode.commands.registerCommand("agentlink.acceptDiffMore", () =>
-      showDiffMoreOptions(),
-    ),
-    vscode.commands.registerCommand("agentlink.rejectDiff", () =>
-      resolveCurrentDiff("reject"),
-    ),
+    ...registerDiffViewCommands(),
     vscode.commands.registerCommand("agentlink.addTrustedCommand", () =>
       addTrustedCommandViaUI(),
     ),
