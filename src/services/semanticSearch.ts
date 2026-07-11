@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { createHash } from "crypto";
 import picomatch from "picomatch";
 
 import {
@@ -18,6 +17,7 @@ import {
   parseRipgrepOutput,
 } from "../util/ripgrep.js";
 import { sleep } from "../util/sleep.js";
+import { getAlCollectionName } from "../indexer/collectionName.js";
 
 import { type ToolResult } from "../shared/types.js";
 import { getSemanticReadinessMessage } from "../shared/semanticReadiness.js";
@@ -161,14 +161,6 @@ function prefixResultPaths(
       },
     };
   });
-}
-
-// --- Collection name derivation ---
-
-/** AgentLink collection name (al- prefix) */
-export function getAlCollectionName(workspacePath: string): string {
-  const hash = createHash("sha256").update(workspacePath).digest("hex");
-  return `al-${hash.substring(0, 16)}`;
 }
 
 // --- OpenAI Embeddings via fetch ---

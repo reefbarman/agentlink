@@ -9,7 +9,6 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import { fork, spawn, type ChildProcess } from "child_process";
-import { createHash } from "crypto";
 import picomatch from "picomatch";
 import { openAiCodexAuthManager } from "../agent/providers/index.js";
 import type {
@@ -28,6 +27,7 @@ import {
   getSemanticReadinessMessage,
 } from "../shared/semanticReadiness.js";
 import { getWorkspaceRootForPath, getWorkspaceRoots } from "../util/paths.js";
+import { getAlCollectionName } from "./collectionName.js";
 
 // --- Public types ---
 
@@ -267,7 +267,7 @@ export class IndexerManager implements vscode.Disposable {
       for (const workspaceRoot of workspaceRoots) {
         if (this.cancelRequested) break;
 
-        const collectionName = this.getCollectionName(workspaceRoot);
+        const collectionName = getAlCollectionName(workspaceRoot);
         const cachePath = this.getCachePath(collectionName);
         const files = discoveredByRoot.get(workspaceRoot) ?? [];
         const folder = vscode.workspace.getWorkspaceFolder(
@@ -784,7 +784,7 @@ export class IndexerManager implements vscode.Disposable {
 
     try {
       for (const { workspaceRoot, added, removed } of filteredChanges) {
-        const collectionName = this.getCollectionName(workspaceRoot);
+        const collectionName = getAlCollectionName(workspaceRoot);
         const cachePath = this.getCachePath(collectionName);
         const stats = await this.runWorkerJob({
           type: "incrementalUpdate",
@@ -1057,11 +1057,6 @@ export class IndexerManager implements vscode.Disposable {
 
   private getWorkspaceRoots(): string[] {
     return getWorkspaceRoots();
-  }
-
-  private getCollectionName(workspacePath: string): string {
-    const hash = createHash("sha256").update(workspacePath).digest("hex");
-    return `al-${hash.substring(0, 16)}`;
   }
 
   private getCachePath(collectionName: string): string {

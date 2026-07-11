@@ -21,10 +21,6 @@ import {
   getSymbolOutline,
 } from "../../tools/readFile.js";
 import {
-  getAlCollectionName,
-  semanticSearch,
-} from "../../services/semanticSearch.js";
-import {
   getContextDiagnosticsSummary,
   getContextDocumentSymbols,
   getContextGitStatus,
@@ -44,8 +40,10 @@ import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
 import { WorkingSetStore } from "../../tools/context/WorkingSetStore.js";
 import { approveOutsideWorkspaceAccess } from "../../tools/pathAccessUI.js";
+import { getAlCollectionName } from "../../indexer/collectionName.js";
 import { isAgentlinkTmpArtifact } from "../../util/agentlinkTmpArtifacts.js";
 import { resolveAndOpenDocument } from "../../tools/languageFeatures.js";
+import { semanticSearch } from "../../services/semanticSearch.js";
 
 export function createVscodeWorkspaceFileProvider(): WorkspaceFileProvider {
   return {

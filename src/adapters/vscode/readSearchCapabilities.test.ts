@@ -21,9 +21,9 @@ vi.mock("../../tools/pathAccessUI.js", () => ({
 }));
 
 const semanticSearch = vi.hoisted(() => vi.fn());
-vi.mock("../../services/semanticSearch.js", () => ({
+vi.mock("../../services/semanticSearch.js", () => ({ semanticSearch }));
+vi.mock("../../indexer/collectionName.js", () => ({
   getAlCollectionName: vi.fn((workspaceRoot: string) => `al-${workspaceRoot}`),
-  semanticSearch,
 }));
 
 const resolveAndValidatePath = vi.hoisted(() => vi.fn());
