@@ -19,6 +19,90 @@ describe("validateCommand", () => {
     });
   });
 
+  describe("reading files created earlier in the same command", () => {
+    it("allows cat of a file redirected to by an earlier sub-command", () => {
+      expect(
+        validateCommand(
+          "curl -s http://localhost:4823/health > /tmp/health.json && cat /tmp/health.json",
+        ),
+      ).toBeNull();
+    });
+
+    it("allows cat after a semicolon-separated redirect", () => {
+      expect(
+        validateCommand("some-tool --dump > /tmp/out.txt; cat /tmp/out.txt"),
+      ).toBeNull();
+    });
+
+    it("allows cat of an inline redirect target (no space)", () => {
+      expect(
+        validateCommand("some-tool >/tmp/out.json && cat /tmp/out.json"),
+      ).toBeNull();
+    });
+
+    it("allows cat of an append-redirect target", () => {
+      expect(
+        validateCommand("some-tool >> /tmp/out.log && cat /tmp/out.log"),
+      ).toBeNull();
+    });
+
+    it("allows cat of a stderr-redirect target", () => {
+      expect(
+        validateCommand("some-tool 2> /tmp/err.log && cat /tmp/err.log"),
+      ).toBeNull();
+    });
+
+    it("allows cat of a quoted redirect target", () => {
+      expect(
+        validateCommand(
+          'some-tool > "/tmp/my out.json" && cat "/tmp/my out.json"',
+        ),
+      ).toBeNull();
+    });
+
+    it("allows tail of a file redirected to by an earlier sub-command", () => {
+      expect(
+        validateCommand("some-tool > /tmp/out.log && tail -n 20 /tmp/out.log"),
+      ).toBeNull();
+    });
+
+    it("allows grep of a file redirected to by an earlier sub-command", () => {
+      expect(
+        validateCommand("some-tool > /tmp/out.log && grep error /tmp/out.log"),
+      ).toBeNull();
+    });
+
+    it("still rejects cat of a different file", () => {
+      const result = validateCommand(
+        "some-tool > /tmp/a.json && cat /tmp/b.json",
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("read_file");
+    });
+
+    it("still rejects cat that runs before the redirect", () => {
+      const result = validateCommand(
+        "cat /tmp/out.json && some-tool > /tmp/out.json",
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("read_file");
+    });
+
+    it("still rejects cat mixing created and pre-existing files", () => {
+      const result = validateCommand(
+        "some-tool > /tmp/a.json && cat /tmp/a.json /tmp/b.json",
+      );
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("read_file");
+    });
+
+    it("does not treat FD duplication as a redirect target", () => {
+      const result = validateCommand("some-tool 2>&1 && cat /tmp/out.json");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain("read_file");
+    });
+  });
+
   describe("cat (write context — heredoc/redirect)", () => {
     it("rejects cat with heredoc but suggests write_file/apply_diff", () => {
       const result = validateCommand(

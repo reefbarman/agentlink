@@ -107,7 +107,19 @@ const PDF_READING_COMMANDS = new Set([
 function checkDirectFileCommands(command: string): ValidationResult | null {
   const subCommands = splitOnCompoundOperators(command);
 
-  for (const sub of subCommands) {
+  // Redirect targets written by sub-commands before the current one. A later
+  // sub-command reading such a file back (e.g. `cmd > /tmp/out.json && cat
+  // /tmp/out.json`) is displaying this command's own output — read_file can't
+  // be suggested because the file doesn't exist until the command runs.
+  const targetsSoFar = new Set<string>();
+  const priorRedirectTargets: Set<string>[] = subCommands.map((sub) => {
+    const prior = new Set(targetsSoFar);
+    for (const target of findRedirectTargets(sub)) targetsSoFar.add(target);
+    return prior;
+  });
+
+  for (let subIndex = 0; subIndex < subCommands.length; subIndex++) {
+    const sub = subCommands[subIndex];
     const trimmed = sub.trim();
     if (!trimmed) continue;
 
@@ -249,6 +261,25 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
       }
 
       // Bare sed with no file (reads stdin) — unlikely but not harmful
+      continue;
+    }
+
+    // Allow reading back a file that an earlier sub-command in this same
+    // compound command created via output redirection — the file doesn't
+    // exist until the command runs, so read_file/search_files can't be used.
+    const fileArgs =
+      cmd === "cat"
+        ? tokens
+            .slice(1)
+            .filter((t) => !t.startsWith("-"))
+            .map(stripQuotes)
+        : [findFileArg(tokens.slice(1), cmd === "grep")].filter(
+            (f): f is string => f !== null,
+          );
+    if (
+      fileArgs.length > 0 &&
+      fileArgs.every((f) => priorRedirectTargets[subIndex].has(f))
+    ) {
       continue;
     }
 
@@ -486,6 +517,32 @@ function findSedFileArg(args: string[]): string | null {
   }
 
   return null;
+}
+
+/**
+ * Extract output-redirection targets (`> file`, `>> file`, `2> file`,
+ * `&> file`, `>file`) from a command segment. FD duplications like `2>&1`
+ * are ignored.
+ */
+function findRedirectTargets(segment: string): string[] {
+  const tokens = tokenize(segment);
+  const targets: string[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const match = tokens[i].match(/^(?:\d*|&)>{1,2}(.*)$/);
+    if (!match) continue;
+
+    const inline = match[1];
+    if (inline.startsWith("&")) continue; // FD dup like 2>&1, >&2
+    if (inline) {
+      targets.push(stripQuotes(inline));
+    } else if (i + 1 < tokens.length) {
+      targets.push(stripQuotes(tokens[i + 1]));
+      i++;
+    }
+  }
+
+  return targets;
 }
 
 function findTeeFileTargets(args: string[]): string[] {
