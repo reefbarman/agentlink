@@ -14,6 +14,7 @@ import type { OnApprovalRequest } from "../shared/types.js";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
 import { randomUUID } from "crypto";
 import { sleep } from "../util/sleep.js";
+import { waitForDiagnosticsQuiescence } from "./diagnosticsQuiescence.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
 export { FileLockTimeoutError, withFileLock } from "../util/fileLock.js";
@@ -679,71 +680,15 @@ export class DiffViewProvider {
   }
 
   private async waitForDiagnostics(): Promise<string | undefined> {
-    return new Promise<string | undefined>((resolve) => {
-      let settled = false;
-      let debounce: ReturnType<typeof setTimeout> | undefined;
-
-      const settle = () => {
-        if (settled) return;
-        settled = true;
-        if (debounce) clearTimeout(debounce);
-        if (graceTimer) clearTimeout(graceTimer);
-        disposable.dispose();
-        clearTimeout(timer);
-
-        const postDiagnostics = vscode.languages.getDiagnostics();
-        const newProblems = getNewDiagnostics(
-          this.preDiagnostics,
-          postDiagnostics,
-        );
-
-        const errorDiags = newProblems.filter(([, diags]) =>
-          diags.some((d) => d.severity === vscode.DiagnosticSeverity.Error),
-        );
-
-        if (errorDiags.length === 0) {
-          resolve(undefined);
-          return;
-        }
-
-        const lines: string[] = [];
-        for (const [, diags] of errorDiags) {
-          for (const diag of diags) {
-            if (diag.severity !== vscode.DiagnosticSeverity.Error) continue;
-            const line = diag.range.start.line + 1;
-            lines.push(`Line ${line}: ${diag.message}`);
+    return waitForDiagnosticsQuiescence({
+      delayMs: this.diagnosticDelay,
+      subscribe: (onEvent) =>
+        vscode.languages.onDidChangeDiagnostics((event) => {
+          if (event.uris.some((uri) => uri.fsPath === this.absolutePath)) {
+            onEvent();
           }
-        }
-        resolve(lines.join("\n"));
-      };
-
-      // Listen for diagnostic changes on our file.
-      // Debounce: the first event is often the language server clearing stale
-      // diagnostics before reanalyzing. Wait for events to stabilize before
-      // collecting, so we don't miss errors that arrive in a subsequent event.
-      const DEBOUNCE_MS = 300;
-      const disposable = vscode.languages.onDidChangeDiagnostics((e) => {
-        if (e.uris.some((u) => u.fsPath === this.absolutePath)) {
-          // First diagnostics arrived — hand off to the debounce.
-          if (graceTimer) {
-            clearTimeout(graceTimer);
-            graceTimer = undefined;
-          }
-          if (debounce) clearTimeout(debounce);
-          debounce = setTimeout(settle, DEBOUNCE_MS);
-        }
-      });
-
-      // If no diagnostics arrive within this grace window, assume the edit was
-      // clean and settle early instead of waiting out the full hard timeout.
-      const FIRST_EVENT_GRACE_MS = Math.min(this.diagnosticDelay, 500);
-      let graceTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(
-        settle,
-        FIRST_EVENT_GRACE_MS,
-      );
-
-      // Hard timeout fallback
-      const timer = setTimeout(settle, this.diagnosticDelay);
+        }),
+      collect: () => collectNewDiagnosticErrors(this.preDiagnostics),
     });
   }
 
@@ -867,6 +812,25 @@ function getNewDiagnostics(
   return result;
 }
 
+function collectNewDiagnosticErrors(
+  preDiagnostics: [vscode.Uri, vscode.Diagnostic[]][],
+): string | undefined {
+  const newProblems = getNewDiagnostics(
+    preDiagnostics,
+    vscode.languages.getDiagnostics(),
+  );
+  const lines: string[] = [];
+  for (const [, diagnostics] of newProblems) {
+    for (const diagnostic of diagnostics) {
+      if (diagnostic.severity !== vscode.DiagnosticSeverity.Error) continue;
+      lines.push(
+        `Line ${diagnostic.range.start.line + 1}: ${diagnostic.message}`,
+      );
+    }
+  }
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
 /**
  * Poll for the visible file editor backing a diff view instead of blocking on a
  * fixed delay. VS Code typically reports the editor within a few tens of
@@ -921,74 +885,17 @@ export function snapshotDiagnostics(filePath: string): {
 
   return {
     collectNewErrors(delayMs: number): Promise<string | undefined> {
-      return new Promise<string | undefined>((resolve) => {
-        let settled = false;
-        let debounce: ReturnType<typeof setTimeout> | undefined;
-
-        const settle = () => {
-          if (settled) return;
-          settled = true;
-          if (debounce) clearTimeout(debounce);
-          if (graceTimer) clearTimeout(graceTimer);
-          lateDisposable.dispose();
-          disposable.dispose();
-          clearTimeout(timer);
-
-          const postDiagnostics = vscode.languages.getDiagnostics();
-          const newProblems = getNewDiagnostics(
-            preDiagnostics,
-            postDiagnostics,
-          );
-
-          const errorDiags = newProblems.filter(([, diags]) =>
-            diags.some((d) => d.severity === vscode.DiagnosticSeverity.Error),
-          );
-
-          if (errorDiags.length === 0) {
-            resolve(undefined);
-            return;
-          }
-
-          const lines: string[] = [];
-          for (const [, diags] of errorDiags) {
-            for (const diag of diags) {
-              if (diag.severity !== vscode.DiagnosticSeverity.Error) continue;
-              const line = diag.range.start.line + 1;
-              lines.push(`Line ${line}: ${diag.message}`);
+      return waitForDiagnosticsQuiescence({
+        delayMs,
+        hadEvent: gotEvent,
+        subscribe: (onEvent) =>
+          vscode.languages.onDidChangeDiagnostics((event) => {
+            if (event.uris.some((uri) => uri.fsPath === filePath)) {
+              onEvent();
             }
-          }
-          resolve(lines.join("\n"));
-        };
-
-        // If we already received events before collectNewErrors was called,
-        // start the debounce immediately so we settle soon.
-        const DEBOUNCE_MS = 300;
-        let graceTimer: ReturnType<typeof setTimeout> | undefined;
-        if (gotEvent) {
-          debounce = setTimeout(settle, DEBOUNCE_MS);
-        } else {
-          // No diagnostics were observed during the write — assume the edit was
-          // clean and settle after a short grace window rather than waiting out
-          // the full hard timeout. If diagnostics do arrive, the listener below
-          // cancels this and hands off to the debounce.
-          const FIRST_EVENT_GRACE_MS = Math.min(delayMs, 500);
-          graceTimer = setTimeout(settle, FIRST_EVENT_GRACE_MS);
-        }
-
-        // Continue listening for new events with debounce
-        const lateDisposable = vscode.languages.onDidChangeDiagnostics((e) => {
-          if (e.uris.some((u) => u.fsPath === filePath)) {
-            if (graceTimer) {
-              clearTimeout(graceTimer);
-              graceTimer = undefined;
-            }
-            if (debounce) clearTimeout(debounce);
-            debounce = setTimeout(settle, DEBOUNCE_MS);
-          }
-        });
-
-        // Hard timeout fallback
-        const timer = setTimeout(settle, delayMs);
+          }),
+        collect: () => collectNewDiagnosticErrors(preDiagnostics),
+        eagerDisposables: [disposable],
       });
     },
   };
