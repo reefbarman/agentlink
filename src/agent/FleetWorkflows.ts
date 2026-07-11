@@ -129,6 +129,10 @@ export type FleetResultEnvelope =
         path?: string;
         line?: number;
       }>;
+      /** What was actually reviewed, e.g. a commit range or file list. */
+      reviewedScope?: string;
+      /** True when the requested diff was empty or missing, so an empty findings list is not a clean review. */
+      emptyDiff?: boolean;
     }
   | { type: "patch"; summary: string; files: string[]; verification?: string }
   | {
@@ -182,6 +186,10 @@ export function isFleetResultEnvelope(
   }
   if (result.type === "review_findings") {
     return (
+      (result.reviewedScope === undefined ||
+        typeof result.reviewedScope === "string") &&
+      (result.emptyDiff === undefined ||
+        typeof result.emptyDiff === "boolean") &&
       Array.isArray(result.findings) &&
       result.findings.every((finding) => {
         if (!finding || typeof finding !== "object") return false;
@@ -233,6 +241,7 @@ export function scoreFleetCandidate(result: FleetResultEnvelope): number {
     );
   }
   if (result.type === "review_findings") {
+    if (result.emptyDiff) return 0;
     return Math.max(0, 50 - result.findings.length);
   }
   return Math.min(25, result.text.trim().length / 100);
@@ -245,11 +254,15 @@ export function withFleetResultInstruction(
   if (!expected || expected === "text") return message;
   const shapes = {
     review_findings:
-      '{"type":"review_findings","findings":[{"severity":"critical|high|medium|low","message":"...","path":"optional","line":1}]}',
+      '{"type":"review_findings","findings":[{"severity":"critical|high|medium|low","message":"...","path":"optional","line":1}],"reviewedScope":"what was actually reviewed, e.g. a commit range or file list","emptyDiff":false}',
     patch:
       '{"type":"patch","summary":"...","files":["..."],"verification":"optional"}',
     verification:
       '{"type":"verification","passed":true,"summary":"...","screenshots":["optional paths"],"logs":["optional evidence"]}',
   } as const;
-  return `${message}\n\nReturn the final answer as JSON matching this exact result envelope: ${shapes[expected]}`;
+  const guidance =
+    expected === "review_findings"
+      ? " Before reviewing, resolve the exact change set you were asked to review and describe it in reviewedScope. If that change set is empty or cannot be found (for example the changes were already committed, stashed, or reverted), set emptyDiff to true and explain what you checked in reviewedScope — never return an empty findings list that is indistinguishable from a clean review."
+      : "";
+  return `${message}\n\nReturn the final answer as JSON matching this exact result envelope: ${shapes[expected]}${guidance}`;
 }

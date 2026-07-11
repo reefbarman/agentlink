@@ -481,7 +481,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         message: {
           type: "string",
           description:
-            "Full instruction for the background agent. Be specific and self-contained. For writable work, include explicit owned files/directories, files to avoid, allowed commands/tests, and how to report conflicts.",
+            "Full instruction for the background agent. Be specific and self-contained. For writable work, include explicit owned files/directories, files to avoid, allowed commands/tests, and how to report conflicts. For review work, pin the review target by value — an explicit commit range (e.g. abc123..HEAD) or the diff content itself — never by reference like 'the current uncommitted diff': the workspace can change (e.g. a commit lands) between spawn and execution, silently emptying the review scope.",
         },
         mode: {
           type: "string",
@@ -524,6 +524,8 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         expectedResult: {
           type: "string",
           enum: ["text", "review_findings", "patch", "verification"],
+          description:
+            "Structured result envelope the agent must return. review_findings envelopes report reviewedScope (what was actually reviewed) and emptyDiff (true when the requested change set was empty or missing) — check emptyDiff before treating an empty findings list as a clean review.",
         },
         budget: {
           type: "object",

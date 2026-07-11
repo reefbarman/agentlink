@@ -76,6 +76,31 @@ describe("fleet workflows", () => {
     );
   });
 
+  it("distinguishes empty-diff reviews from clean reviews", () => {
+    const emptyDiffEnvelope = {
+      type: "review_findings" as const,
+      findings: [],
+      reviewedScope: "git diff HEAD -- src/indexer was empty",
+      emptyDiff: true,
+    };
+    expect(
+      parseFleetResultEnvelope(
+        "review_findings",
+        JSON.stringify(emptyDiffEnvelope),
+      ),
+    ).toEqual(emptyDiffEnvelope);
+    expect(scoreFleetCandidate(emptyDiffEnvelope)).toBe(0);
+    expect(
+      scoreFleetCandidate({ type: "review_findings", findings: [] }),
+    ).toBeGreaterThan(scoreFleetCandidate(emptyDiffEnvelope));
+    const instruction = withFleetResultInstruction(
+      "review_findings",
+      "Review it",
+    );
+    expect(instruction).toContain("emptyDiff");
+    expect(instruction).toContain("reviewedScope");
+  });
+
   it("rejects malformed envelopes and artifact paths outside the workspace", () => {
     const raw = JSON.stringify({
       type: "verification",
@@ -93,6 +118,16 @@ describe("fleet workflows", () => {
         JSON.stringify({
           type: "review_findings",
           findings: [{ severity: "urgent", message: "bad" }],
+        }),
+      ).type,
+    ).toBe("text");
+    expect(
+      parseFleetResultEnvelope(
+        "review_findings",
+        JSON.stringify({
+          type: "review_findings",
+          findings: [],
+          emptyDiff: "yes",
         }),
       ).type,
     ).toBe("text");

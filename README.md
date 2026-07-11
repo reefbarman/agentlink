@@ -864,15 +864,18 @@ Good examples:
 
 For writable background work, include explicit ownership boundaries in `message`: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts.
 
-| Parameter   | Type    | Description                                                                                                                       |
-| ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `task`      | string  | Short label shown in UI                                                                                                           |
-| `message`   | string  | Full instruction for the background agent, including scope boundaries for writable work                                           |
-| `mode`      | string? | Optional mode override (`code`, `architect`, `ask`, `debug`, `review`)                                                            |
-| `model`     | string? | Optional explicit model override                                                                                                  |
-| `provider`  | string? | Optional provider preference/constraint                                                                                           |
-| `taskClass` | string? | Routing profile key (e.g. `review_code`, `review_plan`, `readonly-research`, `research`, `debug`, `explore`, `design`, `general`) |
-| `modelTier` | string? | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`)                                                            |
+For review delegations (`expectedResult: "review_findings"`), pin the review target by value — an explicit commit range (e.g. `abc123..HEAD`) or the diff content itself — rather than by reference like "the current uncommitted diff". The workspace can change between spawn and execution (for example a commit lands), silently emptying the review scope. The `review_findings` envelope includes `reviewedScope` (what was actually reviewed) and `emptyDiff` (true when the requested change set was empty or missing), so consumers should check `emptyDiff` before treating an empty findings list as a clean review.
+
+| Parameter        | Type    | Description                                                                                                                       |
+| ---------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `task`           | string  | Short label shown in UI                                                                                                           |
+| `message`        | string  | Full instruction for the background agent, including scope boundaries for writable work and a pinned target for review work       |
+| `mode`           | string? | Optional mode override (`code`, `architect`, `ask`, `debug`, `review`)                                                            |
+| `model`          | string? | Optional explicit model override                                                                                                  |
+| `provider`       | string? | Optional provider preference/constraint                                                                                           |
+| `taskClass`      | string? | Routing profile key (e.g. `review_code`, `review_plan`, `readonly-research`, `research`, `debug`, `explore`, `design`, `general`) |
+| `modelTier`      | string? | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`)                                                            |
+| `expectedResult` | string? | Structured result envelope (`text`, `review_findings`, `patch`, `verification`)                                                   |
 
 Returns structured JSON including:
 
