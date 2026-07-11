@@ -3647,14 +3647,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
     manager.onFleetEvent = (sessionId, event) => {
       this.postMessage({ type: "agentFleetEvent", sessionId, event });
-      const task = manager.getSession(sessionId)?.title ?? "Background agent";
-      if (event.type === "approval" || event.type === "question") {
-        void vscode.window.showInformationMessage(`${task}: ${event.summary}`);
-      } else if (event.type === "failed" || event.type === "budget_warning") {
-        void vscode.window.showWarningMessage(`${task}: ${event.summary}`);
-      } else if (event.type === "completed") {
-        void vscode.window.showInformationMessage(`${task} completed`);
-      }
     };
   }
 
