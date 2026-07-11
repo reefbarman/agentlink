@@ -14,7 +14,7 @@ import type {
 } from "./providers/types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AgentEngine } from "./AgentEngine.js";
+import { AgentEngine, truncateToolText } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
@@ -25,6 +25,8 @@ import {
 } from "./toolAdapter.js";
 
 const mocks = vi.hoisted(() => ({
+  mockMkdir: vi.fn<typeof import("fs/promises").mkdir>(),
+  mockWriteFile: vi.fn<typeof import("fs/promises").writeFile>(),
   mockBuildSystemPrompt: vi.fn().mockResolvedValue("mock system prompt"),
   mockBuildPromptArtifacts: vi.fn().mockResolvedValue({
     systemPrompt: "mock system prompt",
@@ -40,6 +42,22 @@ const mocks = vi.hoisted(() => ({
   mockInjectSyntheticToolResults: vi.fn((messages: unknown[]) => messages),
   mockEnforceToolResultAdjacency: vi.fn((messages: unknown[]) => messages),
 }));
+
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  mocks.mockMkdir.mockImplementation(actual.mkdir);
+  mocks.mockWriteFile.mockImplementation(actual.writeFile);
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      mkdir: mocks.mockMkdir,
+      writeFile: mocks.mockWriteFile,
+    },
+    mkdir: mocks.mockMkdir,
+    writeFile: mocks.mockWriteFile,
+  };
+});
 
 vi.mock("./systemPrompt.js", () => ({
   buildSystemPrompt: mocks.mockBuildSystemPrompt,
@@ -191,6 +209,37 @@ async function collectEvents(
   }
   return events;
 }
+
+describe("truncateToolText", () => {
+  it("returns pass-through text without scheduling a temp-file write", () => {
+    expect(truncateToolText("short output", 20, "call_short")).toBe(
+      "short output",
+    );
+    expect(mocks.mockMkdir).not.toHaveBeenCalled();
+    expect(mocks.mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("schedules the original truncated text and emits the exact temp-file suffix", async () => {
+    const text = `${"head".repeat(10_001)}\ntail`;
+    mocks.mockMkdir.mockResolvedValueOnce(undefined);
+    mocks.mockWriteFile.mockResolvedValueOnce();
+
+    const result = truncateToolText(text, 40_000, "call_large");
+    await vi.waitFor(() => expect(mocks.mockWriteFile).toHaveBeenCalledOnce());
+
+    expect(mocks.mockMkdir).toHaveBeenCalledWith("/tmp/agentlink-results", {
+      recursive: true,
+    });
+    expect(mocks.mockWriteFile).toHaveBeenCalledWith(
+      "/tmp/agentlink-results/call_large.txt",
+      text,
+      "utf-8",
+    );
+    expect(result).toContain(
+      "\nFull output saved to: /tmp/agentlink-results/call_large.txt — use read_file to access the complete result.\n\n",
+    );
+  });
+});
 
 describe("AgentEngine", () => {
   beforeEach(() => {

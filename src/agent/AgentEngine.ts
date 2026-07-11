@@ -51,7 +51,7 @@ import type {
 import { toSupportedImageMediaType } from "./providers/types.js";
 import { toCoreModelDocumentMediaType } from "../core/modelRuntime.js";
 import { sleep } from "../util/sleep.js";
-import { estimateTokensFromChars } from "../util/tokenEstimation.js";
+import { truncateMiddle } from "../util/truncateMiddle.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_API_RETRIES = 3;
@@ -438,63 +438,33 @@ const DEFAULT_TOOL_RESULT_CHARS = 32_000; // ~8k tokens
 const AGENTLINK_TMP_DIR = "/tmp/agentlink-results";
 
 /**
- * Snap a head slice back to the last newline within 15% of the budget,
- * so truncation always ends at a complete line.
- */
-function headSlice(text: string, maxChars: number): string {
-  const raw = text.slice(0, maxChars);
-  const newlineIdx = raw.lastIndexOf("\n");
-  if (newlineIdx > 0 && maxChars - newlineIdx <= maxChars * 0.15) {
-    return raw.slice(0, newlineIdx + 1);
-  }
-  return raw;
-}
-
-/**
- * Snap a tail slice forward to the first newline within 15% of the budget,
- * so truncation always starts at a complete line.
- */
-function tailSlice(text: string, maxChars: number): string {
-  const raw = text.slice(text.length - maxChars);
-  const newlineIdx = raw.indexOf("\n");
-  if (newlineIdx >= 0 && newlineIdx <= maxChars * 0.15) {
-    return raw.slice(newlineIdx + 1);
-  }
-  return raw;
-}
-
-/**
  * Head+tail truncation with line-boundary snapping. Keeps the first and last
  * portions so both the start and end of output are visible (critical for
  * terminal output where errors appear at the end). Reports omitted tokens so
  * the agent can gauge how much was dropped. Saves full content to a tmp file
  * if toolUseId is provided so the agent can read_file the complete result.
  */
-function truncateToolText(
+export function truncateToolText(
   text: string,
   maxChars: number,
   toolUseId?: string,
 ): string {
   if (text.length <= maxChars) return text;
 
-  const halfChars = Math.floor(maxChars * 0.5);
-  const head = headSlice(text, halfChars);
-  const tail = tailSlice(text, maxChars - halfChars);
-  const omittedChars = text.length - head.length - tail.length;
-  const omittedTokens = estimateTokensFromChars(omittedChars);
-
-  let notice = `\n\n[... ~${omittedTokens.toLocaleString()} tokens (~${omittedChars.toLocaleString()} chars) omitted from middle ...]`;
-
+  let omissionSuffix: string | undefined;
   if (toolUseId) {
     const tmpPath = path.join(AGENTLINK_TMP_DIR, `${toolUseId}.txt`);
     // Fire-and-forget — save full content without blocking the response
     fs.mkdir(AGENTLINK_TMP_DIR, { recursive: true })
       .then(() => fs.writeFile(tmpPath, text, "utf-8"))
       .catch(() => {});
-    notice += `\nFull output saved to: ${tmpPath} — use read_file to access the complete result.`;
+    omissionSuffix = `\nFull output saved to: ${tmpPath} — use read_file to access the complete result.`;
   }
 
-  return `${head}${notice}\n\n${tail}`;
+  return truncateMiddle(text, maxChars, {
+    lineBoundarySnapRatio: 0.15,
+    omissionSuffix,
+  });
 }
 
 function stableStringify(value: unknown): string {

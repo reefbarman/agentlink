@@ -37,6 +37,7 @@ import {
 } from "../indexer/treeSitterChunker.js";
 import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
+import { truncateMiddle } from "../util/truncateMiddle.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -131,15 +132,7 @@ function stripMedia(content: string | ContentBlock[]): string | ContentBlock[] {
 const MAX_TOOL_RESULT_TEXT_CHARS = 20_000;
 
 function normalizeToolResultText(text: string): string {
-  if (text.length <= MAX_TOOL_RESULT_TEXT_CHARS) return text;
-  const headChars = Math.floor(MAX_TOOL_RESULT_TEXT_CHARS * 0.5);
-  const head = text.slice(0, headChars);
-  const tail = text.slice(
-    text.length - (MAX_TOOL_RESULT_TEXT_CHARS - headChars),
-  );
-  const omittedChars = text.length - head.length - tail.length;
-  const omittedTokens = estimateTokensFromChars(omittedChars);
-  return `${head}\n\n[... ~${omittedTokens.toLocaleString()} tokens (~${omittedChars.toLocaleString()} chars) omitted from middle ...]\n\n${tail}`;
+  return truncateMiddle(text, MAX_TOOL_RESULT_TEXT_CHARS);
 }
 
 function transformMessagesForCondensing(
