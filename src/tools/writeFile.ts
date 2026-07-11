@@ -6,6 +6,7 @@ import {
   type ToolResult,
   type OnApprovalRequest,
   errorResult,
+  successResult,
 } from "../shared/types.js";
 import type {
   EditReviewProvider,
@@ -31,12 +32,6 @@ function getWriteRiskWarnings(
   }
 
   return warnings.length > 0 ? warnings : undefined;
-}
-
-function jsonResult(response: Record<string, unknown>): ToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
-  };
 }
 
 export interface WriteFileProviders {
@@ -65,7 +60,7 @@ export async function handleWriteFile(
     // as a side effect when the user clicks "For Session"/"Always" on the diff view.
 
     if (!providers.editReviewProvider) {
-      return jsonResult({
+      return successResult({
         error: "Edit review is unavailable in this runtime",
         path: relPath,
         reason: "edit_review_unavailable",
@@ -114,7 +109,7 @@ export async function handleWriteFile(
       ...response
     } = warnings ? { ...result, warnings } : result;
 
-    return jsonResult(response);
+    return successResult(response);
   } catch (err) {
     return (
       handlePendingEditLockError(err, params.path) ??

@@ -8,6 +8,7 @@ import {
   type ToolResult,
   type OnApprovalRequest,
   errorResult,
+  successResult,
 } from "../shared/types.js";
 import { handlePendingEditLockError } from "./pendingEditLock.js";
 import type {
@@ -615,12 +616,6 @@ function buildFailedBlocksPayload(
   };
 }
 
-function jsonResult(response: Record<string, unknown>): ToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
-  };
-}
-
 export interface ApplyDiffProviders {
   editReviewProvider?: EditReviewProvider;
   writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
@@ -774,7 +769,7 @@ export async function handleApplyDiff(
     }
 
     if (!providers.editReviewProvider) {
-      return jsonResult({
+      return successResult({
         error: "Edit review is unavailable in this runtime",
         path: relPath,
         reason: "edit_review_unavailable",
@@ -875,7 +870,7 @@ export async function handleApplyDiff(
       );
     }
 
-    return jsonResult(responseObj);
+    return successResult(responseObj);
   } catch (err) {
     return (
       handlePendingEditLockError(err, params.path) ??

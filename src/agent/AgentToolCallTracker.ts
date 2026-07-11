@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
 
-import { type ToolResult } from "../shared/types.js";
+import { successResult, type ToolResult } from "../shared/types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,14 +30,6 @@ export interface TrackedCallInfo {
   status: "active" | "completed";
   completedAt?: number;
   canContinueInBackground?: boolean;
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function makeToolResult(payload: Record<string, unknown>): ToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-  };
 }
 
 // ── AgentToolCallTracker ─────────────────────────────────────────────────────
@@ -234,7 +226,7 @@ export class AgentToolCallTracker extends EventEmitter {
 
     // Force-resolve with cancelled result
     call.forceResolve(
-      makeToolResult({
+      successResult({
         status: "cancelled",
         tool: call.toolName,
         message: "Cancelled by user from VS Code",
@@ -269,7 +261,7 @@ export class AgentToolCallTracker extends EventEmitter {
     }
 
     call.forceResolve(
-      makeToolResult({
+      successResult({
         status: "force-completed",
         tool: call.toolName,
         message: "Force-completed by user from VS Code",
@@ -299,7 +291,7 @@ export class AgentToolCallTracker extends EventEmitter {
     }
 
     call.forceResolve(
-      makeToolResult({
+      successResult({
         exit_code: null,
         output: partialOutput || "[No output captured]",
         output_captured: !!partialOutput,
@@ -326,7 +318,7 @@ export class AgentToolCallTracker extends EventEmitter {
       // Terminal not in managed list — try force-reading output as last resort
       const directOutput = tm.getCurrentOutput(terminalId, { force: true });
       call.forceResolve(
-        makeToolResult(
+        successResult(
           directOutput
             ? {
                 terminal_id: terminalId,
@@ -354,7 +346,7 @@ export class AgentToolCallTracker extends EventEmitter {
       : (tm.getCurrentOutput(terminalId, { force: true }) ?? "");
 
     call.forceResolve(
-      makeToolResult({
+      successResult({
         terminal_id: terminalId,
         is_running: state.is_running,
         exit_code: state.exit_code,
@@ -389,7 +381,7 @@ export class AgentToolCallTracker extends EventEmitter {
 
     // No pending diff — force-resolve with fallback
     call.forceResolve(
-      makeToolResult({
+      successResult({
         status: "force-completed",
         path: call.displayArgs,
         message:

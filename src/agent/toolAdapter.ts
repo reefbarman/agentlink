@@ -930,10 +930,6 @@ function jsonTextResult(value: unknown): ToolResult {
   };
 }
 
-function errorTextResult(error: string): ToolResult {
-  return { content: [{ type: "text", text: JSON.stringify({ error }) }] };
-}
-
 export async function buildAskUserToolResult(args: {
   context: string;
   questions: Question[];
@@ -1013,7 +1009,7 @@ const SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE =
 export function createUnavailableSemanticSearchProvider(): SemanticSearchProvider {
   return {
     async search() {
-      return errorTextResult(SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE);
+      return errorResult(SEMANTIC_SEARCH_UNAVAILABLE_MESSAGE);
     },
   };
 }
@@ -1635,7 +1631,7 @@ export async function dispatchToolCall(
   // Route MCP tools (prefixed with 'servername__') to the MCP hub
   if (McpClientHub.isMcpTool(toolName)) {
     if (!skillAllowlistAllowsMcpTool(skillAllowlist, toolName)) {
-      return errorTextResult(
+      return errorResult(
         `MCP tool is not allowed by the active skill allowed-tools allowlist: ${toolName}`,
       );
     }
@@ -2285,7 +2281,7 @@ export async function dispatchToolCall(
         ctx.mcpToolDiscoveryProvider ??
         (mcpHub ? createMcpToolDiscoveryProvider(mcpHub) : undefined);
       if (!mcpToolDiscoveryProvider)
-        return errorTextResult("MCP hub not available");
+        return errorResult("MCP hub not available");
       return mcpDiscoveryResultToToolResult(
         mcpToolDiscoveryProvider.discoverTools({
           query: params.query !== undefined ? String(params.query) : undefined,
@@ -2315,20 +2311,20 @@ export async function dispatchToolCall(
         ctx.mcpToolInvocationProvider ??
         (mcpHub ? createMcpToolInvocationProvider(mcpHub) : undefined);
       if (!mcpToolInvocationProvider)
-        return errorTextResult("MCP hub not available");
+        return errorResult("MCP hub not available");
       const server = String(params.server ?? "").trim();
       const tool = String(params.tool ?? "").trim();
       if (!server || !tool) {
-        return errorTextResult("call_mcp_tool requires server and tool");
+        return errorResult("call_mcp_tool requires server and tool");
       }
       if (server.includes("__")) {
-        return errorTextResult(
+        return errorResult(
           "call_mcp_tool expects a server name without '__'; pass the bare tool name separately in tool",
         );
       }
       const toolName = `${server}__${tool}`;
       if (!skillAllowlistAllowsMcpTool(skillAllowlist, toolName)) {
-        return errorTextResult(
+        return errorResult(
           `MCP tool is not allowed by the active skill allowed-tools allowlist: ${toolName}`,
         );
       }
@@ -2337,7 +2333,7 @@ export async function dispatchToolCall(
           .getToolDefs()
           .some((toolDef) => toolDef.name === toolName)
       ) {
-        return errorTextResult(
+        return errorResult(
           `MCP tool not found: ${toolName}. Use find_mcp_tools to discover available tools.`,
         );
       }
@@ -2398,7 +2394,7 @@ export async function dispatchToolCall(
         ctx.mcpResourcePromptProvider ??
         (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
       if (!mcpResourcePromptProvider)
-        return errorTextResult("MCP hub not available");
+        return errorResult("MCP hub not available");
       const resources = mcpResourcePromptProvider
         .listResources()
         .filter((resource) =>
@@ -2414,10 +2410,10 @@ export async function dispatchToolCall(
         ctx.mcpResourcePromptProvider ??
         (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
       if (!mcpResourcePromptProvider)
-        return errorTextResult("MCP hub not available");
+        return errorResult("MCP hub not available");
       const server = String(params.server ?? "").trim();
       if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
-        return errorTextResult(
+        return errorResult(
           `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
         );
       }
@@ -2432,7 +2428,7 @@ export async function dispatchToolCall(
         ctx.mcpResourcePromptProvider ??
         (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
       if (!mcpResourcePromptProvider)
-        return errorTextResult("MCP hub not available");
+        return errorResult("MCP hub not available");
       const prompts = mcpResourcePromptProvider
         .listPrompts()
         .filter((prompt) =>
@@ -2448,10 +2444,10 @@ export async function dispatchToolCall(
         ctx.mcpResourcePromptProvider ??
         (mcpHub ? createMcpResourcePromptProvider(mcpHub) : undefined);
       if (!mcpResourcePromptProvider)
-        return errorTextResult("MCP hub not available");
+        return errorResult("MCP hub not available");
       const server = String(params.server ?? "").trim();
       if (!skillAllowlistAllowsMcpServer(skillAllowlist, server)) {
-        return errorTextResult(
+        return errorResult(
           `MCP server is not allowed by the active skill allowed-tools allowlist: ${server}`,
         );
       }

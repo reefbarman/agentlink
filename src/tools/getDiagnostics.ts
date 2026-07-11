@@ -2,22 +2,18 @@ import type {
   DiagnosticsParams,
   DiagnosticsProvider,
 } from "../core/capabilities/language.js";
-import { type ToolResult } from "../shared/types.js";
+import { errorResult, type ToolResult } from "../shared/types.js";
 
 export interface GetDiagnosticsProviders {
   diagnosticsProvider?: DiagnosticsProvider;
 }
 
-function errorTextResult(error: string, path?: string): ToolResult {
-  return { content: [{ type: "text", text: JSON.stringify({ error, path }) }] };
-}
-
 export function createUnavailableDiagnosticsProvider(): DiagnosticsProvider {
   return {
     async getDiagnostics(params) {
-      return errorTextResult(
+      return errorResult(
         "Diagnostics are unavailable in this runtime. Provide a DiagnosticsProvider to enable get_diagnostics.",
-        params.path,
+        { path: params.path },
       );
     },
   };

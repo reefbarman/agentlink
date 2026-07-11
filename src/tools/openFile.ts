@@ -3,7 +3,7 @@ import type {
   PathAccessProvider,
   WorkspaceFileProvider,
 } from "../core/capabilities/readSearch.js";
-import { type ToolResult } from "../shared/types.js";
+import { errorResult, type ToolResult } from "../shared/types.js";
 
 export interface OpenFileParams {
   path: string;
@@ -19,16 +19,12 @@ export interface OpenFileProviders {
   editorRevealProvider?: EditorRevealProvider;
 }
 
-function errorTextResult(error: string, path?: string): ToolResult {
-  return { content: [{ type: "text", text: JSON.stringify({ error, path }) }] };
-}
-
 export function createUnavailableEditorRevealProvider(): EditorRevealProvider {
   return {
     async reveal(params) {
-      return errorTextResult(
+      return errorResult(
         "Editor reveal is unavailable in this runtime. Provide an EditorRevealProvider to enable open_file.",
-        params.absolutePath,
+        { path: params.absolutePath },
       );
     },
   };
@@ -77,6 +73,6 @@ export async function handleOpenFile(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return errorTextResult(message, params.path);
+    return errorResult(message, { path: params.path });
   }
 }

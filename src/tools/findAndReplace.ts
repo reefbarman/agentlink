@@ -9,7 +9,11 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
 
-import { type ToolResult, type OnApprovalRequest } from "../shared/types.js";
+import {
+  errorResult,
+  type ToolResult,
+  type OnApprovalRequest,
+} from "../shared/types.js";
 import type {
   MultiFileEditMatch,
   MultiFileEditReviewProvider,
@@ -52,7 +56,7 @@ export async function handleFindAndReplace(
   try {
     const workspaceRoot = tryGetFirstWorkspaceRoot();
     if (!workspaceRoot) {
-      return error(
+      return errorResult(
         "No workspace folder open. find_and_replace with glob requires a workspace.",
       );
     }
@@ -60,7 +64,7 @@ export async function handleFindAndReplace(
     const replaceStr = params.replace;
 
     if (!findStr) {
-      return error("'find' parameter is required");
+      return errorResult("'find' parameter is required");
     }
 
     // Build the search pattern
@@ -69,7 +73,9 @@ export async function handleFindAndReplace(
       try {
         pattern = new RegExp(findStr, "g");
       } catch (e) {
-        return error(`Invalid regex: ${e instanceof Error ? e.message : e}`);
+        return errorResult(
+          `Invalid regex: ${e instanceof Error ? e.message : e}`,
+        );
       }
     } else {
       // Escape special regex characters for literal search
@@ -120,10 +126,10 @@ export async function handleFindAndReplace(
         500,
       );
       if (fileUris.length === 0) {
-        return error(`No files matched glob pattern: ${params.glob}`);
+        return errorResult(`No files matched glob pattern: ${params.glob}`);
       }
     } else {
-      return error("Either 'path' or 'glob' must be specified");
+      return errorResult("Either 'path' or 'glob' must be specified");
     }
 
     // Find all occurrences with context
@@ -238,7 +244,7 @@ export async function handleFindAndReplace(
         !Number.isInteger(maxReplacements) ||
         maxReplacements <= 0
       ) {
-        return error(
+        return errorResult(
           `'max_replacements' must be a positive integer. Received: ${params.max_replacements}`,
         );
       }
@@ -263,9 +269,12 @@ export async function handleFindAndReplace(
     }
 
     if (!providers.multiFileEditReviewProvider) {
-      return error("Multi-file edit review is unavailable in this runtime", {
-        reason: "edit_review_unavailable",
-      });
+      return errorResult(
+        "Multi-file edit review is unavailable in this runtime",
+        {
+          reason: "edit_review_unavailable",
+        },
+      );
     }
 
     return await providers.multiFileEditReviewProvider.reviewAndApply({
@@ -288,14 +297,6 @@ export async function handleFindAndReplace(
       return err as ToolResult;
     }
     const message = err instanceof Error ? err.message : String(err);
-    return error(message);
+    return errorResult(message);
   }
-}
-
-function error(message: string, extra?: Record<string, unknown>): ToolResult {
-  return {
-    content: [
-      { type: "text", text: JSON.stringify({ error: message, ...extra }) },
-    ],
-  };
 }
