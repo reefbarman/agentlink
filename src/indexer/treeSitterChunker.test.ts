@@ -140,12 +140,8 @@ export default hello;
     expect(chunks.length).toBeGreaterThanOrEqual(2);
 
     // Find the function chunks
-    const alphaChunk = chunks.find((c) =>
-      c.content.includes("function alpha"),
-    );
-    const betaChunk = chunks.find((c) =>
-      c.content.includes("function beta"),
-    );
+    const alphaChunk = chunks.find((c) => c.content.includes("function alpha"));
+    const betaChunk = chunks.find((c) => c.content.includes("function beta"));
     expect(alphaChunk).toBeDefined();
     expect(betaChunk).toBeDefined();
 
@@ -203,7 +199,7 @@ export default hello;
     expect(chunks.length).toBeGreaterThanOrEqual(2);
 
     const importChunk = chunks.find((c) =>
-      c.content.includes('import { mod0 }'),
+      c.content.includes("import { mod0 }"),
     );
     expect(importChunk).toBeDefined();
   });
@@ -284,19 +280,14 @@ export default hello;
 
     // The class should be decomposed into multiple chunks + a multi-scale whole-class chunk
     const classChunks = chunks.filter(
-      (c) =>
-        c.content.includes("method") ||
-        c.content.includes("BigService"),
+      (c) => c.content.includes("method") || c.content.includes("BigService"),
     );
     expect(classChunks.length).toBeGreaterThan(1);
 
     // Sub-chunks (excluding multi-scale whole-class) should be within the limit
     const subChunks = classChunks.filter(
       (c) =>
-        !(
-          c.content.includes("methodOne") &&
-          c.content.includes("methodFour")
-        ),
+        !(c.content.includes("methodOne") && c.content.includes("methodFour")),
     );
     for (const chunk of subChunks) {
       expect(chunk.content.length).toBeLessThanOrEqual(1200);
@@ -308,8 +299,7 @@ export default hello;
       (c) =>
         (c.content.includes("methodOne()") &&
           c.content.includes("return a0")) ||
-        (c.content.includes("methodTwo()") &&
-          c.content.includes("return b0")),
+        (c.content.includes("methodTwo()") && c.content.includes("return b0")),
     );
     expect(hasCompleteMethod).toBe(true);
   });
@@ -434,9 +424,7 @@ export default hello;
     const content = lines.join("\n");
     const chunks = await treeSitterChunkFile(content, fp, rp);
 
-    const funcChunk = chunks.find((c) =>
-      c.content.includes("function myFunc"),
-    );
+    const funcChunk = chunks.find((c) => c.content.includes("function myFunc"));
     expect(funcChunk).toBeDefined();
     // Function starts at line 7 (1-based)
     expect(funcChunk!.startLine).toBe(7);
@@ -505,9 +493,7 @@ export default hello;
 
     // All method chunks should have parent scope context
     for (const mc of [methodA!, methodB!, methodC!]) {
-      expect(mc.embeddingContent).toMatch(
-        /\/\/ class SmallService/,
-      );
+      expect(mc.embeddingContent).toMatch(/\/\/ class SmallService/);
     }
   });
 
@@ -575,19 +561,13 @@ export default hello;
     const chunks = await treeSitterChunkFile(content, fp, rp);
 
     // Methods should be individually extracted even through export wrapper
-    const handleChunk = chunks.find((c) =>
-      c.content.includes("handleRequest"),
-    );
-    const processChunk = chunks.find((c) =>
-      c.content.includes("processData"),
-    );
+    const handleChunk = chunks.find((c) => c.content.includes("handleRequest"));
+    const processChunk = chunks.find((c) => c.content.includes("processData"));
     expect(handleChunk).toBeDefined();
     expect(processChunk).toBeDefined();
 
     // Should have parent scope context
-    expect(handleChunk!.embeddingContent).toMatch(
-      /class ExportedService/,
-    );
+    expect(handleChunk!.embeddingContent).toMatch(/class ExportedService/);
   });
 
   it("merges class header into first method chunk when header is small", async () => {
@@ -613,9 +593,7 @@ export default hello;
 
     // The class header "class Greeter {" is too small for its own chunk
     // It should be merged into the first method's chunk
-    const greetChunk = chunks.find((c) =>
-      c.content.includes("greet(name"),
-    );
+    const greetChunk = chunks.find((c) => c.content.includes("greet(name"));
     expect(greetChunk).toBeDefined();
     // The chunk should include the class declaration line
     expect(greetChunk!.content).toContain("class Greeter");
@@ -723,12 +701,8 @@ export default hello;
     const chunks = await treeSitterChunkFile(content, fp, rp);
 
     // Arrow functions in const declarations should be captured
-    const processChunk = chunks.find((c) =>
-      c.content.includes("processItems"),
-    );
-    const formatChunk = chunks.find((c) =>
-      c.content.includes("formatOutput"),
-    );
+    const processChunk = chunks.find((c) => c.content.includes("processItems"));
+    const formatChunk = chunks.find((c) => c.content.includes("formatOutput"));
 
     expect(processChunk).toBeDefined();
     expect(formatChunk).toBeDefined();
@@ -770,23 +744,15 @@ export default hello;
     const chunks = await treeSitterChunkFile(content, fp, rp);
 
     // Find method chunks
-    const authChunk = chunks.find((c) =>
-      c.content.includes("authenticate"),
-    );
-    const authzChunk = chunks.find((c) =>
-      c.content.includes("authorize"),
-    );
+    const authChunk = chunks.find((c) => c.content.includes("authenticate"));
+    const authzChunk = chunks.find((c) => c.content.includes("authorize"));
 
     expect(authChunk).toBeDefined();
     expect(authzChunk).toBeDefined();
 
     // Both should have parent scope "class AuthManager" in embeddingContent
-    expect(authChunk!.embeddingContent).toMatch(
-      /\/\/ class AuthManager/,
-    );
-    expect(authzChunk!.embeddingContent).toMatch(
-      /\/\/ class AuthManager/,
-    );
+    expect(authChunk!.embeddingContent).toMatch(/\/\/ class AuthManager/);
+    expect(authzChunk!.embeddingContent).toMatch(/\/\/ class AuthManager/);
   });
 
   it("falls back to EXTRACTABLE_TYPES for languages without queries", async () => {
@@ -827,7 +793,7 @@ export default hello;
 
   it("handles Go files with methods on struct receivers", async () => {
     const lines: string[] = [];
-    lines.push('package main');
+    lines.push("package main");
     lines.push("");
     lines.push('import "fmt"');
     lines.push("");
@@ -861,13 +827,19 @@ export default hello;
     const chunks = await treeSitterChunkFile(content, goFp, goRp);
 
     // Both methods should be captured
-    const startChunk = chunks.find((c) => c.content.includes("func (s *Server) Start"));
-    const stopChunk = chunks.find((c) => c.content.includes("func (s *Server) Stop"));
+    const startChunk = chunks.find((c) =>
+      c.content.includes("func (s *Server) Start"),
+    );
+    const stopChunk = chunks.find((c) =>
+      c.content.includes("func (s *Server) Stop"),
+    );
     expect(startChunk).toBeDefined();
     expect(stopChunk).toBeDefined();
 
     // Struct should also be captured
-    const structChunk = chunks.find((c) => c.content.includes("type Server struct"));
+    const structChunk = chunks.find((c) =>
+      c.content.includes("type Server struct"),
+    );
     expect(structChunk).toBeDefined();
   });
 
@@ -964,15 +936,9 @@ export default hello;
 
     // Should also have individual method chunks
     const methodChunks = chunks.filter((c) => c !== wholeClass);
-    expect(methodChunks.some((c) => c.content.includes("processA"))).toBe(
-      true,
-    );
-    expect(methodChunks.some((c) => c.content.includes("processB"))).toBe(
-      true,
-    );
-    expect(methodChunks.some((c) => c.content.includes("processC"))).toBe(
-      true,
-    );
+    expect(methodChunks.some((c) => c.content.includes("processA"))).toBe(true);
+    expect(methodChunks.some((c) => c.content.includes("processB"))).toBe(true);
+    expect(methodChunks.some((c) => c.content.includes("processC"))).toBe(true);
 
     // Whole class should be FIRST (unshifted)
     const firstClassChunk = chunks.find((c) =>
@@ -1095,10 +1061,14 @@ describe("fine granularity", () => {
     const lines: string[] = [];
     lines.push("// header comment for context");
     lines.push("");
-    lines.push("export function buildReport(data: Record<string, number>): string {");
+    lines.push(
+      "export function buildReport(data: Record<string, number>): string {",
+    );
     lines.push("  const entries = Object.entries(data);");
     lines.push("  const sorted = entries.sort((a, b) => b[1] - a[1]);");
-    lines.push("  const formatted = sorted.map(([key, val]) => `${key}: ${val}`);");
+    lines.push(
+      "  const formatted = sorted.map(([key, val]) => `${key}: ${val}`);",
+    );
     lines.push("  const header = '=== Report ===';");
     lines.push("  const body = formatted.join('\\n');");
     lines.push("  const footer = `Total items: ${formatted.length}`;");

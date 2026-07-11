@@ -120,7 +120,9 @@ describe("resolveBackgroundRoute", () => {
   it("defaults explicit codex review routing to gpt-5.6-sol", async () => {
     const anthModel = makeModel("claude-opus-4-8", "anthropic");
     const sol = makeModel("gpt-5.6-sol", "codex", { contextWindow: 1_050_000 });
-    const terra = makeModel("gpt-5.6-terra", "codex", { contextWindow: 1_050_000 });
+    const terra = makeModel("gpt-5.6-terra", "codex", {
+      contextWindow: 1_050_000,
+    });
     const registry = makeRegistry([
       makeProvider("anthropic", [anthModel]),
       makeProvider("codex", [terra, sol]),

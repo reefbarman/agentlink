@@ -1,4 +1,8 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 body {
   font-family: var(--vscode-font-family);
@@ -12,16 +16,21 @@ body {
 .section {
   margin-bottom: 16px;
   padding-bottom: 16px;
-  border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
 }
-.section:last-child { border-bottom: none; }
+.section:last-child {
+  border-bottom: none;
+}
 
 h3 {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
+  color: var(
+    --vscode-sideBarSectionHeader-foreground,
+    var(--vscode-foreground)
+  );
   margin-bottom: 8px;
 }
 
@@ -58,8 +67,12 @@ h3 {
   border-radius: 50%;
   flex-shrink: 0;
 }
-.dot.running { background: var(--vscode-testing-iconPassed, #4ec94e); }
-.dot.stopped { background: var(--vscode-testing-iconFailed, #f44747); }
+.dot.running {
+  background: var(--vscode-testing-iconPassed, #4ec94e);
+}
+.dot.stopped {
+  background: var(--vscode-testing-iconFailed, #f44747);
+}
 
 .status-text {
   font-weight: 500;
@@ -73,8 +86,12 @@ h3 {
   padding: 3px 0;
   font-size: 12px;
 }
-.info-row .label { color: var(--vscode-descriptionForeground); }
-.info-row .value { font-weight: 500; }
+.info-row .label {
+  color: var(--vscode-descriptionForeground);
+}
+.info-row .value {
+  font-weight: 500;
+}
 
 .badge {
   font-size: 11px;
@@ -92,7 +109,7 @@ h3 {
   color: #000;
 }
 .badge-pending {
-  background: var(--vscode-widget-border, rgba(128,128,128,0.4));
+  background: var(--vscode-widget-border, rgba(128, 128, 128, 0.4));
   color: var(--vscode-foreground);
 }
 
@@ -107,19 +124,25 @@ h3 {
   cursor: pointer;
   text-align: center;
 }
-.btn + .btn { margin-top: 6px; }
+.btn + .btn {
+  margin-top: 6px;
+}
 
 .btn-primary {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
 }
-.btn-primary:hover { background: var(--vscode-button-hoverBackground); }
+.btn-primary:hover {
+  background: var(--vscode-button-hoverBackground);
+}
 
 .btn-secondary {
   background: var(--vscode-button-secondaryBackground);
   color: var(--vscode-button-secondaryForeground);
 }
-.btn-secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.btn-secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
 
 .select {
   background: var(--vscode-dropdown-background);
@@ -137,8 +160,9 @@ h3 {
   outline-offset: -1px;
 }
 
-
-.button-group { margin-top: 8px; }
+.button-group {
+  margin-top: 8px;
+}
 
 .help-text {
   font-size: 12px;
@@ -146,14 +170,12 @@ h3 {
   margin: 6px 0;
 }
 
-
 .subsection-label {
   font-size: 11px;
   font-weight: 500;
   color: var(--vscode-descriptionForeground);
   margin-bottom: 4px;
 }
-
 
 .rule-row {
   display: flex;
@@ -166,7 +188,7 @@ h3 {
   font-size: 10px;
   padding: 1px 4px;
   border-radius: 3px;
-  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
   color: var(--vscode-descriptionForeground);
   flex-shrink: 0;
 }
@@ -201,18 +223,20 @@ h3 {
   cursor: pointer;
   text-decoration: none;
 }
-.link:hover { text-decoration: underline; }
+.link:hover {
+  text-decoration: underline;
+}
 
 .session-block {
   margin-bottom: 8px;
   padding: 6px;
   border-radius: 4px;
-  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.08));
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.08));
 }
 
 /* Tool call tracker */
 .tool-calls-section {
-  border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.2));
   padding-bottom: 8px;
   margin-bottom: 8px;
 }
@@ -220,7 +244,7 @@ h3 {
   padding: 6px;
   margin-bottom: 4px;
   border-radius: 4px;
-  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.08));
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.08));
 }
 .tool-call-header {
   display: flex;
@@ -232,7 +256,7 @@ h3 {
   font-family: var(--vscode-editor-font-family);
   font-size: 11px;
   color: var(--vscode-foreground);
-  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
   padding: 1px 4px;
   border-radius: 3px;
 }
@@ -268,7 +292,7 @@ h3 {
   padding: 4px;
   margin-top: 2px;
   border-radius: 3px;
-  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
@@ -293,14 +317,16 @@ h3 {
   background: var(--vscode-button-secondaryHoverBackground);
 }
 .btn-cancel {
-  background: var(--vscode-inputValidation-errorBackground, rgba(255,0,0,0.15));
+  background: var(
+    --vscode-inputValidation-errorBackground,
+    rgba(255, 0, 0, 0.15)
+  );
   color: var(--vscode-errorForeground, #f44747);
-  border-color: var(--vscode-inputValidation-errorBorder, rgba(255,0,0,0.3));
+  border-color: var(--vscode-inputValidation-errorBorder, rgba(255, 0, 0, 0.3));
 }
 .btn-cancel:hover {
   opacity: 0.85;
 }
-
 
 /* Completed tool calls */
 .tool-call-completed {
@@ -327,13 +353,13 @@ h3 {
   border: 1px solid transparent;
 }
 .feedback-actions .btn-cancel {
-  border-color: var(--vscode-inputValidation-errorBorder, rgba(255,0,0,0.3));
+  border-color: var(--vscode-inputValidation-errorBorder, rgba(255, 0, 0, 0.3));
 }
 .feedback-row {
   padding: 6px;
   margin-bottom: 4px;
   border-radius: 4px;
-  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.08));
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.08));
 }
 .feedback-header {
   display: flex;
@@ -369,7 +395,7 @@ h3 {
   padding: 4px;
   margin-top: 2px;
   border-radius: 3px;
-  background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
@@ -409,12 +435,17 @@ h3 {
   background: var(--vscode-errorForeground, #f44747);
 }
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 .progress-bar {
   height: 4px;
-  background: var(--vscode-widget-border, rgba(128,128,128,0.2));
+  background: var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
   border-radius: 2px;
   margin: 6px 0;
   overflow: hidden;

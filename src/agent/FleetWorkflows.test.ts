@@ -51,7 +51,9 @@ describe("fleet workflows", () => {
       candidates: [{ model: "one" }, { model: "two" }, { model: "three" }],
     });
     expect(plan.delegations).toHaveLength(3);
-    expect(plan.delegations.every((item) => item.worktree === "isolated")).toBe(true);
+    expect(plan.delegations.every((item) => item.worktree === "isolated")).toBe(
+      true,
+    );
   });
 
   it("creates goal-scoped budgets and parses structured evidence", () => {

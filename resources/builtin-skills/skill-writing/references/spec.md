@@ -48,8 +48,8 @@ name: code-review
 Invalid:
 
 ```yaml
-name: PDF-Processing  # uppercase not allowed
-name: -pdf            # cannot start with hyphen
+name: PDF-Processing # uppercase not allowed
+name: -pdf # cannot start with hyphen
 name: pdf--processing # consecutive hyphens not allowed
 ```
 

@@ -32,13 +32,17 @@ export class FleetAutomationStore {
 
   constructor(
     private readonly filePath: string,
-    private readonly launch: (workflow: FleetWorkflowRequest) => Promise<unknown>,
+    private readonly launch: (
+      workflow: FleetWorkflowRequest,
+    ) => Promise<unknown>,
     private readonly now: () => number = () => Date.now(),
   ) {}
 
   async load(): Promise<void> {
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, "utf8")) as unknown;
+      const parsed = JSON.parse(
+        await fs.readFile(this.filePath, "utf8"),
+      ) as unknown;
       if (Array.isArray(parsed)) {
         this.automations = parsed.filter(isFleetAutomation);
         this.historyEntries = [];
@@ -64,7 +68,9 @@ export class FleetAutomationStore {
   history(automationId?: string): FleetAutomationRun[] {
     return structuredClone(
       automationId
-        ? this.historyEntries.filter((entry) => entry.automationId === automationId)
+        ? this.historyEntries.filter(
+            (entry) => entry.automationId === automationId,
+          )
         : this.historyEntries,
     );
   }
@@ -114,7 +120,8 @@ export class FleetAutomationStore {
   async runDue(): Promise<string[]> {
     const now = this.now();
     const due = this.automations.filter(
-      (item) => item.enabled && item.nextRunAt !== undefined && item.nextRunAt <= now,
+      (item) =>
+        item.enabled && item.nextRunAt !== undefined && item.nextRunAt <= now,
     );
     for (const item of due) {
       await this.runAutomation(item);
@@ -191,7 +198,11 @@ export class FleetAutomationStore {
     await fs.writeFile(
       temp,
       `${JSON.stringify(
-        { schemaVersion: 1, automations: this.automations, history: this.historyEntries },
+        {
+          schemaVersion: 1,
+          automations: this.automations,
+          history: this.historyEntries,
+        },
         null,
         2,
       )}\n`,

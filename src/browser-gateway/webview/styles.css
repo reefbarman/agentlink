@@ -505,7 +505,10 @@ textarea {
 
 .url-elicitation-warning {
   border: 1px solid var(--vscode-inputValidation-warningBorder, #cca700);
-  background: var(--vscode-inputValidation-warningBackground, rgba(204, 167, 0, 0.12));
+  background: var(
+    --vscode-inputValidation-warningBackground,
+    rgba(204, 167, 0, 0.12)
+  );
   border-radius: 6px;
   padding: 8px;
   font-size: 12px;
@@ -514,7 +517,10 @@ textarea {
 
 .url-elicitation-warning.danger {
   border-color: var(--vscode-inputValidation-errorBorder, #f14c4c);
-  background: var(--vscode-inputValidation-errorBackground, rgba(241, 76, 76, 0.12));
+  background: var(
+    --vscode-inputValidation-errorBackground,
+    rgba(241, 76, 76, 0.12)
+  );
 }
 
 .url-elicitation-details {
@@ -536,7 +542,10 @@ textarea {
   border: 1px solid var(--vscode-panel-border);
   border-radius: 4px;
   padding: 6px;
-  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  background: var(
+    --vscode-textCodeBlock-background,
+    var(--vscode-editor-background)
+  );
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 11px;
 }
@@ -688,7 +697,6 @@ textarea {
   z-index: 1000;
   max-width: min(320px, calc(100vw - 16px));
 }
-
 
 .toolbar-selector-option {
   display: flex;
@@ -1128,7 +1136,6 @@ textarea {
   padding: 0;
   background: var(--vscode-editor-background, var(--ag-code-bg));
 }
-
 
 /* Mirrors `.browser-instance-tabs` so file tabs match the instance tab strip. */
 .diff-list {
@@ -1617,7 +1624,6 @@ pre {
     max-width: min(100%, calc(100vw - 24px));
   }
 
-
   .approval-mobile-review-actions {
     display: flex;
     flex-shrink: 0;
@@ -1643,10 +1649,7 @@ pre {
   }
 
   .approval-panel-embed .mobile-review-button:hover:not(:disabled) {
-    background: var(
-      --vscode-button-secondaryHoverBackground,
-      var(--ag-hover)
-    );
+    background: var(--vscode-button-secondaryHoverBackground, var(--ag-hover));
   }
 
   .approval-panel-embed .mobile-review-button.active {

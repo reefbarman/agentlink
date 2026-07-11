@@ -309,7 +309,10 @@ describe("AgentSessionManager background agents", () => {
       () => releaseFirst,
       (release) => typeof release === "function",
     );
-    const second = await mgr.spawnBackground({ task: "second", message: "wait" });
+    const second = await mgr.spawnBackground({
+      task: "second",
+      message: "wait",
+    });
     expect(mgr.getBackgroundStatus(second.sessionId).status).toBe("queued");
 
     releaseFirst?.();
@@ -692,7 +695,10 @@ describe("AgentSessionManager background agents", () => {
         parent.sessionId,
       ),
     ).rejects.toMatchObject({
-      result: expect.objectContaining({ code: "budget_reservation", limit: 100 }),
+      result: expect.objectContaining({
+        code: "budget_reservation",
+        limit: 100,
+      }),
     });
     mgr.stopSession(parent.sessionId);
   });
@@ -896,7 +902,10 @@ describe("AgentSessionManager background agents", () => {
     mgr.setToolContext(toolCtx);
     await mgr.createSession("code");
     const first = await mgr.spawnBackground({ task: "first", message: "one" });
-    const second = await mgr.spawnBackground({ task: "second", message: "two" });
+    const second = await mgr.spawnBackground({
+      task: "second",
+      message: "two",
+    });
 
     expect(
       mgr.getAuthorizedBackgroundStatus(first.sessionId, second.sessionId),
@@ -908,9 +917,7 @@ describe("AgentSessionManager background agents", () => {
     );
     expect(
       mgr.killAuthorizedBackground(first.sessionId, second.sessionId),
-    ).toEqual(
-      expect.objectContaining({ killed: false }),
-    );
+    ).toEqual(expect.objectContaining({ killed: false }));
   });
 
   it("steers authorized descendants at a safe boundary", async () => {
@@ -940,7 +947,10 @@ describe("AgentSessionManager background agents", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
     const foreground = await mgr.createSession("code");
-    const parent = await mgr.spawnBackground({ task: "parent", message: "work" });
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "work",
+    });
     const child = await mgr.spawnBackground(
       { task: "child", message: "work" },
       parent.sessionId,
@@ -971,7 +981,10 @@ describe("AgentSessionManager background agents", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
     await mgr.createSession("code");
-    const original = await mgr.spawnBackground({ task: "pause me", message: "work" });
+    const original = await mgr.spawnBackground({
+      task: "pause me",
+      message: "work",
+    });
 
     expect(mgr.pauseBackground(original.sessionId)).toEqual({ paused: true });
     expect((mgr as any).sessions.get(original.sessionId).fleetMetadata).toEqual(
@@ -1098,10 +1111,13 @@ describe("AgentSessionManager background agents", () => {
       message: "work",
     });
     await waitFor(
-      () => (mgr as any).sessions.get(spawned.sessionId).fleetMetadata.lifecycle,
+      () =>
+        (mgr as any).sessions.get(spawned.sessionId).fleetMetadata.lifecycle,
       (lifecycle) => lifecycle === "completed",
     );
-    const info = mgr.getBgSessionInfos().find((item) => item.id === spawned.sessionId);
+    const info = mgr
+      .getBgSessionInfos()
+      .find((item) => item.id === spawned.sessionId);
     expect(info?.events?.map((event) => event.type)).toEqual([
       "queued",
       "started",

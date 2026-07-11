@@ -2838,7 +2838,8 @@ export async function dispatchToolCall(
         "persistent_goal",
       ]);
       const kind = String(params.kind ?? "") as FleetWorkflowRequest["kind"];
-      if (!allowedKinds.has(kind)) return errorResult("Invalid fleet workflow kind");
+      if (!allowedKinds.has(kind))
+        return errorResult("Invalid fleet workflow kind");
       const candidates = Array.isArray(params.candidates)
         ? params.candidates
             .filter(
@@ -2902,25 +2903,16 @@ export async function dispatchToolCall(
         return errorResult("Fleet automation management not available");
       }
       const action = String(params.action ?? "");
-      if (![
-        "list",
-        "history",
-        "enable",
-        "disable",
-        "delete",
-      ].includes(action)) {
+      if (
+        !["list", "history", "enable", "disable", "delete"].includes(action)
+      ) {
         return errorResult(`Invalid fleet automation action: ${action}`);
       }
       if (["enable", "disable", "delete"].includes(action) && !params.id) {
         return errorResult(`${action} requires an automation id`);
       }
       const result = await ctx.onManageFleetAutomations({
-        action: action as
-          | "list"
-          | "history"
-          | "enable"
-          | "disable"
-          | "delete",
+        action: action as "list" | "history" | "enable" | "disable" | "delete",
         id: typeof params.id === "string" ? params.id : undefined,
       });
       return { content: [{ type: "text", text: JSON.stringify(result) }] };

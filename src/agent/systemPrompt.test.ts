@@ -957,10 +957,14 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt("review", tmpDir, {
       isBackground: true,
     });
-    expect(result).toContain("Background placement does not reduce your capabilities");
+    expect(result).toContain(
+      "Background placement does not reduce your capabilities",
+    );
     expect(result).toContain("active mode");
     expect(result).toContain("Skip pre-task user alignment");
-    expect(result).toContain("same context-management and recovery expectations");
+    expect(result).toContain(
+      "same context-management and recovery expectations",
+    );
     expect(result).not.toContain("3-5 tool calls");
   });
 

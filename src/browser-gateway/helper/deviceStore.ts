@@ -131,9 +131,7 @@ export class DeviceStore {
     };
   }
 
-  async matchToken(
-    token: string,
-  ): Promise<BrowserGatewayDeviceRecord | null> {
+  async matchToken(token: string): Promise<BrowserGatewayDeviceRecord | null> {
     if (!token) return null;
     const tokenHash = hashDeviceToken(token);
     const store = await readStore(this.filePath);

@@ -66,7 +66,9 @@ describe("FleetAutomationStore", () => {
   });
 
   it("skips a reentrant event run and records it", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "fleet-automation-reentrant-"));
+    const dir = await mkdtemp(
+      path.join(os.tmpdir(), "fleet-automation-reentrant-"),
+    );
     let store: FleetAutomationStore;
     const launch = vi.fn(async () => {
       await store.trigger("changed");

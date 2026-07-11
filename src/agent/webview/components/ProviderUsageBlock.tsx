@@ -45,11 +45,7 @@ export function ProviderUsagePanel({
           {data.providers.length} provider
           {data.providers.length === 1 ? "" : "s"}
         </span>
-        <button
-          class="icon-button"
-          onClick={onRefresh}
-          title="Refresh usage"
-        >
+        <button class="icon-button" onClick={onRefresh} title="Refresh usage">
           <i class="codicon codicon-refresh" />
         </button>
         <button class="icon-button" onClick={onClose} title="Dismiss">
@@ -58,10 +54,7 @@ export function ProviderUsagePanel({
       </div>
       <div class="provider-usage-body">
         {data.providers.map((provider) => (
-          <section
-            class="provider-usage-provider"
-            key={provider.providerId}
-          >
+          <section class="provider-usage-provider" key={provider.providerId}>
             <div class="provider-usage-provider-header">
               <i
                 class={`codicon codicon-${provider.available ? "pass-filled" : "circle-slash"}`}
@@ -100,22 +93,21 @@ export function ProviderUsagePanel({
                       <UsageWindow label="Primary" window={limit.primary} />
                     )}
                     {limit.secondary && (
-                      <UsageWindow
-                        label="Secondary"
-                        window={limit.secondary}
-                      />
+                      <UsageWindow label="Secondary" window={limit.secondary} />
                     )}
                   </div>
                 ))}
                 <div class="provider-usage-stats">
                   {provider.lifetimeTokens !== undefined && (
                     <span>
-                      Lifetime: {provider.lifetimeTokens.toLocaleString()} tokens
+                      Lifetime: {provider.lifetimeTokens.toLocaleString()}{" "}
+                      tokens
                     </span>
                   )}
                   {provider.peakDailyTokens !== undefined && (
                     <span>
-                      Peak day: {provider.peakDailyTokens.toLocaleString()} tokens
+                      Peak day: {provider.peakDailyTokens.toLocaleString()}{" "}
+                      tokens
                     </span>
                   )}
                   {provider.resetCredits !== undefined && (

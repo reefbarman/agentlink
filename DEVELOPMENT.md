@@ -60,9 +60,9 @@ Development builds collect bounded, non-reactive streaming metrics for the VS Co
 Inspect the current runtime from its own developer console (Extension Host, helper process, VS Code webview, or browser webview):
 
 ```js
-__agentlinkStreamingBaseline.summarize("browser-webview")
-__agentlinkStreamingBaseline.events("browser-webview")
-__agentlinkStreamingBaseline.reset("browser-webview")
+__agentlinkStreamingBaseline.summarize("browser-webview");
+__agentlinkStreamingBaseline.events("browser-webview");
+__agentlinkStreamingBaseline.reset("browser-webview");
 ```
 
 Use the matching surface name: `vscode-gateway`, `ask-agent-helper`, `vscode-webview`, or `browser-webview`. Each process/webview keeps its own latest 50,000 samples and reports dropped samples in the summary.

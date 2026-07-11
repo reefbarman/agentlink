@@ -70,7 +70,10 @@ export class FleetScheduler {
         limit: this.policy.maxDepth,
       };
     }
-    if (args.parentFound && args.activeChildren >= this.policy.maxChildrenPerParent) {
+    if (
+      args.parentFound &&
+      args.activeChildren >= this.policy.maxChildrenPerParent
+    ) {
       return {
         ok: false,
         code: "max_children",

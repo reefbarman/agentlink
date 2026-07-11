@@ -108,12 +108,12 @@ describe("ToolUsageTelemetry", () => {
 
     const records = await readJsonLines(telemetryPath);
     expect(records).toHaveLength(2);
-    expect((records[0] as { tools: Record<string, unknown> }).tools).toHaveProperty(
-      "search_files",
-    );
-    expect((records[1] as { tools: Record<string, unknown> }).tools).toHaveProperty(
-      "write_file",
-    );
+    expect(
+      (records[0] as { tools: Record<string, unknown> }).tools,
+    ).toHaveProperty("search_files");
+    expect(
+      (records[1] as { tools: Record<string, unknown> }).tools,
+    ).toHaveProperty("write_file");
     expect(JSON.stringify(records)).not.toContain("secret content");
   });
 

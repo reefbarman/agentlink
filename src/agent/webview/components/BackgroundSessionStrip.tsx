@@ -250,7 +250,8 @@ export function BackgroundSessionStrip({
   }, [hasActive]);
 
   const visibleSessions = sessions.filter((session) => {
-    if (providerFilter && session.resolvedProvider !== providerFilter) return false;
+    if (providerFilter && session.resolvedProvider !== providerFilter)
+      return false;
     if (workspaceFilter && session.workspace !== workspaceFilter) return false;
     if (goalFilter && session.goalId !== goalFilter) return false;
     if (filter === "active") return ACTIVE_STATUSES.has(session.status);
@@ -290,18 +291,22 @@ export function BackgroundSessionStrip({
       </button>
       {!collapsed && (
         <div class="bg-session-strip-body">
-          <div class="bg-session-filters" role="group" aria-label="Fleet filters">
-            {(["all", "active", "attention", "completed", "archived"] as const).map(
-              (value) => (
-                <button
-                  key={value}
-                  class={`bg-session-filter${filter === value ? " active" : ""}`}
-                  onClick={() => setFilter(value)}
-                >
-                  {value}
-                </button>
-              ),
-            )}
+          <div
+            class="bg-session-filters"
+            role="group"
+            aria-label="Fleet filters"
+          >
+            {(
+              ["all", "active", "attention", "completed", "archived"] as const
+            ).map((value) => (
+              <button
+                key={value}
+                class={`bg-session-filter${filter === value ? " active" : ""}`}
+                onClick={() => setFilter(value)}
+              >
+                {value}
+              </button>
+            ))}
             <button
               class="bg-session-filter"
               onClick={() => setViewMode(viewMode === "tree" ? "flat" : "tree")}
@@ -313,27 +318,43 @@ export function BackgroundSessionStrip({
               class="bg-session-select"
               value={providerFilter}
               onChange={(event) =>
-                setProviderFilter((event.currentTarget as HTMLSelectElement).value)
+                setProviderFilter(
+                  (event.currentTarget as HTMLSelectElement).value,
+                )
               }
               aria-label="Filter by provider"
             >
               <option value="">All providers</option>
-              {[...new Set(sessions.map((item) => item.resolvedProvider).filter((value): value is string => Boolean(value)))].map(
-                (value) => <option value={value}>{value}</option>,
-              )}
+              {[
+                ...new Set(
+                  sessions
+                    .map((item) => item.resolvedProvider)
+                    .filter((value): value is string => Boolean(value)),
+                ),
+              ].map((value) => (
+                <option value={value}>{value}</option>
+              ))}
             </select>
             <select
               class="bg-session-select"
               value={workspaceFilter}
               onChange={(event) =>
-                setWorkspaceFilter((event.currentTarget as HTMLSelectElement).value)
+                setWorkspaceFilter(
+                  (event.currentTarget as HTMLSelectElement).value,
+                )
               }
               aria-label="Filter by workspace"
             >
               <option value="">All workspaces</option>
-              {[...new Set(sessions.map((item) => item.workspace).filter((value): value is string => Boolean(value)))].map(
-                (value) => <option value={value}>{value}</option>,
-              )}
+              {[
+                ...new Set(
+                  sessions
+                    .map((item) => item.workspace)
+                    .filter((value): value is string => Boolean(value)),
+                ),
+              ].map((value) => (
+                <option value={value}>{value}</option>
+              ))}
             </select>
             <select
               class="bg-session-select"
@@ -344,9 +365,15 @@ export function BackgroundSessionStrip({
               aria-label="Filter by goal"
             >
               <option value="">All goals</option>
-              {[...new Set(sessions.map((item) => item.goalId).filter((value): value is string => Boolean(value)))].map(
-                (value) => <option value={value}>{value}</option>,
-              )}
+              {[
+                ...new Set(
+                  sessions
+                    .map((item) => item.goalId)
+                    .filter((value): value is string => Boolean(value)),
+                ),
+              ].map((value) => (
+                <option value={value}>{value}</option>
+              ))}
             </select>
           </div>
           {visibleSessions.length === 0 && (
@@ -378,7 +405,9 @@ export function BackgroundSessionStrip({
                 s.workspace ? `workspace: ${s.workspace}` : null,
                 s.worktreePath ? `worktree: ${s.worktreePath}` : null,
                 s.worktreeBranch ? `branch: ${s.worktreeBranch}` : null,
-                s.delegation ? `delegation: ${JSON.stringify(s.delegation)}` : null,
+                s.delegation
+                  ? `delegation: ${JSON.stringify(s.delegation)}`
+                  : null,
                 s.terminalReason ? `reason: ${s.terminalReason}` : null,
                 `tokens: ${(s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0)}`,
                 s.toolCalls !== undefined ? `tools: ${s.toolCalls}` : null,
@@ -390,7 +419,9 @@ export function BackgroundSessionStrip({
                 s.structuredResult
                   ? `result: ${JSON.stringify(s.structuredResult)}`
                   : null,
-              ].filter((value): value is string => Boolean(value)).join("\n")}
+              ]
+                .filter((value): value is string => Boolean(value))
+                .join("\n")}
             >
               {(s.depth ?? 1) > 1 && (
                 <i class="codicon codicon-debug-step-into bg-session-parent-link" />

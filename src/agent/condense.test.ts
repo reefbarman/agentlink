@@ -119,7 +119,8 @@ function makeCodexProvider(
       return true;
     },
     getCapabilities(model: string) {
-      const contextWindow = model === CODEX_CONDENSE_MODEL ? 1_050_000 : 400_000;
+      const contextWindow =
+        model === CODEX_CONDENSE_MODEL ? 1_050_000 : 400_000;
       return {
         ...TEST_CAPABILITIES,
         contextWindow,
@@ -596,7 +597,9 @@ User wants to fix the condense resume bug for Codex after summarization.
     const request = complete.mock.calls[0][0] as CompleteRequest;
     expect(request.model).toBe("gpt-5.4");
     expect(result.metadata?.modelCandidates[0]).toBe("gpt-5.4");
-    expect(result.metadata?.modelCandidates).not.toContain(CODEX_CONDENSE_MODEL);
+    expect(result.metadata?.modelCandidates).not.toContain(
+      CODEX_CONDENSE_MODEL,
+    );
     expect(result.metadata?.selectedModel).toBe("gpt-5.4");
     expect(result.metadata?.skippedModelCandidates).toEqual([
       expect.objectContaining({ model: CODEX_CONDENSE_MODEL }),

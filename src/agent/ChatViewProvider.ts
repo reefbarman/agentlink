@@ -3352,7 +3352,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     if (input.action === "resume") {
       try {
-        const result = await this.sessionManager.resumeBackground(input.sessionId);
+        const result = await this.sessionManager.resumeBackground(
+          input.sessionId,
+        );
         return { ok: true, sessionId: result.sessionId };
       } catch (error) {
         return { ok: false, error: String(error) };
@@ -3360,7 +3362,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     if (input.action === "retry") {
       try {
-        const result = await this.sessionManager.retryBackground(input.sessionId);
+        const result = await this.sessionManager.retryBackground(
+          input.sessionId,
+        );
         return { ok: true, sessionId: result.sessionId };
       } catch (error) {
         return { ok: false, error: String(error) };

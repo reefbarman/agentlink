@@ -68,7 +68,8 @@ function main() {
   }
 
   const inputPath = path.resolve(args.input ?? DEFAULT_INPUT);
-  const top = Number.isFinite(args.top) && args.top > 0 ? args.top : DEFAULT_TOP;
+  const top =
+    Number.isFinite(args.top) && args.top > 0 ? args.top : DEFAULT_TOP;
   const knownTools = loadKnownTools();
   const knownParameters = loadKnownToolParameters();
   const report = readTelemetry(inputPath, knownTools, knownParameters);
@@ -133,7 +134,11 @@ function requireValue(argv, index, flag) {
   return value;
 }
 
-function readTelemetry(inputPath, knownTools = new Map(), knownParameters = new Map()) {
+function readTelemetry(
+  inputPath,
+  knownTools = new Map(),
+  knownParameters = new Map(),
+) {
   const report = createEmptyReport();
   seedKnownTools(report, knownTools);
 
@@ -355,12 +360,7 @@ function loadKnownTools() {
     "tools",
     "toolCapabilities.ts",
   );
-  const registryPath = path.join(
-    REPO_ROOT,
-    "src",
-    "shared",
-    "toolRegistry.ts",
-  );
+  const registryPath = path.join(REPO_ROOT, "src", "shared", "toolRegistry.ts");
   const tools = new Map();
 
   if (fs.existsSync(capabilitiesPath)) {
@@ -406,7 +406,12 @@ function loadKnownTools() {
 }
 
 function loadKnownToolParameters() {
-  const toolAdapterPath = path.join(REPO_ROOT, "src", "agent", "toolAdapter.ts");
+  const toolAdapterPath = path.join(
+    REPO_ROOT,
+    "src",
+    "agent",
+    "toolAdapter.ts",
+  );
   const schemasPath = path.join(REPO_ROOT, "src", "shared", "toolSchemas.ts");
   const parameters = new Map();
   if (!fs.existsSync(toolAdapterPath) || !fs.existsSync(schemasPath)) {
@@ -416,7 +421,10 @@ function loadKnownToolParameters() {
   const toolAdapterSource = fs.readFileSync(toolAdapterPath, "utf-8");
   const schemasSource = fs.readFileSync(schemasPath, "utf-8");
   const schemaObjects = parseSchemaObjects(schemasSource);
-  const toolSchemasBody = extractAssignedObject(toolAdapterSource, "TOOL_SCHEMAS");
+  const toolSchemasBody = extractAssignedObject(
+    toolAdapterSource,
+    "TOOL_SCHEMAS",
+  );
 
   const schemaEntries = toolSchemasBody.matchAll(
     /([A-Za-z0-9_]+)\s*:\s*schemas\.([A-Za-z0-9_]+)/g,
@@ -449,7 +457,9 @@ function addInlineToolParameters(parameters) {
 
 function parseSchemaObjects(source) {
   const schemas = new Map();
-  const schemaExports = source.matchAll(/export const ([A-Za-z0-9_]+)\s*=\s*\{/g);
+  const schemaExports = source.matchAll(
+    /export const ([A-Za-z0-9_]+)\s*=\s*\{/g,
+  );
   for (const match of schemaExports) {
     const schemaName = match[1];
     const objectStart = source.indexOf("{", match.index);
@@ -542,7 +552,9 @@ function printSummary(report, inputPath, top) {
   console.log(`Input: ${inputPath}`);
   console.log(`Flush records: ${report.flushes}`);
   console.log(`Invalid lines skipped: ${report.invalidLines}`);
-  console.log(`Period: ${report.periodStart ?? "n/a"} -> ${report.periodEnd ?? "n/a"}`);
+  console.log(
+    `Period: ${report.periodStart ?? "n/a"} -> ${report.periodEnd ?? "n/a"}`,
+  );
   console.log(`Total calls: ${report.totalCalls}`);
   console.log(`Known tools: ${report.knownToolCount}`);
   console.log(`Tools in report: ${report.toolCount}`);
@@ -593,7 +605,9 @@ function printSummary(report, inputPath, top) {
   const parameterRows = report.parameters.slice(0, top);
   if (parameterRows.length > 0) {
     console.log("");
-    console.log(`Top tool parameters by presence (top ${parameterRows.length})`);
+    console.log(
+      `Top tool parameters by presence (top ${parameterRows.length})`,
+    );
     printTable(
       ["tool", "parameter", "count", "% calls"],
       parameterRows.map((row) => [
@@ -614,7 +628,12 @@ function printTable(headers, rows) {
     ),
   );
   console.log(formatTableRow(headers, widths));
-  console.log(formatTableRow(widths.map((width) => "-".repeat(width)), widths));
+  console.log(
+    formatTableRow(
+      widths.map((width) => "-".repeat(width)),
+      widths,
+    ),
+  );
   for (const row of rows) console.log(formatTableRow(row, widths));
 }
 
@@ -699,7 +718,10 @@ function writeCsvReports(report, csvDir) {
 }
 
 function toCsv(headers, rows) {
-  return [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n") + "\n";
+  return (
+    [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n") +
+    "\n"
+  );
 }
 
 function csvCell(value) {

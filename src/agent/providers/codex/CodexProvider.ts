@@ -398,11 +398,7 @@ export class CodexProvider implements ModelProvider {
     const codexInput = translateCodexMessages(messages);
 
     let auth = await this.getModelAuthOrThrow();
-    let effectiveModel = this.resolveEffectiveModel(
-      model,
-      auth,
-      "complete()",
-    );
+    let effectiveModel = this.resolveEffectiveModel(model, auth, "complete()");
     let reasoningEffort = resolveCodexReasoningEffort({
       modelId: effectiveModel,
       requestedEffort,

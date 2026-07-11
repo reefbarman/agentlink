@@ -261,7 +261,7 @@ Set these VS Code settings:
 {
   "agentlink.semanticSearchEnabled": true,
   "agentlink.qdrantUrl": "http://localhost:6333",
-  "agentlink.autoIndex": true
+  "agentlink.autoIndex": true,
 }
 ```
 
@@ -1064,12 +1064,12 @@ Configure ACP agents in VS Code settings:
       "args": ["--stdio"],
       "env": {
         // Optional extra environment for the subprocess. Values are redacted in diagnostics.
-        "EXAMPLE_API_KEY": "..."
+        "EXAMPLE_API_KEY": "...",
       },
       "initTimeoutMs": 10000,
-      "readonlyOnly": true
-    }
-  ]
+      "readonlyOnly": true,
+    },
+  ],
 }
 ```
 

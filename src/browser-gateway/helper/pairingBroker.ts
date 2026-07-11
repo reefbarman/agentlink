@@ -87,7 +87,8 @@ export class PairingBroker {
 
   constructor(options: PairingBrokerOptions = {}) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-    this.maxAttemptsPerCode = options.maxAttemptsPerCode ?? DEFAULT_MAX_ATTEMPTS;
+    this.maxAttemptsPerCode =
+      options.maxAttemptsPerCode ?? DEFAULT_MAX_ATTEMPTS;
     this.maxFailuresPerRemote =
       options.maxFailuresPerRemote ?? DEFAULT_MAX_FAILURES_PER_REMOTE;
     this.failuresWindowMs =
@@ -171,11 +172,7 @@ export class PairingBroker {
     };
   }
 
-  markConsumed(
-    pairingId: string,
-    deviceId: string,
-    deviceLabel: string,
-  ): void {
+  markConsumed(pairingId: string, deviceId: string, deviceLabel: string): void {
     this.retire(
       {
         pairingId,

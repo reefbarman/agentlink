@@ -848,10 +848,7 @@ describe("spawn_background_agent tool", () => {
       "bg-child",
       "change direction",
     );
-    expect(onDetachBackground).toHaveBeenCalledWith(
-      "test-session",
-      "bg-child",
-    );
+    expect(onDetachBackground).toHaveBeenCalledWith("test-session", "bg-child");
   });
 
   it("dispatches get_background_status to onGetBackgroundStatus callback", async () => {

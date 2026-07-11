@@ -366,7 +366,13 @@ export async function treeSitterChunkFile(
       const query = getOrCreateQuery(language, grammarName);
       let chunks: Chunk[];
       if (query) {
-        chunks = extractChunksWithQueries(tree, query, lines, filePath, relPath);
+        chunks = extractChunksWithQueries(
+          tree,
+          query,
+          lines,
+          filePath,
+          relPath,
+        );
       } else {
         // Fallback: top-level walk with EXTRACTABLE_TYPES
         const extractable = EXTRACTABLE_TYPES[grammarName];

@@ -1,4 +1,7 @@
-import type { AgentBudget, SpawnBackgroundRequest } from "../core/capabilities/background.js";
+import type {
+  AgentBudget,
+  SpawnBackgroundRequest,
+} from "../core/capabilities/background.js";
 
 export type FleetWorkflowKind =
   | "structured_diff_review"
@@ -37,7 +40,9 @@ export interface FleetWorkflowOutcome {
 }
 
 /** Builds higher-autonomy workflows exclusively from normal fleet delegations. */
-export function planFleetWorkflow(request: FleetWorkflowRequest): FleetWorkflowPlan {
+export function planFleetWorkflow(
+  request: FleetWorkflowRequest,
+): FleetWorkflowPlan {
   const workflowId = globalThis.crypto.randomUUID();
   const goalId =
     request.kind === "persistent_goal"
@@ -141,7 +146,8 @@ export function parseFleetResultEnvelope(
   if (expected && expected !== "text") {
     try {
       const parsed = JSON.parse(text) as unknown;
-      if (isFleetResultEnvelope(parsed) && parsed.type === expected) return parsed;
+      if (isFleetResultEnvelope(parsed) && parsed.type === expected)
+        return parsed;
     } catch {
       // Preserve useful evidence as text if the backend did not emit JSON.
     }
@@ -149,7 +155,9 @@ export function parseFleetResultEnvelope(
   return { type: "text", text };
 }
 
-export function isFleetResultEnvelope(value: unknown): value is FleetResultEnvelope {
+export function isFleetResultEnvelope(
+  value: unknown,
+): value is FleetResultEnvelope {
   if (!value || typeof value !== "object") return false;
   const result = value as Record<string, unknown>;
   if (result.type === "text") return typeof result.text === "string";
@@ -158,7 +166,8 @@ export function isFleetResultEnvelope(value: unknown): value is FleetResultEnvel
       typeof result.summary === "string" &&
       isStringArray(result.files) &&
       result.files.every(isWorkspaceRelativeArtifact) &&
-      (result.verification === undefined || typeof result.verification === "string")
+      (result.verification === undefined ||
+        typeof result.verification === "string")
     );
   }
   if (result.type === "verification") {
@@ -178,7 +187,9 @@ export function isFleetResultEnvelope(value: unknown): value is FleetResultEnvel
         if (!finding || typeof finding !== "object") return false;
         const item = finding as Record<string, unknown>;
         return (
-          ["critical", "high", "medium", "low"].includes(String(item.severity)) &&
+          ["critical", "high", "medium", "low"].includes(
+            String(item.severity),
+          ) &&
           typeof item.message === "string" &&
           (item.path === undefined ||
             (typeof item.path === "string" &&
@@ -195,7 +206,9 @@ export function isFleetResultEnvelope(value: unknown): value is FleetResultEnvel
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
 }
 
 function isWorkspaceRelativeArtifact(value: string): boolean {

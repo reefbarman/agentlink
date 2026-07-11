@@ -58,7 +58,7 @@ export function createCodexUsageAdapter(): ProviderUsageAdapter {
         accountSource: "Signed in to the Codex CLI",
         switchAccountInstructions:
           "To view another account, run codex logout, sign in to that account with codex login, then run /usage again. Switching AgentLink's active OAuth account does not change the Codex CLI account.",
-        ...(usage.account.planType ?? usage.rateLimits.planType
+        ...((usage.account.planType ?? usage.rateLimits.planType)
           ? { planType: usage.account.planType ?? usage.rateLimits.planType! }
           : {}),
         rateLimits: snapshots.map(([id, snapshot]) => ({

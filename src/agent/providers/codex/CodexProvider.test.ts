@@ -1045,7 +1045,10 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
       return (async function* () {
         yield {
           type: "response.done",
-          response: { id: "resp", usage: { input_tokens: 1, output_tokens: 1 } },
+          response: {
+            id: "resp",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
         };
       })();
     });
@@ -1139,7 +1142,10 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
         return (async function* () {
           yield {
             type: "response.done",
-            response: { id: "resp", usage: { input_tokens: 1, output_tokens: 1 } },
+            response: {
+              id: "resp",
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
           };
         })();
       });

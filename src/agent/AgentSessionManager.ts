@@ -67,10 +67,7 @@ import {
   type AgentSessionManagerOptions,
   type CheckpointManagerLike,
 } from "./AgentSessionManagerHost.js";
-import {
-  FleetAdmissionError,
-  FleetScheduler,
-} from "./FleetScheduler.js";
+import { FleetAdmissionError, FleetScheduler } from "./FleetScheduler.js";
 import {
   parseFleetResultEnvelope,
   planFleetWorkflow,
@@ -294,8 +291,7 @@ export class AgentSessionManager {
     this.fleetScheduler = new FleetScheduler({
       maxConcurrent: this.bgDefaults.maxConcurrent,
       maxConcurrentPerRoot: this.bgDefaults.maxConcurrentPerRoot ?? 2,
-      maxConcurrentPerProvider:
-        this.bgDefaults.maxConcurrentPerProvider ?? 2,
+      maxConcurrentPerProvider: this.bgDefaults.maxConcurrentPerProvider ?? 2,
       maxDepth: this.bgDefaults.maxDepth ?? 2,
       maxChildrenPerParent: this.bgDefaults.maxChildrenPerParent ?? 2,
     });
@@ -2423,8 +2419,7 @@ export class AgentSessionManager {
           routingReason: fleet.routingReason,
           fallbackUsed: fleet.fallbackUsed,
           toolCalls: 0,
-          tokenUsage:
-            session.totalInputTokens + session.totalOutputTokens,
+          tokenUsage: session.totalInputTokens + session.totalOutputTokens,
           apiTurns: fleet.budgetUsage?.apiTurns ?? 0,
           startedAt:
             fleet.completedAt && fleet.budgetUsage
@@ -2720,8 +2715,10 @@ export class AgentSessionManager {
       const nextIndex = this.fleetScheduler.findNextRunnable(
         this.bgLaunchQueue,
         (candidate) => {
-        const candidateSession = this.sessions.get(candidate.sessionId);
-        return Boolean(candidateSession && this.canStartBackground(candidateSession));
+          const candidateSession = this.sessions.get(candidate.sessionId);
+          return Boolean(
+            candidateSession && this.canStartBackground(candidateSession),
+          );
         },
       );
       if (nextIndex < 0) break;
@@ -2766,13 +2763,13 @@ export class AgentSessionManager {
     const parentDepth = parent?.fleetMetadata?.depth ?? 0;
     const childCount = parent
       ? Array.from(this.sessions.values()).filter(
-        (candidate) =>
-          candidate.fleetMetadata?.parentSessionId === parent.id &&
-          candidate.fleetMetadata.lifecycle !== "completed" &&
-          candidate.fleetMetadata.lifecycle !== "failed" &&
-          candidate.fleetMetadata.lifecycle !== "cancelled" &&
-          candidate.fleetMetadata.lifecycle !== "budget_exhausted" &&
-          candidate.fleetMetadata.lifecycle !== "interrupted",
+          (candidate) =>
+            candidate.fleetMetadata?.parentSessionId === parent.id &&
+            candidate.fleetMetadata.lifecycle !== "completed" &&
+            candidate.fleetMetadata.lifecycle !== "failed" &&
+            candidate.fleetMetadata.lifecycle !== "cancelled" &&
+            candidate.fleetMetadata.lifecycle !== "budget_exhausted" &&
+            candidate.fleetMetadata.lifecycle !== "interrupted",
         ).length
       : 0;
     const admission = this.fleetScheduler.evaluateSpawn({
@@ -2975,36 +2972,36 @@ export class AgentSessionManager {
             this.onSessionsChanged?.();
           } else {
             this.bgStatusDetail.delete(session.id);
-          this.markBgCompleted(session.id);
-          const fallbackMsg = this.bgErrors.get(session.id)
-            ? `ACP background agent stopped: ${this.bgErrors.get(session.id)}`
-            : "(ACP background agent completed without output)";
-          const resultText = session.getLastAssistantText() ?? fallbackMsg;
-          this.cancelOwnedChildrenOnCompletion(session.id);
-          this.finalizeFleetMetadata(session, resultText);
-          this.saveSession(session.id);
-          this.bgFinalResults.set(session.id, resultText);
-          for (const t of this.bgSafetyTimers.get(session.id) ?? []) {
-            this.host.timers.clearTimeout(t);
-          }
-          this.bgSafetyTimers.delete(session.id);
-          for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
-            resolve(resultText);
-          }
-          this.bgResultWaiters.delete(session.id);
-          this.onSessionsChanged?.();
-          void this.resumeParentAfterBackgroundCompletion(
-            session.id,
-            resultText,
-          );
-          this.host.timers.setTimeout(
-            () => {
-              this.bgFinalResults.delete(session.id);
-              this.bgParents.delete(session.id);
-              this.bgAutoResumed.delete(session.id);
-            },
-            5 * 60 * 1000,
-          );
+            this.markBgCompleted(session.id);
+            const fallbackMsg = this.bgErrors.get(session.id)
+              ? `ACP background agent stopped: ${this.bgErrors.get(session.id)}`
+              : "(ACP background agent completed without output)";
+            const resultText = session.getLastAssistantText() ?? fallbackMsg;
+            this.cancelOwnedChildrenOnCompletion(session.id);
+            this.finalizeFleetMetadata(session, resultText);
+            this.saveSession(session.id);
+            this.bgFinalResults.set(session.id, resultText);
+            for (const t of this.bgSafetyTimers.get(session.id) ?? []) {
+              this.host.timers.clearTimeout(t);
+            }
+            this.bgSafetyTimers.delete(session.id);
+            for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
+              resolve(resultText);
+            }
+            this.bgResultWaiters.delete(session.id);
+            this.onSessionsChanged?.();
+            void this.resumeParentAfterBackgroundCompletion(
+              session.id,
+              resultText,
+            );
+            this.host.timers.setTimeout(
+              () => {
+                this.bgFinalResults.delete(session.id);
+                this.bgParents.delete(session.id);
+                this.bgAutoResumed.delete(session.id);
+              },
+              5 * 60 * 1000,
+            );
           }
         }
       };
@@ -3176,9 +3173,7 @@ export class AgentSessionManager {
         for await (const event of bgEngine.run(session, {
           isBackground: true,
           toolProfile:
-            request.permissionProfile === "review-only"
-              ? "review"
-              : undefined,
+            request.permissionProfile === "review-only" ? "review" : undefined,
         })) {
           if (event.type === "text_delta") {
             this.appendBgStreamingText(session.id, event.text);
@@ -4082,7 +4077,11 @@ export class AgentSessionManager {
     if (!session || !fleet?.parentSessionId) {
       return { detached: false, reason: "session is already a root" };
     }
-    const updateSubtree = (node: AgentSession, rootId: string, depth: number) => {
+    const updateSubtree = (
+      node: AgentSession,
+      rootId: string,
+      depth: number,
+    ) => {
       if (!node.fleetMetadata) return;
       node.fleetMetadata.rootSessionId = rootId;
       node.fleetMetadata.depth = depth;
@@ -4367,11 +4366,7 @@ export class AgentSessionManager {
     session: AgentSession,
     args: Omit<
       PersistedFleetMetadata,
-      | "schemaVersion"
-      | "placement"
-      | "rootSessionId"
-      | "depth"
-      | "lifecycle"
+      "schemaVersion" | "placement" | "rootSessionId" | "depth" | "lifecycle"
     >,
   ): PersistedFleetMetadata {
     const parent = args.parentSessionId
@@ -4382,7 +4377,9 @@ export class AgentSessionManager {
       placement: "background",
       ...args,
       rootSessionId:
-        parent?.fleetMetadata?.rootSessionId ?? args.parentSessionId ?? session.id,
+        parent?.fleetMetadata?.rootSessionId ??
+        args.parentSessionId ??
+        session.id,
       depth: parent?.fleetMetadata ? parent.fleetMetadata.depth + 1 : 1,
       lifecycle: "running",
     };
@@ -4397,7 +4394,8 @@ export class AgentSessionManager {
     fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
     fleet.finalResult = resultText;
     fleet.structuredResult = parseFleetResultEnvelope(
-      fleet.delegation?.expectedResult as SpawnBackgroundRequest["expectedResult"],
+      fleet.delegation
+        ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
       resultText,
     );
     const meta = this.bgMeta.get(session.id);
@@ -4408,8 +4406,7 @@ export class AgentSessionManager {
         apiTurns: meta.apiTurns,
         elapsedMs: Math.max(0, Date.now() - meta.startedAt),
         estimatedCostUsd: fleet.budget?.estimatedCostPerMillionTokens
-          ? (meta.tokenUsage /
-              1_000_000) *
+          ? (meta.tokenUsage / 1_000_000) *
             fleet.budget.estimatedCostPerMillionTokens
           : undefined,
       };
@@ -4481,10 +4478,7 @@ export class AgentSessionManager {
           : this.isFleetDescendant(candidate.id, owner!.id)),
     );
     const fields: Array<
-      [
-        keyof NonNullable<PersistedFleetMetadata["budget"]>,
-        string,
-      ]
+      [keyof NonNullable<PersistedFleetMetadata["budget"]>, string]
     > = [
       ["maxTokens", "tokens"],
       ["maxToolCalls", "tool calls"],
@@ -4532,7 +4526,9 @@ export class AgentSessionManager {
         continue;
       }
       const conflicting = request.ownedPaths.find((requested) =>
-        fleet.delegation?.ownedPaths?.some((owned) => overlaps(requested, owned)),
+        fleet.delegation?.ownedPaths?.some((owned) =>
+          overlaps(requested, owned),
+        ),
       );
       if (conflicting) {
         throw new FleetAdmissionError({
@@ -4693,9 +4689,11 @@ export class AgentSessionManager {
         session.fleetMetadata.terminalReason =
           record.status === "completed"
             ? undefined
-            : record.error ?? `worktree_${record.status}`;
+            : (record.error ?? `worktree_${record.status}`);
         session.fleetMetadata.finalResult =
-          record.resultText ?? record.error ?? "Worktree agent ended without output";
+          record.resultText ??
+          record.error ??
+          "Worktree agent ended without output";
         session.fleetMetadata.structuredResult = parseFleetResultEnvelope(
           session.fleetMetadata.delegation
             ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
@@ -4704,12 +4702,10 @@ export class AgentSessionManager {
         session.fleetMetadata.completedAt = Date.now();
         const meta = this.bgMeta.get(session.id);
         if (meta && record.usage) {
-          meta.tokenUsage = record.usage.inputTokens + record.usage.outputTokens;
+          meta.tokenUsage =
+            record.usage.inputTokens + record.usage.outputTokens;
         }
-        this.bgFinalResults.set(
-          session.id,
-          session.fleetMetadata.finalResult,
-        );
+        this.bgFinalResults.set(session.id, session.fleetMetadata.finalResult);
         for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
           resolve(session.fleetMetadata.finalResult);
         }
@@ -4943,17 +4939,18 @@ export class AgentSessionManager {
         const eventKind =
           latestUnread?.type === "question"
             ? "question"
-            : status === "awaiting_approval" || latestUnread?.type === "approval"
+            : status === "awaiting_approval" ||
+                latestUnread?.type === "approval"
               ? "approval"
               : latestUnread?.type === "budget_warning"
                 ? "budget_warning"
                 : s.fleetMetadata?.lifecycle === "interrupted"
-              ? "interrupted"
-              : status === "error"
-                ? "failure"
-                : s.fleetMetadata?.lifecycle === "completed"
-                  ? "completion"
-                  : undefined;
+                  ? "interrupted"
+                  : status === "error"
+                    ? "failure"
+                    : s.fleetMetadata?.lifecycle === "completed"
+                      ? "completion"
+                      : undefined;
         const eventTimestamp =
           s.fleetMetadata?.completedAt ?? s.lastActiveAt ?? s.createdAt;
 
@@ -5022,15 +5019,16 @@ export class AgentSessionManager {
           attention:
             latestUnread?.type === "question"
               ? "question"
-              : status === "awaiting_approval" || latestUnread?.type === "approval"
-              ? "approval"
-              : latestUnread?.type === "budget_warning"
-                ? "budget_warning"
-              : s.fleetMetadata?.lifecycle === "interrupted"
-                ? "interrupted"
-                : status === "error"
-                  ? "failed"
-                  : undefined,
+              : status === "awaiting_approval" ||
+                  latestUnread?.type === "approval"
+                ? "approval"
+                : latestUnread?.type === "budget_warning"
+                  ? "budget_warning"
+                  : s.fleetMetadata?.lifecycle === "interrupted"
+                    ? "interrupted"
+                    : status === "error"
+                      ? "failed"
+                      : undefined,
           attentionEvent: eventKind
             ? {
                 id: `${s.id}:${eventKind}:${eventTimestamp}`,
@@ -5078,8 +5076,7 @@ export class AgentSessionManager {
     for (const children of byParent.values()) {
       children.sort(
         (a, b) =>
-          (a.createdAt ?? 0) - (b.createdAt ?? 0) ||
-          a.id.localeCompare(b.id),
+          (a.createdAt ?? 0) - (b.createdAt ?? 0) || a.id.localeCompare(b.id),
       );
     }
     const ordered: BgSessionInfo[] = [];

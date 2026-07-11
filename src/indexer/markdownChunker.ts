@@ -57,9 +57,7 @@ export function markdownChunkFile(
     const sectionContent = section.lines.join("\n").trim();
     if (sectionContent.length < MIN_CHUNK_CHARS) continue;
 
-    const headingContext = section.heading
-      ? `// ${section.heading}\n`
-      : "";
+    const headingContext = section.heading ? `// ${section.heading}\n` : "";
 
     if (
       sectionContent.length <= EFFECTIVE_MAX &&

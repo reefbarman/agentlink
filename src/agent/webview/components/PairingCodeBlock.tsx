@@ -60,9 +60,8 @@ export function PairingCodeBlock({ block }: PairingCodeBlockProps) {
   const primaryUrl = block.pairingUrls[0] ?? "";
   const fallbackUrls = block.pairingUrls.slice(1);
   const isPending = block.status === "pending" && remainingMs > 0;
-  const displayStatus = remainingMs <= 0 && block.status === "pending"
-    ? "expired"
-    : block.status;
+  const displayStatus =
+    remainingMs <= 0 && block.status === "pending" ? "expired" : block.status;
 
   return (
     <div class={`tool-call-block ${statusClass} pairing-code-block`}>

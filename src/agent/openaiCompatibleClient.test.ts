@@ -42,9 +42,7 @@ describe("getOpenAiCompatibleEndpoint", () => {
 
   it("strips trailing slashes from baseUrl", () => {
     workspaceConfig["openaiCompatible.baseUrl"] = "http://example.com/v1///";
-    expect(getOpenAiCompatibleEndpoint().baseUrl).toBe(
-      "http://example.com/v1",
-    );
+    expect(getOpenAiCompatibleEndpoint().baseUrl).toBe("http://example.com/v1");
   });
 
   it("trims whitespace on model and apiKey", () => {
@@ -71,9 +69,7 @@ describe("getOpenAiCompatibleEndpoint", () => {
   it("new keys take precedence over legacy", () => {
     workspaceConfig["openaiCompatible.baseUrl"] = "http://new.example/v1";
     workspaceConfig["questionDetection.baseUrl"] = "http://legacy.example/v1";
-    expect(getOpenAiCompatibleEndpoint().baseUrl).toBe(
-      "http://new.example/v1",
-    );
+    expect(getOpenAiCompatibleEndpoint().baseUrl).toBe("http://new.example/v1");
   });
 });
 

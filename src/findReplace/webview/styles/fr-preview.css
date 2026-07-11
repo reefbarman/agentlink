@@ -40,7 +40,10 @@ body {
 }
 
 .fr-old {
-  background: var(--vscode-diffEditor-removedTextBackground, rgba(255, 0, 0, 0.2));
+  background: var(
+    --vscode-diffEditor-removedTextBackground,
+    rgba(255, 0, 0, 0.2)
+  );
   padding: 2px 6px;
   border-radius: 3px;
   font-family: var(--vscode-editor-font-family);
@@ -49,7 +52,10 @@ body {
 }
 
 .fr-new {
-  background: var(--vscode-diffEditor-insertedTextBackground, rgba(0, 255, 0, 0.2));
+  background: var(
+    --vscode-diffEditor-insertedTextBackground,
+    rgba(0, 255, 0, 0.2)
+  );
   padding: 2px 6px;
   border-radius: 3px;
   font-family: var(--vscode-editor-font-family);
@@ -234,20 +240,32 @@ body {
 }
 
 .fr-deletion {
-  background: var(--vscode-diffEditor-removedLineBackground, rgba(255, 0, 0, 0.1));
+  background: var(
+    --vscode-diffEditor-removedLineBackground,
+    rgba(255, 0, 0, 0.1)
+  );
 }
 
 .fr-insertion {
-  background: var(--vscode-diffEditor-insertedLineBackground, rgba(0, 255, 0, 0.1));
+  background: var(
+    --vscode-diffEditor-insertedLineBackground,
+    rgba(0, 255, 0, 0.1)
+  );
 }
 
 .fr-match-old {
-  background: var(--vscode-diffEditor-removedTextBackground, rgba(255, 0, 0, 0.3));
+  background: var(
+    --vscode-diffEditor-removedTextBackground,
+    rgba(255, 0, 0, 0.3)
+  );
   text-decoration: line-through;
 }
 
 .fr-match-new {
-  background: var(--vscode-diffEditor-insertedTextBackground, rgba(0, 255, 0, 0.3));
+  background: var(
+    --vscode-diffEditor-insertedTextBackground,
+    rgba(0, 255, 0, 0.3)
+  );
 }
 
 .fr-line-num {

@@ -135,12 +135,12 @@ describe("markdownChunkFile", () => {
 
   it("sets correct line numbers", () => {
     const content = [
-      "# Section One",  // L1
-      "",               // L2
+      "# Section One", // L1
+      "", // L2
       "Content one that is long enough to pass the minimum character threshold easily.", // L3
-      "",               // L4
-      "## Section Two",  // L5
-      "",                // L6
+      "", // L4
+      "## Section Two", // L5
+      "", // L6
       "Content two that is also long enough to pass the minimum character threshold here.", // L7
     ].join("\n");
 

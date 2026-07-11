@@ -17,7 +17,8 @@ export function setChunkGranularity(g: ChunkGranularity): void {
 }
 
 /** Tokens that commonly start a new logical block */
-const BOUNDARY_TOKENS = /^\s*(function\b|class\b|export\b|import\b|def\b|async\b|const\b|let\b|var\b|interface\b|type\b|enum\b|struct\b|impl\b|pub\b|#|\/\/|\/\*|\})/;
+const BOUNDARY_TOKENS =
+  /^\s*(function\b|class\b|export\b|import\b|def\b|async\b|const\b|let\b|var\b|interface\b|type\b|enum\b|struct\b|impl\b|pub\b|#|\/\/|\/\*|\})/;
 
 // --- Public API ---
 
@@ -54,7 +55,9 @@ export function chunkFile(
   const chunks: Chunk[] = [];
   let cursor = 0;
   const targetWindow =
-    currentGranularity === "fine" ? Math.floor(TARGET_WINDOW / 2) : TARGET_WINDOW;
+    currentGranularity === "fine"
+      ? Math.floor(TARGET_WINDOW / 2)
+      : TARGET_WINDOW;
   const overlapLines = currentGranularity === "fine" ? 0 : OVERLAP_LINES;
 
   while (cursor < lines.length) {

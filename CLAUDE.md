@@ -17,6 +17,7 @@
 Choose verification based on the type of change:
 
 ### Main code changes (production code, shared libraries, extension runtime, tests, build config, tool definitions)
+
 Run full verification before considering the task complete:
 
 1. `npm run lint` — type-checks all tsconfigs (`tsc --noEmit`) and runs oxlint. Fix **all** errors and warnings.
@@ -25,11 +26,13 @@ Run full verification before considering the task complete:
 Both must pass cleanly (zero exit code, no warnings).
 
 ### Spikes / experiments / one-off scripts / docs-only changes
+
 Full-project lint + test is **not required** by default.
 
 Use lightweight verification appropriate to the task (for example: run only the script, run a focused test, or do no execution for docs-only edits).
 
 When full verification is skipped, explicitly state:
+
 - what was skipped,
 - why it was skipped,
 - and what validation was run instead (if any).

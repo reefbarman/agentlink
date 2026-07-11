@@ -25,7 +25,11 @@ describe("isAgentlinkTmpArtifact", () => {
       const varBase = base.startsWith("/private/")
         ? base.slice("/private".length)
         : base;
-      const varPath = path.join(varBase, "agentlink-output-abc123", "output.txt");
+      const varPath = path.join(
+        varBase,
+        "agentlink-output-abc123",
+        "output.txt",
+      );
       const privateVarPath = `/private${varPath}`;
 
       expect(isAgentlinkTmpArtifact(varPath)).toBe(true);

@@ -73,7 +73,10 @@ describe("filterOutput", () => {
   // ── output_offset ───────────────────────────────────────────────────
 
   it("output_offset skips first N lines", () => {
-    const result = filterOutput(lines(10), { output_offset: 3, output_head: 2 });
+    const result = filterOutput(lines(10), {
+      output_offset: 3,
+      output_head: 2,
+    });
     expect(result.filtered).toBe("line 4\nline 5");
   });
 
@@ -114,20 +117,29 @@ describe("filterOutput", () => {
 
   it("output_grep with context includes surrounding lines", () => {
     const input = "a\nb\nc\nmatch\ne\nf\ng";
-    const result = filterOutput(input, { output_grep: "match", output_grep_context: 1 });
+    const result = filterOutput(input, {
+      output_grep: "match",
+      output_grep_context: 1,
+    });
     expect(result.filtered).toBe("c\nmatch\ne");
   });
 
   it("output_grep with context inserts separators between groups", () => {
     const input = "a\nmatch1\nc\nd\ne\nmatch2\ng";
-    const result = filterOutput(input, { output_grep: "match", output_grep_context: 0 });
+    const result = filterOutput(input, {
+      output_grep: "match",
+      output_grep_context: 0,
+    });
     // No context, no separators
     expect(result.filtered).toBe("match1\nmatch2");
   });
 
   it("output_grep with context merges overlapping ranges", () => {
     const input = "a\nmatch1\nc\nmatch2\ne";
-    const result = filterOutput(input, { output_grep: "match", output_grep_context: 1 });
+    const result = filterOutput(input, {
+      output_grep: "match",
+      output_grep_context: 1,
+    });
     // context=1: match1 includes a,match1,c. match2 includes c,match2,e. Merged = all lines.
     expect(result.filtered).toBe("a\nmatch1\nc\nmatch2\ne");
   });
@@ -135,7 +147,10 @@ describe("filterOutput", () => {
   it("output_grep with context adds separators for non-contiguous groups", () => {
     // 7 lines: 0=a, 1=match1, 2=c, 3=d, 4=e, 5=match2, 6=g
     const input = "a\nmatch1\nc\nd\ne\nmatch2\ng";
-    const result = filterOutput(input, { output_grep: "match", output_grep_context: 1 });
+    const result = filterOutput(input, {
+      output_grep: "match",
+      output_grep_context: 1,
+    });
     // match1 ctx=1: lines 0,1,2. match2 ctx=1: lines 4,5,6. Gap at line 3.
     expect(result.filtered).toBe("a\nmatch1\nc\n--\ne\nmatch2\ng");
   });
@@ -150,7 +165,11 @@ describe("filterOutput", () => {
 
   it("grep + offset + tail", () => {
     const input = "a1\na2\na3\na4\na5";
-    const result = filterOutput(input, { output_grep: "a", output_offset: 1, output_tail: 2 });
+    const result = filterOutput(input, {
+      output_grep: "a",
+      output_offset: 1,
+      output_tail: 2,
+    });
     // grep matches all 5, offset=1 → a2,a3,a4,a5 → tail 2 → a4,a5
     expect(result.filtered).toBe("a4\na5");
   });

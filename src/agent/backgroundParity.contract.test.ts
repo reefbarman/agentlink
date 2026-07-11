@@ -13,8 +13,12 @@ const mcpTools = [
 describe("foreground/background capability parity contract", () => {
   for (const mode of BUILT_IN_MODES) {
     it(`${mode.slug} exposes the same native and MCP tools by placement`, () => {
-      const foreground = getAgentTools(mode, mcpTools, false).map((tool) => tool.name);
-      const background = getAgentTools(mode, mcpTools, true).map((tool) => tool.name);
+      const foreground = getAgentTools(mode, mcpTools, false).map(
+        (tool) => tool.name,
+      );
+      const background = getAgentTools(mode, mcpTools, true).map(
+        (tool) => tool.name,
+      );
       expect(background).toEqual(foreground);
     });
   }

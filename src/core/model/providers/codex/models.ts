@@ -130,7 +130,9 @@ export function remapToChatgptBackendModel(modelId: string): string {
 }
 
 /** Stable equivalents used when a limited-preview GPT-5.6 model is unavailable. */
-export function getCodexPreviewModelFallback(modelId: string): string | undefined {
+export function getCodexPreviewModelFallback(
+  modelId: string,
+): string | undefined {
   switch (modelId) {
     case "gpt-5.6-sol":
       return "gpt-5.5";
