@@ -18,6 +18,10 @@ import {
 } from "../util/ripgrep.js";
 import { getAlCollectionName } from "../indexer/collectionName.js";
 import { requestEmbeddings } from "../indexer/embeddingClient.js";
+import {
+  DEFAULT_QDRANT_URL,
+  queryQdrantPoints,
+} from "../indexer/qdrantClient.js";
 
 import { type ToolResult } from "../shared/types.js";
 import { getSemanticReadinessMessage } from "../shared/semanticReadiness.js";
@@ -27,7 +31,7 @@ import { getSemanticReadinessMessage } from "../shared/semanticReadiness.js";
 export function getQdrantUrl(): string {
   return vscode.workspace
     .getConfiguration("agentlink")
-    .get<string>("qdrantUrl", "http://localhost:6333");
+    .get<string>("qdrantUrl", DEFAULT_QDRANT_URL);
 }
 
 const EMBEDDING_MAX_RETRIES = 3;
@@ -625,36 +629,7 @@ async function queryQdrantVector(
     },
   };
 
-  const url = `${qdrantUrl.replace(/\/+$/, "")}/collections/${collectionName}/points/query`;
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Qdrant is not reachable at ${qdrantUrl}. Ensure Qdrant is running. (${message})`,
-    );
-  }
-
-  if (!response.ok) {
-    const error = await response.text();
-    if (response.status === 404) {
-      throw new Error(
-        `No codebase index found (collection: ${collectionName}).`,
-      );
-    }
-    throw new Error(`Qdrant API error (${response.status}): ${error}`);
-  }
-
-  const data = (await response.json()) as {
-    result?: { points?: QdrantSearchResult[] };
-  };
-  return data.result?.points ?? [];
+  return queryQdrantPoints<QdrantSearchResult>(qdrantUrl, collectionName, body);
 }
 
 /** Execute a vector search filtered by keyword text match */
@@ -694,20 +669,12 @@ async function queryQdrantWithTextFilter(
     },
   };
 
-  const url = `${qdrantUrl.replace(/\/+$/, "")}/collections/${collectionName}/points/query`;
-
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) return []; // silently fall back to vector-only
-    const data = (await response.json()) as {
-      result?: { points?: QdrantSearchResult[] };
-    };
-    return data.result?.points ?? [];
+    return await queryQdrantPoints<QdrantSearchResult>(
+      qdrantUrl,
+      collectionName,
+      body,
+    );
   } catch {
     return []; // silently fall back to vector-only
   }
@@ -1000,21 +967,9 @@ export async function semanticFileQuery(
       with_payload: { include: ["startLine", "endLine"] },
     };
 
-    const url = `${qdrantUrl.replace(/\/+$/, "")}/collections/${collectionName}/points/query`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) return null;
-
-    const data = (await response.json()) as {
-      result?: {
-        points?: Array<{ payload?: { startLine?: number; endLine?: number } }>;
-      };
-    };
-    const points = data.result?.points;
+    const points = await queryQdrantPoints<{
+      payload?: { startLine?: number; endLine?: number };
+    }>(qdrantUrl, collectionName, body);
     if (!points || points.length === 0) return null;
 
     // Return the best match's line range

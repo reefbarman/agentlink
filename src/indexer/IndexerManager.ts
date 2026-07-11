@@ -28,6 +28,7 @@ import {
 } from "../shared/semanticReadiness.js";
 import { getWorkspaceRootForPath, getWorkspaceRoots } from "../util/paths.js";
 import { getAlCollectionName } from "./collectionName.js";
+import { DEFAULT_QDRANT_URL, normalizeQdrantUrl } from "./qdrantClient.js";
 
 // --- Public types ---
 
@@ -142,10 +143,7 @@ export class IndexerManager implements vscode.Disposable {
         "semanticSearchEnabled",
         false,
       );
-      const qdrantUrl = config.get<string>(
-        "qdrantUrl",
-        "http://localhost:6333",
-      );
+      const qdrantUrl = config.get<string>("qdrantUrl", DEFAULT_QDRANT_URL);
       const workspaceRoots = this.getWorkspaceRoots();
 
       const embeddingBearerToken = await this.getEmbeddingBearerToken();
@@ -747,7 +745,7 @@ export class IndexerManager implements vscode.Disposable {
     this.pendingAdded.clear();
     this.pendingRemoved.clear();
 
-    const qdrantUrl = config.get<string>("qdrantUrl", "http://localhost:6333");
+    const qdrantUrl = config.get<string>("qdrantUrl", DEFAULT_QDRANT_URL);
     const embeddingBearerToken = await this.getEmbeddingBearerToken();
     if (!embeddingBearerToken) return;
 
@@ -1123,7 +1121,7 @@ export class IndexerManager implements vscode.Disposable {
    * Returns false if all attempts fail or cancel is requested.
    */
   private async waitForQdrant(qdrantUrl: string): Promise<boolean> {
-    const baseUrl = qdrantUrl.replace(/\/+$/, "");
+    const baseUrl = normalizeQdrantUrl(qdrantUrl);
     const delays = [0, 1000, 2000, 4000, 8000]; // initial + 4 retries
 
     for (let i = 0; i < delays.length; i++) {

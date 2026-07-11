@@ -63,6 +63,14 @@ import type {
 } from "./types.js";
 import { EMBEDDING_DIM } from "./embeddingConfig.js";
 import { requestEmbeddings } from "./embeddingClient.js";
+import {
+  deleteQdrantCollection,
+  deleteQdrantPoints,
+  ensureQdrantCollection,
+  upsertQdrantPoints,
+  type QdrantPoint,
+  type QdrantPayloadIndex,
+} from "./qdrantClient.js";
 import { sleep } from "../util/sleep.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 
@@ -420,7 +428,7 @@ async function processFileBatch(
     if (aborted) break;
     const batch = points.slice(i, i + QDRANT_UPSERT_BATCH);
     try {
-      await upsertPoints(config.qdrantUrl, config.collectionName, batch);
+      await upsertQdrantPoints(config.qdrantUrl, config.collectionName, batch);
       pointsUpserted += batch.length;
     } catch (err) {
       errors.push(`Qdrant upsert failed: ${err}`);
@@ -489,7 +497,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
 
     // Force re-index: delete collection and clear cache
     if (msg.force) {
-      await deleteCollection(msg.qdrantUrl, msg.collectionName);
+      await deleteQdrantCollection(msg.qdrantUrl, msg.collectionName);
       writeCache(msg.cachePath, { version: 1, files: {} });
       resetStructuralCache(
         structuralCache,
@@ -500,7 +508,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     }
 
     // Ensure Qdrant collection exists
-    await ensureCollection(msg.qdrantUrl, msg.collectionName);
+    await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
 
     // Load cache
     const cache = loadCache(msg.cachePath);
@@ -508,8 +516,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     // Granularity change → force full re-index
     // Treat undefined (old cache) as "standard" to avoid unnecessary re-index
     if ((cache.granularity ?? "standard") !== msg.granularity) {
-      await deleteCollection(msg.qdrantUrl, msg.collectionName);
-      await ensureCollection(msg.qdrantUrl, msg.collectionName);
+      await deleteQdrantCollection(msg.qdrantUrl, msg.collectionName);
+      await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
       cache.files = {};
       cache.granularity = msg.granularity;
       resetStructuralCache(
@@ -555,7 +563,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         const cached = cache.files[relPath];
         if (cached && cached.pointIds.length > 0) {
           try {
-            await deletePoints(
+            await deleteQdrantPoints(
               msg.qdrantUrl,
               msg.collectionName,
               cached.pointIds,
@@ -639,7 +647,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         const cached = cache.files[file.relPath];
         if (cached && cached.pointIds.length > 0) {
           try {
-            await deletePoints(
+            await deleteQdrantPoints(
               msg.qdrantUrl,
               msg.collectionName,
               cached.pointIds,
@@ -730,7 +738,7 @@ async function handleIncrementalUpdate(
       const cached = cache.files[relPath];
       if (cached && cached.pointIds.length > 0) {
         try {
-          await deletePoints(
+          await deleteQdrantPoints(
             msg.qdrantUrl,
             msg.collectionName,
             cached.pointIds,
@@ -757,7 +765,7 @@ async function handleIncrementalUpdate(
       const cached = cache.files[file.relPath];
       if (cached && cached.pointIds.length > 0) {
         try {
-          await deletePoints(
+          await deleteQdrantPoints(
             msg.qdrantUrl,
             msg.collectionName,
             cached.pointIds,
@@ -920,129 +928,33 @@ async function embedBatchWithRetry(
 // Qdrant REST API
 // ============================================================
 
-async function ensureCollection(
+const QDRANT_PAYLOAD_INDEXES: QdrantPayloadIndex[] = [
+  { field_name: "filePath", field_schema: "keyword" },
+  { field_name: "type", field_schema: "keyword" },
+  { field_name: "pathSegments.0", field_schema: "keyword" },
+  { field_name: "pathSegments.1", field_schema: "keyword" },
+  { field_name: "pathSegments.2", field_schema: "keyword" },
+  { field_name: "pathSegments.3", field_schema: "keyword" },
+  { field_name: "pathSegments.4", field_schema: "keyword" },
+  {
+    field_name: "codeChunk",
+    field_schema: {
+      type: "text",
+      tokenizer: "word",
+      min_token_len: 2,
+      max_token_len: 40,
+    },
+  },
+];
+
+async function ensureQdrantCollectionForIndex(
   qdrantUrl: string,
   collectionName: string,
 ): Promise<void> {
-  const baseUrl = qdrantUrl.replace(/\/+$/, "");
-
-  // Check if collection exists
-  const checkResp = await fetch(`${baseUrl}/collections/${collectionName}`);
-  if (checkResp.ok) return;
-
-  // Create collection with tuned HNSW for better recall
-  const createResp = await fetch(`${baseUrl}/collections/${collectionName}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      vectors: {
-        size: EMBEDDING_DIM,
-        distance: "Cosine",
-        on_disk: true,
-      },
-      hnsw_config: {
-        m: 64,
-        ef_construct: 512,
-        on_disk: true,
-      },
-    }),
+  await ensureQdrantCollection({
+    qdrantUrl,
+    collectionName,
+    vectorSize: EMBEDDING_DIM,
+    payloadIndexes: QDRANT_PAYLOAD_INDEXES,
   });
-
-  if (!createResp.ok) {
-    const err = await createResp.text();
-    throw new Error(
-      `Failed to create Qdrant collection ${collectionName}: ${err}`,
-    );
-  }
-
-  // Create payload indexes for efficient filtering
-  const indexes: Array<{
-    field_name: string;
-    field_schema: string | Record<string, unknown>;
-  }> = [
-    { field_name: "filePath", field_schema: "keyword" },
-    { field_name: "type", field_schema: "keyword" },
-    // pathSegments indexes for directory-scoped search (5 levels)
-    { field_name: "pathSegments.0", field_schema: "keyword" },
-    { field_name: "pathSegments.1", field_schema: "keyword" },
-    { field_name: "pathSegments.2", field_schema: "keyword" },
-    { field_name: "pathSegments.3", field_schema: "keyword" },
-    { field_name: "pathSegments.4", field_schema: "keyword" },
-    // Full-text index on codeChunk for hybrid keyword search
-    {
-      field_name: "codeChunk",
-      field_schema: {
-        type: "text",
-        tokenizer: "word",
-        min_token_len: 2,
-        max_token_len: 40,
-      },
-    },
-  ];
-
-  for (const idx of indexes) {
-    await fetch(`${baseUrl}/collections/${collectionName}/index`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(idx),
-    });
-  }
-}
-
-async function deleteCollection(
-  qdrantUrl: string,
-  collectionName: string,
-): Promise<void> {
-  const baseUrl = qdrantUrl.replace(/\/+$/, "");
-  await fetch(`${baseUrl}/collections/${collectionName}`, {
-    method: "DELETE",
-  });
-}
-
-interface QdrantPoint {
-  id: string;
-  vector: number[];
-  payload: Record<string, unknown>;
-}
-
-async function upsertPoints(
-  qdrantUrl: string,
-  collectionName: string,
-  points: QdrantPoint[],
-): Promise<void> {
-  const baseUrl = qdrantUrl.replace(/\/+$/, "");
-  const response = await fetch(
-    `${baseUrl}/collections/${collectionName}/points`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ points }),
-    },
-  );
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Qdrant upsert failed: ${err}`);
-  }
-}
-
-async function deletePoints(
-  qdrantUrl: string,
-  collectionName: string,
-  pointIds: string[],
-): Promise<void> {
-  const baseUrl = qdrantUrl.replace(/\/+$/, "");
-  const response = await fetch(
-    `${baseUrl}/collections/${collectionName}/points/delete`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ points: pointIds }),
-    },
-  );
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Qdrant delete failed: ${err}`);
-  }
 }
