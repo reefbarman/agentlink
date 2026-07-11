@@ -1,17 +1,24 @@
 import type { LanguagePositionParams } from "../core/capabilities/language.js";
 import type { ToolResult } from "../shared/types.js";
 
-export interface PositionLanguageToolOptions<TProvider, TProviders> {
+export interface PositionLanguageToolOptions<
+  TProvider,
+  TProviders,
+  TParams extends LanguagePositionParams = LanguagePositionParams,
+> {
   unavailableMessage: string;
   getProvider(providers: TProviders): TProvider | undefined;
   invoke(
     provider: TProvider,
-    params: LanguagePositionParams & { sessionId: string },
+    params: TParams & { sessionId: string },
   ): Promise<ToolResult>;
 }
 
-export type PositionLanguageToolHandler<TProviders> = (
-  params: LanguagePositionParams,
+export type PositionLanguageToolHandler<
+  TProviders,
+  TParams extends LanguagePositionParams = LanguagePositionParams,
+> = (
+  params: TParams,
   sessionId: string,
   providers?: TProviders,
 ) => Promise<ToolResult>;
@@ -26,9 +33,13 @@ function isToolResult(error: unknown): error is ToolResult {
   return typeof error === "object" && error !== null && "content" in error;
 }
 
-export function createPositionLanguageToolHandler<TProvider, TProviders>(
-  options: PositionLanguageToolOptions<TProvider, TProviders>,
-): PositionLanguageToolHandler<TProviders> {
+export function createPositionLanguageToolHandler<
+  TProvider,
+  TProviders,
+  TParams extends LanguagePositionParams = LanguagePositionParams,
+>(
+  options: PositionLanguageToolOptions<TProvider, TProviders, TParams>,
+): PositionLanguageToolHandler<TProviders, TParams> {
   return async (params, sessionId, providers) => {
     try {
       const provider = providers ? options.getProvider(providers) : undefined;
