@@ -34,6 +34,10 @@ import {
   useRef,
   useState,
 } from "preact/hooks";
+import {
+  useSlashCommandPopup,
+  withSlashCommandDisplayName,
+} from "./useSlashCommandPopup";
 
 import { ComposerBox } from "../../../shared/ui/ComposerBox";
 import { EmojiPopup } from "./EmojiPopup";
@@ -83,14 +87,6 @@ const ACCEPTED_DOC_TYPES = new Set([
   "text/xml",
   "text/yaml",
 ]);
-function withSlashCommandDisplayName(
-  command: SlashCommandInfo,
-): SlashCommandInfo {
-  if (command.source !== "skill" || command.displayName) {
-    return command;
-  }
-  return { ...command, displayName: command.name.replace(/^skill:/, "") };
-}
 
 const DOCUMENT_EXTENSION_MIME_TYPES: Record<string, string> = {
   c: "text/x-c",
@@ -232,20 +228,12 @@ export function InputArea({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
   const [atStart, setAtStart] = useState(-1); // cursor position of the @ that triggered the picker
-  const [slashOpen, setSlashOpen] = useState(false);
-  const [slashQuery, setSlashQuery] = useState("");
-  const [slashStart, setSlashStart] = useState(-1);
-  const [slashView, setSlashView] = useState<
-    "main" | "mode" | "model" | "mcp-config"
-  >("main");
-  const [slashSelectedIdx, setSlashSelectedIdx] = useState(0);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [emojiQuery, setEmojiQuery] = useState("");
   const [emojiStart, setEmojiStart] = useState(-1);
   const [emojiSelectedIdx, setEmojiSelectedIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputWrapperRef = useRef<HTMLDivElement>(null);
-  const slashPopupRef = useRef<HTMLDivElement>(null);
   const hasSubmitContent = canSubmitComposer({
     text,
     hasAttachments: allowAttachments && attachments.length > 0,
@@ -314,14 +302,30 @@ export function InputArea({
     allowAttachments,
     allowMediaPaste,
   ]);
-
-  const closeSlash = useCallback(() => {
-    setSlashOpen(false);
-    setSlashQuery("");
-    setSlashStart(-1);
-    setSlashSelectedIdx(0);
-    setSlashView("main");
-  }, []);
+  const {
+    open: slashOpen,
+    start: slashStart,
+    view: slashView,
+    selectedIndex: slashSelectedIdx,
+    popupRef: slashPopupRef,
+    filteredCommands: filteredSlashCommands,
+    visible: shouldShowSlashPopup,
+    close: closeSlash,
+    openAt: openSlashAt,
+    updateFromInput: updateSlashFromInput,
+    enterView: enterSlashView,
+    back: backSlashView,
+    selectNext: selectNextSlash,
+    selectPrevious: selectPreviousSlash,
+  } = useSlashCommandPopup({
+    commands: displaySlashCommands,
+    modes,
+    currentMode,
+    availableModels,
+    currentModel,
+    matchedCommand: matchedExecutableSlashCommand?.command ?? null,
+    inputWrapperRef,
+  });
 
   const handleSubmit = useCallback(() => {
     const trimmed = text.trim();
@@ -400,116 +404,6 @@ export function InputArea({
     streaming,
   ]);
 
-  // Build model list from dynamic provider data, with a fallback for
-  // the brief window before the extension sends the first agentModelsUpdate.
-  const modelList: Array<{ id: string; label: string }> =
-    availableModels.length > 0
-      ? availableModels.map((m) => ({ id: m.id, label: m.displayName }))
-      : [{ id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" }];
-
-  const filteredSlashCommands: SlashCommandInfo[] = (() => {
-    // Sub-view: mode picker
-    if (slashView === "mode") {
-      return modes.map((m) => ({
-        name: `__mode:${m.slug}`,
-        description: m.name,
-        source: "builtin" as const,
-        builtin: true,
-        icon: m.icon,
-        isCurrent: m.slug === currentMode,
-      }));
-    }
-    // Sub-view: model picker
-    if (slashView === "model") {
-      return modelList.map((m) => ({
-        name: `__model:${m.id}`,
-        description: m.label,
-        source: "builtin" as const,
-        builtin: true,
-        icon: "symbol-namespace",
-        isCurrent: m.id === currentModel,
-      }));
-    }
-    // Sub-view: mcp-config scope picker
-    if (slashView === "mcp-config") {
-      return [
-        {
-          name: "__mcp:project",
-          description: "Project (.agentlink/mcp.json)",
-          source: "builtin" as const,
-          builtin: true,
-          icon: "folder",
-        },
-        {
-          name: "__mcp:global",
-          description: "Global (~/.agentlink/mcp.json)",
-          source: "builtin" as const,
-          builtin: true,
-          icon: "home",
-        },
-      ];
-    }
-    // Main view: filter + enrich with right labels
-    const currentModeName =
-      modes.find((m) => m.slug === currentMode)?.name ?? currentMode;
-    const currentModelLabel =
-      modelList.find((m) => m.id === currentModel)?.label ?? currentModel;
-    return displaySlashCommands
-      .filter((c) => {
-        const query = slashQuery.toLowerCase();
-        return (
-          c.name.toLowerCase().startsWith(query) ||
-          c.displayName?.toLowerCase().startsWith(query)
-        );
-      })
-      .map((c) => {
-        if (c.name === "mode")
-          return { ...c, icon: "symbol-misc", rightLabel: currentModeName };
-        if (c.name === "model")
-          return {
-            ...c,
-            icon: "symbol-namespace",
-            rightLabel: currentModelLabel,
-          };
-        if (c.name === "new") return { ...c, icon: "add" };
-        if (c.name === "clear") return { ...c, icon: "clear-all" };
-        if (c.name === "help") return { ...c, icon: "question" };
-        if (c.name === "skills") return { ...c, icon: "sparkle" };
-        if (c.name === "condense") return { ...c, icon: "fold" };
-        if (c.name === "checkpoint") return { ...c, icon: "git-commit" };
-        if (c.name === "revert") return { ...c, icon: "history" };
-        if (c.name === "btw") return { ...c, icon: "comment-discussion" };
-        if (c.name === "pair") return { ...c, icon: "device-mobile" };
-        return c;
-      });
-  })();
-
-  const hasSlashPrefixAlternatives = useMemo(() => {
-    if (!matchedExecutableSlashCommand || slashView !== "main") {
-      return false;
-    }
-    const exactName = matchedExecutableSlashCommand.command.name.toLowerCase();
-    const exactDisplayName = (
-      matchedExecutableSlashCommand.command.displayName ??
-      matchedExecutableSlashCommand.command.name
-    ).toLowerCase();
-    return displaySlashCommands.some((cmd) => {
-      const name = cmd.name.toLowerCase();
-      const displayName = (cmd.displayName ?? cmd.name).toLowerCase();
-      return (
-        name !== exactName &&
-        displayName !== exactDisplayName &&
-        (name.startsWith(exactDisplayName) ||
-          displayName.startsWith(exactDisplayName))
-      );
-    });
-  }, [matchedExecutableSlashCommand, slashView, displaySlashCommands]);
-
-  const shouldShowSlashPopup =
-    slashOpen &&
-    filteredSlashCommands.length > 0 &&
-    (!matchedExecutableSlashCommand || hasSlashPrefixAlternatives);
-
   const emojiSuggestions = useMemo(
     () => searchEmojiShortcodes(emojiQuery, 12),
     [emojiQuery],
@@ -537,35 +431,6 @@ export function InputArea({
     setEmojiStart(-1);
     setEmojiSelectedIdx(0);
   }, []);
-
-  useEffect(() => {
-    if (!slashOpen) return;
-
-    const handleDocumentPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (slashPopupRef.current?.contains(target)) return;
-      if (inputWrapperRef.current?.contains(target)) return;
-      closeSlash();
-    };
-
-    const handleDocumentKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      closeSlash();
-    };
-
-    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
-    document.addEventListener("keydown", handleDocumentKeyDown, true);
-    return () => {
-      document.removeEventListener(
-        "pointerdown",
-        handleDocumentPointerDown,
-        true,
-      );
-      document.removeEventListener("keydown", handleDocumentKeyDown, true);
-    };
-  }, [slashOpen, closeSlash]);
 
   const handleEmojiSelect = useCallback(
     (suggestion: { emoji: string; shortcode: string }) => {
@@ -630,8 +495,7 @@ export function InputArea({
       // Commands that drill into a sub-picker — clear typed text, stay open
       if (SUB_PICKER_CMDS.has(cmd.name)) {
         setText(before);
-        setSlashView(cmd.name as "mode" | "model" | "mcp-config");
-        setSlashSelectedIdx(0);
+        enterSlashView(cmd.name as "mode" | "model" | "mcp-config");
         return;
       }
 
@@ -684,6 +548,7 @@ export function InputArea({
       onExecuteBuiltinCommand,
       onSwitchMode,
       onSend,
+      enterSlashView,
       allowAttachments,
       allowMediaPaste,
       attachments.length,
@@ -734,14 +599,12 @@ export function InputArea({
       if (shouldShowSlashPopup) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
-          setSlashSelectedIdx((i) => (i + 1) % filteredSlashCommands.length);
+          selectNextSlash(filteredSlashCommands.length);
           return;
         }
         if (e.key === "ArrowUp") {
           e.preventDefault();
-          setSlashSelectedIdx((i) =>
-            i <= 0 ? filteredSlashCommands.length - 1 : i - 1,
-          );
+          selectPreviousSlash(filteredSlashCommands.length);
           return;
         }
         if (e.key === "Enter" && !e.shiftKey) {
@@ -776,8 +639,7 @@ export function InputArea({
         if (e.key === "Escape") {
           e.preventDefault();
           if (slashView !== "main") {
-            setSlashView("main");
-            setSlashSelectedIdx(0);
+            backSlashView();
           } else {
             closeSlash();
           }
@@ -808,6 +670,9 @@ export function InputArea({
       slashSelectedIdx,
       handleSlashSelect,
       closeSlash,
+      backSlashView,
+      selectNextSlash,
+      selectPreviousSlash,
       shouldShowSlashPopup,
       shouldShowEmojiPopup,
       emojiSuggestions,
@@ -1019,25 +884,7 @@ export function InputArea({
         }
       }
 
-      if (slashOpen && slashStart >= 0) {
-        // Update slash query while popup is open
-        const query = value.slice(slashStart + 1, cursor);
-        if (
-          query.includes(" ") ||
-          query.includes("\n") ||
-          cursor <= slashStart
-        ) {
-          // Space means user typed args — keep popup open but update query
-          if (query.includes("\n") || cursor <= slashStart) {
-            closeSlash();
-          } else {
-            setSlashQuery(query.split(" ")[0]);
-          }
-        } else {
-          setSlashQuery(query);
-          setSlashSelectedIdx(0);
-        }
-      }
+      updateSlashFromInput(value, cursor);
 
       if (emojiOpen && emojiStart >= 0) {
         const query = value.slice(emojiStart + 1, cursor);
@@ -1075,10 +922,7 @@ export function InputArea({
           value[cursor - 1] === "/" &&
           shouldOpenSlashPopup(value, cursor - 1)
         ) {
-          setSlashStart(cursor - 1);
-          setSlashQuery("");
-          setSlashOpen(true);
-          setSlashSelectedIdx(0);
+          openSlashAt(cursor - 1);
           // Reload slash commands from disk on every open
           vscodeApi.postMessage({ command: "agentRefreshSlashCommands" });
         }
@@ -1115,8 +959,8 @@ export function InputArea({
       atStart,
       closePicker,
       slashOpen,
-      slashStart,
-      closeSlash,
+      updateSlashFromInput,
+      openSlashAt,
       emojiOpen,
       emojiStart,
       closeEmoji,
@@ -1497,10 +1341,7 @@ export function InputArea({
                   ? "Open MCP Config"
                   : undefined
           }
-          onBack={() => {
-            setSlashView("main");
-            setSlashSelectedIdx(0);
-          }}
+          onBack={backSlashView}
         />
       )}
       {shouldShowEmojiPopup && (
