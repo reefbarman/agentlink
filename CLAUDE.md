@@ -12,6 +12,13 @@
 - **Brand color**: `#4EC9B0` (teal) — used in `media/agentlink-terminal.svg` and throughout the chat webview UI (file picker indicator, active states)
 - **Icon**: `media/agentlink.svg` uses `currentColor` (themed by VS Code); `media/agentlink-terminal.svg` uses the hardcoded brand color
 
+## Formatting
+
+- **Format**: `npm run fmt` — formats supported project files with Oxfmt using `.oxfmtrc.json`.
+- **Check formatting**: `npm run fmt:check` — verifies formatting without writing files.
+- Format touched supported files before validation. `npm run lint` also runs `oxfmt --check`, so formatting drift fails the main verification gate.
+- For VS Code format-on-save, install the official Oxc extension (`oxc.oxc-vscode`) and configure it to use the repository's `.oxfmtrc.json`.
+
 ## Verification
 
 Choose verification based on the type of change:
@@ -20,7 +27,7 @@ Choose verification based on the type of change:
 
 Run full verification before considering the task complete:
 
-1. `npm run lint` — type-checks all tsconfigs (`tsc --noEmit`) and runs oxlint. Fix **all** errors and warnings.
+1. `npm run lint` — checks Oxfmt formatting, type-checks all tsconfigs (`tsc --noEmit`), and runs oxlint. Fix **all** errors and warnings.
 2. `npm test` — runs the vitest suite. Fix any failures.
 
 Both must pass cleanly (zero exit code, no warnings).
