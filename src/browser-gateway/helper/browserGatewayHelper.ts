@@ -28,10 +28,13 @@ import {
   BAKED_BROWSER_GATEWAY_THEME,
   readBrowserGatewayThemeCache,
 } from "../browserGatewayThemeCache.js";
-import {
-  AskAgentSnapshotPublicationQueue,
-  type AskAgentSnapshotPublication,
-} from "./askAgentSnapshotPublicationQueue.js";
+import type {
+  AskAgentController,
+  AskAgentControllerPublication,
+  AskAgentControllerSnapshot,
+} from "./AskAgentController.js";
+import { freezeAskAgentControllerSnapshot } from "./AskAgentController.js";
+import { AskAgentSnapshotPublicationQueue } from "./askAgentSnapshotPublicationQueue.js";
 import {
   BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
   type BrowserGatewayClientLeaseRequest,
@@ -73,6 +76,7 @@ import {
   type BrowserGatewayAskAgentMemoryCandidateNudge,
   type BrowserGatewayAskAgentPersistedSession,
   type BrowserGatewayAskAgentProjectHandoff,
+  type BrowserGatewayAskAgentSnapshot,
 } from "../browserGatewayAskAgentSessionStore.js";
 import { BrowserGatewayAskAgentPreferencesStore } from "../browserGatewayAskAgentPreferences.js";
 import { BrowserGatewayAskAgentHistoryStore } from "../browserGatewayAskAgentHistory.js";
@@ -559,7 +563,7 @@ type AskAgentPendingApproval = {
   resolve: (decision: DecisionMessage) => void;
 };
 
-export class BrowserGatewayHelper {
+export class BrowserGatewayHelper implements AskAgentController {
   private readonly startedAt = new Date();
   private readonly startedAtMs = this.startedAt.getTime();
   private readonly browserBootstrapToken = randomUUID();
@@ -578,9 +582,7 @@ export class BrowserGatewayHelper {
   private modelCatalogSnapshot: CoreModelCatalogSnapshot | null = null;
   private readonly askAgentSessionStore: BrowserGatewayAskAgentSessionStore;
   private readonly askAgentEventClients = new Set<http.ServerResponse>();
-  private readonly askAgentSnapshotQueue: AskAgentSnapshotPublicationQueue<
-    ReturnType<BrowserGatewayAskAgentSessionStore["getOrCreate"]>["snapshot"]
-  >;
+  private readonly askAgentSnapshotQueue: AskAgentSnapshotPublicationQueue<AskAgentControllerSnapshot>;
   private readonly streamingMetrics: StreamingBaselineMetrics;
   private readonly askAgentModelClient: Pick<
     BrowserGatewayAskAgentModelClient,
@@ -594,6 +596,8 @@ export class BrowserGatewayHelper {
     settled: Promise<void>;
     settle: () => void;
   } | null = null;
+  private askAgentCancellation: Promise<AskAgentControllerPublication | null> | null =
+    null;
   private readonly askAgentLogPath: string;
   private readonly askAgentPreferencesStore: BrowserGatewayAskAgentPreferencesStore;
   private readonly askAgentHistoryStore: BrowserGatewayAskAgentHistoryStore;
@@ -652,11 +656,7 @@ export class BrowserGatewayHelper {
       askAgentHistoryStore?: BrowserGatewayAskAgentHistoryStore;
       streamingMetrics?: StreamingBaselineMetrics;
       beforeAskAgentSnapshotPublish?: (
-        publication: AskAgentSnapshotPublication<
-          ReturnType<
-            BrowserGatewayAskAgentSessionStore["getOrCreate"]
-          >["snapshot"]
-        >,
+        publication: AskAgentControllerPublication,
       ) => void | Promise<void>;
     } = {},
   ) {
@@ -730,8 +730,7 @@ export class BrowserGatewayHelper {
       this.askAgentPreferencesStore.read(),
       this.askAgentHistoryStore.read(),
     ]);
-    this.askAgentSessionStore.applyPreferences(preferences);
-    this.askAgentSessionStore.loadHistory(history);
+    this.restoreState(preferences, history);
     this.logAskAgentEvent("helper.starting", {
       port: this.options.port,
       bindHost: this.bindHost,
@@ -806,13 +805,7 @@ export class BrowserGatewayHelper {
     }
     this.askAgentMemorySummaryControllers.clear();
 
-    const activeTurn = this.askAgentActiveTurn;
-    if (activeTurn) {
-      activeTurn.stopped = true;
-      activeTurn.controller.abort();
-      await activeTurn.settled;
-    }
-    await this.askAgentSnapshotQueue.dispose();
+    await this.dispose();
     for (const client of this.askAgentEventClients) {
       client.end();
     }
@@ -1929,6 +1922,22 @@ export class BrowserGatewayHelper {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
     }
+  }
+
+  restoreState(
+    preferences: Parameters<
+      BrowserGatewayAskAgentSessionStore["applyPreferences"]
+    >[0],
+    history: Parameters<BrowserGatewayAskAgentSessionStore["loadHistory"]>[0],
+  ): void {
+    this.askAgentSessionStore.applyPreferences(preferences);
+    this.askAgentSessionStore.loadHistory(history);
+  }
+
+  async buildSnapshot(): Promise<AskAgentControllerSnapshot> {
+    return freezeAskAgentControllerSnapshot(
+      (await this.buildAskAgentResponse()).snapshot,
+    );
   }
 
   private async buildAskAgentResponse(): Promise<
@@ -3577,7 +3586,7 @@ export class BrowserGatewayHelper {
         modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
       }).snapshot;
       this.recordAskAgentSnapshotBuild(snapshot, startedAt);
-      return snapshot;
+      return freezeAskAgentControllerSnapshot(snapshot);
     };
     const scheduleTurnSnapshot = () => {
       void this.askAgentSnapshotQueue
@@ -5132,12 +5141,34 @@ export class BrowserGatewayHelper {
   private async handleAskAgentStopRequest(
     res: http.ServerResponse,
   ): Promise<void> {
-    const activeTurn = this.askAgentActiveTurn;
-    if (!activeTurn) {
+    const publication = await this.cancelActiveTurn();
+    if (!publication) {
       writeJson(res, 200, { ok: true, stopped: false });
       return;
     }
+    writeJson(res, 200, {
+      ok: true,
+      stopped: true,
+      snapshot: publication.snapshot,
+    });
+  }
 
+  cancelActiveTurn(): Promise<AskAgentControllerPublication | null> {
+    if (this.askAgentCancellation) return this.askAgentCancellation;
+    const activeTurn = this.askAgentActiveTurn;
+    if (!activeTurn) return Promise.resolve(null);
+
+    this.askAgentCancellation = this.commitAskAgentCancellation(
+      activeTurn,
+    ).finally(() => {
+      this.askAgentCancellation = null;
+    });
+    return this.askAgentCancellation;
+  }
+
+  private async commitAskAgentCancellation(
+    activeTurn: NonNullable<BrowserGatewayHelper["askAgentActiveTurn"]>,
+  ): Promise<AskAgentControllerPublication> {
     activeTurn.stopped = true;
     activeTurn.controller.abort();
     this.logAskAgentEvent("ask-agent.stop", {
@@ -5162,18 +5193,11 @@ export class BrowserGatewayHelper {
       now,
       await this.resolveInitialTheme(null),
     );
-    await this.publishAskAgentSnapshot(response.snapshot);
-    writeJson(res, 200, {
-      ok: true,
-      stopped: true,
-      snapshot: response.snapshot,
-    });
+    return await this.publishSnapshot(response.snapshot);
   }
 
   private serializeAskAgentSnapshot(
-    snapshot: ReturnType<
-      BrowserGatewayAskAgentSessionStore["getOrCreate"]
-    >["snapshot"],
+    snapshot: AskAgentControllerSnapshot,
   ): string {
     const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
     const serialized = JSON.stringify(snapshot);
@@ -5188,22 +5212,34 @@ export class BrowserGatewayHelper {
     return serialized;
   }
 
+  publishSnapshot(
+    snapshot: AskAgentControllerSnapshot,
+  ): Promise<AskAgentControllerPublication> {
+    const committedSnapshot = freezeAskAgentControllerSnapshot(
+      snapshot as BrowserGatewayAskAgentSnapshot,
+    );
+    return this.askAgentSnapshotQueue.publishNow(() => committedSnapshot);
+  }
+
   private publishAskAgentSnapshot(
-    snapshot: ReturnType<
-      BrowserGatewayAskAgentSessionStore["getOrCreate"]
-    >["snapshot"],
-  ): Promise<
-    AskAgentSnapshotPublication<
-      ReturnType<BrowserGatewayAskAgentSessionStore["getOrCreate"]>["snapshot"]
-    >
-  > {
-    return this.askAgentSnapshotQueue.publishNow(() => snapshot);
+    snapshot: AskAgentControllerSnapshot,
+  ): Promise<AskAgentControllerPublication> {
+    return this.publishSnapshot(snapshot);
+  }
+
+  async dispose(): Promise<void> {
+    const activeTurn = this.askAgentActiveTurn;
+    if (activeTurn) {
+      activeTurn.stopped = true;
+      activeTurn.controller.abort();
+      await activeTurn.settled;
+    }
+    await this.askAgentCancellation;
+    await this.askAgentSnapshotQueue.dispose();
   }
 
   private broadcastAskAgentPublication(
-    publication: AskAgentSnapshotPublication<
-      ReturnType<BrowserGatewayAskAgentSessionStore["getOrCreate"]>["snapshot"]
-    >,
+    publication: AskAgentControllerPublication,
   ): void {
     if (this.streamingMetrics.enabled) {
       this.streamingMetrics.record({

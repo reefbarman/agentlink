@@ -8,6 +8,7 @@ import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "../../agent/webview/types.js";
+import type { AskAgentControllerPublication } from "./AskAgentController.js";
 import {
   BrowserGatewayHelper,
   type HelperRuntimeOptions,
@@ -122,7 +123,10 @@ async function makeAskAgentToolLoopTestHarness(params: {
   modelClient: AskAgentToolLoopTestClient;
   helperVersion?: string;
   streamingMetrics?: StreamingBaselineRecorder;
-  beforeAskAgentSnapshotPublish?: () => void | Promise<void>;
+  grantCredential?: boolean;
+  beforeAskAgentSnapshotPublish?: (
+    publication: AskAgentControllerPublication,
+  ) => void | Promise<void>;
 }): Promise<{
   helper: BrowserGatewayHelper;
   helperServer: http.Server;
@@ -198,36 +202,38 @@ async function makeAskAgentToolLoopTestHarness(params: {
       processId: process.pid,
     }),
   });
-  await fetch(`${helperBase}/internal/model-auth/credentials`, {
-    method: "POST",
-    headers: internalHeaders,
-    body: JSON.stringify({
-      providerId: "openai-codex",
-      method: "oauth",
-      bearerToken: "test-token",
-      grantedByOwnerId: "vscode-owner",
-      modelScopes: ["chat"],
-      helperGenerationId: discovery.helperGenerationId,
-      ttlMs: 60_000,
-      now: Date.now(),
-    }),
-  });
-  await fetch(`${helperBase}/internal/model-auth/leases`, {
-    method: "POST",
-    headers: internalHeaders,
-    body: JSON.stringify({
-      providerId: "openai-codex",
-      method: "oauth",
-      grantedByOwnerId: "vscode-owner",
-      grantedToOwnerId: ownerPayload.ownerRegistration.owner.ownerId,
-      grantedToOwnerGenerationId:
-        ownerPayload.ownerRegistration.ownerGenerationId,
-      modelScopes: ["chat"],
-      helperGenerationId: discovery.helperGenerationId,
-      ttlMs: 60_000,
-      auditId: "ask-agent-tool-loop-test",
-    }),
-  });
+  if (params.grantCredential !== false) {
+    await fetch(`${helperBase}/internal/model-auth/credentials`, {
+      method: "POST",
+      headers: internalHeaders,
+      body: JSON.stringify({
+        providerId: "openai-codex",
+        method: "oauth",
+        bearerToken: "test-token",
+        grantedByOwnerId: "vscode-owner",
+        modelScopes: ["chat"],
+        helperGenerationId: discovery.helperGenerationId,
+        ttlMs: 60_000,
+        now: Date.now(),
+      }),
+    });
+    await fetch(`${helperBase}/internal/model-auth/leases`, {
+      method: "POST",
+      headers: internalHeaders,
+      body: JSON.stringify({
+        providerId: "openai-codex",
+        method: "oauth",
+        grantedByOwnerId: "vscode-owner",
+        grantedToOwnerId: ownerPayload.ownerRegistration.owner.ownerId,
+        grantedToOwnerGenerationId:
+          ownerPayload.ownerRegistration.ownerGenerationId,
+        modelScopes: ["chat"],
+        helperGenerationId: discovery.helperGenerationId,
+        ttlMs: 60_000,
+        auditId: "ask-agent-tool-loop-test",
+      }),
+    });
+  }
   return { helper, helperServer, helperBase, cookie, askAgentLogPath };
 }
 
@@ -3526,6 +3532,46 @@ describe("BrowserGatewayHelper proxy routing", () => {
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
 
+  it("publishes credential failure as a committed controller snapshot", async () => {
+    const publications: AskAgentControllerPublication[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async () => {
+      throw new Error("model should not run without credentials");
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      grantCredential: false,
+      beforeAskAgentSnapshotPublish: (publication) => {
+        publications.push(publication);
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Attempt without credentials" }),
+    });
+    const body = (await send.json()) as {
+      snapshot: AskAgentControllerPublication["snapshot"];
+    };
+    const publication = publications.at(-1);
+
+    expect(send.ok).toBe(true);
+    expect(publication?.snapshot).toEqual(body.snapshot);
+    expect(publication?.revision).toBe(1);
+    expect(publication?.serialized).toBe(JSON.stringify(body.snapshot));
+    expect(body.snapshot.session.foreground.streaming).toBe(false);
+    expect(body.snapshot.session.foreground.projectedMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.stringContaining("needs model credentials"),
+        }),
+      ]),
+    );
+  });
+
   it("stops an in-flight helper-owned Ask Agent model turn", async () => {
     const extensionRootPath = await makeExtensionRoot();
     const helperPort = 47214;
@@ -3543,6 +3589,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
     const started = new Promise<void>((resolve) => {
       resolveStarted = resolve;
     });
+    const publications: AskAgentControllerPublication[] = [];
     const askAgentModelClient = {
       complete: async ({
         signal,
@@ -3563,6 +3610,9 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
     helper = await createIsolatedHelper(options, helperServer, {
       askAgentModelClient,
+      beforeAskAgentSnapshotPublish: (publication) => {
+        publications.push(publication);
+      },
     });
     helperServer.on("request", helper.handleRequest);
     await helper.start();
@@ -3671,6 +3721,20 @@ describe("BrowserGatewayHelper proxy routing", () => {
       ]),
     );
     expect(signalFromCall?.aborted).toBe(true);
+    const stopPublication = publications.at(-1);
+    expect(publications.length).toBeGreaterThan(1);
+    expect(
+      publications.every(
+        (publication) =>
+          Object.isFrozen(publication.snapshot) &&
+          Object.isFrozen(
+            publication.snapshot.session.foreground.projectedMessages,
+          ),
+      ),
+    ).toBe(true);
+    expect(stopPublication?.snapshot).toEqual(stopBody.snapshot);
+    expect(stopPublication?.serialized).toBe(JSON.stringify(stopBody.snapshot));
+    expect(stopPublication?.revision).toBeGreaterThan(1);
 
     const sendResponse = await sendPromise;
     expect(sendResponse.ok).toBe(true);
@@ -3707,6 +3771,73 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });
+  });
+
+  it("awaits an in-flight cancellation publication before helper shutdown", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let blockCancellationPublication = false;
+    let resolveCancellationPublicationStarted!: () => void;
+    const cancellationPublicationStarted = new Promise<void>((resolve) => {
+      resolveCancellationPublicationStarted = resolve;
+    });
+    let releaseCancellationPublication!: () => void;
+    const cancellationPublicationBlocked = new Promise<void>((resolve) => {
+      releaseCancellationPublication = resolve;
+    });
+    const modelClient = makeAskAgentToolLoopClient(async ({ signal }) => {
+      resolveStarted();
+      return await new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(new Error("browser_gateway_ask_agent_model_aborted")),
+          { once: true },
+        );
+      });
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      beforeAskAgentSnapshotPublish: async () => {
+        if (!blockCancellationPublication) return;
+        blockCancellationPublication = false;
+        resolveCancellationPublicationStarted();
+        await cancellationPublicationBlocked;
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const sendPromise = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Stop while shutting down" }),
+    });
+    await started;
+    blockCancellationPublication = true;
+    const stopPromise = fetch(`${harness.helperBase}/api/ask-agent/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: "{}",
+    });
+    await cancellationPublicationStarted;
+
+    let shutdownCompleted = false;
+    const shutdown = helper
+      .stop("test-cancellation-publication-shutdown")
+      .then(() => {
+        shutdownCompleted = true;
+      });
+    await Promise.resolve();
+    expect(shutdownCompleted).toBe(false);
+
+    releaseCancellationPublication();
+    const stopResponse = await stopPromise;
+    expect(stopResponse.ok).toBe(true);
+    await shutdown;
+    helper = null;
+    await expect(sendPromise).resolves.toMatchObject({ ok: true });
   });
 
   it("registers the active turn before the initial publication commits", async () => {
@@ -4004,6 +4135,7 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
   it("applies safe Ask Agent todo_write and set_task_status tool calls", async () => {
     let callCount = 0;
+    const publications: AskAgentControllerPublication[] = [];
     const modelClient = makeAskAgentToolLoopClient(async () => {
       callCount++;
       if (callCount === 1) {
@@ -4042,7 +4174,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
         ],
       };
     });
-    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      beforeAskAgentSnapshotPublish: (publication) => {
+        publications.push(publication);
+      },
+    });
     helper = harness.helper;
     servers.push(harness.helperServer);
 
@@ -4106,6 +4243,15 @@ describe("BrowserGatewayHelper proxy routing", () => {
       summary: "Safe Ask Agent tool loop completed.",
       toolCall: expect.objectContaining({ name: "set_task_status" }),
     });
+    const finalPublication = publications.at(-1);
+    expect(finalPublication?.snapshot).toEqual(body.snapshot);
+    expect(finalPublication?.serialized).toBe(JSON.stringify(body.snapshot));
+    expect(finalPublication?.snapshot.session.foreground.streaming).toBe(false);
+    expect(
+      finalPublication?.snapshot.session.foreground.projectedMessages.find(
+        (message) => message.role === "assistant",
+      )?.finalMarker,
+    ).toMatchObject({ status: "completed", source: "tool" });
   });
 
   it("clears pending Ask Agent questions when set_task_status finalizes a later turn", async () => {
