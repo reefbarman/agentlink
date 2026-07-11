@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 import { providerRegistry, queryProviderUsage } from "./providers/index.js";
 import type { ModelProvider } from "./providers/types.js";
 import type {
+  BtwBudget,
   ChatMessage,
   ExtensionMessage,
   ProviderUsageCardData,
@@ -685,11 +686,23 @@ export type ExtensionToWebview =
     }
   | { type: "agentBtwLoading"; requestId: string; question: string }
   | {
+      type: "agentBtwProgress";
+      requestId: string;
+      answer: string;
+      tools: string[];
+      warnings: string[];
+      budget: BtwBudget;
+    }
+  | {
       type: "agentBtwResponse";
       requestId: string;
       question: string;
       answer: string;
       error?: boolean;
+      cancelled?: boolean;
+      tools?: string[];
+      warnings?: string[];
+      budget?: BtwBudget;
     }
   | {
       type: "agentPairingCode";
@@ -892,6 +905,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     string,
     (msg: DecisionMessage) => void
   >();
+  /** In-flight /btw side questions, keyed by requestId, for cancellation. */
+  private pendingBtwRequests = new Map<string, AbortController>();
   private activeApprovalRequests = new Map<string, ApprovalRequest>();
   private activeApprovalOrder: string[] = [];
   private visibleApprovalId: string | null = null;
@@ -4615,6 +4630,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentBtwCancel": {
+        const requestId = String(msg.requestId ?? "");
+        if (requestId) this.cancelBtwQuestion(requestId);
+        break;
+      }
+
+      case "agentBtwPromote": {
+        const question = String(msg.question ?? "");
+        const answer = String(msg.answer ?? "");
+        if (question && answer) {
+          await this.promoteBtwAnswer(question, answer);
+        }
+        break;
+      }
+
       case "agentOpenFile": {
         const filePath = msg.path as string;
         const line = msg.line as number | undefined;
@@ -6498,6 +6528,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   private async handleBtwQuestion(question: string): Promise<void> {
     const requestId = randomUUID();
+    const controller = new AbortController();
+    this.pendingBtwRequests.set(requestId, controller);
 
     this.postMessage({
       type: "agentBtwLoading",
@@ -6505,8 +6537,49 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       question,
     } as ExtensionToWebview);
 
+    const tools: string[] = [];
+    const warnings: string[] = [];
+    let answer = "";
+    let budget = {
+      apiTurns: 0,
+      maxApiTurns: 0,
+      toolCalls: 0,
+      maxToolCalls: 0,
+    };
+
     try {
-      const result = await this.sessionManager?.runBtwQuestion(question);
+      const result = await this.sessionManager?.runBtwQuestion(question, {
+        signal: controller.signal,
+        onProgress: (event) => {
+          switch (event.type) {
+            case "text_delta":
+              answer += event.text;
+              break;
+            case "tool":
+              tools.push(event.toolName);
+              break;
+            case "warning":
+              warnings.push(event.message);
+              break;
+            case "budget":
+              budget = {
+                apiTurns: event.apiTurns,
+                maxApiTurns: event.maxApiTurns,
+                toolCalls: event.toolCalls,
+                maxToolCalls: event.maxToolCalls,
+              };
+              break;
+          }
+          this.postMessage({
+            type: "agentBtwProgress",
+            requestId,
+            answer,
+            tools: [...tools],
+            warnings: [...warnings],
+            budget,
+          } as ExtensionToWebview);
+        },
+      });
       if (!result) {
         throw new Error("No active agent session manager");
       }
@@ -6516,6 +6589,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         requestId,
         question,
         answer: result.answer,
+        cancelled: result.cancelled,
+        tools: result.toolCalls.map((t) => t.toolName),
+        warnings: result.warnings,
+        budget: {
+          apiTurns: result.apiTurns,
+          maxApiTurns: result.maxApiTurns,
+          toolCalls: result.toolCallCount,
+          maxToolCalls: result.maxToolCalls,
+        },
       } as ExtensionToWebview);
 
       const toolSummary =
@@ -6523,7 +6605,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ? ` tools=${result.toolCalls.map((t) => t.toolName).join(",")}`
           : "";
       this.log(
-        `[btw] answered (${result.inputTokens}in/${result.outputTokens}out${toolSummary})`,
+        `[btw] ${result.cancelled ? "cancelled" : "answered"} (${result.inputTokens}in/${result.outputTokens}out ${result.apiTurns}/${result.maxApiTurns}turns${toolSummary})`,
       );
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -6535,7 +6617,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         answer: errorMsg,
         error: true,
       } as ExtensionToWebview);
+    } finally {
+      this.pendingBtwRequests.delete(requestId);
     }
+  }
+
+  /** Cancel an in-flight /btw side question, aborting its side session. */
+  private cancelBtwQuestion(requestId: string): void {
+    this.pendingBtwRequests.get(requestId)?.abort();
+  }
+
+  /**
+   * Promote a /btw answer into the main conversation as a user-visible
+   * exchange, so a useful side answer isn't lost when the panel is dismissed.
+   */
+  private async promoteBtwAnswer(
+    question: string,
+    answer: string,
+  ): Promise<void> {
+    const fg = this.sessionManager?.getForegroundSession();
+    if (!fg) return;
+    fg.addUserMessage(`/btw ${question}`, {
+      displayText: `/btw ${question}`,
+      isSlashCommand: true,
+      slashCommandLabel: "/btw",
+    });
+    fg.appendAssistantTurn([{ type: "text", text: answer }]);
+    this.sessionManager?.saveSession(fg.id);
+    this.postSessionLoaded(fg, {
+      checkpoints: this.getSessionCheckpoints(fg.id),
+      tailTurns: 0,
+    });
   }
 
   private async revertCheckpointWithConfirmation(

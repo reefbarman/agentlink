@@ -126,6 +126,14 @@ export interface Question {
   modeSwitch?: Record<string, string>;
 }
 
+/** Consumption vs. limits for a /btw side question, shown as a visible budget. */
+export interface BtwBudget {
+  apiTurns: number;
+  maxApiTurns: number;
+  toolCalls: number;
+  maxToolCalls: number;
+}
+
 /** Messages from extension to webview */
 export type ExtensionMessage =
   | { type: "stateUpdate"; state: ChatState }
@@ -577,11 +585,27 @@ export type ExtensionMessage =
   | ShowBgTranscriptMessage
   | { type: "agentBtwLoading"; requestId: string; question: string }
   | {
+      type: "agentBtwProgress";
+      requestId: string;
+      /** Full accumulated answer text so far. */
+      answer: string;
+      /** Tool names invoked so far, in order. */
+      tools: string[];
+      /** Warnings surfaced so far (retries, timeouts, limit notices). */
+      warnings: string[];
+      budget: BtwBudget;
+    }
+  | {
       type: "agentBtwResponse";
       requestId: string;
       question: string;
       answer: string;
       error?: boolean;
+      /** True when the run was cut short by cancellation or the deadline. */
+      cancelled?: boolean;
+      tools?: string[];
+      warnings?: string[];
+      budget?: BtwBudget;
     }
   | {
       type: "agentPairingCode";

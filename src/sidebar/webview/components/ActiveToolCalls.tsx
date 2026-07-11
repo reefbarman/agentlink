@@ -75,12 +75,14 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
             )}
             <button
               class="btn btn-complete"
+              title="Mark this tool call as complete and return control to the agent"
               onClick={() => postCommand("completeToolCall", { id: c.id })}
             >
               Complete
             </button>
             <button
               class="btn btn-cancel"
+              title="Stop this tool call and report its cancellation to the agent"
               onClick={() => postCommand("cancelToolCall", { id: c.id })}
             >
               Cancel

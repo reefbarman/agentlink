@@ -227,6 +227,133 @@ describe("AgentSessionManager /btw side questions", () => {
     expect(fg.getAllMessages()).toHaveLength(1);
   });
 
+  it("streams incremental progress events while running", async () => {
+    const provider = makeProvider((_request, callIndex) => {
+      if (callIndex === 0) {
+        return [
+          {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "tool-1",
+                name: "read_file",
+                input: { path: "src/agent/ChatViewProvider.ts" },
+              },
+            ],
+          },
+          { type: "usage", inputTokens: 20, outputTokens: 2 },
+          { type: "done" },
+        ];
+      }
+      return textResponse("streamed answer");
+    });
+    providerRegistry.register(provider);
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(makeToolCtx());
+    await mgr.createSession("code");
+
+    const events: string[] = [];
+    let lastBudget: { apiTurns: number; toolCalls: number } | undefined;
+    const result = await mgr.runBtwQuestion("stream please", {
+      onProgress: (event) => {
+        events.push(event.type);
+        if (event.type === "budget") {
+          lastBudget = {
+            apiTurns: event.apiTurns,
+            toolCalls: event.toolCalls,
+          };
+        }
+      },
+    });
+
+    expect(result.answer).toBe("streamed answer");
+    expect(result.cancelled).toBe(false);
+    expect(events).toContain("text_delta");
+    expect(events).toContain("tool");
+    expect(events).toContain("budget");
+    expect(result.toolCallCount).toBe(1);
+    expect(result.maxApiTurns).toBe(5);
+    expect(result.maxToolCalls).toBe(10);
+    expect(lastBudget?.toolCalls).toBe(1);
+    expect(lastBudget?.apiTurns).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns a cancelled result without running when the signal is pre-aborted", async () => {
+    const provider = makeProvider(() => textResponse("should not run"));
+    providerRegistry.register(provider);
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(makeToolCtx());
+    await mgr.createSession("code");
+
+    const controller = new AbortController();
+    controller.abort();
+    const result = await mgr.runBtwQuestion("never mind", {
+      signal: controller.signal,
+    });
+
+    expect(result.cancelled).toBe(true);
+    expect(result.answer).toBe("");
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it("aborts the side session mid-run when the signal fires", async () => {
+    const controller = new AbortController();
+    const provider = makeProvider((_request, callIndex) => {
+      // Abort partway through: after the first turn requests a tool, the run
+      // should stop before issuing a second API request.
+      if (callIndex === 0) {
+        controller.abort();
+        return [
+          {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "tool-1",
+                name: "read_file",
+                input: { path: "src/agent/ChatViewProvider.ts" },
+              },
+            ],
+          },
+          { type: "usage", inputTokens: 20, outputTokens: 2 },
+          { type: "done" },
+        ];
+      }
+      return textResponse("second turn should not happen");
+    });
+    providerRegistry.register(provider);
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(makeToolCtx());
+    await mgr.createSession("code");
+
+    const result = await mgr.runBtwQuestion("cancel me", {
+      signal: controller.signal,
+    });
+
+    expect(result.cancelled).toBe(true);
+    // Only the first turn ran; the abort stopped the loop before a second call.
+    expect(provider.requests).toHaveLength(1);
+  });
+
+  it("clears the in-flight guard so a second /btw can run after the first", async () => {
+    const provider = makeProvider(() => textResponse("ok"));
+    providerRegistry.register(provider);
+
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(makeToolCtx());
+    await mgr.createSession("code");
+
+    const first = await mgr.runBtwQuestion("first");
+    expect(first.answer).toBe("ok");
+    // Would throw "Another /btw question is already running" if not cleared.
+    const second = await mgr.runBtwQuestion("second");
+    expect(second.answer).toBe("ok");
+  });
+
   it("can append queued follow-ups as separate user messages before one run", async () => {
     const provider = makeProvider(() => textResponse("batch answer"));
     providerRegistry.register(provider);

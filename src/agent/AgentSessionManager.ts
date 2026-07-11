@@ -82,13 +82,49 @@ import {
 } from "./FleetWorkflows.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
 
+/** Incremental progress emitted while a /btw side question runs. */
+export type BtwProgressEvent =
+  | { type: "text_delta"; text: string }
+  | { type: "tool"; toolName: string }
+  | { type: "warning"; message: string }
+  | {
+      type: "budget";
+      apiTurns: number;
+      toolCalls: number;
+      maxApiTurns: number;
+      maxToolCalls: number;
+    };
+
+export interface BtwQuestionOptions {
+  /** Streamed incremental progress (text, tool activity, warnings, budget). */
+  onProgress?: (event: BtwProgressEvent) => void;
+  /** External cancellation (e.g. a Cancel button). Aborts the side session. */
+  signal?: AbortSignal;
+  /** Overall wall-clock deadline; aborts the side session when it elapses. */
+  timeoutMs?: number;
+}
+
 export interface BtwQuestionResult {
   answer: string;
   toolCalls: Array<{ toolName: string; durationMs?: number }>;
   warnings: string[];
   inputTokens: number;
   outputTokens: number;
+  /** True when the run was cut short by cancellation or the deadline. */
+  cancelled: boolean;
+  /** API turns consumed / allowed, for a legible budget in the UI. */
+  apiTurns: number;
+  maxApiTurns: number;
+  /** Dispatchable tool calls consumed / allowed. */
+  toolCallCount: number;
+  maxToolCalls: number;
 }
+
+/** Bounds for a /btw side question — surfaced to the UI as a visible budget. */
+const BTW_MAX_API_TURNS = 5;
+const BTW_MAX_TOOL_CALLS = 10;
+/** Default overall deadline for a /btw run before it self-aborts. */
+const BTW_DEFAULT_TIMEOUT_MS = 120_000;
 
 export interface CheckpointRevertPreviewResult {
   checkpointId: string;
@@ -994,12 +1030,33 @@ export class AgentSessionManager {
     }));
   }
 
-  async runBtwQuestion(question: string): Promise<BtwQuestionResult> {
+  async runBtwQuestion(
+    question: string,
+    opts?: BtwQuestionOptions,
+  ): Promise<BtwQuestionResult> {
     const trimmed = question.trim();
     if (!trimmed) throw new Error("/btw requires a question");
     if (!this.toolCtx) throw new Error("No tool context — cannot run /btw");
     if (this.btwInFlight) {
       throw new Error("Another /btw question is already running");
+    }
+
+    // Already-cancelled before we start: the engine creates its own abort
+    // controller on first iteration, so a pre-aborted external signal would
+    // otherwise be lost. Return a cancelled result without spinning anything up.
+    if (opts?.signal?.aborted) {
+      return {
+        answer: "",
+        toolCalls: [],
+        warnings: [],
+        inputTokens: 0,
+        outputTokens: 0,
+        cancelled: true,
+        apiTurns: 0,
+        maxApiTurns: BTW_MAX_API_TURNS,
+        toolCallCount: 0,
+        maxToolCalls: BTW_MAX_TOOL_CALLS,
+      };
     }
 
     const fg = this.getForegroundSession();
@@ -1073,26 +1130,66 @@ export class AgentSessionManager {
     let answer = "";
     const toolCalls: BtwQuestionResult["toolCalls"] = [];
     const warnings: string[] = [];
+    let apiTurns = 0;
+    let cancelled = false;
+
+    // Cancellation: abort the side session from either the external signal
+    // (Cancel button) or the deadline timer. The engine's run() loop checks
+    // session.isAborted between turns and after each tool dispatch.
+    const cancel = () => {
+      if (cancelled) return;
+      cancelled = true;
+      session.abort();
+    };
+    const timeoutMs = opts?.timeoutMs ?? BTW_DEFAULT_TIMEOUT_MS;
+    const deadline =
+      timeoutMs > 0
+        ? this.host.timers.setTimeout(cancel, timeoutMs)
+        : undefined;
+    const externalSignal = opts?.signal;
+    const onExternalAbort = () => cancel();
+    if (externalSignal) {
+      if (externalSignal.aborted) cancel();
+      else externalSignal.addEventListener("abort", onExternalAbort);
+    }
+
+    const emitBudget = () => {
+      opts?.onProgress?.({
+        type: "budget",
+        apiTurns,
+        toolCalls: toolCalls.length,
+        maxApiTurns: BTW_MAX_API_TURNS,
+        maxToolCalls: BTW_MAX_TOOL_CALLS,
+      });
+    };
 
     this.btwInFlight = true;
     try {
       for await (const event of engine.run(session, {
         toolProfile: "btw",
-        maxApiTurns: 5,
-        maxToolCalls: 10,
+        maxApiTurns: BTW_MAX_API_TURNS,
+        maxToolCalls: BTW_MAX_TOOL_CALLS,
       })) {
         switch (event.type) {
           case "text_delta":
             answer += event.text;
+            opts?.onProgress?.({ type: "text_delta", text: event.text });
+            break;
+          case "api_request":
+            apiTurns += 1;
+            emitBudget();
             break;
           case "tool_result":
             toolCalls.push({
               toolName: event.toolName,
               durationMs: event.durationMs,
             });
+            opts?.onProgress?.({ type: "tool", toolName: event.toolName });
+            emitBudget();
             break;
           case "warning":
             warnings.push(event.message);
+            opts?.onProgress?.({ type: "warning", message: event.message });
             break;
           case "error":
             throw new Error(event.error);
@@ -1100,6 +1197,8 @@ export class AgentSessionManager {
       }
     } finally {
       this.btwInFlight = false;
+      if (deadline) this.host.timers.clearTimeout(deadline);
+      externalSignal?.removeEventListener("abort", onExternalAbort);
     }
 
     return {
@@ -1108,6 +1207,11 @@ export class AgentSessionManager {
       warnings,
       inputTokens: session.totalInputTokens,
       outputTokens: session.totalOutputTokens,
+      cancelled,
+      apiTurns,
+      maxApiTurns: BTW_MAX_API_TURNS,
+      toolCallCount: toolCalls.length,
+      maxToolCalls: BTW_MAX_TOOL_CALLS,
     };
   }
 

@@ -21,6 +21,10 @@
     {
       "pattern": "npm run fmt",
       "mode": "prefix"
+    },
+    {
+      "pattern": "npx oxfmt",
+      "mode": "prefix"
     }
   ],
   "pathRules": [

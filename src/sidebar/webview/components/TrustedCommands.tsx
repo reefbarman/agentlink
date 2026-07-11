@@ -43,6 +43,7 @@ export function TrustedCommands({ state, postCommand }: Props) {
       <button
         class="btn btn-secondary"
         style={{ marginTop: "6px" }}
+        title="Add a command pattern that agents may run without asking again"
         onClick={() => postCommand("addGlobalRule")}
       >
         + Add Rule
@@ -61,6 +62,7 @@ export function TrustedCommands({ state, postCommand }: Props) {
               />
               <a
                 class="link"
+                title="Remove every trusted command rule for this session"
                 onClick={() =>
                   postCommand("clearSessionRules", { sessionId: s.id })
                 }
@@ -72,6 +74,7 @@ export function TrustedCommands({ state, postCommand }: Props) {
           <a
             class="link"
             style={{ display: "block", marginTop: "6px" }}
+            title="Remove trusted command rules for all sessions"
             onClick={() => postCommand("clearAllSessions")}
           >
             Clear All Sessions

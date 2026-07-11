@@ -1200,6 +1200,22 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             requestId: msg.requestId,
             question: msg.question,
             answer: "",
+            tools: [],
+            warnings: [],
+          });
+          break;
+
+        case "agentBtwProgress":
+          setBtwState((prev) => {
+            // Discard stale progress
+            if (!prev || prev.requestId !== msg.requestId) return prev;
+            return {
+              ...prev,
+              answer: msg.answer,
+              tools: msg.tools,
+              warnings: msg.warnings,
+              budget: msg.budget,
+            };
           });
           break;
 
@@ -1211,6 +1227,11 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               ...prev,
               answer: msg.answer,
               error: msg.error,
+              done: true,
+              cancelled: msg.cancelled,
+              tools: msg.tools ?? prev.tools,
+              warnings: msg.warnings ?? prev.warnings,
+              budget: msg.budget ?? prev.budget,
             };
           });
           break;
@@ -2545,7 +2566,29 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           />
         )}
         {btwState && (
-          <BtwPanel state={btwState} onDismiss={() => setBtwState(null)} />
+          <BtwPanel
+            state={btwState}
+            onDismiss={() => {
+              if (btwState && !btwState.done && !btwState.error) {
+                vscodeApi.postMessage({
+                  command: "agentBtwCancel",
+                  requestId: btwState.requestId,
+                });
+              }
+              setBtwState(null);
+            }}
+            onCancel={(requestId) =>
+              vscodeApi.postMessage({ command: "agentBtwCancel", requestId })
+            }
+            onPromote={(question, answer) => {
+              vscodeApi.postMessage({
+                command: "agentBtwPromote",
+                question,
+                answer,
+              });
+              setBtwState(null);
+            }}
+          />
         )}
         {state.chatState.interrupted && !state.streaming && (
           <div class="interrupted-session-banner">

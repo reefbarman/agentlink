@@ -93,6 +93,7 @@ export function IndexStatus({ state, postCommand }: Props) {
             {!isIndexing && wasCancelled && (
               <button
                 class="btn btn-secondary"
+                title="Continue indexing from the previous stopping point"
                 onClick={() => postCommand("resumeIndex")}
               >
                 Resume
@@ -101,6 +102,13 @@ export function IndexStatus({ state, postCommand }: Props) {
             {!isIndexing && (
               <button
                 class="btn btn-secondary"
+                title={
+                  isError
+                    ? "Try building the codebase index again"
+                    : status?.lastCompleted && !wasCancelled
+                      ? "Rebuild the semantic index from the current codebase"
+                      : "Build a semantic index so agents can search this codebase"
+                }
                 onClick={() => postCommand("rebuildIndex")}
               >
                 {isError
@@ -113,6 +121,7 @@ export function IndexStatus({ state, postCommand }: Props) {
             {isIndexing && (
               <button
                 class="btn btn-secondary"
+                title="Stop the current indexing run; indexed progress is retained"
                 onClick={() => postCommand("cancelIndex")}
               >
                 Cancel
@@ -147,18 +156,21 @@ function ReadinessActions({
         <div class="button-group">
           <button
             class="btn btn-primary"
+            title="Save an API key used to create semantic-search embeddings"
             onClick={() => postCommand("setOpenaiApiKey")}
           >
             Set Embeddings API Key
           </button>
           <button
             class="btn btn-secondary"
+            title="Save one API key for both model requests and semantic-search embeddings"
             onClick={() => postCommand("setOpenaiModelsAndEmbeddingsApiKey")}
           >
             Set Models + Embeddings API Key
           </button>
           <button
             class="btn btn-secondary"
+            title="Open guided setup for semantic search"
             onClick={() =>
               postCommand("setupSemanticSearch", { reason: readinessReason })
             }
@@ -177,12 +189,14 @@ function ReadinessActions({
         <div class="button-group">
           <button
             class="btn btn-primary"
+            title="Build the semantic index required for codebase search"
             onClick={() => postCommand("rebuildIndex")}
           >
             Index Codebase
           </button>
           <button
             class="btn btn-secondary"
+            title="Open guided setup for semantic search"
             onClick={() =>
               postCommand("setupSemanticSearch", { reason: readinessReason })
             }
@@ -201,18 +215,21 @@ function ReadinessActions({
         <div class="button-group">
           <button
             class="btn btn-primary"
+            title="Retry connecting to the vector database and building the index"
             onClick={() => postCommand("rebuildIndex")}
           >
             Retry
           </button>
           <button
             class="btn btn-secondary"
+            title="Open AgentLink settings to review semantic-search configuration"
             onClick={() => postCommand("openSettings")}
           >
             Open Settings
           </button>
           <button
             class="btn btn-secondary"
+            title="Open AgentLink logs to diagnose the indexing problem"
             onClick={() => postCommand("openOutput")}
           >
             Open Output
@@ -229,6 +246,7 @@ function ReadinessActions({
         <div class="button-group">
           <button
             class="btn btn-primary"
+            title="Open AgentLink settings to enable semantic search"
             onClick={() => postCommand("openSettings")}
           >
             Enable in Settings
@@ -244,6 +262,7 @@ function ReadinessActions({
       <div class="button-group">
         <button
           class="btn btn-secondary"
+          title="Try building the codebase index again"
           onClick={() => postCommand("rebuildIndex")}
         >
           Retry

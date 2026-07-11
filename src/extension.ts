@@ -352,7 +352,10 @@ export function activate(context: vscode.ExtensionContext): void {
     codexProMode: agentConfiguration.get<boolean>("codexProMode") ?? false,
   };
 
-  const isDevMode = context.extensionMode === vscode.ExtensionMode.Development;
+  // Dev builds (__DEV_BUILD__) expose the feedback tools and dev sidebar UI,
+  // so they must also get the dev-mode system prompt — not just F5 sessions.
+  const isDevMode =
+    __DEV_BUILD__ || context.extensionMode === vscode.ExtensionMode.Development;
   chatViewProvider = new ChatViewProvider(
     context.extensionUri,
     context.globalState,

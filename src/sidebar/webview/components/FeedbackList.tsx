@@ -41,7 +41,11 @@ export function FeedbackList({ entries, postCommand }: Props) {
     return (
       <CollapsibleSection title="Feedback" titleExtra={badge}>
         <p class="help-text">No feedback recorded.</p>
-        <button class="btn" onClick={() => postCommand("refreshFeedback")}>
+        <button
+          class="btn"
+          title="Reload feedback entries from disk"
+          onClick={() => postCommand("refreshFeedback")}
+        >
           Refresh
         </button>
       </CollapsibleSection>
@@ -51,16 +55,25 @@ export function FeedbackList({ entries, postCommand }: Props) {
   return (
     <CollapsibleSection title="Feedback" titleExtra={badge}>
       <div class="feedback-actions">
-        <button class="btn" onClick={() => postCommand("refreshFeedback")}>
+        <button
+          class="btn"
+          title="Reload feedback entries from disk"
+          onClick={() => postCommand("refreshFeedback")}
+        >
           Refresh
         </button>
         <button
           class="btn btn-cancel"
+          title="Permanently delete every recorded feedback entry"
           onClick={() => postCommand("clearAllFeedback")}
         >
           Clear All
         </button>
-        <button class="btn" onClick={() => postCommand("openFeedbackFile")}>
+        <button
+          class="btn"
+          title="Open the feedback data file in the editor"
+          onClick={() => postCommand("openFeedbackFile")}
+        >
           Open File
         </button>
       </div>
@@ -92,6 +105,7 @@ export function FeedbackList({ entries, postCommand }: Props) {
             )}
             <button
               class="btn-inline btn-cancel"
+              title="Delete this feedback entry"
               onClick={() => postCommand("deleteFeedbackEntry", { index: i })}
             >
               Delete

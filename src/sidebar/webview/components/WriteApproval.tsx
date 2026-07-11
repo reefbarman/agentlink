@@ -50,6 +50,8 @@ export function WriteApproval({ state, postCommand }: Props) {
       <div class="info-row">
         <select
           class="select"
+          title="Choose when AgentLink asks before applying file changes"
+          aria-label="Write approval mode"
           value={writeApproval}
           onChange={handleModeChange}
         >

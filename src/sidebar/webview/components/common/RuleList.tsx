@@ -48,6 +48,9 @@ export function RuleList({
             <a
               class="rule-action"
               title="Edit"
+              aria-label={`Edit rule ${r.pattern}`}
+              role="button"
+              tabIndex={0}
               onClick={() =>
                 postCommand(editCommand, {
                   pattern: r.pattern,
@@ -62,6 +65,9 @@ export function RuleList({
           <a
             class="rule-action rule-delete"
             title="Remove"
+            aria-label={`Remove rule ${r.pattern}`}
+            role="button"
+            tabIndex={0}
             onClick={() =>
               postCommand(removeCommand, {
                 pattern: r.pattern,

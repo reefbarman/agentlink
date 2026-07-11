@@ -45,6 +45,7 @@ export function CollapsibleSection({
     <div class={`section ${className ?? ""}`}>
       <h3
         class="section-header"
+        title={`${open ? "Collapse" : "Expand"} ${title}`}
         onClick={toggle}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -55,6 +56,7 @@ export function CollapsibleSection({
         role="button"
         tabIndex={0}
         aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} ${title}`}
       >
         <span class={`chevron ${open ? "open" : ""}`}>&#9656;</span>
         {title}
