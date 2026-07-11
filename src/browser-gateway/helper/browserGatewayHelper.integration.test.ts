@@ -122,6 +122,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
   modelClient: AskAgentToolLoopTestClient;
   helperVersion?: string;
   streamingMetrics?: StreamingBaselineRecorder;
+  beforeAskAgentSnapshotPublish?: () => void | Promise<void>;
 }): Promise<{
   helper: BrowserGatewayHelper;
   helperServer: http.Server;
@@ -160,6 +161,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
         filePath: path.join(storeDir, "memory.json"),
       }),
       streamingMetrics: params.streamingMetrics,
+      beforeAskAgentSnapshotPublish: params.beforeAskAgentSnapshotPublish,
     },
   );
   helperServer.on("request", helper.handleRequest);
@@ -3705,6 +3707,119 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
 
     await fs.rm(extensionRootPath, { recursive: true, force: true });
+  });
+
+  it("registers the active turn before the initial publication commits", async () => {
+    let releasePublication!: () => void;
+    const publicationBlocked = new Promise<void>((resolve) => {
+      releasePublication = resolve;
+    });
+    let resolvePublicationStarted!: () => void;
+    const publicationStarted = new Promise<void>((resolve) => {
+      resolvePublicationStarted = resolve;
+    });
+    let didInvokeModel = false;
+    const modelClient = makeAskAgentToolLoopClient(async ({ signal }) => {
+      if (!signal) throw new Error("expected Ask Agent abort signal");
+      didInvokeModel = true;
+      if (signal.aborted) {
+        throw new Error("browser_gateway_ask_agent_model_aborted");
+      }
+      return { text: "Unexpected completion", toolCalls: [] };
+    });
+    let blockNextPublication = false;
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      beforeAskAgentSnapshotPublish: async () => {
+        if (!blockNextPublication) return;
+        blockNextPublication = false;
+        resolvePublicationStarted();
+        await publicationBlocked;
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+    blockNextPublication = true;
+
+    const sendPromise = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Block the initial publication" }),
+    });
+    await publicationStarted;
+
+    const overlappingSend = await fetch(
+      `${harness.helperBase}/api/ask-agent/send`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+        body: JSON.stringify({ text: "Must be rejected" }),
+      },
+    );
+    expect(overlappingSend.status).toBe(409);
+
+    let shutdownCompleted = false;
+    const shutdown = helper
+      .stop("test-initial-publication-shutdown")
+      .then(() => {
+        shutdownCompleted = true;
+      });
+    await Promise.resolve();
+    expect(shutdownCompleted).toBe(false);
+
+    releasePublication();
+    await shutdown;
+    helper = null;
+
+    expect(didInvokeModel).toBe(true);
+    const sendResponse = await sendPromise;
+    expect(sendResponse.ok).toBe(true);
+  });
+
+  it("aborts and settles an active Ask Agent turn before helper shutdown completes", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let signalFromCall: AbortSignal | undefined;
+    let didSettleModelCall = false;
+    const modelClient = makeAskAgentToolLoopClient(
+      async ({ signal, onDelta }) => {
+        if (!signal) throw new Error("expected Ask Agent abort signal");
+        signalFromCall = signal;
+        onDelta?.("Partial response");
+        resolveStarted();
+        try {
+          return await new Promise<never>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () =>
+                reject(new Error("browser_gateway_ask_agent_model_aborted")),
+              { once: true },
+            );
+          });
+        } finally {
+          didSettleModelCall = true;
+        }
+      },
+    );
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const sendPromise = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Keep running until shutdown" }),
+    });
+    await started;
+
+    await helper.stop("test-shutdown");
+    helper = null;
+
+    expect(signalFromCall?.aborted).toBe(true);
+    expect(didSettleModelCall).toBe(true);
+    await expect(sendPromise).resolves.toMatchObject({ ok: true });
   });
 
   it("surfaces safe Ask Agent ask_user tool calls and resumes after submitted answers", async () => {
