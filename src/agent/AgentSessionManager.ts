@@ -127,6 +127,29 @@ const BTW_MAX_TOOL_CALLS = 10;
 /** Default overall deadline for a /btw run before it self-aborts. */
 const BTW_DEFAULT_TIMEOUT_MS = 120_000;
 
+/** Overage allowed on an exhausted budget dimension while a wrap-up is in flight. */
+const BUDGET_WRAP_UP_GRACE_RATIO = 1.5;
+/** Time allowed for a wrap-up turn to complete before the hard kill. */
+const BUDGET_WRAP_UP_GRACE_MS = 120_000;
+
+/** Human-readable label for a budget check kind (e.g. "tool_calls" → "tool call"). */
+function formatBudgetKind(kind: string): string {
+  switch (kind) {
+    case "tokens":
+      return "token";
+    case "tool_calls":
+      return "tool call";
+    case "api_turns":
+      return "API turn";
+    case "elapsed_time":
+      return "elapsed time";
+    case "estimated_cost":
+      return "estimated cost";
+    default:
+      return kind.replace(/_/g, " ");
+  }
+}
+
 export interface CheckpointRevertPreviewResult {
   checkpointId: string;
   sessionRevision: PersistenceRevision;
@@ -191,6 +214,11 @@ export class AgentSessionManager {
   private bgSafetyTimers = new Map<
     string,
     ReturnType<AgentSessionManagerHost["timers"]["setTimeout"]>[]
+  >();
+  /** Budget wrap-up requests per owner session: exhausted dimension + when the wrap-up was injected. */
+  private bgBudgetWrapUps = new Map<
+    string,
+    { kind: string; requestedAt: number }
   >();
   /** Accumulated streaming text for background sessions (for UI preview). */
   private bgStreamingText = new Map<string, string>();
@@ -407,7 +435,13 @@ export class AgentSessionManager {
 
     const meta = this.bgMeta.get(session.id);
     if (meta) {
-      meta.tokenUsage = usage.totalTokens;
+      // Budget "tokens" counts spend: uncached input + output, matching the
+      // in-process engine metric (uncachedInputTokens + outputTokens per API
+      // turn). ACP usage is cumulative across the session, so assign rather
+      // than accumulate. totalTokens would also count cache reads, which
+      // grow with every turn and would exhaust budgets far faster than the
+      // equivalent native agent.
+      meta.tokenUsage = usage.inputTokens + usage.outputTokens;
       meta.apiTurns += 1;
     }
     this.enforceBackgroundBudget(session);
@@ -546,9 +580,13 @@ export class AgentSessionManager {
     }
 
     if (update.sessionUpdate === "usage_update") {
+      // update.used is context-window occupancy ("tokens currently in
+      // context"), not cumulative spend — it must not count against the
+      // token budget, or an agent that loads a large diff would exhaust a
+      // reasonable budget instantly. Spend is applied from the prompt
+      // response usage instead. Still re-run enforcement so elapsed-time
+      // budgets are checked between turns.
       session.lastInputTokens = update.used;
-      const meta = this.bgMeta.get(session.id);
-      if (meta) meta.tokenUsage = update.used;
       this.enforceBackgroundBudget(session);
     }
   }
@@ -3277,11 +3315,22 @@ export class AgentSessionManager {
         1000,
       );
 
+      // Session-scoped caps also flow into the engine, which refuses
+      // over-limit tool calls and demands a final answer — a graceful
+      // landing instead of the manager's hard kill. Subtree/goal budgets are
+      // shared pools, so their totals don't apply to a single engine run.
+      const budget = session.fleetMetadata?.budget;
+      const engineBudget =
+        budget && (budget.scope === undefined || budget.scope === "session")
+          ? budget
+          : undefined;
       try {
         for await (const event of bgEngine.run(session, {
           isBackground: true,
           toolProfile:
             request.permissionProfile === "review-only" ? "review" : undefined,
+          maxToolCalls: engineBudget?.maxToolCalls,
+          maxApiTurns: engineBudget?.maxApiTurns,
         })) {
           if (event.type === "text_delta") {
             this.appendBgStreamingText(session.id, event.text);
@@ -4200,6 +4249,7 @@ export class AgentSessionManager {
   ): void {
     const fleet = session.fleetMetadata;
     if (!fleet) return;
+    this.bgBudgetWrapUps.delete(session.id);
     fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
     fleet.finalResult = resultText;
     fleet.structuredResult = parseFleetResultEnvelope(
@@ -4552,10 +4602,39 @@ export class AgentSessionManager {
     return false;
   }
 
+  /**
+   * Best-effort budget message injection into running in-process members.
+   * External backends (ACP, worktree) have no interjection channel and are
+   * skipped. Returns true when at least one member accepted the message.
+   */
+  private injectBudgetInterjection(
+    members: AgentSession[],
+    text: string,
+  ): boolean {
+    let accepted = false;
+    for (const member of members) {
+      const fleet = member.fleetMetadata;
+      if (!fleet || fleet.backend !== "native") continue;
+      if (fleet.placement !== "background") continue;
+      if (fleet.lifecycle !== "running" && fleet.lifecycle !== "queued") {
+        continue;
+      }
+      if (member.setPendingInterjection(text, crypto.randomUUID())) {
+        accepted = true;
+      }
+    }
+    return accepted;
+  }
+
   private enforceBudgetOwner(owner: AgentSession): boolean {
     const fleet = owner.fleetMetadata;
     const budget = fleet?.budget;
     if (!fleet || !budget) return false;
+    // Never re-enforce a session that already reached a terminal state (a
+    // stale grace timer could otherwise mark a completed session as failed).
+    if (fleet.lifecycle !== "running" && fleet.lifecycle !== "queued") {
+      return false;
+    }
     const members = Array.from(this.sessions.values()).filter((candidate) => {
       if (budget.scope === "goal") {
         return (
@@ -4613,6 +4692,12 @@ export class AgentSessionManager {
         "budget_warning",
         `${warning.kind} budget at ${Math.round(warning.ratio * 100)}%`,
       );
+      // Tell the agent, not just the UI — leave enough budget headroom to
+      // finish and deliver findings rather than getting cut off mid-work.
+      this.injectBudgetInterjection(
+        members,
+        `[fleet budget] About ${Math.round(warning.ratio * 100)}% of the ${formatBudgetKind(warning.kind)} budget for this task is used. Prioritize the remaining work and start wrapping up so you can deliver your findings before the budget runs out.`,
+      );
       this.saveSession(owner.id);
       this.onSessionsChanged?.();
     }
@@ -4620,7 +4705,44 @@ export class AgentSessionManager {
       ([limit, used]) => limit !== undefined && limit >= 0 && used >= limit,
     );
     if (!exhausted) return false;
-    const [, , kind] = exhausted;
+    const [exhaustedLimit, exhaustedUsed, kind] = exhausted;
+    // Prefer a graceful landing over discarding the work: ask running
+    // in-process members to deliver findings now, and hard-kill only when
+    // the grace window or the overage cap is breached (or when no member
+    // has an interjection channel, e.g. ACP/worktree backends).
+    const wrapUp = this.bgBudgetWrapUps.get(owner.id);
+    if (!wrapUp) {
+      const accepted = this.injectBudgetInterjection(
+        members,
+        `[fleet budget] The ${formatBudgetKind(kind)} budget for this task is exhausted. Do not start new tool calls — deliver your final findings now with the information you already have.`,
+      );
+      if (accepted) {
+        this.bgBudgetWrapUps.set(owner.id, { kind, requestedAt: Date.now() });
+        this.appendFleetEvent(
+          owner,
+          "budget_warning",
+          `${kind} budget exhausted — wrap-up requested`,
+        );
+        // A hung agent produces no further events, so nothing would re-run
+        // enforcement — schedule the hard kill at the end of the grace window.
+        const timer = this.host.timers.setTimeout(() => {
+          this.enforceBackgroundBudget(owner);
+        }, BUDGET_WRAP_UP_GRACE_MS);
+        const timers = this.bgSafetyTimers.get(owner.id) ?? [];
+        timers.push(timer);
+        this.bgSafetyTimers.set(owner.id, timers);
+        this.saveSession(owner.id);
+        this.onSessionsChanged?.();
+        return false;
+      }
+    } else if (
+      Date.now() - wrapUp.requestedAt < BUDGET_WRAP_UP_GRACE_MS &&
+      exhaustedLimit !== undefined &&
+      exhaustedUsed < exhaustedLimit * BUDGET_WRAP_UP_GRACE_RATIO
+    ) {
+      return false;
+    }
+    this.bgBudgetWrapUps.delete(owner.id);
     const reason = `budget_exhausted:${kind}`;
     fleet.terminalReason = reason;
     owner.status = "error";

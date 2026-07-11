@@ -632,11 +632,47 @@ describe("AgentSessionManager background agents", () => {
     expect(info.errorMessage).toBeUndefined();
   });
 
-  it("stops at a hard budget and persists an explicit terminal reason", async () => {
+  it("requests a wrap-up at the budget limit and lets the agent deliver findings", async () => {
     mocks.runBehavior.mockReturnValue(
       (async function* () {
         yield { type: "tool_start", toolCallId: "tc-1", toolName: "search" };
         yield { type: "tool_start", toolCallId: "tc-2", toolName: "read" };
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "bounded task",
+      message: "run",
+      budget: { maxToolCalls: 2 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+
+    // Hitting the limit injects a wrap-up instruction instead of killing the
+    // run, so the agent's findings survive.
+    expect(session.setPendingInterjection).toHaveBeenCalledWith(
+      expect.stringContaining("budget for this task is exhausted"),
+      expect.any(String),
+    );
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(session.fleetMetadata).toEqual(
+      expect.objectContaining({
+        lifecycle: "completed",
+        budgetUsage: expect.objectContaining({ toolCalls: 2 }),
+      }),
+    );
+  });
+
+  it("hard-stops past the wrap-up grace overage and persists an explicit terminal reason", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        yield { type: "tool_start", toolCallId: "tc-1", toolName: "search" };
+        yield { type: "tool_start", toolCallId: "tc-2", toolName: "read" };
+        // Third call reaches the 1.5x overage cap (2 * 1.5 = 3) → hard kill.
+        yield { type: "tool_start", toolCallId: "tc-3", toolName: "read" };
         yield { type: "done" };
       })(),
     );
@@ -656,9 +692,108 @@ describe("AgentSessionManager background agents", () => {
       expect.objectContaining({
         lifecycle: "budget_exhausted",
         terminalReason: "budget_exhausted:tool_calls",
-        budgetUsage: expect.objectContaining({ toolCalls: 2 }),
+        budgetUsage: expect.objectContaining({ toolCalls: 3 }),
       }),
     );
+  });
+
+  it("passes session-scoped budget caps into the background engine run", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    await mgr.spawnBackground({
+      task: "capped",
+      message: "run",
+      budget: { maxToolCalls: 5, maxApiTurns: 7 },
+    });
+
+    expect(mocks.runArgs).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ maxToolCalls: 5, maxApiTurns: 7 }),
+    );
+  });
+
+  it("does not apply shared subtree budget caps to a single engine run", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    await mgr.spawnBackground({
+      task: "subtree owner",
+      message: "run",
+      budget: { maxToolCalls: 5, maxApiTurns: 7, scope: "subtree" },
+    });
+
+    expect(mocks.runArgs).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        maxToolCalls: undefined,
+        maxApiTurns: undefined,
+      }),
+    );
+  });
+
+  it("counts ACP usage as uncached input + output, not cache reads", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "acp usage",
+      message: "run",
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+
+    (mgr as any).applyAcpPromptResponseUsage(session, {
+      stopReason: "end_turn",
+      usage: {
+        totalTokens: 5000,
+        inputTokens: 300,
+        outputTokens: 200,
+        cachedReadTokens: 4500,
+      },
+    });
+
+    expect(meta.tokenUsage).toBe(500);
+    expect(meta.apiTurns).toBe(1);
+    mgr.stopSession(spawned.sessionId);
+  });
+
+  it("does not count ACP context occupancy against the token budget", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "acp context",
+      message: "run",
+      budget: { maxTokens: 100_000 },
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+
+    (mgr as any).applyAcpSessionUpdate({
+      session,
+      assistantTextParts: [],
+      update: { sessionUpdate: "usage_update", used: 150_000, size: 200_000 },
+    });
+
+    // Context occupancy is not spend: the budget must not trip.
+    expect(meta.tokenUsage).toBe(0);
+    expect(session.lastInputTokens).toBe(150_000);
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(session.fleetMetadata.lifecycle).toBe("running");
+    mgr.stopSession(spawned.sessionId);
   });
 
   it("reserves child capacity from a subtree budget", async () => {
@@ -703,7 +838,13 @@ describe("AgentSessionManager background agents", () => {
     mgr.stopSession(parent.sessionId);
   });
 
-  it("emits a durable warning before a session budget is exhausted", async () => {
+  it("emits a durable warning and nudges the agent before a session budget is exhausted", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
     const spawned = await mgr.spawnBackground({
@@ -719,6 +860,11 @@ describe("AgentSessionManager background agents", () => {
     expect(session.fleetMetadata.budgetWarning).toEqual(
       expect.objectContaining({ kind: "tokens", ratio: 0.8 }),
     );
+    expect(session.setPendingInterjection).toHaveBeenCalledWith(
+      expect.stringContaining("80% of the token budget"),
+      expect.any(String),
+    );
+    mgr.stopSession(spawned.sessionId);
   });
 
   it("exposes route summaries for debug payloads", async () => {

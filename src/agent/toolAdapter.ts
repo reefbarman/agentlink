@@ -467,6 +467,46 @@ const SWITCH_MODE_TOOL: ToolDefinition = {
   },
 };
 
+/** Shared budget schema for spawn_background_agent and start_fleet_workflow. */
+const AGENT_BUDGET_SCHEMA = {
+  type: "object",
+  description:
+    "Optional resource caps. Omit entirely for a standard review or research task — an uncapped agent simply runs to completion. When a cap is reached the agent is asked to wrap up and deliver its findings, then force-stopped after a short grace (50% overage or 2 minutes).",
+  properties: {
+    maxTokens: {
+      type: "number",
+      description:
+        "Cap on uncached input + output tokens summed across all API turns. Cache misses charge the full context, so reading a large diff or repo can cost 30k-100k tokens in a single turn; a typical diff review spends 100k-300k total. Do not set below 100000 for review tasks.",
+    },
+    maxToolCalls: {
+      type: "number",
+      description:
+        "Cap on tool invocations. More predictable than maxTokens for bounding work; a typical diff review uses 10-40 tool calls.",
+    },
+    maxApiTurns: {
+      type: "number",
+      description:
+        "Cap on model API turns. A typical diff review takes 5-25 turns.",
+    },
+    maxElapsedMs: {
+      type: "number",
+      description: "Wall-clock cap in milliseconds.",
+    },
+    maxEstimatedCostUsd: {
+      type: "number",
+      description:
+        "Estimated-cost cap in USD; only enforced when estimatedCostPerMillionTokens is also set.",
+    },
+    estimatedCostPerMillionTokens: { type: "number" },
+    warningThresholdRatio: {
+      type: "number",
+      description:
+        "Usage ratio (default 0.8) at which the agent is nudged to start wrapping up.",
+    },
+    scope: { type: "string", enum: ["session", "subtree", "goal"] },
+  },
+};
+
 /** Background agent management tools (only available in foreground sessions). */
 const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
@@ -529,19 +569,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           description:
             "Structured result envelope the agent must return. review_findings envelopes report reviewedScope (what was actually reviewed) and emptyDiff (true when the requested change set was empty or missing) — check emptyDiff before treating an empty findings list as a clean review.",
         },
-        budget: {
-          type: "object",
-          properties: {
-            maxTokens: { type: "number" },
-            maxToolCalls: { type: "number" },
-            maxApiTurns: { type: "number" },
-            maxElapsedMs: { type: "number" },
-            maxEstimatedCostUsd: { type: "number" },
-            estimatedCostPerMillionTokens: { type: "number" },
-            warningThresholdRatio: { type: "number" },
-            scope: { type: "string", enum: ["session", "subtree", "goal"] },
-          },
-        },
+        budget: AGENT_BUDGET_SCHEMA,
         goalId: { type: "string" },
       },
       required: ["task", "message"],
@@ -649,7 +677,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
             },
           },
         },
-        budget: { type: "object" },
+        budget: AGENT_BUDGET_SCHEMA,
       },
       required: ["kind", "task", "message"],
     },

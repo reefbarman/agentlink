@@ -877,6 +877,9 @@ For review delegations (`expectedResult: "review_findings"`), pin the review tar
 | `taskClass`      | string? | Routing profile key (e.g. `review_code`, `review_plan`, `readonly-research`, `research`, `debug`, `explore`, `design`, `general`) |
 | `modelTier`      | string? | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`)                                                            |
 | `expectedResult` | string? | Structured result envelope (`text`, `review_findings`, `patch`, `verification`)                                                   |
+| `budget`         | object? | Optional resource caps (`maxTokens`, `maxToolCalls`, `maxApiTurns`, `maxElapsedMs`, `maxEstimatedCostUsd`, `scope`) - see below   |
+
+Budgets are optional — omit them for standard review/research tasks and the agent simply runs to completion. `maxTokens` counts uncached input + output tokens summed across all API turns (cache misses charge the full context, so a large diff review typically spends 100k–300k tokens; don't cap reviews below ~100k). At `warningThresholdRatio` (default 0.8) the agent is nudged to start wrapping up; when a cap is reached it is asked to stop tool calls and deliver its findings, and only force-stopped (`budget_exhausted:<kind>`) after a short grace window (50% overage or 2 minutes). Session-scoped `maxToolCalls`/`maxApiTurns` caps are also enforced inside the engine, which refuses over-limit tool calls and demands a final answer.
 
 Returns structured JSON including:
 
