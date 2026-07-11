@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 
 import { successResult, type ToolResult } from "../shared/types.js";
+import { getAgentToolCompletionStrategy } from "./agentToolCompletionStrategies.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -245,148 +246,7 @@ export class AgentToolCallTracker extends EventEmitter {
 
     this.log(`COMPLETE_AGENT ${call.toolName} (${id.slice(0, 8)})`);
 
-    if (call.toolName === "execute_command") {
-      await this.completeExecuteCommand(call);
-      return;
-    }
-
-    if (call.toolName === "get_terminal_output") {
-      await this.completeGetTerminalOutput(call);
-      return;
-    }
-
-    if (call.toolName === "write_file" || call.toolName === "apply_diff") {
-      await this.completeWriteTool(call);
-      return;
-    }
-
-    call.forceResolve(
-      successResult({
-        status: "force-completed",
-        tool: call.toolName,
-        message: "Force-completed by user from VS Code",
-      }),
-    );
-  }
-
-  private async completeExecuteCommand(call: TrackedCall): Promise<void> {
-    this.log(
-      `COMPLETE_EXEC ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId ?? "none"}`,
-    );
-    const { getTerminalManager } =
-      await import("../integrations/TerminalManager.js");
-    const tm = getTerminalManager();
-
-    let partialOutput = "";
-    if (call.terminalId) {
-      partialOutput =
-        tm.getCurrentOutput(call.terminalId, { force: true }) ?? "";
-      this.log(`COMPLETE_EXEC output captured: ${partialOutput.length} chars`);
-    }
-
-    // Interrupt the running process
-    if (call.terminalId) {
-      this.log(`COMPLETE_EXEC interrupting terminal ${call.terminalId}`);
-      tm.interruptTerminal(call.terminalId);
-    }
-
-    call.forceResolve(
-      successResult({
-        exit_code: null,
-        output: partialOutput || "[No output captured]",
-        output_captured: !!partialOutput,
-        terminal_id: call.terminalId ?? null,
-        status: "force-completed",
-        message: "Command force-completed by user. Process was interrupted.",
-      }),
-    );
-  }
-
-  private async completeGetTerminalOutput(call: TrackedCall): Promise<void> {
-    // displayArgs is the terminal_id for get_terminal_output
-    const terminalId = call.displayArgs;
-    this.log(
-      `COMPLETE_GET_OUTPUT ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${terminalId}`,
-    );
-
-    const { getTerminalManager } =
-      await import("../integrations/TerminalManager.js");
-    const tm = getTerminalManager();
-    const state = tm.getBackgroundState(terminalId);
-
-    if (!state) {
-      // Terminal not in managed list — try force-reading output as last resort
-      const directOutput = tm.getCurrentOutput(terminalId, { force: true });
-      call.forceResolve(
-        successResult(
-          directOutput
-            ? {
-                terminal_id: terminalId,
-                is_running: false,
-                exit_code: null,
-                output_captured: true,
-                output: directOutput,
-                status: "force-completed",
-                message:
-                  "Output returned immediately — wait was interrupted by user.",
-              }
-            : {
-                error: `Terminal "${terminalId}" not found. It may have been closed.`,
-              },
-        ),
-      );
-      return;
-    }
-
-    // Use background state output when captured, otherwise force-read
-    // the output buffer directly (covers foreground terminals that were
-    // never transitioned to background mode).
-    const output = state.output_captured
-      ? state.output
-      : (tm.getCurrentOutput(terminalId, { force: true }) ?? "");
-
-    call.forceResolve(
-      successResult({
-        terminal_id: terminalId,
-        is_running: state.is_running,
-        exit_code: state.exit_code,
-        output_captured: state.output_captured || !!output,
-        output: output || "[No output captured]",
-        status: "force-completed",
-        message: "Output returned immediately — wait was interrupted by user.",
-        ...(!state.output_captured &&
-          !output && {
-            verification_hint:
-              `Terminal_id "${terminalId}" did not have shell integration capture available. ` +
-              "Use the visible terminal to verify command state rather than re-running it.",
-          }),
-      }),
-    );
-  }
-
-  private async completeWriteTool(call: TrackedCall): Promise<void> {
-    this.log(`COMPLETE_WRITE ${call.toolName} (${call.id.slice(0, 8)})`);
-    const { resolveCurrentDiff } =
-      await import("../integrations/DiffViewProvider.js");
-
-    // Try to auto-accept the pending diff — if successful the original
-    // handler will complete naturally through saveChanges().
-    if (resolveCurrentDiff("accept")) {
-      this.log(`COMPLETE_WRITE auto-accepted diff for ${call.toolName}`);
-      return; // Original handler wins the Promise.race
-    }
-    this.log(
-      `COMPLETE_WRITE no pending diff, force-resolving ${call.toolName}`,
-    );
-
-    // No pending diff — force-resolve with fallback
-    call.forceResolve(
-      successResult({
-        status: "force-completed",
-        path: call.displayArgs,
-        message:
-          "No pending diff to accept — file may already be saved or approval was not yet shown",
-      }),
-    );
+    const strategy = getAgentToolCompletionStrategy(call.toolName);
+    await strategy(call, this.log);
   }
 }

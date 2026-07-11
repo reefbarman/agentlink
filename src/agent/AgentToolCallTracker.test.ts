@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   detachTerminal: vi.fn<(terminalId: string) => boolean>(),
   interruptTerminal: vi.fn<(terminalId: string) => void>(),
   getCurrentOutput: vi.fn<(terminalId: string) => string | undefined>(),
+  getBackgroundState: vi.fn(),
   resolveCurrentDiff: vi.fn<(decision: "accept" | "reject") => boolean>(),
 }));
 
@@ -14,6 +15,7 @@ vi.mock("../integrations/TerminalManager.js", () => ({
     detachTerminal: mocks.detachTerminal,
     interruptTerminal: mocks.interruptTerminal,
     getCurrentOutput: mocks.getCurrentOutput,
+    getBackgroundState: mocks.getBackgroundState,
   }),
 }));
 
@@ -28,6 +30,7 @@ describe("AgentToolCallTracker continueInBackground", () => {
     mocks.detachTerminal.mockReturnValue(true);
     mocks.interruptTerminal.mockReset();
     mocks.getCurrentOutput.mockReset();
+    mocks.getBackgroundState.mockReset();
     mocks.resolveCurrentDiff.mockReset();
     mocks.resolveCurrentDiff.mockReturnValue(false);
   });
@@ -116,6 +119,7 @@ describe("AgentToolCallTracker lifecycle", () => {
     mocks.detachTerminal.mockReset();
     mocks.interruptTerminal.mockReset();
     mocks.getCurrentOutput.mockReset();
+    mocks.getBackgroundState.mockReset();
     mocks.resolveCurrentDiff.mockReset();
     mocks.resolveCurrentDiff.mockReturnValue(false);
   });
@@ -200,6 +204,26 @@ describe("AgentToolCallTracker lifecycle", () => {
     });
   });
 
+  it("force-completes generic tools with the existing fallback", async () => {
+    const tracker = new AgentToolCallTracker();
+    const forceResolve = vi.fn();
+    tracker.registerAgentCall(
+      "call-generic",
+      "read_file",
+      "src/index.ts",
+      "session-a",
+      forceResolve,
+    );
+
+    await tracker.completeCall("call-generic");
+
+    expect(JSON.parse(forceResolve.mock.calls[0][0].content[0].text)).toEqual({
+      status: "force-completed",
+      tool: "read_file",
+      message: "Force-completed by user from VS Code",
+    });
+  });
+
   it("force-completes execute_command with captured output", async () => {
     mocks.getCurrentOutput.mockReturnValue("partial output");
     const tracker = new AgentToolCallTracker();
@@ -227,6 +251,109 @@ describe("AgentToolCallTracker lifecycle", () => {
       output_captured: true,
       terminal_id: "term-complete",
       status: "force-completed",
+    });
+  });
+
+  it("returns managed terminal output without forcing a second capture", async () => {
+    mocks.getBackgroundState.mockReturnValue({
+      is_running: true,
+      exit_code: null,
+      output_captured: true,
+      output: "managed output",
+    });
+    const tracker = new AgentToolCallTracker();
+    const forceResolve = vi.fn();
+    tracker.registerAgentCall(
+      "call-output",
+      "get_terminal_output",
+      "term-output",
+      "session-a",
+      forceResolve,
+    );
+
+    await tracker.completeCall("call-output");
+
+    expect(mocks.getCurrentOutput).not.toHaveBeenCalled();
+    expect(
+      JSON.parse(forceResolve.mock.calls[0][0].content[0].text),
+    ).toMatchObject({
+      terminal_id: "term-output",
+      is_running: true,
+      exit_code: null,
+      output_captured: true,
+      output: "managed output",
+      status: "force-completed",
+    });
+  });
+
+  it("force-reads output when the terminal is no longer managed", async () => {
+    mocks.getBackgroundState.mockReturnValue(undefined);
+    mocks.getCurrentOutput.mockReturnValue("direct output");
+    const tracker = new AgentToolCallTracker();
+    const forceResolve = vi.fn();
+    tracker.registerAgentCall(
+      "call-output-direct",
+      "get_terminal_output",
+      "term-direct",
+      "session-a",
+      forceResolve,
+    );
+
+    await tracker.completeCall("call-output-direct");
+
+    expect(mocks.getCurrentOutput).toHaveBeenCalledWith("term-direct", {
+      force: true,
+    });
+    expect(
+      JSON.parse(forceResolve.mock.calls[0][0].content[0].text),
+    ).toMatchObject({
+      terminal_id: "term-direct",
+      is_running: false,
+      output_captured: true,
+      output: "direct output",
+      status: "force-completed",
+    });
+  });
+
+  it.each(["write_file", "apply_diff"])(
+    "auto-accepts pending diffs for %s without force-resolving",
+    async (toolName) => {
+      mocks.resolveCurrentDiff.mockReturnValue(true);
+      const tracker = new AgentToolCallTracker();
+      const forceResolve = vi.fn();
+      tracker.registerAgentCall(
+        `call-${toolName}`,
+        toolName,
+        "src/index.ts",
+        "session-a",
+        forceResolve,
+      );
+
+      await tracker.completeCall(`call-${toolName}`);
+
+      expect(mocks.resolveCurrentDiff).toHaveBeenCalledWith("accept");
+      expect(forceResolve).not.toHaveBeenCalled();
+    },
+  );
+
+  it("force-completes a write tool when no diff is pending", async () => {
+    const tracker = new AgentToolCallTracker();
+    const forceResolve = vi.fn();
+    tracker.registerAgentCall(
+      "call-write-fallback",
+      "write_file",
+      "src/index.ts",
+      "session-a",
+      forceResolve,
+    );
+
+    await tracker.completeCall("call-write-fallback");
+
+    expect(JSON.parse(forceResolve.mock.calls[0][0].content[0].text)).toEqual({
+      status: "force-completed",
+      path: "src/index.ts",
+      message:
+        "No pending diff to accept — file may already be saved or approval was not yet shown",
     });
   });
 });
