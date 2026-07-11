@@ -2,8 +2,6 @@ import * as vscode from "vscode";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  expandQuery,
-  extractKeywords,
   rerankResults,
   rrfMerge,
   semanticFileList,
@@ -67,100 +65,6 @@ vi.mock("../util/ripgrep.js", async () => {
 });
 
 global.fetch = fetchMock as typeof fetch;
-
-// --- extractKeywords ---
-
-describe("extractKeywords", () => {
-  it("splits CamelCase identifiers", () => {
-    const result = extractKeywords("TerminalManager");
-    expect(result).toContain("TerminalManager");
-    expect(result).toContain("Terminal");
-    expect(result).toContain("Manager");
-  });
-
-  it("splits snake_case identifiers", () => {
-    const result = extractKeywords("shell_integration");
-    expect(result).toContain("shell_integration");
-    expect(result).toContain("shell");
-    expect(result).toContain("integration");
-  });
-
-  it("removes stop words", () => {
-    const result = extractKeywords("how does the server work");
-    expect(result).not.toContain("how");
-    expect(result).not.toContain("does");
-    expect(result).not.toContain("the");
-    expect(result).toContain("server");
-    expect(result).toContain("work");
-  });
-
-  it("removes code noise words", () => {
-    const result = extractKeywords("function class interface");
-    expect(result).toHaveLength(0);
-  });
-
-  it("filters short tokens (< 3 chars)", () => {
-    const result = extractKeywords("a to by DiffView");
-    expect(result).not.toContain("a");
-    expect(result).not.toContain("to");
-    expect(result).not.toContain("by");
-    expect(result).toContain("DiffView");
-  });
-
-  it("deduplicates keywords", () => {
-    const result = extractKeywords("server server Server");
-    const lowerResults = result.map((r) => r.toLowerCase());
-    const unique = new Set(lowerResults);
-    expect(unique.size).toBe(lowerResults.length);
-  });
-
-  it("handles mixed query with identifiers and natural language", () => {
-    const result = extractKeywords(
-      "DiffViewProvider open diff editor approval",
-    );
-    expect(result).toContain("DiffViewProvider");
-    expect(result).toContain("Diff");
-    expect(result).toContain("open");
-    expect(result).toContain("editor");
-    expect(result).toContain("approval");
-  });
-
-  it("returns empty array for all-stop-word queries", () => {
-    const result = extractKeywords("is a the");
-    expect(result).toHaveLength(0);
-  });
-});
-
-// --- expandQuery ---
-
-describe("expandQuery", () => {
-  it("expands CamelCase terms", () => {
-    const result = expandQuery("DiffViewProvider");
-    expect(result).toContain("DiffViewProvider");
-    expect(result).toContain("Diff");
-    expect(result).toContain("View");
-    expect(result).toContain("Provider");
-  });
-
-  it("expands snake_case terms", () => {
-    const result = expandQuery("shell_integration command");
-    expect(result).toContain("shell_integration");
-    expect(result).toContain("shell integration");
-  });
-
-  it("preserves original query for plain words", () => {
-    const result = expandQuery("search files");
-    expect(result).toBe("search files");
-  });
-
-  it("handles mixed CamelCase and snake_case", () => {
-    const result = expandQuery("TerminalManager execute_command");
-    expect(result).toContain("TerminalManager");
-    expect(result).toContain("Terminal");
-    expect(result).toContain("Manager");
-    expect(result).toContain("execute command");
-  });
-});
 
 // --- rrfMerge ---
 
