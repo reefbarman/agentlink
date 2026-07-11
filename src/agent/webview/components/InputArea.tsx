@@ -50,6 +50,7 @@ import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
 import { WriteApprovalSelector } from "./WriteApprovalSelector";
 import { randomId } from "../../../shared/randomId";
+import { useFileMentionPopup } from "./useFileMentionPopup";
 
 /** A pasted or dropped file held in webview state before sending. */
 export interface MediaAttachment {
@@ -225,15 +226,25 @@ export function InputArea({
   const [mediaAttachments, setMediaAttachments] = useState<MediaAttachment[]>(
     [],
   );
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerQuery, setPickerQuery] = useState("");
-  const [atStart, setAtStart] = useState(-1); // cursor position of the @ that triggered the picker
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [emojiQuery, setEmojiQuery] = useState("");
   const [emojiStart, setEmojiStart] = useState(-1);
   const [emojiSelectedIdx, setEmojiSelectedIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputWrapperRef = useRef<HTMLDivElement>(null);
+  const {
+    open: pickerOpen,
+    query: pickerQuery,
+    close: closePicker,
+    openAt: openPickerAt,
+    openStandalone: openStandalonePicker,
+    updateFromInput: updatePickerFromInput,
+    complete: completeFileMention,
+  } = useFileMentionPopup({
+    text,
+    onTextChange: setText,
+    textareaRef,
+  });
   const hasSubmitContent = canSubmitComposer({
     text,
     hasAttachments: allowAttachments && attachments.length > 0,
@@ -658,9 +669,6 @@ export function InputArea({
         onComposerEvent?.("submit.key", { key: "Enter" });
         handleSubmit();
       }
-      if (e.key === "Escape" && pickerOpen) {
-        setPickerOpen(false);
-      }
     },
     [
       handleSubmit,
@@ -683,12 +691,6 @@ export function InputArea({
     ],
   );
 
-  const closePicker = useCallback(() => {
-    setPickerOpen(false);
-    setPickerQuery("");
-    setAtStart(-1);
-  }, []);
-
   const handleFileSelect = useCallback(
     (path: string) => {
       if (!allowAttachments) {
@@ -696,29 +698,12 @@ export function InputArea({
         return;
       }
 
-      if (atStart >= 0) {
-        const before = text.slice(0, atStart);
-        const tokenEnd = atStart + 1 + pickerQuery.length;
-        const after = text.slice(tokenEnd);
-        const completedPath = `@${path}`;
-        const nextText = `${before}${completedPath}${after}`;
-        const nextCursor = (before + completedPath).length;
-        setText(nextText);
-        requestAnimationFrame(() => {
-          if (textareaRef.current) {
-            textareaRef.current.selectionStart = nextCursor;
-            textareaRef.current.selectionEnd = nextCursor;
-            textareaRef.current.focus();
-            autosizeTextarea(textareaRef.current);
-          }
-        });
-      }
+      completeFileMention(path);
       if (!attachments.includes(path)) {
         setAttachments((prev) => [...prev, path]);
       }
-      closePicker();
     },
-    [allowAttachments, text, atStart, pickerQuery, attachments, closePicker],
+    [allowAttachments, attachments, closePicker, completeFileMention],
   );
 
   const handleRemoveAttachment = useCallback((path: string) => {
@@ -874,15 +859,7 @@ export function InputArea({
         }
       }
 
-      // Detect @ trigger for file picker
-      if (pickerOpen && atStart >= 0) {
-        const query = value.slice(atStart + 1, cursor);
-        if (query.includes(" ") || query.includes("\n") || cursor <= atStart) {
-          closePicker();
-        } else {
-          setPickerQuery(query);
-        }
-      }
+      updatePickerFromInput(value, cursor);
 
       updateSlashFromInput(value, cursor);
 
@@ -913,9 +890,7 @@ export function InputArea({
             charBefore === " " ||
             charBefore === "\n")
         ) {
-          setAtStart(cursor - 1);
-          setPickerQuery("");
-          setPickerOpen(true);
+          openPickerAt(cursor - 1);
         }
         // Check if user just typed / at start or after whitespace
         if (
@@ -956,8 +931,8 @@ export function InputArea({
     },
     [
       pickerOpen,
-      atStart,
-      closePicker,
+      updatePickerFromInput,
+      openPickerAt,
       slashOpen,
       updateSlashFromInput,
       openSlashAt,
@@ -1167,10 +1142,7 @@ export function InputArea({
         if (!allowFileMentions || !allowAttachments) {
           return;
         }
-        setAtStart(-1);
-        setPickerQuery("");
-        setPickerOpen(true);
-        textareaRef.current?.focus();
+        openStandalonePicker();
         return;
       }
 
@@ -1190,7 +1162,7 @@ export function InputArea({
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [allowAttachments, allowFileMentions]);
+  }, [allowAttachments, allowFileMentions, openStandalonePicker]);
 
   // Compute picker anchor position relative to input wrapper
   const getPickerAnchor = useCallback(() => {
