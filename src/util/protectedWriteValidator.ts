@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 
+import { scanShellLexBoundaries, scanShellLexTokens } from "./shellLex.js";
+
 import { isMemoryProtectedPath } from "../approvals/protectedPaths.js";
 
 export interface ProtectedWriteValidationResult {
@@ -296,140 +298,46 @@ function findGitRestoreTargets(args: string[]): string[] {
 }
 
 function splitOnCompoundOperators(command: string): string[] {
-  const result: string[] = [];
-  let current = "";
-  let quote: string | null = null;
-  let escaped = false;
-
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    const next = command[i + 1];
-
-    if (escaped) {
-      current += ch;
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      current += ch;
-      escaped = true;
-      continue;
-    }
-    if ((ch === '"' || ch === "'") && !quote) {
-      quote = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === quote) {
-      quote = null;
-      current += ch;
-      continue;
-    }
-    if (
-      !quote &&
-      (ch === ";" ||
-        (ch === "&" && next === "&") ||
-        (ch === "|" && next === "|"))
-    ) {
-      if (current.trim()) result.push(current.trim());
-      current = "";
-      if (ch !== ";") i++;
-      continue;
-    }
-    current += ch;
-  }
-  if (current.trim()) result.push(current.trim());
-  return result;
+  return splitAtBoundaries(
+    command,
+    scanShellLexBoundaries(command, {
+      separators: ["&&", "||", ";"],
+      comments: false,
+    }).boundaries,
+  )
+    .map((segment) => segment.trim())
+    .filter(Boolean);
 }
 
 function splitOnUnquotedPipes(command: string): string[] {
-  const segments: string[] = [];
-  let current = "";
-  let quote: string | null = null;
-  let escaped = false;
+  return splitAtBoundaries(
+    command,
+    scanShellLexBoundaries(command, {
+      separators: ["|"],
+      comments: false,
+    }).boundaries,
+  );
+}
 
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (escaped) {
-      current += ch;
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      current += ch;
-      escaped = true;
-      continue;
-    }
-    if ((ch === '"' || ch === "'") && !quote) {
-      quote = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === quote) {
-      quote = null;
-      current += ch;
-      continue;
-    }
-    if (!quote && ch === "|") {
-      segments.push(current);
-      current = "";
-      continue;
-    }
-    current += ch;
+function splitAtBoundaries(
+  command: string,
+  boundaries: ReturnType<typeof scanShellLexBoundaries>["boundaries"],
+): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  for (const boundary of boundaries) {
+    segments.push(command.slice(start, boundary.start));
+    start = boundary.end;
   }
-  segments.push(current);
+  segments.push(command.slice(start));
   return segments;
 }
 
 function tokenize(command: string): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: string | null = null;
-  let escaped = false;
-
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (escaped) {
-      current += ch;
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if ((ch === '"' || ch === "'") && !quote) {
-      quote = ch;
-      continue;
-    }
-    if (ch === quote) {
-      quote = null;
-      continue;
-    }
-    if (!quote && /\s/.test(ch)) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-      continue;
-    }
-    if (!quote && (ch === ">" || ch === "<")) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-      if (ch === ">" && command[i + 1] === ">") {
-        tokens.push(">>");
-        i++;
-      } else {
-        tokens.push(ch);
-      }
-      continue;
-    }
-    current += ch;
-  }
-  if (current) tokens.push(current);
-  return tokens;
+  return scanShellLexTokens(command, {
+    operators: [">>", ">", "<"],
+    escapeInSingleQuotes: true,
+  }).tokens;
 }
 
 function stripQuotes(value: string): string {

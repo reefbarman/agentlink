@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { scanShellLexBoundaries, scanShellLexWords } from "./shellLex.js";
+import {
+  scanShellLexBoundaries,
+  scanShellLexTokens,
+  scanShellLexWords,
+} from "./shellLex.js";
 
 describe("scanShellLexBoundaries", () => {
   it.each([
@@ -152,6 +156,60 @@ describe("scanShellLexWords", () => {
         { start: 0, end: 4, raw: "echo" },
         { start: 5, end: 14, raw: "trailing\\" },
       ],
+      finalState: { quote: null, danglingEscape: true },
+    });
+  });
+});
+
+// This normalized scanner is intentionally separate from the raw word scanner:
+// security consumers need exact control over quote, escape, and operator handling.
+describe("scanShellLexTokens", () => {
+  it("normalizes quotes and escapes while omitting empty quoted arguments", () => {
+    expect(
+      scanShellLexTokens(String.raw`cp "source file" escaped\ path "" ''`),
+    ).toEqual({
+      tokens: ["cp", "source file", "escaped path"],
+      finalState: { quote: null, danglingEscape: false },
+    });
+  });
+
+  it("splits only configured longest-match operators", () => {
+    expect(
+      scanShellLexTokens("echo hi 2>>out <in", {
+        operators: [">>", ">", "<"],
+      }).tokens,
+    ).toEqual(["echo", "hi", "2", ">>", "out", "<", "in"]);
+    expect(scanShellLexTokens("echo hi 2>>out").tokens).toEqual([
+      "echo",
+      "hi",
+      "2>>out",
+    ]);
+    expect(
+      scanShellLexTokens("echo hi >>out", { operators: [">"] }).tokens,
+    ).toEqual(["echo", "hi", ">>out"]);
+    expect(
+      scanShellLexTokens("echo hi >out", { operators: [">>"] }).tokens,
+    ).toEqual(["echo", "hi", ">out"]);
+  });
+
+  it("supports legacy escape-next behavior inside single quotes", () => {
+    const input = String.raw`echo 'AGENTS\.md'`;
+    expect(scanShellLexTokens(input).tokens).toEqual([
+      "echo",
+      String.raw`AGENTS\.md`,
+    ]);
+    expect(
+      scanShellLexTokens(input, { escapeInSingleQuotes: true }).tokens,
+    ).toEqual(["echo", "AGENTS.md"]);
+  });
+
+  it("reports malformed state after preserving normalized tokens", () => {
+    expect(scanShellLexTokens(`echo "unterminated`)).toEqual({
+      tokens: ["echo", "unterminated"],
+      finalState: { quote: "double", danglingEscape: false },
+    });
+    expect(scanShellLexTokens("echo trailing\\")).toEqual({
+      tokens: ["echo", "trailing"],
       finalState: { quote: null, danglingEscape: true },
     });
   });

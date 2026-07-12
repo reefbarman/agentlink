@@ -41,6 +41,16 @@ export interface ShellLexWordScanResult {
   finalState: ShellLexFinalState;
 }
 
+export interface ShellLexTokenOptions {
+  operators?: readonly (">>" | ">" | "<")[];
+  escapeInSingleQuotes?: boolean;
+}
+
+export interface ShellLexTokenScanResult {
+  tokens: string[];
+  finalState: ShellLexFinalState;
+}
+
 /**
  * Scans the legacy command-splitter dialect without interpreting shell syntax.
  *
@@ -186,6 +196,83 @@ export function scanShellLexWords(input: string): ShellLexWordScanResult {
   return { words, finalState: { quote, danglingEscape } };
 }
 
+/**
+ * Tokenizes shell-like source while removing quote delimiters and escape markers.
+ *
+ * Optional redirection operators are emitted as separate tokens. Empty quoted
+ * arguments are omitted. Malformed final state is diagnostic only.
+ */
+export function scanShellLexTokens(
+  input: string,
+  options: ShellLexTokenOptions = {},
+): ShellLexTokenScanResult {
+  const tokens: string[] = [];
+  const operators = new Set(options.operators ?? []);
+  const escapeInSingleQuotes = options.escapeInSingleQuotes ?? false;
+  let current = "";
+  let quote: ShellLexQuote | null = null;
+  let danglingEscape = false;
+  let index = 0;
+
+  const finishToken = () => {
+    if (!current) return;
+    tokens.push(current);
+    current = "";
+  };
+
+  while (index < input.length) {
+    const ch = input[index];
+
+    if (ch === "\\" && (quote !== "single" || escapeInSingleQuotes)) {
+      if (index + 1 < input.length) {
+        current += input[index + 1];
+        index += 2;
+        continue;
+      }
+      danglingEscape = true;
+      index++;
+      continue;
+    }
+
+    if (ch === "'" && quote !== "double") {
+      quote = quote === "single" ? null : "single";
+      index++;
+      continue;
+    }
+    if (ch === '"' && quote !== "single") {
+      quote = quote === "double" ? null : "double";
+      index++;
+      continue;
+    }
+
+    if (!quote && /\s/.test(ch)) {
+      finishToken();
+      index++;
+      continue;
+    }
+
+    if (!quote) {
+      const operator = readTokenOperator(input, index);
+      if (operator) {
+        if (operators.has(operator.value)) {
+          finishToken();
+          tokens.push(operator.value);
+        } else {
+          current += operator.value;
+        }
+        index = operator.end;
+        continue;
+      }
+    }
+
+    current += ch;
+    index++;
+  }
+
+  finishToken();
+  return { tokens, finalState: { quote, danglingEscape } };
+}
+
 function readSeparator(
   input: string,
   index: number,
@@ -207,5 +294,17 @@ function readSeparator(
   if (ch === "\n") {
     return { kind: "separator", operator: "\n", start: index, end: index + 1 };
   }
+  return null;
+}
+
+function readTokenOperator(
+  input: string,
+  index: number,
+): { value: ">>" | ">" | "<"; end: number } | null {
+  if (input[index] === ">" && input[index + 1] === ">") {
+    return { value: ">>", end: index + 2 };
+  }
+  if (input[index] === ">") return { value: ">", end: index + 1 };
+  if (input[index] === "<") return { value: "<", end: index + 1 };
   return null;
 }

@@ -20,11 +20,32 @@ describe("validateProtectedWriteCommand", () => {
     expectProtected("cat <<'EOF' > .claude/CLAUDE.md\nhi\nEOF");
   });
 
+  it("normalizes quoted, escaped, attached, and file-descriptor redirections", () => {
+    expectProtected(`echo remember > ".agentlink/memory.md"`);
+    expectProtected(String.raw`echo remember > .agentlink/memory\.md`);
+    expectProtected("echo remember >>AGENTS.md");
+    expectProtected("echo remember 2>AGENTS.md");
+  });
+
   it("rejects tee to protected files", () => {
     expectProtected("echo hi | tee -a .agentlink/memory.md");
     expectProtected(
       "tee -- .agentlink/commands/release.md >/dev/null <<'EOF'\nhi\nEOF",
     );
+  });
+
+  it("splits compounds and pipes while preserving quoted and escaped operators", () => {
+    expectProtected("echo safe && echo remember > AGENTS.md");
+    expectProtected("echo safe || echo remember > AGENTS.md");
+    expectProtected("echo safe; echo remember > AGENTS.md");
+    expectProtected("echo safe | tee .agentlink/memory.md");
+    expectProtected(`printf "a|b && c;d" > AGENTS.md`);
+    expectProtected(String.raw`printf a\|b > AGENTS.md`);
+  });
+
+  it("keeps comments and newlines in the protected-write lexical dialect", () => {
+    expectProtected("echo safe # apparent comment > AGENTS.md");
+    expectProtected("echo safe\necho remember > AGENTS.md");
   });
 
   it("rejects in-place edits to protected files", () => {
@@ -51,6 +72,11 @@ describe("validateProtectedWriteCommand", () => {
     expectProtected("git checkout -- .agentlink/memory.md");
   });
 
+  it("retokenizes supported shell command wrappers", () => {
+    expectProtected(`bash -c "echo remember > .agentlink/memory.md"`);
+    expectProtected(`zsh --command 'tee AGENTS.md'`);
+  });
+
   it("allows ordinary command writes", () => {
     expect(
       validateProtectedWriteCommand("echo hi > tmp/out.txt", cwd),
@@ -65,6 +91,17 @@ describe("validateProtectedWriteCommand", () => {
     expect(validateProtectedWriteCommand("echo hi > $TARGET", cwd)).toBeNull();
     expect(
       validateProtectedWriteCommand("cp a $(pwd)/AGENTS.md", cwd),
+    ).toBeNull();
+  });
+
+  it("preserves legacy normalization and malformed-input behavior", () => {
+    expectProtected(String.raw`echo remember > 'AGENTS\.md'`);
+    expectProtected("echo remember > AGENTS.md\\");
+    expect(
+      validateProtectedWriteCommand(
+        `echo "unterminated > .agentlink/memory.md`,
+        cwd,
+      ),
     ).toBeNull();
   });
 });
