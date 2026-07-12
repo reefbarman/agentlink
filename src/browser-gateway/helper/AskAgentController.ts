@@ -1,4 +1,8 @@
-import type { ApprovalRequest } from "../../approvals/webview/types.js";
+import type {
+  ApprovalRequest,
+  DecisionMessage,
+} from "../../approvals/webview/types.js";
+import type { ChatMessage } from "../../agent/webview/types.js";
 import type { BrowserGatewayThemeSnapshot } from "../../shared/types.js";
 import type { BrowserGatewayAskAgentPreferencesSnapshot } from "../browserGatewayAskAgentPreferences.js";
 import type {
@@ -8,6 +12,7 @@ import type {
 } from "../browserGatewayAskAgentSessionStore.js";
 import { BrowserGatewayAskAgentSessionStore } from "../browserGatewayAskAgentSessionStore.js";
 import type { BrowserGatewayModelCredentialStatus } from "../browserGatewayModelCredentialCache.js";
+import type { MemoryCandidateKind } from "../../shared/memoryCandidates.js";
 import type { BrowserGatewayCoreOwnerRegistry } from "../coreOwnerRegistry.js";
 import {
   AskAgentSnapshotPublicationQueue,
@@ -47,6 +52,35 @@ export interface AskAgentControllerProjectionOptions {
   memoryCandidateNudge?: BrowserGatewayAskAgentMemoryCandidateNudge | null;
 }
 
+export interface AskAgentControllerTurn {
+  readonly messageId: string;
+  readonly signal: AbortSignal;
+}
+
+interface ActiveAskAgentControllerTurn extends AskAgentControllerTurn {
+  readonly controller: AbortController;
+  readonly settled: Promise<void>;
+  stopped: boolean;
+  settle(): void;
+}
+
+interface PendingAskAgentControllerApproval {
+  readonly request: ApprovalRequest;
+  resolve(decision: DecisionMessage): void;
+  reject(error: Error): void;
+}
+
+export type AskAgentControllerTurnOutcome =
+  | "model_success"
+  | "model_empty"
+  | "model_question"
+  | "model_final"
+  | "model_stopped"
+  | "model_auth_failed"
+  | "model_error"
+  | "credential_missing"
+  | "duplicate_ignored";
+
 export interface AskAgentControllerOptions {
   ownerRegistry: BrowserGatewayCoreOwnerRegistry;
   coalesceMs: number;
@@ -57,6 +91,12 @@ export interface AskAgentControllerOptions {
     snapshot: AskAgentControllerSnapshot,
     durationMs: number,
   ): void;
+  memoryNudgeLimit?: number;
+  createMemoryNudgeId?(): string;
+  onMemoryNudgeDetected?(
+    nudge: BrowserGatewayAskAgentMemoryCandidateNudge,
+  ): void;
+  onCompletedTurn?(sessionId: string): void;
 }
 
 export function freezeAskAgentControllerSnapshot(
@@ -75,6 +115,19 @@ export function freezeAskAgentControllerSnapshot(
 export class AskAgentController {
   readonly sessionStore: BrowserGatewayAskAgentSessionStore;
   private readonly snapshotQueue: AskAgentSnapshotPublicationQueue<AskAgentControllerSnapshot>;
+  private activeTurn: ActiveAskAgentControllerTurn | null = null;
+  private cancellation: {
+    turn: ActiveAskAgentControllerTurn;
+    promise: Promise<AskAgentControllerPublication | null>;
+  } | null = null;
+  private readonly pendingCancellations = new Set<
+    Promise<AskAgentControllerPublication | null>
+  >();
+  private pendingApproval: PendingAskAgentControllerApproval | null = null;
+  private memoryCandidateNudge: BrowserGatewayAskAgentMemoryCandidateNudge | null =
+    null;
+  private readonly memoryCandidateNudgeCounts = new Map<string, number>();
+  private readonly memoryCandidateDismissed = new Set<string>();
 
   constructor(private readonly options: AskAgentControllerOptions) {
     this.sessionStore = new BrowserGatewayAskAgentSessionStore(
@@ -116,6 +169,275 @@ export class AskAgentController {
     };
   }
 
+  recordTurnOutcome(sessionId: string, outcome: string): void {
+    if (
+      outcome === "model_success" ||
+      outcome === "model_empty" ||
+      outcome === "model_question" ||
+      outcome === "model_final"
+    ) {
+      this.options.onCompletedTurn?.(sessionId);
+    }
+  }
+
+  getMemoryCandidateNudge(): BrowserGatewayAskAgentMemoryCandidateNudge | null {
+    return this.memoryCandidateNudge;
+  }
+
+  considerMemoryCandidate(params: {
+    sessionId: string;
+    now: number;
+    candidate: { kind: MemoryCandidateKind; matchedPhrase: string } | null;
+    approvalPending: boolean;
+  }): BrowserGatewayAskAgentMemoryCandidateNudge | null {
+    if (params.approvalPending || !params.candidate) return null;
+    if (this.memoryCandidateNudge?.sessionId === params.sessionId) return null;
+    const nudgeCount =
+      this.memoryCandidateNudgeCounts.get(params.sessionId) ?? 0;
+    if (nudgeCount >= (this.options.memoryNudgeLimit ?? 0)) return null;
+    const key = this.memoryCandidateNudgeKey({
+      sessionId: params.sessionId,
+      kind: params.candidate.kind,
+      matchedPhrase: params.candidate.matchedPhrase,
+    });
+    if (this.memoryCandidateDismissed.has(key)) return null;
+    const nudge: BrowserGatewayAskAgentMemoryCandidateNudge = {
+      id:
+        this.options.createMemoryNudgeId?.() ??
+        `ask-agent-memory-nudge-${params.now}`,
+      sessionId: params.sessionId,
+      createdAt: params.now,
+      kind: params.candidate.kind,
+      matchedPhrase: params.candidate.matchedPhrase,
+      suggestedScope: "global",
+      suggestedTier: "memory",
+      title: "Remember from Ask Agent",
+      rationale:
+        "Ask Agent detected a possible durable user preference. Review before saving; persistence requires explicit approval.",
+      content: params.candidate.matchedPhrase,
+    };
+    this.memoryCandidateNudgeCounts.set(params.sessionId, nudgeCount + 1);
+    this.memoryCandidateNudge = nudge;
+    this.options.onMemoryNudgeDetected?.(nudge);
+    return nudge;
+  }
+
+  dismissMemoryCandidateNudge(id: string): void {
+    const nudge = this.memoryCandidateNudge;
+    if (!nudge || nudge.id !== id) return;
+    this.memoryCandidateDismissed.add(this.memoryCandidateNudgeKey(nudge));
+    this.memoryCandidateNudge = null;
+  }
+
+  clearMemoryCandidateNudgeForSession(sessionId: string): void {
+    if (this.memoryCandidateNudge?.sessionId === sessionId) {
+      this.memoryCandidateNudge = null;
+    }
+    this.memoryCandidateNudgeCounts.delete(sessionId);
+    const prefix = `${sessionId.trim().toLowerCase()}::`;
+    for (const key of this.memoryCandidateDismissed) {
+      if (key.startsWith(prefix)) this.memoryCandidateDismissed.delete(key);
+    }
+  }
+
+  private memoryCandidateNudgeKey(params: {
+    sessionId: string;
+    kind: string;
+    matchedPhrase: string;
+  }): string {
+    return [params.sessionId, params.kind, params.matchedPhrase]
+      .map((part) => part.trim().toLowerCase().replace(/\s+/g, " "))
+      .join("::");
+  }
+
+  getPendingApproval(): ApprovalRequest | null {
+    return this.pendingApproval?.request ?? null;
+  }
+
+  requestApproval(
+    request: ApprovalRequest,
+    signal: AbortSignal,
+  ): Promise<DecisionMessage> {
+    if (this.pendingApproval) {
+      return Promise.reject(new Error("ask_agent_approval_pending"));
+    }
+    if (signal.aborted) {
+      return Promise.reject(new Error("ask_agent_approval_cancelled"));
+    }
+    return new Promise<DecisionMessage>((resolve, reject) => {
+      const rejectApproval = (error: Error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      };
+      const abort = () => {
+        if (this.pendingApproval?.request.id === request.id) {
+          this.pendingApproval = null;
+        }
+        rejectApproval(new Error("ask_agent_approval_cancelled"));
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      this.pendingApproval = {
+        request,
+        resolve: (decision) => {
+          signal.removeEventListener("abort", abort);
+          resolve(decision);
+        },
+        reject: rejectApproval,
+      };
+    });
+  }
+
+  submitApproval(decision: DecisionMessage): ApprovalRequest | null {
+    const pending = this.pendingApproval;
+    if (!pending || pending.request.id !== decision.id) return null;
+    this.pendingApproval = null;
+    pending.resolve(decision);
+    return pending.request;
+  }
+
+  appendAssistantDelta(
+    ...args: Parameters<
+      BrowserGatewayAskAgentSessionStore["appendAssistantDelta"]
+    >
+  ): void {
+    this.sessionStore.appendAssistantDelta(...args);
+  }
+
+  startAssistantToolCall(
+    ...args: Parameters<
+      BrowserGatewayAskAgentSessionStore["startAssistantToolCall"]
+    >
+  ): void {
+    this.sessionStore.startAssistantToolCall(...args);
+  }
+
+  completeAssistantToolCall(
+    ...args: Parameters<
+      BrowserGatewayAskAgentSessionStore["completeAssistantToolCall"]
+    >
+  ): void {
+    this.sessionStore.completeAssistantToolCall(...args);
+  }
+
+  setTodos(
+    ...args: Parameters<BrowserGatewayAskAgentSessionStore["setTodos"]>
+  ): void {
+    this.sessionStore.setTodos(...args);
+  }
+
+  setQuestionRequest(
+    ...args: Parameters<
+      BrowserGatewayAskAgentSessionStore["setQuestionRequest"]
+    >
+  ): void {
+    this.sessionStore.setQuestionRequest(...args);
+  }
+
+  completeTodos(): ReturnType<
+    BrowserGatewayAskAgentSessionStore["completeTodos"]
+  > {
+    return this.sessionStore.completeTodos();
+  }
+
+  applyFinalMarker(
+    ...args: Parameters<BrowserGatewayAskAgentSessionStore["applyFinalMarker"]>
+  ): void {
+    this.sessionStore.applyFinalMarker(...args);
+  }
+
+  finishAssistantError(
+    ...args: Parameters<
+      BrowserGatewayAskAgentSessionStore["finishAssistantErrorMessage"]
+    >
+  ): void {
+    this.sessionStore.finishAssistantErrorMessage(...args);
+  }
+
+  finishAssistantSuccess(params: {
+    messageId: string;
+    text: string;
+    memoryDisclosure?: ChatMessage["memoryDisclosure"];
+  }): void {
+    this.sessionStore.finishAssistantMessage(
+      params.messageId,
+      params.text,
+      params.memoryDisclosure,
+    );
+  }
+
+  finishAssistantEmpty(params: {
+    messageId: string;
+    text: string;
+    code: string;
+  }): void {
+    this.finishAssistantError({
+      messageId: params.messageId,
+      text: params.text,
+      code: params.code,
+      retryable: true,
+    });
+  }
+
+  hasActiveTurn(): boolean {
+    return this.activeTurn !== null;
+  }
+
+  beginTurn(messageId: string): AskAgentControllerTurn | null {
+    if (this.activeTurn) return null;
+    const controller = new AbortController();
+    let resolveSettled!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
+    let didSettle = false;
+    this.activeTurn = {
+      messageId,
+      signal: controller.signal,
+      controller,
+      stopped: false,
+      settled,
+      settle: () => {
+        if (didSettle) return;
+        didSettle = true;
+        resolveSettled();
+      },
+    };
+    return this.activeTurn;
+  }
+
+  isTurnStopped(turn: AskAgentControllerTurn): boolean {
+    return this.activeTurn === turn && this.activeTurn.stopped;
+  }
+
+  completeTurn(turn: AskAgentControllerTurn): void {
+    if (this.activeTurn !== turn) return;
+    this.activeTurn.settle();
+    this.activeTurn = null;
+  }
+
+  cancelActiveTurn(
+    finalize: (messageId: string) => Promise<AskAgentControllerPublication>,
+  ): Promise<AskAgentControllerPublication | null> {
+    const activeTurn = this.activeTurn;
+    if (!activeTurn) return Promise.resolve(null);
+    if (this.cancellation?.turn === activeTurn) {
+      return this.cancellation.promise;
+    }
+    activeTurn.stopped = true;
+    activeTurn.controller.abort();
+    const cancellation = {
+      turn: activeTurn,
+      promise: Promise.resolve<AskAgentControllerPublication | null>(null),
+    };
+    cancellation.promise = finalize(activeTurn.messageId).finally(() => {
+      this.pendingCancellations.delete(cancellation.promise);
+      if (this.cancellation === cancellation) this.cancellation = null;
+    });
+    this.cancellation = cancellation;
+    this.pendingCancellations.add(cancellation.promise);
+    return cancellation.promise;
+  }
+
   publishableSnapshot(
     snapshot: BrowserGatewayAskAgentSnapshot | AskAgentControllerSnapshot,
   ): AskAgentControllerSnapshot {
@@ -144,6 +466,16 @@ export class AskAgentController {
   }
 
   async dispose(): Promise<void> {
+    const pendingApproval = this.pendingApproval;
+    this.pendingApproval = null;
+    pendingApproval?.reject(new Error("ask_agent_approval_cancelled"));
+    const activeTurn = this.activeTurn;
+    if (activeTurn) {
+      activeTurn.stopped = true;
+      activeTurn.controller.abort();
+      await activeTurn.settled;
+    }
+    await Promise.all(this.pendingCancellations);
     await this.snapshotQueue.dispose();
   }
 }

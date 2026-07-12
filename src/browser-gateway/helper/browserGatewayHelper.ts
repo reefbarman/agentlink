@@ -33,6 +33,7 @@ import {
   type AskAgentControllerPublication,
   type AskAgentControllerSnapshot,
   type AskAgentControllerState,
+  type AskAgentControllerTurn,
 } from "./AskAgentController.js";
 import {
   BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
@@ -72,7 +73,6 @@ import {
   BROWSER_GATEWAY_ASK_AGENT_SESSION_ID,
   BrowserGatewayAskAgentSessionStore,
   type BrowserGatewayAskAgentMediaItem,
-  type BrowserGatewayAskAgentMemoryCandidateNudge,
   type BrowserGatewayAskAgentPersistedSession,
   type BrowserGatewayAskAgentProjectHandoff,
 } from "../browserGatewayAskAgentSessionStore.js";
@@ -556,11 +556,6 @@ type AskAgentToolExecutionResult = {
   modelResult?: string;
 };
 
-type AskAgentPendingApproval = {
-  request: ApprovalRequest;
-  resolve: (decision: DecisionMessage) => void;
-};
-
 type AskAgentSessionResponse = { readonly ok: true } & AskAgentControllerState;
 
 export class BrowserGatewayHelper {
@@ -588,21 +583,12 @@ export class BrowserGatewayHelper {
     "complete"
   > &
     Partial<Pick<BrowserGatewayAskAgentModelClient, "completeWithToolCalls">>;
-  private askAgentActiveTurn: {
-    messageId: string;
-    controller: AbortController;
-    stopped: boolean;
-    settled: Promise<void>;
-    settle: () => void;
-  } | null = null;
-  private askAgentCancellation: Promise<AskAgentControllerPublication | null> | null =
-    null;
+
   private readonly askAgentLogPath: string;
   private readonly askAgentPreferencesStore: BrowserGatewayAskAgentPreferencesStore;
   private readonly askAgentHistoryStore: BrowserGatewayAskAgentHistoryStore;
   private readonly askAgentMemoryStore: BrowserGatewayAskAgentMemoryStore;
   private readonly askAgentMemoryProposalBridge: BrowserGatewayAskAgentMemoryProposalBridge;
-  private askAgentPendingApproval: AskAgentPendingApproval | null = null;
   private readonly askAgentSummarizer: BrowserGatewayAskAgentSummarizer;
   private readonly askAgentMemorySummaryDebounceMs: number;
   private readonly askAgentMemorySummaryTimers = new Map<
@@ -613,13 +599,7 @@ export class BrowserGatewayHelper {
     string,
     AbortController
   >();
-  private askAgentMemoryCandidateNudge: BrowserGatewayAskAgentMemoryCandidateNudge | null =
-    null;
-  private readonly askAgentMemoryCandidateNudgeCounts = new Map<
-    string,
-    number
-  >();
-  private readonly askAgentMemoryCandidateDismissed = new Set<string>();
+
   private readonly askAgentMemorySecretSkippedRevisions = new Map<
     string,
     string
@@ -677,6 +657,17 @@ export class BrowserGatewayHelper {
       serialize: (snapshot) => this.serializeAskAgentSnapshot(snapshot),
       onSnapshotBuilt: (snapshot, durationMs) =>
         this.recordAskAgentSnapshotBuild(snapshot, durationMs),
+      memoryNudgeLimit: MAX_MEMORY_NUDGES_PER_SESSION,
+      createMemoryNudgeId: () => `ask-agent-memory-nudge-${randomUUID()}`,
+      onMemoryNudgeDetected: (nudge) => {
+        this.logAskAgentEvent("ask-agent.memory.nudge.detected", {
+          ok: true,
+          sessionId: nudge.sessionId,
+          kind: nudge.kind,
+        });
+      },
+      onCompletedTurn: (sessionId) =>
+        this.scheduleAskAgentMemorySummary(sessionId),
     });
     this.deviceStore = injectables.deviceStore ?? new DeviceStore();
     this.pairingBroker = injectables.pairingBroker ?? new PairingBroker();
@@ -1511,28 +1502,6 @@ export class BrowserGatewayHelper {
     writeJson(res, 200, await this.buildAskAgentResponse());
   }
 
-  private createAskAgentActiveTurn(
-    messageId: string,
-  ): NonNullable<BrowserGatewayHelper["askAgentActiveTurn"]> {
-    const controller = new AbortController();
-    let resolveSettled!: () => void;
-    const settled = new Promise<void>((resolve) => {
-      resolveSettled = resolve;
-    });
-    let didSettle = false;
-    return {
-      messageId,
-      controller,
-      stopped: false,
-      settled,
-      settle: () => {
-        if (didSettle) return;
-        didSettle = true;
-        resolveSettled();
-      },
-    };
-  }
-
   private handleAskAgentSessionsRequest(res: http.ServerResponse): void {
     writeJson(res, 200, { sessions: this.askAgentSessionStore.listSessions() });
   }
@@ -1591,7 +1560,7 @@ export class BrowserGatewayHelper {
       await this.persistAskAgentHistory();
       await this.askAgentMemoryStore.deleteSessionMemory(sessionId);
       this.cancelAskAgentMemorySummary(sessionId);
-      this.clearAskAgentMemoryCandidateNudgeForSession(sessionId);
+      this.askAgentController.clearMemoryCandidateNudgeForSession(sessionId);
       const response = await this.buildAskAgentResponse();
       await this.publishAskAgentSnapshot(response.snapshot);
       writeJson(res, 200, { ok: true, snapshot: response.snapshot });
@@ -1645,9 +1614,7 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    let activeTurn: NonNullable<
-      BrowserGatewayHelper["askAgentActiveTurn"]
-    > | null = null;
+    let activeTurn: AskAgentControllerTurn | null = null;
     try {
       const body = (await readJsonBody(req)) as {
         id?: unknown;
@@ -1686,7 +1653,7 @@ export class BrowserGatewayHelper {
         writeJson(res, 409, { error: "credential_missing" });
         return;
       }
-      if (this.askAgentActiveTurn) {
+      if (this.askAgentController.hasActiveTurn()) {
         this.logAskAgentEvent("ask-agent.question.response", {
           id,
           ok: false,
@@ -1711,7 +1678,7 @@ export class BrowserGatewayHelper {
         ok: true,
         responses: answerResult.responses,
       });
-      this.askAgentSessionStore.completeAssistantToolCall({
+      this.askAgentController.completeAssistantToolCall({
         messageId: answerResult.messageId,
         toolCallId: answerResult.toolCallId,
         toolName: "ask_user",
@@ -1731,10 +1698,9 @@ export class BrowserGatewayHelper {
 
       let response: ReturnType<typeof this.buildAskAgentSnapshotResponse>;
       let sendOutcome = "model_success";
-      activeTurn = this.createAskAgentActiveTurn(answerResult.messageId);
+      activeTurn = this.askAgentController.beginTurn(answerResult.messageId);
+      if (!activeTurn) throw new Error("ask_agent_turn_in_progress");
       try {
-        const { controller } = activeTurn;
-        this.askAgentActiveTurn = activeTurn;
         const transcriptMessages =
           this.askAgentSessionStore.getTranscriptMessages();
         const turnResult = await this.runAskAgentModelTurn({
@@ -1743,7 +1709,7 @@ export class BrowserGatewayHelper {
           transcriptMessages,
           initialToolMessages: [answerToolMessage],
           theme,
-          signal: controller.signal,
+          signal: activeTurn.signal,
         });
         sendOutcome = turnResult.outcome;
       } catch (err) {
@@ -1754,9 +1720,7 @@ export class BrowserGatewayHelper {
           err instanceof Error &&
           err.message === "browser_gateway_ask_agent_model_aborted";
         const alreadyStopped =
-          stopped &&
-          this.askAgentActiveTurn?.messageId === answerResult.messageId &&
-          this.askAgentActiveTurn.stopped;
+          stopped && this.askAgentController.isTurnStopped(activeTurn);
         const errorPresentation = buildAskAgentModelErrorPresentation({
           error: err,
           authFailed,
@@ -1777,7 +1741,7 @@ export class BrowserGatewayHelper {
           error: sendOutcome,
         });
         if (!alreadyStopped) {
-          this.askAgentSessionStore.finishAssistantErrorMessage({
+          this.askAgentController.finishAssistantError({
             messageId: answerResult.messageId,
             text: errorPresentation.message,
             code: errorPresentation.code ?? sendOutcome,
@@ -1787,16 +1751,10 @@ export class BrowserGatewayHelper {
           });
         }
       }
-      if (
-        sendOutcome === "model_success" ||
-        sendOutcome === "model_empty" ||
-        sendOutcome === "model_question" ||
-        sendOutcome === "model_final"
-      ) {
-        this.scheduleAskAgentMemorySummary(
-          this.askAgentSessionStore.getActiveSessionId(),
-        );
-      }
+      this.askAgentController.recordTurnOutcome(
+        this.askAgentSessionStore.getActiveSessionId(),
+        sendOutcome,
+      );
       response = this.buildAskAgentSnapshotResponse(Date.now(), theme);
       this.logAskAgentEvent("ask-agent.question.response.complete", {
         id,
@@ -1820,13 +1778,7 @@ export class BrowserGatewayHelper {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
     } finally {
-      activeTurn?.settle();
-      if (
-        activeTurn &&
-        this.askAgentActiveTurn?.messageId === activeTurn.messageId
-      ) {
-        this.askAgentActiveTurn = null;
-      }
+      if (activeTurn) this.askAgentController.completeTurn(activeTurn);
     }
   }
 
@@ -1954,93 +1906,26 @@ export class BrowserGatewayHelper {
     }
   }
 
-  private buildAskAgentMemoryCandidateNudgeKey(params: {
-    sessionId: string;
-    kind: string;
-    matchedPhrase: string;
-  }): string {
-    return [params.sessionId, params.kind, params.matchedPhrase]
-      .map((part) => part.trim().toLowerCase().replace(/\s+/g, " "))
-      .join("::");
-  }
-
   private maybeCreateAskAgentMemoryCandidateNudge(params: {
     text: string;
     priorUserTexts: string[];
     sessionId: string;
     now: number;
   }): void {
-    if (this.askAgentMemoryProposalBridge.getPendingApproval()) return;
-    if (this.askAgentMemoryCandidateNudge?.sessionId === params.sessionId)
-      return;
-
-    const nudgeCount =
-      this.askAgentMemoryCandidateNudgeCounts.get(params.sessionId) ?? 0;
-    if (nudgeCount >= MAX_MEMORY_NUDGES_PER_SESSION) return;
-
-    const candidate = detectMemoryCandidates(
-      params.text,
-      params.priorUserTexts,
-      this.readGlobalDurableMemoryContent(),
-    ).find((item) => item.suggestedScope === "global");
-    if (!candidate) return;
-
-    const key = this.buildAskAgentMemoryCandidateNudgeKey({
+    const candidate =
+      detectMemoryCandidates(
+        params.text,
+        params.priorUserTexts,
+        this.readGlobalDurableMemoryContent(),
+      ).find((item) => item.suggestedScope === "global") ?? null;
+    this.askAgentController.considerMemoryCandidate({
       sessionId: params.sessionId,
-      kind: candidate.kind,
-      matchedPhrase: candidate.matchedPhrase,
+      now: params.now,
+      candidate,
+      approvalPending: Boolean(
+        this.askAgentMemoryProposalBridge.getPendingApproval(),
+      ),
     });
-    if (this.askAgentMemoryCandidateDismissed.has(key)) return;
-
-    this.askAgentMemoryCandidateNudgeCounts.set(
-      params.sessionId,
-      nudgeCount + 1,
-    );
-    this.askAgentMemoryCandidateNudge = {
-      id: `ask-agent-memory-nudge-${randomUUID()}`,
-      sessionId: params.sessionId,
-      createdAt: params.now,
-      kind: candidate.kind,
-      matchedPhrase: candidate.matchedPhrase,
-      suggestedScope: "global",
-      suggestedTier: "memory",
-      title: "Remember from Ask Agent",
-      rationale:
-        "Ask Agent detected a possible durable user preference. Review before saving; persistence requires explicit approval.",
-      content: candidate.matchedPhrase,
-    };
-    this.logAskAgentEvent("ask-agent.memory.nudge.detected", {
-      ok: true,
-      sessionId: params.sessionId,
-      kind: candidate.kind,
-      nudgeCount: nudgeCount + 1,
-    });
-  }
-
-  private dismissAskAgentMemoryCandidateNudge(id: string): void {
-    const nudge = this.askAgentMemoryCandidateNudge;
-    if (!nudge || nudge.id !== id) return;
-    this.askAgentMemoryCandidateDismissed.add(
-      this.buildAskAgentMemoryCandidateNudgeKey({
-        sessionId: nudge.sessionId,
-        kind: nudge.kind,
-        matchedPhrase: nudge.matchedPhrase,
-      }),
-    );
-    this.askAgentMemoryCandidateNudge = null;
-  }
-
-  private clearAskAgentMemoryCandidateNudgeForSession(sessionId: string): void {
-    if (this.askAgentMemoryCandidateNudge?.sessionId === sessionId) {
-      this.askAgentMemoryCandidateNudge = null;
-    }
-    this.askAgentMemoryCandidateNudgeCounts.delete(sessionId);
-    const dismissedPrefix = `${sessionId.trim().toLowerCase()}::`;
-    for (const key of this.askAgentMemoryCandidateDismissed) {
-      if (key.startsWith(dismissedPrefix)) {
-        this.askAgentMemoryCandidateDismissed.delete(key);
-      }
-    }
   }
 
   private buildAskAgentSnapshotResponse(
@@ -2053,9 +1938,8 @@ export class BrowserGatewayHelper {
       modelCredentialStatus: this.getAskAgentModelCredentialStatus(now),
       approval:
         this.askAgentMemoryProposalBridge.getPendingApproval() ??
-        this.askAgentPendingApproval?.request ??
-        null,
-      memoryCandidateNudge: this.askAgentMemoryCandidateNudge,
+        this.askAgentController.getPendingApproval(),
+      memoryCandidateNudge: this.askAgentController.getMemoryCandidateNudge(),
     });
     return { ok: true, ...state };
   }
@@ -2882,7 +2766,7 @@ export class BrowserGatewayHelper {
           : {}),
       });
       if (nudgeId) {
-        this.dismissAskAgentMemoryCandidateNudge(nudgeId);
+        this.askAgentController.dismissMemoryCandidateNudge(nudgeId);
       }
       const response = await this.buildAskAgentResponse();
       await this.publishAskAgentSnapshot(response.snapshot);
@@ -2922,7 +2806,7 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_request" });
         return;
       }
-      this.dismissAskAgentMemoryCandidateNudge(body.id);
+      this.askAgentController.dismissMemoryCandidateNudge(body.id);
       const response = await this.buildAskAgentResponse();
       await this.publishAskAgentSnapshot(response.snapshot);
       this.logAskAgentEvent("ask-agent.memory.nudge.dismiss", {
@@ -3002,19 +2886,20 @@ export class BrowserGatewayHelper {
         writeJson(res, 400, { error: "invalid_request" });
         return;
       }
-      const pending = this.askAgentPendingApproval;
-      if (!pending || pending.request.id !== body.id) {
+      const request = this.askAgentController.submitApproval({
+        type: "decision",
+        ...body,
+      });
+      if (!request) {
         writeJson(res, 404, { error: "approval_not_found" });
         return;
       }
-      this.askAgentPendingApproval = null;
-      pending.resolve({ type: "decision", ...body });
       const response = await this.buildAskAgentResponse();
       await this.publishAskAgentSnapshot(response.snapshot);
       this.logAskAgentEvent("ask-agent.approval", {
         ok: true,
         approvalId: body.id,
-        kind: pending.request.kind,
+        kind: request.kind,
         decision: body.decision,
       });
       writeJson(res, 200, { ok: true, snapshot: response.snapshot });
@@ -3576,8 +3461,8 @@ export class BrowserGatewayHelper {
         now: Date.now(),
         theme: params.theme,
         modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
-        approval: this.askAgentPendingApproval?.request ?? null,
-        memoryCandidateNudge: this.askAgentMemoryCandidateNudge,
+        approval: this.askAgentController.getPendingApproval(),
+        memoryCandidateNudge: this.askAgentController.getMemoryCandidateNudge(),
       }).snapshot;
     const scheduleTurnSnapshot = () => {
       void this.askAgentController
@@ -3607,7 +3492,7 @@ export class BrowserGatewayHelper {
               chars: delta.length,
             });
           }
-          this.askAgentSessionStore.appendAssistantDelta(
+          this.askAgentController.appendAssistantDelta(
             params.assistantMessageId,
             delta,
           );
@@ -3648,7 +3533,7 @@ export class BrowserGatewayHelper {
                 chars: delta.length,
               });
             }
-            this.askAgentSessionStore.appendAssistantDelta(
+            this.askAgentController.appendAssistantDelta(
               params.assistantMessageId,
               delta,
             );
@@ -3660,7 +3545,7 @@ export class BrowserGatewayHelper {
       runTool: async (toolCall) => {
         const toolStartedAt = Date.now();
         this.recordAskAgentSemanticDelta();
-        this.askAgentSessionStore.startAssistantToolCall({
+        this.askAgentController.startAssistantToolCall({
           messageId: params.assistantMessageId,
           toolCallId: toolCall.id,
           toolName: toolCall.name,
@@ -3673,7 +3558,7 @@ export class BrowserGatewayHelper {
           params.signal,
         );
         this.recordAskAgentSemanticDelta();
-        this.askAgentSessionStore.completeAssistantToolCall({
+        this.askAgentController.completeAssistantToolCall({
           messageId: params.assistantMessageId,
           toolCallId: toolCall.id,
           toolName: toolCall.name,
@@ -3707,20 +3592,19 @@ export class BrowserGatewayHelper {
     assistantText: string,
     outcome: AskAgentToolLoopOutcome = "model_success",
   ): AskAgentToolLoopResult {
-    this.askAgentSessionStore.finishAssistantMessage(
-      params.assistantMessageId,
-      assistantText,
-      params.memoryDisclosure,
-    );
+    this.askAgentController.finishAssistantSuccess({
+      messageId: params.assistantMessageId,
+      text: assistantText,
+      memoryDisclosure: params.memoryDisclosure,
+    });
     return { outcome, assistantText };
   }
 
   private finishAskAgentEmptyResponse(messageId: string): void {
-    this.askAgentSessionStore.finishAssistantErrorMessage({
+    this.askAgentController.finishAssistantEmpty({
       messageId,
       text: ASK_AGENT_EMPTY_MODEL_ERROR,
       code: "model_empty",
-      retryable: true,
     });
   }
 
@@ -3885,7 +3769,7 @@ export class BrowserGatewayHelper {
     if (this.askAgentMemoryProposalBridge.getPendingApproval()) {
       throw new Error("An Ask Agent memory approval is already pending");
     }
-    if (this.askAgentPendingApproval) {
+    if (this.askAgentController.getPendingApproval()) {
       throw new Error("An Ask Agent image approval is already pending");
     }
     const id = `ask-agent-generate-image-${randomUUID()}`;
@@ -3907,22 +3791,10 @@ export class BrowserGatewayHelper {
       writeOperation: "modify",
       detail,
     };
-    const decisionPromise = new Promise<DecisionMessage>((resolve, reject) => {
-      const abort = () => {
-        if (this.askAgentPendingApproval?.request.id === id) {
-          this.askAgentPendingApproval = null;
-        }
-        reject(new Error("Ask Agent image generation approval was cancelled"));
-      };
-      params.signal.addEventListener("abort", abort, { once: true });
-      this.askAgentPendingApproval = {
-        request,
-        resolve: (decision) => {
-          params.signal.removeEventListener("abort", abort);
-          resolve(decision);
-        },
-      };
-    });
+    const decisionPromise = this.askAgentController.requestApproval(
+      request,
+      params.signal,
+    );
     const response = await this.buildAskAgentResponse();
     await this.publishAskAgentSnapshot(response.snapshot);
     return await decisionPromise;
@@ -4106,7 +3978,7 @@ export class BrowserGatewayHelper {
       const { content, todos } = handleTodoWrite(
         toolCall.input as unknown as TodoToolInput,
       );
-      this.askAgentSessionStore.setTodos(todos);
+      this.askAgentController.setTodos(todos);
       this.logAskAgentEvent("ask-agent.tool.todo_write", {
         ok: true,
         todos: todos.length,
@@ -4147,7 +4019,7 @@ export class BrowserGatewayHelper {
           ),
         };
       }
-      this.askAgentSessionStore.setQuestionRequest(questionRequest);
+      this.askAgentController.setQuestionRequest(questionRequest);
       const content = JSON.stringify({
         ok: true,
         pendingQuestionId: toolCall.id,
@@ -4503,7 +4375,7 @@ export class BrowserGatewayHelper {
     const completeTodosRequested = toolCall.input.completeTodos === true;
     const completedTodos =
       status === "completed" && completeTodosRequested
-        ? this.askAgentSessionStore.completeTodos()
+        ? this.askAgentController.completeTodos()
         : undefined;
     const content = JSON.stringify({
       ok: true,
@@ -4516,7 +4388,7 @@ export class BrowserGatewayHelper {
         : {}),
     });
     this.recordAskAgentSemanticDelta();
-    this.askAgentSessionStore.setQuestionRequest(null);
+    this.askAgentController.setQuestionRequest(null);
     const marker: FinalMessageMarker = {
       status: status as FinalMessageStatus,
       source: "tool",
@@ -4532,7 +4404,7 @@ export class BrowserGatewayHelper {
         durationMs: Date.now() - startedAt,
       },
     };
-    this.askAgentSessionStore.applyFinalMarker(marker);
+    this.askAgentController.applyFinalMarker(marker);
     this.logAskAgentEvent("ask-agent.tool.set_task_status", {
       ok: true,
       status,
@@ -4646,9 +4518,7 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    let activeTurn: NonNullable<
-      BrowserGatewayHelper["askAgentActiveTurn"]
-    > | null = null;
+    let activeTurn: AskAgentControllerTurn | null = null;
     try {
       const body = (await readJsonBody(req).catch((err) => {
         if (err instanceof Error && err.message === "invalid_json") throw err;
@@ -4685,7 +4555,7 @@ export class BrowserGatewayHelper {
         writeJson(res, 409, { error: "credential_missing" });
         return;
       }
-      if (this.askAgentActiveTurn) {
+      if (this.askAgentController.hasActiveTurn()) {
         this.logAskAgentEvent("ask-agent.retry", {
           sessionId: requestedSessionId,
           ok: false,
@@ -4760,18 +4630,19 @@ export class BrowserGatewayHelper {
       const assistantMessage = this.askAgentSessionStore.startAssistantMessage({
         now,
       });
-      activeTurn = this.createAskAgentActiveTurn(assistantMessage.id);
-      this.askAgentActiveTurn = activeTurn;
-      const streamSnapshot = this.askAgentSessionStore.getOrCreate({
+      activeTurn = this.askAgentController.beginTurn(assistantMessage.id);
+      if (!activeTurn) throw new Error("ask_agent_turn_in_progress");
+      const streamSnapshot = this.askAgentController.projectState({
         now,
         theme,
         modelCredentialStatus: this.getAskAgentModelCredentialStatus(now),
+        approval: this.askAgentController.getPendingApproval(),
+        memoryCandidateNudge: this.askAgentController.getMemoryCandidateNudge(),
       });
       await this.publishAskAgentSnapshot(streamSnapshot.snapshot);
 
       let sendOutcome = "model_success";
       try {
-        const { controller } = activeTurn;
         const transcriptMessages = this.askAgentSessionStore
           .getTranscriptMessages()
           .filter((message) => message.id !== assistantMessage.id);
@@ -4788,7 +4659,7 @@ export class BrowserGatewayHelper {
           memoryDisclosure: memoryContextResult?.disclosure,
           initialToolMessages: retryToolResults,
           theme,
-          signal: controller.signal,
+          signal: activeTurn.signal,
         });
         sendOutcome = turnResult.outcome;
       } catch (err) {
@@ -4799,9 +4670,7 @@ export class BrowserGatewayHelper {
           err instanceof Error &&
           err.message === "browser_gateway_ask_agent_model_aborted";
         const alreadyStopped =
-          stopped &&
-          this.askAgentActiveTurn?.messageId === assistantMessage.id &&
-          this.askAgentActiveTurn.stopped;
+          stopped && this.askAgentController.isTurnStopped(activeTurn);
         const errorPresentation = buildAskAgentModelErrorPresentation({
           error: err,
           authFailed,
@@ -4822,7 +4691,7 @@ export class BrowserGatewayHelper {
           error: sendOutcome,
         });
         if (!alreadyStopped) {
-          this.askAgentSessionStore.finishAssistantErrorMessage({
+          this.askAgentController.finishAssistantError({
             messageId: assistantMessage.id,
             text: errorPresentation.message,
             code: errorPresentation.code ?? sendOutcome,
@@ -4833,16 +4702,10 @@ export class BrowserGatewayHelper {
       }
 
       await this.persistAskAgentHistory();
-      if (
-        sendOutcome === "model_success" ||
-        sendOutcome === "model_empty" ||
-        sendOutcome === "model_question" ||
-        sendOutcome === "model_final"
-      ) {
-        this.scheduleAskAgentMemorySummary(
-          this.askAgentSessionStore.getActiveSessionId(),
-        );
-      }
+      this.askAgentController.recordTurnOutcome(
+        this.askAgentSessionStore.getActiveSessionId(),
+        sendOutcome,
+      );
       const response = this.buildAskAgentSnapshotResponse(Date.now(), theme);
       this.logAskAgentEvent("ask-agent.retry.complete", {
         ...sendLogFields,
@@ -4864,13 +4727,7 @@ export class BrowserGatewayHelper {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
     } finally {
-      activeTurn?.settle();
-      if (
-        activeTurn &&
-        this.askAgentActiveTurn?.messageId === activeTurn.messageId
-      ) {
-        this.askAgentActiveTurn = null;
-      }
+      if (activeTurn) this.askAgentController.completeTurn(activeTurn);
     }
   }
 
@@ -4878,9 +4735,7 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    let activeTurn: NonNullable<
-      BrowserGatewayHelper["askAgentActiveTurn"]
-    > | null = null;
+    let activeTurn: AskAgentControllerTurn | null = null;
     try {
       const body = (await readJsonBody(req)) as {
         id?: unknown;
@@ -4962,7 +4817,7 @@ export class BrowserGatewayHelper {
       if (duplicateUserMessage) {
         response = this.buildAskAgentSnapshotResponse(now, theme);
         sendOutcome = "duplicate_ignored";
-      } else if (credential && this.askAgentActiveTurn) {
+      } else if (credential && this.askAgentController.hasActiveTurn()) {
         this.logAskAgentEvent("ask-agent.send", {
           ...sendLogFields,
           ok: false,
@@ -4983,18 +4838,18 @@ export class BrowserGatewayHelper {
           this.askAgentSessionStore.startAssistantMessage({
             now,
           });
-        activeTurn = this.createAskAgentActiveTurn(assistantMessage.id);
-        this.askAgentActiveTurn = activeTurn;
+        activeTurn = this.askAgentController.beginTurn(assistantMessage.id);
+        if (!activeTurn) throw new Error("ask_agent_turn_in_progress");
         const streamSnapshot = this.askAgentController.projectState({
           now,
           theme,
           modelCredentialStatus: this.getAskAgentModelCredentialStatus(now),
-          approval: this.askAgentPendingApproval?.request ?? null,
-          memoryCandidateNudge: this.askAgentMemoryCandidateNudge,
+          approval: this.askAgentController.getPendingApproval(),
+          memoryCandidateNudge:
+            this.askAgentController.getMemoryCandidateNudge(),
         });
         await this.publishAskAgentSnapshot(streamSnapshot.snapshot);
         try {
-          const { controller } = activeTurn;
           const transcriptMessages = this.askAgentSessionStore
             .getTranscriptMessages()
             .filter((message) => message.id !== assistantMessage.id);
@@ -5010,7 +4865,7 @@ export class BrowserGatewayHelper {
             memoryContext: memoryContextResult?.context,
             memoryDisclosure: memoryContextResult?.disclosure,
             theme,
-            signal: controller.signal,
+            signal: activeTurn.signal,
           });
           sendOutcome = turnResult.outcome;
         } catch (err) {
@@ -5021,9 +4876,7 @@ export class BrowserGatewayHelper {
             err instanceof Error &&
             err.message === "browser_gateway_ask_agent_model_aborted";
           const alreadyStopped =
-            stopped &&
-            this.askAgentActiveTurn?.messageId === assistantMessage.id &&
-            this.askAgentActiveTurn.stopped;
+            stopped && this.askAgentController.isTurnStopped(activeTurn);
           const errorPresentation = buildAskAgentModelErrorPresentation({
             error: err,
             authFailed,
@@ -5044,7 +4897,7 @@ export class BrowserGatewayHelper {
             error: sendOutcome,
           });
           if (!alreadyStopped) {
-            this.askAgentSessionStore.finishAssistantErrorMessage({
+            this.askAgentController.finishAssistantError({
               messageId: assistantMessage.id,
               text: errorPresentation.message,
               code: errorPresentation.code ?? sendOutcome,
@@ -5054,14 +4907,7 @@ export class BrowserGatewayHelper {
           }
         }
         await this.persistAskAgentHistory();
-        if (
-          sendOutcome === "model_success" ||
-          sendOutcome === "model_empty" ||
-          sendOutcome === "model_question" ||
-          sendOutcome === "model_final"
-        ) {
-          this.scheduleAskAgentMemorySummary(activeSessionId);
-        }
+        this.askAgentController.recordTurnOutcome(activeSessionId, sendOutcome);
         this.maybeCreateAskAgentMemoryCandidateNudge({
           text: body.text,
           priorUserTexts,
@@ -5119,13 +4965,7 @@ export class BrowserGatewayHelper {
         error: invalidJson ? "invalid_json" : "internal_error",
       });
     } finally {
-      activeTurn?.settle();
-      if (
-        activeTurn &&
-        this.askAgentActiveTurn?.messageId === activeTurn.messageId
-      ) {
-        this.askAgentActiveTurn = null;
-      }
+      if (activeTurn) this.askAgentController.completeTurn(activeTurn);
     }
   }
 
@@ -5145,25 +4985,16 @@ export class BrowserGatewayHelper {
   }
 
   cancelActiveTurn(): Promise<AskAgentControllerPublication | null> {
-    if (this.askAgentCancellation) return this.askAgentCancellation;
-    const activeTurn = this.askAgentActiveTurn;
-    if (!activeTurn) return Promise.resolve(null);
-
-    this.askAgentCancellation = this.commitAskAgentCancellation(
-      activeTurn,
-    ).finally(() => {
-      this.askAgentCancellation = null;
-    });
-    return this.askAgentCancellation;
+    return this.askAgentController.cancelActiveTurn((messageId) =>
+      this.commitAskAgentCancellation(messageId),
+    );
   }
 
   private async commitAskAgentCancellation(
-    activeTurn: NonNullable<BrowserGatewayHelper["askAgentActiveTurn"]>,
+    messageId: string,
   ): Promise<AskAgentControllerPublication> {
-    activeTurn.stopped = true;
-    activeTurn.controller.abort();
     this.logAskAgentEvent("ask-agent.stop", {
-      messageId: activeTurn.messageId,
+      messageId,
       ok: true,
     });
     const errorPresentation = buildAskAgentModelErrorPresentation({
@@ -5171,8 +5002,8 @@ export class BrowserGatewayHelper {
       authFailed: false,
       stopped: true,
     });
-    this.askAgentSessionStore.finishAssistantErrorMessage({
-      messageId: activeTurn.messageId,
+    this.askAgentController.finishAssistantError({
+      messageId,
       text: errorPresentation.message,
       code: errorPresentation.code ?? "model_stopped",
       retryable: errorPresentation.retryable,
@@ -5210,13 +5041,6 @@ export class BrowserGatewayHelper {
   }
 
   async dispose(): Promise<void> {
-    const activeTurn = this.askAgentActiveTurn;
-    if (activeTurn) {
-      activeTurn.stopped = true;
-      activeTurn.controller.abort();
-      await activeTurn.settled;
-    }
-    await this.askAgentCancellation;
     await this.askAgentController.dispose();
   }
 
