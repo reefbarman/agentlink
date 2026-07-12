@@ -39,4 +39,19 @@ describe("BrowserGatewayAskAgentPreferencesStore", () => {
 
     await fs.rm(path.dirname(filePath), { recursive: true, force: true });
   });
+
+  it("serializes concurrent read-modify-write updates", async () => {
+    const filePath = await makePreferencesPath();
+    const store = new BrowserGatewayAskAgentPreferencesStore({ filePath });
+
+    await Promise.all([
+      store.update({ model: "gpt-5.3-codex" }),
+      store.update({ reasoningEffort: "high" }),
+    ]);
+
+    await expect(store.read()).resolves.toEqual({
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+    });
+  });
 });

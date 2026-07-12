@@ -64,6 +64,45 @@ describe("BrowserGatewayAskAgentHistoryStore", () => {
     });
   });
 
+  it("serializes concurrent whole-snapshot writes in call order", async () => {
+    const filePath = await makeHistoryPath();
+    const store = new BrowserGatewayAskAgentHistoryStore({ filePath });
+
+    await Promise.all([
+      store.write({
+        activeSessionId: "session-1",
+        sessions: [
+          {
+            id: "session-1",
+            title: "First",
+            createdAt: 100,
+            lastActiveAt: 100,
+            nextMessageSequence: 1,
+            messages: [],
+          },
+        ],
+      }),
+      store.write({
+        activeSessionId: "session-2",
+        sessions: [
+          {
+            id: "session-2",
+            title: "Second",
+            createdAt: 200,
+            lastActiveAt: 200,
+            nextMessageSequence: 1,
+            messages: [],
+          },
+        ],
+      }),
+    ]);
+
+    await expect(store.read()).resolves.toMatchObject({
+      activeSessionId: "session-2",
+      sessions: [{ id: "session-2", title: "Second" }],
+    });
+  });
+
   it("sanitizes malformed history files", async () => {
     const filePath = await makeHistoryPath();
     await fs.mkdir(path.dirname(filePath), { recursive: true });

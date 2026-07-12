@@ -4,7 +4,7 @@ import * as path from "path";
 
 import type { ReasoningEffort } from "../agent/webview/types.js";
 import { isCoreReasoningEffort } from "../core/modelCatalog.js";
-import { randomUUID } from "crypto";
+import { writeTextFileAtomic } from "./atomicFile.js";
 
 const PREFERENCES_DIR = path.join(os.homedir(), ".agentlink");
 const PREFERENCES_PATH = path.join(
@@ -51,13 +51,11 @@ async function writePreferencesFile(
   filePath: string,
   preferences: BrowserGatewayAskAgentPreferencesSnapshot,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.tmp.${process.pid}.${randomUUID()}`;
-  await fs.writeFile(tmpPath, JSON.stringify(preferences, null, 2) + "\n", {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  await fs.rename(tmpPath, filePath);
+  await writeTextFileAtomic(
+    filePath,
+    JSON.stringify(preferences, null, 2) + "\n",
+    { mode: 0o600 },
+  );
 }
 
 export interface BrowserGatewayAskAgentPreferencesStoreOptions {

@@ -3,7 +3,7 @@ import * as os from "os";
 import * as path from "path";
 
 import type { BrowserGatewayAskAgentHistorySnapshot } from "./browserGatewayAskAgentSessionStore.js";
-import { randomUUID } from "crypto";
+import { writeTextFileAtomic } from "./atomicFile.js";
 
 const HISTORY_DIR = path.join(os.homedir(), ".agentlink");
 const HISTORY_PATH = path.join(
@@ -99,13 +99,13 @@ async function writeHistoryFile(
   filePath: string,
   snapshot: BrowserGatewayAskAgentHistorySnapshot,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.tmp.${process.pid}.${randomUUID()}`;
-  await fs.writeFile(tmpPath, JSON.stringify(snapshot, null, 2) + "\n", {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  await fs.rename(tmpPath, filePath);
+  await writeTextFileAtomic(
+    filePath,
+    JSON.stringify(snapshot, null, 2) + "\n",
+    {
+      mode: 0o600,
+    },
+  );
 }
 
 export interface BrowserGatewayAskAgentHistoryStoreOptions {
