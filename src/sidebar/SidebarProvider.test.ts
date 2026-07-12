@@ -351,7 +351,7 @@ describe("SidebarProvider retained activity behavior", () => {
 
   it.each([
     ["openSettings", ["workbench.action.openSettings", "agentlink"]],
-    ["openOutput", ["workbench.action.output.show", "AgentLink"]],
+    ["openOutput", ["workbench.action.output.show"]],
     ["openBrowserGateway", ["agentlink.openBrowserGateway"]],
     ["rebuildIndex", ["agentlink.rebuildIndex"]],
     ["cancelIndex", ["agentlink.cancelIndex"]],
@@ -374,6 +374,29 @@ describe("SidebarProvider retained activity behavior", () => {
     webview.getMessageHandler()?.({ command });
 
     expect(commandExec).toHaveBeenCalledWith(...expected);
+  });
+
+  it("opens the configured AgentLink output channel", async () => {
+    const { SidebarProvider } = await import("./SidebarProvider.js");
+    const showOutput = vi.fn();
+    const provider = new SidebarProvider(
+      { path: "/ext" } as never,
+      undefined,
+      showOutput,
+    );
+    const webview = makeWebviewView();
+    provider.resolveWebviewView(
+      webview.view as never,
+      {} as never,
+      {} as never,
+    );
+
+    webview.getMessageHandler()?.({ command: "openOutput" });
+
+    expect(showOutput).toHaveBeenCalledOnce();
+    expect(commandExec).not.toHaveBeenCalledWith(
+      "workbench.action.output.show",
+    );
   });
 
   it.each([

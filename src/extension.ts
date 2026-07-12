@@ -300,7 +300,9 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // Sidebar
-  sidebarProvider = new SidebarProvider(context.extensionUri, log);
+  sidebarProvider = new SidebarProvider(context.extensionUri, log, () =>
+    outputChannel.show(true),
+  );
   sidebarProvider.setApprovalManager(approvalManager);
   sidebarProvider.setToolCallTracker(toolCallTracker);
   context.subscriptions.push(

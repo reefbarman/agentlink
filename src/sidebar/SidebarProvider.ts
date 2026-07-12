@@ -40,6 +40,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     log?: (msg: string) => void,
+    private readonly showOutput?: () => void,
   ) {
     this.log = log ?? (() => {});
   }
@@ -132,10 +133,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           );
           break;
         case "openOutput":
-          vscode.commands.executeCommand(
-            "workbench.action.output.show",
-            "AgentLink",
-          );
+          if (this.showOutput) {
+            this.showOutput();
+          } else {
+            vscode.commands.executeCommand("workbench.action.output.show");
+          }
           break;
         case "openBrowserGateway":
           vscode.commands.executeCommand("agentlink.openBrowserGateway");
