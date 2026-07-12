@@ -161,6 +161,10 @@ import {
   type StreamingBaselineMetrics,
   utf8ByteLength,
 } from "../../shared/streamingBaselineMetrics.js";
+import {
+  matchAskAgentRoute,
+  type AskAgentRouteHandler,
+} from "./helperRouteFamilies.js";
 
 export interface HelperRuntimeOptions {
   port: number;
@@ -963,321 +967,10 @@ export class BrowserGatewayHelper {
       return;
     }
 
-    if (method === "GET" && pathname === "/api/ask-agent/session") {
+    const askAgentRoute = matchAskAgentRoute(method, pathname);
+    if (askAgentRoute) {
       void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentSessionRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/ask-agent/sessions") {
-      void this.authThen(req, res, async (auth) => {
-        this.handleAskAgentSessionsRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/session/new") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentNewSessionRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/session/load") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentLoadSessionRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/session/delete") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentDeleteSessionRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/session/rename") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentRenameSessionRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      pathname === "/api/ask-agent/session/copy-first-prompt"
-    ) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentCopyFirstPromptRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/ask-agent/events") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentEventsRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/ask-agent/models") {
-      void this.authThen(req, res, async (auth) => {
-        this.handleAskAgentModelsRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/ask-agent/slash-commands") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentSlashCommandsRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/ask-agent/mcp-config") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMcpConfigRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/mcp-config/server") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMcpConfigServerRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (
-      method === "DELETE" &&
-      pathname === "/api/ask-agent/mcp-config/server"
-    ) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMcpConfigServerRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      pathname === "/api/ask-agent/mcp-config/open-raw"
-    ) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMcpConfigOpenRawRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/ask-agent/mcp-status") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMcpStatusRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/mcp-refresh") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMcpRefreshRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/question") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentQuestionResponseRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/question-progress") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentQuestionProgressRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/ask-agent/memory") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMemoryStatusRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/memory/clear") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMemoryClearRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/log") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentUiLogRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/model") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentModelRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/memory/proposal") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMemoryProposalRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      pathname === "/api/ask-agent/memory/nudge/dismiss"
-    ) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMemoryCandidateNudgeDismissRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/memory/approval") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentMemoryApprovalRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/approval") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentApprovalRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/ask-agent/read-grants") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentReadGrantsRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/read-grants") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentReadGrantAddRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/read-grants/revoke") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentReadGrantRevokeRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (
-      method === "GET" &&
-      pathname === "/api/ask-agent/project-handoff/targets"
-    ) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentProjectHandoffTargetsRequest(res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      pathname === "/api/ask-agent/project-handoff/propose"
-    ) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentProjectHandoffProposeRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      pathname === "/api/ask-agent/project-handoff/cancel"
-    ) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentProjectHandoffCancelRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (
-      method === "POST" &&
-      pathname === "/api/ask-agent/project-handoff/approve"
-    ) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentProjectHandoffApproveRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/thinking") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentThinkingRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/send") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentSendRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/retry") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentRetryRequest(req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "POST" && pathname === "/api/ask-agent/stop") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentStopRequest(res);
+        await this.handleAskAgentRoute(askAgentRoute.handler, req, res);
         void this.recordDeviceActivity(auth);
       });
       return;
@@ -1309,6 +1002,89 @@ export class BrowserGatewayHelper {
 
     writeJson(res, 404, { error: "not_found" });
   };
+
+  private async handleAskAgentRoute(
+    handler: AskAgentRouteHandler,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    switch (handler) {
+      case "session":
+        return this.handleAskAgentSessionRequest(res);
+      case "sessions":
+        this.handleAskAgentSessionsRequest(res);
+        return;
+      case "sessionNew":
+        return this.handleAskAgentNewSessionRequest(res);
+      case "sessionLoad":
+        return this.handleAskAgentLoadSessionRequest(req, res);
+      case "sessionDelete":
+        return this.handleAskAgentDeleteSessionRequest(req, res);
+      case "sessionRename":
+        return this.handleAskAgentRenameSessionRequest(req, res);
+      case "sessionCopyFirstPrompt":
+        return this.handleAskAgentCopyFirstPromptRequest(req, res);
+      case "events":
+        return this.handleAskAgentEventsRequest(req, res);
+      case "models":
+        this.handleAskAgentModelsRequest(res);
+        return;
+      case "slashCommands":
+        return this.handleAskAgentSlashCommandsRequest(res);
+      case "mcpConfig":
+        return this.handleAskAgentMcpConfigRequest(res);
+      case "mcpConfigServer":
+        return this.handleAskAgentMcpConfigServerRequest(req, res);
+      case "mcpConfigOpenRaw":
+        return this.handleAskAgentMcpConfigOpenRawRequest(req, res);
+      case "mcpStatus":
+        return this.handleAskAgentMcpStatusRequest(res);
+      case "mcpRefresh":
+        return this.handleAskAgentMcpRefreshRequest(res);
+      case "question":
+        return this.handleAskAgentQuestionResponseRequest(req, res);
+      case "questionProgress":
+        return this.handleAskAgentQuestionProgressRequest(req, res);
+      case "memory":
+        return this.handleAskAgentMemoryStatusRequest(res);
+      case "memoryClear":
+        return this.handleAskAgentMemoryClearRequest(req, res);
+      case "log":
+        return this.handleAskAgentUiLogRequest(req, res);
+      case "model":
+        return this.handleAskAgentModelRequest(req, res);
+      case "memoryProposal":
+        return this.handleAskAgentMemoryProposalRequest(req, res);
+      case "memoryNudgeDismiss":
+        return this.handleAskAgentMemoryCandidateNudgeDismissRequest(req, res);
+      case "memoryApproval":
+        return this.handleAskAgentMemoryApprovalRequest(req, res);
+      case "approval":
+        return this.handleAskAgentApprovalRequest(req, res);
+      case "readGrants":
+        return this.handleAskAgentReadGrantsRequest(res);
+      case "readGrantAdd":
+        return this.handleAskAgentReadGrantAddRequest(req, res);
+      case "readGrantRevoke":
+        return this.handleAskAgentReadGrantRevokeRequest(req, res);
+      case "projectHandoffTargets":
+        return this.handleAskAgentProjectHandoffTargetsRequest(res);
+      case "projectHandoffPropose":
+        return this.handleAskAgentProjectHandoffProposeRequest(req, res);
+      case "projectHandoffCancel":
+        return this.handleAskAgentProjectHandoffCancelRequest(req, res);
+      case "projectHandoffApprove":
+        return this.handleAskAgentProjectHandoffApproveRequest(req, res);
+      case "thinking":
+        return this.handleAskAgentThinkingRequest(req, res);
+      case "send":
+        return this.handleAskAgentSendRequest(req, res);
+      case "retry":
+        return this.handleAskAgentRetryRequest(req, res);
+      case "stop":
+        return this.handleAskAgentStopRequest(res);
+    }
+  }
 
   private async authThen(
     req: http.IncomingMessage,
