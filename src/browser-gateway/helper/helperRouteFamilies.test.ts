@@ -1,4 +1,9 @@
-import { ASK_AGENT_ROUTES, matchAskAgentRoute } from "./helperRouteFamilies.js";
+import {
+  ASK_AGENT_ROUTES,
+  INTERNAL_CORE_ROUTES,
+  matchAskAgentRoute,
+  matchInternalCoreRoute,
+} from "./helperRouteFamilies.js";
 import { describe, expect, it } from "vitest";
 
 describe("helper route families", () => {
@@ -18,10 +23,25 @@ describe("helper route families", () => {
     expect(matchAskAgentRoute("POST", "/api/ask-agent/unknown")).toBeNull();
   });
 
-  it("contains no duplicate method and path contracts", () => {
-    const keys = ASK_AGENT_ROUTES.map(
-      (route) => `${route.method} ${route.path}`,
-    );
+  it("matches every internal core method and path contract", () => {
+    for (const route of INTERNAL_CORE_ROUTES) {
+      expect(matchInternalCoreRoute(route.method, route.path)).toEqual(route);
+    }
+  });
+
+  it("keeps internal core methods exact and excludes other internal families", () => {
+    expect(matchInternalCoreRoute("GET", "/internal/client/lease")).toBeNull();
+    expect(matchInternalCoreRoute("POST", "/internal/shutdown")).toBeNull();
+    expect(
+      matchInternalCoreRoute("POST", "/internal/pairing/create"),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["Ask Agent", ASK_AGENT_ROUTES],
+    ["internal core", INTERNAL_CORE_ROUTES],
+  ])("contains no duplicate %s method and path contracts", (_name, routes) => {
+    const keys = routes.map((route) => `${route.method} ${route.path}`);
     expect(new Set(keys).size).toBe(keys.length);
   });
 });

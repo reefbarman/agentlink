@@ -163,7 +163,9 @@ import {
 } from "../../shared/streamingBaselineMetrics.js";
 import {
   matchAskAgentRoute,
+  matchInternalCoreRoute,
   type AskAgentRouteHandler,
+  type InternalCoreRouteHandler,
 } from "./helperRouteFamilies.js";
 
 export interface HelperRuntimeOptions {
@@ -1106,57 +1108,9 @@ export class BrowserGatewayHelper {
     res: http.ServerResponse,
     requestUrl: URL,
   ): Promise<void> {
-    if (method === "POST" && pathname === "/internal/client/lease") {
-      await this.handleLeaseRequest(req, res);
-      return;
-    }
-    if (method === "POST" && pathname === "/internal/client/release") {
-      await this.handleReleaseRequest(req, res);
-      return;
-    }
-    if (method === "POST" && pathname === "/internal/core-owners/register") {
-      await this.handleCoreOwnerRegisterRequest(req, res);
-      return;
-    }
-    if (method === "POST" && pathname === "/internal/core-owners/heartbeat") {
-      await this.handleCoreOwnerHeartbeatRequest(req, res);
-      return;
-    }
-    if (method === "GET" && pathname === "/internal/core-owners") {
-      this.handleCoreOwnersListRequest(res);
-      return;
-    }
-    if (method === "POST" && pathname === "/internal/model-catalog") {
-      await this.handleModelCatalogPublishRequest(req, res);
-      return;
-    }
-    if (method === "POST" && pathname === "/internal/model-auth/credentials") {
-      await this.handleModelCredentialGrantRequest(req, res);
-      return;
-    }
-    if (
-      method === "POST" &&
-      pathname === "/internal/model-auth/credentials/clear"
-    ) {
-      await this.handleModelCredentialClearRequest(req, res);
-      return;
-    }
-    if (method === "POST" && pathname === "/internal/model-auth/leases") {
-      await this.handleModelAuthLeaseRequest(req, res);
-      return;
-    }
-    if (
-      method === "POST" &&
-      pathname === "/internal/model-auth/leases/validate"
-    ) {
-      await this.handleModelAuthLeaseValidateRequest(req, res);
-      return;
-    }
-    if (
-      method === "POST" &&
-      pathname === "/internal/model-auth/leases/revoke"
-    ) {
-      await this.handleModelAuthLeaseRevokeRequest(req, res);
+    const internalCoreRoute = matchInternalCoreRoute(method, pathname);
+    if (internalCoreRoute) {
+      await this.handleInternalCoreRoute(internalCoreRoute.handler, req, res);
       return;
     }
     if (method === "POST" && pathname === "/internal/shutdown") {
@@ -1187,6 +1141,38 @@ export class BrowserGatewayHelper {
       return;
     }
     writeJson(res, 404, { error: "not_found" });
+  }
+
+  private async handleInternalCoreRoute(
+    handler: InternalCoreRouteHandler,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    switch (handler) {
+      case "clientLease":
+        return this.handleLeaseRequest(req, res);
+      case "clientRelease":
+        return this.handleReleaseRequest(req, res);
+      case "coreOwnerRegister":
+        return this.handleCoreOwnerRegisterRequest(req, res);
+      case "coreOwnerHeartbeat":
+        return this.handleCoreOwnerHeartbeatRequest(req, res);
+      case "coreOwners":
+        this.handleCoreOwnersListRequest(res);
+        return;
+      case "modelCatalog":
+        return this.handleModelCatalogPublishRequest(req, res);
+      case "modelCredentialGrant":
+        return this.handleModelCredentialGrantRequest(req, res);
+      case "modelCredentialClear":
+        return this.handleModelCredentialClearRequest(req, res);
+      case "modelAuthLease":
+        return this.handleModelAuthLeaseRequest(req, res);
+      case "modelAuthLeaseValidate":
+        return this.handleModelAuthLeaseValidateRequest(req, res);
+      case "modelAuthLeaseRevoke":
+        return this.handleModelAuthLeaseRevokeRequest(req, res);
+    }
   }
 
   private async handleRootRequest(

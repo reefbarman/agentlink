@@ -167,8 +167,82 @@ export function matchAskAgentRoute(
   method: string,
   pathname: string,
 ): HelperRouteMatch<AskAgentRouteHandler> | null {
+  return matchExactRoute(ASK_AGENT_ROUTES, method, pathname);
+}
+
+export type InternalCoreRouteHandler =
+  | "clientLease"
+  | "clientRelease"
+  | "coreOwnerRegister"
+  | "coreOwnerHeartbeat"
+  | "coreOwners"
+  | "modelCatalog"
+  | "modelCredentialGrant"
+  | "modelCredentialClear"
+  | "modelAuthLease"
+  | "modelAuthLeaseValidate"
+  | "modelAuthLeaseRevoke";
+
+export const INTERNAL_CORE_ROUTES = [
+  { method: "POST", path: "/internal/client/lease", handler: "clientLease" },
+  {
+    method: "POST",
+    path: "/internal/client/release",
+    handler: "clientRelease",
+  },
+  {
+    method: "POST",
+    path: "/internal/core-owners/register",
+    handler: "coreOwnerRegister",
+  },
+  {
+    method: "POST",
+    path: "/internal/core-owners/heartbeat",
+    handler: "coreOwnerHeartbeat",
+  },
+  { method: "GET", path: "/internal/core-owners", handler: "coreOwners" },
+  { method: "POST", path: "/internal/model-catalog", handler: "modelCatalog" },
+  {
+    method: "POST",
+    path: "/internal/model-auth/credentials",
+    handler: "modelCredentialGrant",
+  },
+  {
+    method: "POST",
+    path: "/internal/model-auth/credentials/clear",
+    handler: "modelCredentialClear",
+  },
+  {
+    method: "POST",
+    path: "/internal/model-auth/leases",
+    handler: "modelAuthLease",
+  },
+  {
+    method: "POST",
+    path: "/internal/model-auth/leases/validate",
+    handler: "modelAuthLeaseValidate",
+  },
+  {
+    method: "POST",
+    path: "/internal/model-auth/leases/revoke",
+    handler: "modelAuthLeaseRevoke",
+  },
+] as const satisfies readonly HelperExactRoute<InternalCoreRouteHandler>[];
+
+export function matchInternalCoreRoute(
+  method: string,
+  pathname: string,
+): HelperRouteMatch<InternalCoreRouteHandler> | null {
+  return matchExactRoute(INTERNAL_CORE_ROUTES, method, pathname);
+}
+
+function matchExactRoute<THandler extends string>(
+  routes: readonly HelperExactRoute<THandler>[],
+  method: string,
+  pathname: string,
+): HelperRouteMatch<THandler> | null {
   return (
-    ASK_AGENT_ROUTES.find(
+    routes.find(
       (route) => route.method === method && route.path === pathname,
     ) ?? null
   );
