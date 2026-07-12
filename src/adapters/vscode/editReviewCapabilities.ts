@@ -38,6 +38,7 @@ import type { ApprovalManager } from "../../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../../approvals/ApprovalPanelProvider.js";
 import { FindReplacePreviewPanel } from "../../findReplace/FindReplacePreviewPanel.js";
 import type { WriteApprovalResponse } from "../../approvals/ApprovalPanelProvider.js";
+import { applyWorkspaceEditAndSave } from "./workspaceEditOrchestration.js";
 import { approveOutsideWorkspaceAccess } from "../../tools/pathAccessUI.js";
 import { getConfiguredMasterBypass } from "./agentLinkConfig.js";
 import { getRelativePath } from "../../util/paths.js";
@@ -455,45 +456,43 @@ export function createVscodeMultiFileEditReviewProvider(
           };
         }
 
-        const applied = await vscode.workspace.applyEdit(edit);
-        if (!applied) {
-          return {
+        return await applyWorkspaceEditAndSave({
+          edit,
+          affectedPaths: params.files.map((file) => file.absolutePath),
+          applyFailure: {
             content: [
               {
-                type: "text",
+                type: "text" as const,
                 text: JSON.stringify({ error: "Failed to apply replacements" }),
               },
             ],
-          };
-        }
+          },
+          buildSuccess: () => {
+            const result: Record<string, unknown> = {
+              status: "applied",
+              find: params.find,
+              replace: params.replace,
+              files_changed: appliedFiles.length,
+              total_replacements: appliedCount,
+              files: appliedFiles,
+            };
+            if (acceptedIds && appliedCount < params.totalMatches) {
+              result.excluded = params.totalMatches - appliedCount;
+            }
+            if (followUp) {
+              result.follow_up = followUp;
+            }
 
-        for (const file of params.files) {
-          const doc = vscode.workspace.textDocuments.find(
-            (document) => document.uri.fsPath === file.absolutePath,
-          );
-          if (doc?.isDirty) {
-            await doc.save();
-          }
-        }
-
-        const result: Record<string, unknown> = {
-          status: "applied",
-          find: params.find,
-          replace: params.replace,
-          files_changed: appliedFiles.length,
-          total_replacements: appliedCount,
-          files: appliedFiles,
-        };
-        if (acceptedIds && appliedCount < params.totalMatches) {
-          result.excluded = params.totalMatches - appliedCount;
-        }
-        if (followUp) {
-          result.follow_up = followUp;
-        }
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        };
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify(result, null, 2),
+                },
+              ],
+            };
+          },
+        });
       } finally {
         previewPanel?.close();
       }
@@ -699,44 +698,37 @@ export function createVscodeRenameSymbolProvider(
         }
       }
 
-      const applied = await vscode.workspace.applyEdit(edit);
-      if (!applied) {
-        return {
+      return await applyWorkspaceEditAndSave({
+        edit,
+        affectedPaths: entries.map(([entryUri]) => entryUri.fsPath),
+        applyFailure: {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: JSON.stringify({
                 error: "Failed to apply rename edit",
                 path: relPath,
               }),
             },
           ],
-        };
-      }
+        },
+        buildSuccess: () => {
+          const result: Record<string, unknown> = {
+            status: "accepted",
+            old_name: oldName,
+            new_name: params.newName,
+            files_modified: filesPreview,
+            total_changes: totalChanges,
+          };
+          if (renameFollowUp) {
+            result.follow_up = renameFollowUp;
+          }
 
-      for (const [entryUri] of entries) {
-        const doc = vscode.workspace.textDocuments.find(
-          (candidate) => candidate.uri.fsPath === entryUri.fsPath,
-        );
-        if (doc?.isDirty) {
-          await doc.save();
-        }
-      }
-
-      const result: Record<string, unknown> = {
-        status: "accepted",
-        old_name: oldName,
-        new_name: params.newName,
-        files_modified: filesPreview,
-        total_changes: totalChanges,
-      };
-      if (renameFollowUp) {
-        result.follow_up = renameFollowUp;
-      }
-
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-      };
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(result) }],
+          };
+        },
+      });
     },
   };
 }
