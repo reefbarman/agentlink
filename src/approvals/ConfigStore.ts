@@ -1,11 +1,12 @@
-import * as vscode from "vscode";
 import * as fs from "fs";
-import * as path from "path";
 import * as os from "os";
+import * as path from "path";
+import * as vscode from "vscode";
 
-import type { CommandRule, PathRule } from "./ApprovalManager.js";
-import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
+import type { CommandRule } from "./CommandRuleStore.js";
+import type { PathRule } from "./ApprovalManager.js";
 import { parseJsonWithComments } from "../util/jsonc.js";
+import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
 export interface AgentLinkConfig {
   version: number;

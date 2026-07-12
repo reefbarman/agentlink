@@ -4,18 +4,18 @@ import picomatch from "picomatch";
 import { parseMcpToolName } from "../agent/mcpToolNames.js";
 import { tryGetFirstWorkspaceRoot, getRelativePath } from "../util/paths.js";
 import type { ConfigStore } from "./ConfigStore.js";
+import {
+  CommandRuleStore,
+  type CommandRule,
+  type RuleScope,
+} from "./CommandRuleStore.js";
 
-export interface CommandRule {
-  pattern: string;
-  mode: "prefix" | "regex" | "exact";
-}
+export type { CommandRule, RuleScope } from "./CommandRuleStore.js";
 
 export interface PathRule {
   pattern: string;
   mode: "glob" | "prefix" | "exact";
 }
-
-export type RuleScope = "session" | "project" | "global";
 
 interface SessionState {
   writeApproved: boolean;
@@ -47,12 +47,22 @@ export class ApprovalManager {
   // Per-session MCP tool approvals: key is "sessionId:toolName" or "sessionId:server:*"
   private mcpApprovals = new Set<string>();
   private configStoreListener: vscode.Disposable;
+  private commandRuleStore: CommandRuleStore;
 
   constructor(
     private globalState: vscode.Memento, // kept for migration
     private configStore: ConfigStore,
   ) {
     this.loadPersistedSessions();
+    this.commandRuleStore = new CommandRuleStore(configStore, {
+      get: (sessionId) => this.sessions.get(sessionId),
+      create: (sessionId) => {
+        const session = this.newSession();
+        this.sessions.set(sessionId, session);
+        return session;
+      },
+      persist: () => this.persistSessions(),
+    });
     this.pruneExpiredSessions();
     this.pruneTimer = setInterval(
       () => this.pruneExpiredSessions(),
@@ -734,66 +744,20 @@ export class ApprovalManager {
   ): { rule: CommandRule; scope: RuleScope } | null {
     const trimmed = command.trim();
 
-    // Check session rules first
-    const session = this.getSession(sessionId);
-    for (const rule of session.commandRules) {
-      if (this.matchesRule(trimmed, rule)) return { rule, scope: "session" };
-    }
-
-    // Check project rules
-    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
-    if (projectConfig) {
-      for (const rule of projectConfig.commandRules ?? []) {
-        if (this.matchesRule(trimmed, rule)) return { rule, scope: "project" };
+    const rulesByScope = this.commandRuleStore.get(sessionId);
+    for (const scope of ["session", "project", "global"] as const) {
+      for (const rule of rulesByScope[scope]) {
+        if (this.matchesRule(trimmed, rule)) return { rule, scope };
       }
-    }
-
-    // Check global rules
-    const globalConfig = this.configStore.getGlobalConfig();
-    for (const rule of globalConfig.commandRules ?? []) {
-      if (this.matchesRule(trimmed, rule)) return { rule, scope: "global" };
     }
 
     return null;
   }
 
   addCommandRule(sessionId: string, rule: CommandRule, scope: RuleScope): void {
-    if (scope === "global") {
-      this.configStore.updateGlobalConfig((c) => {
-        const rules = c.commandRules ?? [];
-        if (
-          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
-        ) {
-          rules.push(rule);
-          c.commandRules = rules;
-        }
-      });
-    } else if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return;
-      this.configStore.updateProjectConfig(folder, (c) => {
-        const rules = c.commandRules ?? [];
-        if (
-          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
-        ) {
-          rules.push(rule);
-          c.commandRules = rules;
-        }
-      });
-    } else {
-      const session = this.sessions.get(sessionId) ?? this.newSession();
-      if (
-        !session.commandRules.some(
-          (r) => r.pattern === rule.pattern && r.mode === rule.mode,
-        )
-      ) {
-        session.commandRules.push(rule);
-        session.lastActivity = Date.now();
-        this.sessions.set(sessionId, session);
-        this.persistSessions();
-      }
+    if (this.commandRuleStore.add(sessionId, rule, scope)) {
+      this._onDidChange.fire();
     }
-    this._onDidChange.fire();
   }
 
   editCommandRule(
@@ -802,33 +766,9 @@ export class ApprovalManager {
     scope: RuleScope,
     sessionId?: string,
   ): void {
-    if (scope === "global") {
-      this.configStore.updateGlobalConfig((c) => {
-        const rules = c.commandRules ?? [];
-        const idx = rules.findIndex((r) => r.pattern === oldPattern);
-        if (idx !== -1) rules[idx] = newRule;
-      });
-    } else if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return;
-      this.configStore.updateProjectConfig(folder, (c) => {
-        const rules = c.commandRules ?? [];
-        const idx = rules.findIndex((r) => r.pattern === oldPattern);
-        if (idx !== -1) rules[idx] = newRule;
-      });
-    } else if (sessionId) {
-      const session = this.sessions.get(sessionId);
-      if (session) {
-        const idx = session.commandRules.findIndex(
-          (r) => r.pattern === oldPattern,
-        );
-        if (idx !== -1) {
-          session.commandRules[idx] = newRule;
-          this.persistSessions();
-        }
-      }
+    if (this.commandRuleStore.edit(oldPattern, newRule, scope, sessionId)) {
+      this._onDidChange.fire();
     }
-    this._onDidChange.fire();
   }
 
   removeCommandRule(
@@ -836,30 +776,9 @@ export class ApprovalManager {
     scope: RuleScope,
     sessionId?: string,
   ): void {
-    if (scope === "global") {
-      this.configStore.updateGlobalConfig((c) => {
-        c.commandRules = (c.commandRules ?? []).filter(
-          (r) => r.pattern !== pattern,
-        );
-      });
-    } else if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return;
-      this.configStore.updateProjectConfig(folder, (c) => {
-        c.commandRules = (c.commandRules ?? []).filter(
-          (r) => r.pattern !== pattern,
-        );
-      });
-    } else if (sessionId) {
-      const session = this.sessions.get(sessionId);
-      if (session) {
-        session.commandRules = session.commandRules.filter(
-          (r) => r.pattern !== pattern,
-        );
-        this.persistSessions();
-      }
+    if (this.commandRuleStore.remove(pattern, scope, sessionId)) {
+      this._onDidChange.fire();
     }
-    this._onDidChange.fire();
   }
 
   getCommandRules(sessionId: string): {
@@ -867,21 +786,11 @@ export class ApprovalManager {
     project: CommandRule[];
     global: CommandRule[];
   } {
-    const session = this.getSession(sessionId);
-    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
-    return {
-      session: [...session.commandRules],
-      project: [...(projectConfig?.commandRules ?? [])],
-      global: [...(this.configStore.getGlobalConfig().commandRules ?? [])],
-    };
+    return this.commandRuleStore.get(sessionId);
   }
 
   clearSessionCommandRules(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      session.commandRules = [];
-      this.persistSessions();
-    }
+    this.commandRuleStore.clearSession(sessionId);
     this._onDidChange.fire();
   }
 
