@@ -1,109 +1,21 @@
+import { scanShellLexBoundaries } from "../util/shellLex.js";
+
 /**
  * Split a compound shell command on &&, ||, |, ;, and newlines while
  * respecting single/double quotes, backslash escapes, and # comments.
  */
 export function splitCompoundCommand(command: string): string[] {
   const parts: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-  let i = 0;
+  let segmentStart = 0;
 
-  while (i < command.length) {
-    const ch = command[i];
-
-    // Backslash escape (skip next character)
-    if (ch === "\\" && i + 1 < command.length) {
-      current += ch + command[i + 1];
-      i += 2;
-      continue;
-    }
-
-    // Quote tracking
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      current += ch;
-      i++;
-      continue;
-    }
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    // Only split when outside quotes
-    if (!inSingle && !inDouble) {
-      // # comment — skip to end of line (only at word boundary:
-      // start of command, or preceded by whitespace/separator)
-      if (ch === "#" && (current.trim() === "" || /\s$/.test(current))) {
-        // Flush anything before the comment
-        const trimmed = current.trim();
-        if (trimmed) parts.push(trimmed);
-        current = "";
-        // Skip to end of line or end of string
-        while (i < command.length && command[i] !== "\n") {
-          i++;
-        }
-        // Skip the newline itself
-        if (i < command.length) i++;
-        continue;
-      }
-
-      // Newline — treat like ;
-      if (ch === "\n") {
-        const trimmed = current.trim();
-        if (trimmed) parts.push(trimmed);
-        current = "";
-        i++;
-        continue;
-      }
-
-      // && operator
-      if (ch === "&" && i + 1 < command.length && command[i + 1] === "&") {
-        const trimmed = current.trim();
-        if (trimmed) parts.push(trimmed);
-        current = "";
-        i += 2;
-        continue;
-      }
-
-      // || operator
-      if (ch === "|" && i + 1 < command.length && command[i + 1] === "|") {
-        const trimmed = current.trim();
-        if (trimmed) parts.push(trimmed);
-        current = "";
-        i += 2;
-        continue;
-      }
-
-      // | pipe
-      if (ch === "|") {
-        const trimmed = current.trim();
-        if (trimmed) parts.push(trimmed);
-        current = "";
-        i++;
-        continue;
-      }
-
-      // ; separator
-      if (ch === ";") {
-        const trimmed = current.trim();
-        if (trimmed) parts.push(trimmed);
-        current = "";
-        i++;
-        continue;
-      }
-    }
-
-    current += ch;
-    i++;
+  for (const boundary of scanShellLexBoundaries(command).boundaries) {
+    const trimmed = command.slice(segmentStart, boundary.start).trim();
+    if (trimmed) parts.push(trimmed);
+    segmentStart = boundary.end;
   }
 
-  const trimmed = current.trim();
+  const trimmed = command.slice(segmentStart).trim();
   if (trimmed) parts.push(trimmed);
-
   return parts;
 }
 
