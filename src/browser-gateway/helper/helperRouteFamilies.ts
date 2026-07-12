@@ -288,6 +288,60 @@ export function matchInternalDeviceRoute(
   return matchExactRoute(INTERNAL_DEVICE_ROUTES, method, pathname);
 }
 
+export type PublicHelperRouteHandler =
+  | "health"
+  | "root"
+  | "browserGatewayJs"
+  | "browserGatewayCss"
+  | "monacoWorker"
+  | "monacoWorkerMap"
+  | "codiconCss"
+  | "codiconFont"
+  | "appIcon"
+  | "appIconSvg"
+  | "webManifest";
+
+export const PUBLIC_HELPER_EXACT_ROUTES = [
+  { method: "GET", path: "/health", handler: "health" },
+  { method: "GET", path: "/", handler: "root" },
+  {
+    method: "GET",
+    path: "/browser-gateway.js",
+    handler: "browserGatewayJs",
+  },
+  {
+    method: "GET",
+    path: "/browser-gateway.css",
+    handler: "browserGatewayCss",
+  },
+  { method: "GET", path: "/codicon.css", handler: "codiconCss" },
+  { method: "GET", path: "/codicon.ttf", handler: "codiconFont" },
+  { method: "GET", path: "/favicon.ico", handler: "appIcon" },
+  { method: "GET", path: "/agentlink-icon.png", handler: "appIcon" },
+  { method: "GET", path: "/apple-touch-icon.png", handler: "appIcon" },
+  { method: "GET", path: "/agentlink-icon.svg", handler: "appIconSvg" },
+  { method: "GET", path: "/site.webmanifest", handler: "webManifest" },
+] as const satisfies readonly HelperExactRoute<PublicHelperRouteHandler>[];
+
+export function matchPublicHelperRoute(
+  method: string,
+  pathname: string,
+): HelperRouteMatch<PublicHelperRouteHandler> | null {
+  if (method !== "GET") return null;
+  const exact = matchExactRoute(PUBLIC_HELPER_EXACT_ROUTES, method, pathname);
+  if (exact) return exact;
+  if (/^\/monaco-[a-z-]+\.worker\.js$/.test(pathname)) {
+    return { handler: "monacoWorker" };
+  }
+  if (/^\/monaco-[a-z-]+\.worker\.js\.map$/.test(pathname)) {
+    return { handler: "monacoWorkerMap" };
+  }
+  if (pathname.startsWith("/codicon.ttf")) {
+    return { handler: "codiconFont" };
+  }
+  return null;
+}
+
 function matchExactRoute<THandler extends string>(
   routes: readonly HelperExactRoute<THandler>[],
   method: string,

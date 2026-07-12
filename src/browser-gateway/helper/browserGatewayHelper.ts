@@ -166,10 +166,12 @@ import {
   matchInternalCoreRoute,
   matchInternalDeviceRoute,
   matchPairedBrowserRoute,
+  matchPublicHelperRoute,
   type AskAgentRouteHandler,
   type InternalCoreRouteHandler,
   type InternalDeviceRouteHandler,
   type PairedBrowserRouteHandler,
+  type PublicHelperRouteHandler,
 } from "./helperRouteFamilies.js";
 
 export interface HelperRuntimeOptions {
@@ -853,22 +855,6 @@ export class BrowserGatewayHelper {
     const requestUrl = new URL(rawUrl, `http://127.0.0.1:${this.options.port}`);
     const pathname = requestUrl.pathname;
 
-    if (method === "GET" && pathname === "/health") {
-      const payload: BrowserGatewayHelperHealthResponse = {
-        status: "ok",
-        protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
-        helperVersion: this.options.helperVersion,
-        startedAt: this.startedAt.toISOString(),
-        now: new Date().toISOString(),
-        uptimeMs: Date.now() - this.startedAtMs,
-        activeClientLeases: this.getActiveLeaseCount(),
-        helperGenerationId: this.helperGenerationId,
-        coreOwners: this.coreOwnerRegistry.list(Date.now()).length,
-      };
-      writeJson(res, 200, payload);
-      return;
-    }
-
     // Internal extension-to-helper endpoints (auth: clientSharedSecret).
     if (pathname.startsWith("/internal/")) {
       if (!this.isInternalClientAuthorized(req)) {
@@ -885,87 +871,15 @@ export class BrowserGatewayHelper {
       return;
     }
 
-    if (method === "GET" && pathname === "/") {
-      void this.handleRootRequest(req, requestUrl, res);
-      return;
-    }
-
-    if (method === "GET" && pathname === "/browser-gateway.js") {
-      void this.handleStaticAssetRequest(
-        "dist/browser-gateway.js",
-        "text/javascript; charset=utf-8",
+    const publicRoute = matchPublicHelperRoute(method, pathname);
+    if (publicRoute) {
+      void this.handlePublicRoute(
+        publicRoute.handler,
+        pathname,
+        req,
         res,
+        requestUrl,
       );
-      return;
-    }
-
-    if (method === "GET" && pathname === "/browser-gateway.css") {
-      void this.handleStaticAssetRequest(
-        "dist/browser-gateway.css",
-        "text/css; charset=utf-8",
-        res,
-      );
-      return;
-    }
-
-    if (method === "GET" && pathname.startsWith("/monaco-")) {
-      const assetName = pathname.slice(1);
-      if (/^monaco-[a-z-]+\.worker\.js$/.test(assetName)) {
-        void this.handleStaticAssetRequest(
-          `dist/${assetName}`,
-          "text/javascript; charset=utf-8",
-          res,
-        );
-        return;
-      }
-      if (/^monaco-[a-z-]+\.worker\.js\.map$/.test(assetName)) {
-        void this.handleStaticAssetRequest(
-          `dist/${assetName}`,
-          "application/json; charset=utf-8",
-          res,
-        );
-        return;
-      }
-    }
-
-    if (method === "GET" && pathname === "/codicon.css") {
-      void this.handleStaticAssetRequest(
-        "dist/codicon.css",
-        "text/css; charset=utf-8",
-        res,
-      );
-      return;
-    }
-
-    if (
-      method === "GET" &&
-      (pathname === "/codicon.ttf" || pathname.startsWith("/codicon.ttf"))
-    ) {
-      void this.handleStaticAssetRequest("dist/codicon.ttf", "font/ttf", res);
-      return;
-    }
-
-    if (
-      method === "GET" &&
-      (pathname === "/favicon.ico" ||
-        pathname === AGENTLINK_ICON_PATH ||
-        pathname === "/apple-touch-icon.png")
-    ) {
-      void this.handleAppIconRequest(res);
-      return;
-    }
-
-    if (method === "GET" && pathname === AGENTLINK_ICON_SVG_PATH) {
-      void this.handleStaticAssetRequest(
-        "media/agentlink-terminal.svg",
-        "image/svg+xml; charset=utf-8",
-        res,
-      );
-      return;
-    }
-
-    if (method === "GET" && pathname === "/site.webmanifest") {
-      this.handleWebManifestRequest(res);
       return;
     }
 
@@ -1131,6 +1045,81 @@ export class BrowserGatewayHelper {
       return;
     }
     writeJson(res, 404, { error: "not_found" });
+  }
+
+  private async handlePublicRoute(
+    handler: PublicHelperRouteHandler,
+    pathname: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    requestUrl: URL,
+  ): Promise<void> {
+    switch (handler) {
+      case "health": {
+        const payload: BrowserGatewayHelperHealthResponse = {
+          status: "ok",
+          protocolVersion: BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
+          helperVersion: this.options.helperVersion,
+          startedAt: this.startedAt.toISOString(),
+          now: new Date().toISOString(),
+          uptimeMs: Date.now() - this.startedAtMs,
+          activeClientLeases: this.getActiveLeaseCount(),
+          helperGenerationId: this.helperGenerationId,
+          coreOwners: this.coreOwnerRegistry.list(Date.now()).length,
+        };
+        writeJson(res, 200, payload);
+        return;
+      }
+      case "root":
+        return this.handleRootRequest(req, requestUrl, res);
+      case "browserGatewayJs":
+        return this.handleStaticAssetRequest(
+          "dist/browser-gateway.js",
+          "text/javascript; charset=utf-8",
+          res,
+        );
+      case "browserGatewayCss":
+        return this.handleStaticAssetRequest(
+          "dist/browser-gateway.css",
+          "text/css; charset=utf-8",
+          res,
+        );
+      case "monacoWorker":
+        return this.handleStaticAssetRequest(
+          `dist/${pathname.slice(1)}`,
+          "text/javascript; charset=utf-8",
+          res,
+        );
+      case "monacoWorkerMap":
+        return this.handleStaticAssetRequest(
+          `dist/${pathname.slice(1)}`,
+          "application/json; charset=utf-8",
+          res,
+        );
+      case "codiconCss":
+        return this.handleStaticAssetRequest(
+          "dist/codicon.css",
+          "text/css; charset=utf-8",
+          res,
+        );
+      case "codiconFont":
+        return this.handleStaticAssetRequest(
+          "dist/codicon.ttf",
+          "font/ttf",
+          res,
+        );
+      case "appIcon":
+        return this.handleAppIconRequest(res);
+      case "appIconSvg":
+        return this.handleStaticAssetRequest(
+          "media/agentlink-terminal.svg",
+          "image/svg+xml; charset=utf-8",
+          res,
+        );
+      case "webManifest":
+        this.handleWebManifestRequest(res);
+        return;
+    }
   }
 
   private async handlePairedBrowserRoute(
