@@ -43,8 +43,8 @@ import {
   getStructuralCachePath,
   loadCache,
   loadStructuralCache,
-  writeCache,
-  writeStructuralCache,
+  writeCache as writeCacheFile,
+  writeStructuralCache as writeStructuralCacheFile,
   diffFiles,
   scanFiles,
   readFilesBatch,
@@ -64,15 +64,21 @@ import type {
 import { EMBEDDING_DIM } from "./embeddingConfig.js";
 import { requestEmbeddings } from "./embeddingClient.js";
 import {
-  deleteQdrantCollection,
-  deleteQdrantPoints,
-  ensureQdrantCollection,
-  upsertQdrantPoints,
+  deleteQdrantCollection as deleteQdrantCollectionRequest,
+  deleteQdrantPoints as deleteQdrantPointsRequest,
+  ensureQdrantCollection as ensureQdrantCollectionRequest,
+  upsertQdrantPoints as upsertQdrantPointsRequest,
   type QdrantPoint,
   type QdrantPayloadIndex,
 } from "./qdrantClient.js";
 import { sleep } from "../util/sleep.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
+import {
+  createIndexWorkerMetrics,
+  measureIndexWorkerPhase,
+  measureIndexWorkerPhaseSync,
+  serializedByteLength,
+} from "./workerMetrics.js";
 
 // --- Constants ---
 
@@ -102,6 +108,7 @@ const FILE_BATCH_SIZE = 50;
 // --- State ---
 
 let aborted = false;
+let metrics = createIndexWorkerMetrics();
 const pendingEmbeddingAuthRefreshRequests = new Map<
   string,
   {
@@ -109,6 +116,45 @@ const pendingEmbeddingAuthRefreshRequests = new Map<
     reject: (error: Error) => void;
   }
 >();
+
+function writeCache(cachePath: string, cache: IndexCache): void {
+  writeCacheFile(cachePath, cache);
+  metrics.recordOperation("cache.writeVector", serializedByteLength(cache));
+}
+
+function writeStructuralCache(
+  cachePath: string,
+  cache: StructuralGraphCache,
+): void {
+  writeStructuralCacheFile(cachePath, cache);
+  metrics.recordOperation("cache.writeStructural", serializedByteLength(cache));
+}
+
+async function deleteQdrantCollection(
+  qdrantUrl: string,
+  collectionName: string,
+): Promise<void> {
+  metrics.recordOperation("qdrant.deleteCollection");
+  await deleteQdrantCollectionRequest(qdrantUrl, collectionName);
+}
+
+async function deleteQdrantPoints(
+  qdrantUrl: string,
+  collectionName: string,
+  pointIds: string[],
+): Promise<void> {
+  metrics.recordOperation("qdrant.deletePoints");
+  await deleteQdrantPointsRequest(qdrantUrl, collectionName, pointIds);
+}
+
+async function upsertQdrantPoints(
+  qdrantUrl: string,
+  collectionName: string,
+  points: QdrantPoint[],
+): Promise<void> {
+  metrics.recordOperation("qdrant.upsertPoints");
+  await upsertQdrantPointsRequest(qdrantUrl, collectionName, points);
+}
 
 // --- IPC helpers ---
 
@@ -125,8 +171,13 @@ function sendProgress(
   send({ type: "progress", phase, current, total, detail });
 }
 
+function sampleHeapUsed(): void {
+  sampleHeapUsed();
+}
+
 function sendComplete(stats: IndexStats): void {
-  send({ type: "complete", stats });
+  sampleHeapUsed();
+  send({ type: "complete", stats: { ...stats, metrics: metrics.snapshot() } });
 }
 
 function sendError(message: string, fatal: boolean): void {
@@ -249,16 +300,25 @@ async function backfillStructuralCacheForCachedFiles(args: {
     const files = await readFilesBatch(
       missingStructuralPaths.slice(i, i + FILE_BATCH_SIZE),
       readErrors,
+      metrics,
     );
     args.errors.push(...readErrors);
 
-    updated += updateStructuralCacheForFiles(
-      args.structuralCache,
-      files.filter(
-        (file) => args.cache.files[file.relPath]?.hash === file.hash,
-      ),
-      args.workspaceRoot,
+    const retainedBytes = files.reduce(
+      (total, file) => total + Buffer.byteLength(file.content, "utf8"),
+      0,
     );
+    try {
+      updated += updateStructuralCacheForFiles(
+        args.structuralCache,
+        files.filter(
+          (file) => args.cache.files[file.relPath]?.hash === file.hash,
+        ),
+        args.workspaceRoot,
+      );
+    } finally {
+      metrics.contentReleased(retainedBytes);
+    }
   }
 
   return updated;
@@ -270,6 +330,8 @@ process.on("message", (msg: ExtensionToWorkerMessage) => {
   switch (msg.type) {
     case "start":
       aborted = false;
+      metrics = createIndexWorkerMetrics();
+      sampleHeapUsed();
       handleStart(msg).catch((err) => {
         sendError(String(err), false);
       });
@@ -292,6 +354,8 @@ process.on("message", (msg: ExtensionToWorkerMessage) => {
     }
     case "incrementalUpdate":
       aborted = false;
+      metrics = createIndexWorkerMetrics();
+      sampleHeapUsed();
       handleIncrementalUpdate(msg).catch((err) => {
         sendError(String(err), false);
       });
@@ -533,8 +597,14 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       toIndexPaths,
       staleRelPaths,
       errors: scanErrors,
-    } = await scanFiles(msg.files, msg.workspaceRoot, cache, (scanned, total) =>
-      sendProgress("reading", scanned, total),
+    } = await measureIndexWorkerPhase(metrics, "scan", () =>
+      scanFiles(
+        msg.files,
+        msg.workspaceRoot,
+        cache,
+        (scanned, total) => sendProgress("reading", scanned, total),
+        metrics,
+      ),
     );
     errors.push(...scanErrors);
     sendProgress("reading", msg.files.length, msg.files.length);
@@ -583,14 +653,19 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     }
 
     if (!aborted) {
-      const structuralBackfillCount =
-        await backfillStructuralCacheForCachedFiles({
-          files: msg.files,
-          workspaceRoot: msg.workspaceRoot,
-          cache,
-          structuralCache,
-          errors,
-        });
+      const structuralBackfillCount = await measureIndexWorkerPhase(
+        metrics,
+        "backfill",
+        () =>
+          backfillStructuralCacheForCachedFiles({
+            files: msg.files,
+            workspaceRoot: msg.workspaceRoot,
+            cache,
+            structuralCache,
+            errors,
+          }),
+      );
+      sampleHeapUsed();
       if (structuralBackfillCount > 0) {
         writeStructuralCache(structuralCachePath, structuralCache);
       }
@@ -637,7 +712,9 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
 
       // Read content for this batch only
       const batchErrors: string[] = [];
-      const batchFiles = await readFilesBatch(batchPaths, batchErrors);
+      const batchFiles = await measureIndexWorkerPhase(metrics, "read", () =>
+        readFilesBatch(batchPaths, batchErrors, metrics),
+      );
       errors.push(...batchErrors);
 
       if (batchFiles.length === 0) continue;
@@ -669,16 +746,22 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         `batch ${batchNum + 1}/${totalBatches}`,
       );
 
-      const result = await processFileBatch(
-        batchFiles,
-        batchConfig,
-        cache,
-        structuralCache,
+      const retainedBytes = batchFiles.reduce(
+        (total, file) => total + Buffer.byteLength(file.content, "utf8"),
+        0,
       );
-      filesIndexed += result.filesIndexed;
-      chunksCreated += result.chunksCreated;
-      pointsUpserted += result.pointsUpserted;
-      errors.push(...result.errors);
+      try {
+        const result = await measureIndexWorkerPhase(metrics, "process", () =>
+          processFileBatch(batchFiles, batchConfig, cache, structuralCache),
+        );
+        filesIndexed += result.filesIndexed;
+        chunksCreated += result.chunksCreated;
+        pointsUpserted += result.pointsUpserted;
+        errors.push(...result.errors);
+      } finally {
+        metrics.contentReleased(retainedBytes);
+        sampleHeapUsed();
+      }
 
       // batchFiles, result, and all intermediate arrays are now out of scope
     }
@@ -753,11 +836,12 @@ async function handleIncrementalUpdate(
     }
 
     // Handle added/changed files — diff against cache
-    const { toIndex, errors: readErrors } = diffFiles(
-      msg.added,
-      msg.workspaceRoot,
-      cache,
+    const { toIndex, errors: readErrors } = measureIndexWorkerPhaseSync(
+      metrics,
+      "diff",
+      () => diffFiles(msg.added, msg.workspaceRoot, cache, metrics),
     );
+    sampleHeapUsed();
     errors.push(...readErrors);
 
     // Delete old points for files that will be re-indexed
@@ -793,16 +877,22 @@ async function handleIncrementalUpdate(
       for (let i = 0; i < toIndex.length; i += FILE_BATCH_SIZE) {
         if (aborted) break;
         const batch = toIndex.slice(i, i + FILE_BATCH_SIZE);
-        const result = await processFileBatch(
-          batch,
-          batchConfig,
-          cache,
-          structuralCache,
+        const retainedBytes = batch.reduce(
+          (total, file) => total + Buffer.byteLength(file.content, "utf8"),
+          0,
         );
-        filesIndexed += result.filesIndexed;
-        chunksCreated += result.chunksCreated;
-        pointsUpserted += result.pointsUpserted;
-        errors.push(...result.errors);
+        try {
+          const result = await measureIndexWorkerPhase(metrics, "process", () =>
+            processFileBatch(batch, batchConfig, cache, structuralCache),
+          );
+          filesIndexed += result.filesIndexed;
+          chunksCreated += result.chunksCreated;
+          pointsUpserted += result.pointsUpserted;
+          errors.push(...result.errors);
+        } finally {
+          metrics.contentReleased(retainedBytes);
+          sampleHeapUsed();
+        }
       }
     }
 
@@ -951,7 +1041,8 @@ async function ensureQdrantCollectionForIndex(
   qdrantUrl: string,
   collectionName: string,
 ): Promise<void> {
-  await ensureQdrantCollection({
+  metrics.recordOperation("qdrant.ensureCollection");
+  await ensureQdrantCollectionRequest({
     qdrantUrl,
     collectionName,
     vectorSize: EMBEDDING_DIM,

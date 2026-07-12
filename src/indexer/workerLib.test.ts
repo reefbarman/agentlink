@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { IndexCache } from "./types.js";
 import type { StructuralGraphCache } from "./structuralGraph.js";
+import { createIndexWorkerMetrics } from "./workerMetrics.js";
 
 const ioMocks = vi.hoisted(() => ({
   stat: vi.fn<typeof import("fs/promises").stat>(),
@@ -495,7 +496,8 @@ describe("scanFiles / readFilesBatch", () => {
     );
     ioMocks.readFile.mockResolvedValue("content");
 
-    const resultPromise = readFilesBatch(paths, []);
+    const metrics = createIndexWorkerMetrics();
+    const resultPromise = readFilesBatch(paths, [], metrics);
     await vi.waitFor(() => expect(pendingStats).toHaveLength(10));
     expect(pendingStats.map(({ path: file }) => path.basename(file))).toEqual(
       paths.slice(0, 10).map(({ relPath }) => relPath),
@@ -514,6 +516,10 @@ describe("scanFiles / readFilesBatch", () => {
     }
 
     await expect(resultPromise).resolves.toHaveLength(12);
+    expect(metrics.snapshot()).toMatchObject({
+      maxActiveReads: 10,
+      maxRetainedContentBytes: 12 * Buffer.byteLength("content", "utf8"),
+    });
   });
 
   it("preserves empty scan and batch results", async () => {
@@ -537,6 +543,25 @@ describe("scanFiles / readFilesBatch", () => {
         throw new Error("progress failed");
       }),
     ).rejects.toThrow("progress failed");
+  });
+
+  it("releases scan content after each file is hashed", async () => {
+    const first = writeFile("first.ts", "first");
+    const second = writeFile("second.ts", "second-value");
+    const metrics = createIndexWorkerMetrics();
+
+    await scanFiles(
+      [first, second],
+      tmpDir,
+      { version: 1, files: {} },
+      undefined,
+      metrics,
+    );
+
+    expect(metrics.snapshot()).toMatchObject({
+      maxActiveReads: 2,
+      maxRetainedContentBytes: Buffer.byteLength("second-value", "utf8"),
+    });
   });
 
   it("continues reading a batch after file errors", async () => {

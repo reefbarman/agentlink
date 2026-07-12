@@ -11,6 +11,7 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 import { createHash } from "crypto";
 import { Semaphore } from "../util/Semaphore.js";
+import type { IndexWorkerMetrics } from "./workerMetrics.js";
 import type { IndexCache } from "./types.js";
 import {
   STRUCTURAL_GRAPH_CACHE_VERSION,
@@ -208,6 +209,7 @@ export function diffFiles(
   files: string[],
   workspaceRoot: string,
   cache: IndexCache,
+  metrics?: IndexWorkerMetrics,
 ): DiffResult {
   const toIndex: DiffResult["toIndex"] = [];
   const errors: string[] = [];
@@ -226,11 +228,14 @@ export function diffFiles(
     const ext = path.extname(absPath).toLowerCase();
     if (ext && !INDEXABLE_EXTENSIONS.has(ext)) continue;
 
+    let readActive = false;
     try {
       const stat = fs.statSync(absPath);
       if (!stat.isFile()) continue;
       if (stat.size > MAX_FILE_SIZE || stat.size === 0) continue;
 
+      metrics?.readStarted();
+      readActive = true;
       const content = fs.readFileSync(absPath, "utf-8");
       if (isBinaryContent(content)) continue;
 
@@ -240,9 +245,12 @@ export function diffFiles(
       const cached = cache.files[relPath];
       if (cached && cached.hash === hash) continue;
 
+      metrics?.contentRetained(Buffer.byteLength(content, "utf8"));
       toIndex.push({ absPath, relPath, content, hash });
     } catch (err) {
       errors.push(`Failed to read ${relPath}: ${err}`);
+    } finally {
+      if (readActive) metrics?.readFinished();
     }
   }
 
@@ -275,6 +283,7 @@ export async function scanFiles(
   workspaceRoot: string,
   cache: IndexCache,
   onProgress?: (scanned: number, total: number) => void,
+  metrics?: IndexWorkerMetrics,
 ): Promise<ScanResult> {
   const toIndexPaths: ScanResult["toIndexPaths"] = [];
   const errors: string[] = [];
@@ -300,6 +309,7 @@ export async function scanFiles(
   const scanPromises = candidates.map(async ({ absPath, relPath }) => {
     const release = await semaphore.acquire();
     try {
+      metrics?.readStarted();
       const stat = await fsp.stat(absPath);
       if (!stat.isFile()) return;
       if (stat.size > MAX_FILE_SIZE || stat.size === 0) return;
@@ -318,20 +328,27 @@ export async function scanFiles(
 
       // Slow path: read + hash
       const content = await fsp.readFile(absPath, "utf-8");
-      if (isBinaryContent(content)) return;
+      const contentBytes = Buffer.byteLength(content, "utf8");
+      metrics?.contentRetained(contentBytes);
+      try {
+        if (isBinaryContent(content)) return;
 
-      const hash = hashContent(content);
+        const hash = hashContent(content);
 
-      if (cached && cached.hash === hash) {
-        cached.mtimeMs = stat.mtimeMs;
-        cached.size = stat.size;
-        return;
+        if (cached && cached.hash === hash) {
+          cached.mtimeMs = stat.mtimeMs;
+          cached.size = stat.size;
+          return;
+        }
+
+        toIndexPaths.push({ absPath, relPath });
+      } finally {
+        metrics?.contentReleased(contentBytes);
       }
-
-      toIndexPaths.push({ absPath, relPath });
     } catch (err) {
       errors.push(`Failed to scan ${relPath}: ${err}`);
     } finally {
+      metrics?.readFinished();
       try {
         scanned++;
         if (scanned % 100 === 0) {
@@ -375,6 +392,7 @@ export interface FileWithContent {
 export async function readFilesBatch(
   paths: Array<{ absPath: string; relPath: string }>,
   errors: string[],
+  metrics?: IndexWorkerMetrics,
 ): Promise<FileWithContent[]> {
   const result: FileWithContent[] = [];
   const semaphore = new Semaphore(IO_CONCURRENCY);
@@ -382,9 +400,11 @@ export async function readFilesBatch(
   const promises = paths.map(async ({ absPath, relPath }) => {
     const release = await semaphore.acquire();
     try {
+      metrics?.readStarted();
       const stat = await fsp.stat(absPath);
       const content = await fsp.readFile(absPath, "utf-8");
       const hash = hashContent(content);
+      metrics?.contentRetained(Buffer.byteLength(content, "utf8"));
       result.push({
         absPath,
         relPath,
@@ -396,6 +416,7 @@ export async function readFilesBatch(
     } catch (err) {
       errors.push(`Failed to read ${relPath}: ${err}`);
     } finally {
+      metrics?.readFinished();
       release();
     }
   });

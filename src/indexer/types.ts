@@ -74,6 +74,15 @@ export interface ProgressMessage {
   detail?: string;
 }
 
+export interface IndexWorkerMetricsSnapshot {
+  operations: Record<string, number>;
+  cacheWriteBytes: number;
+  phaseDurationsMs: Record<string, number>;
+  maxActiveReads: number;
+  maxRetainedContentBytes: number;
+  maxHeapUsedBytes: number;
+}
+
 export interface IndexStats {
   filesIndexed: number;
   /** Total files in the index (cache) after this run */
@@ -87,6 +96,8 @@ export interface IndexStats {
   errors: string[];
   /** True if this run was cancelled before completing */
   cancelled?: boolean;
+  /** Optional worker instrumentation used by reproducible performance fixtures. */
+  metrics?: IndexWorkerMetricsSnapshot;
 }
 
 export interface CompleteMessage {
