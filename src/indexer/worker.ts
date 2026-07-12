@@ -172,7 +172,7 @@ function sendProgress(
 }
 
 function sampleHeapUsed(): void {
-  sampleHeapUsed();
+  metrics.sampleHeapUsed(process.memoryUsage().heapUsed);
 }
 
 function sendComplete(stats: IndexStats): void {
