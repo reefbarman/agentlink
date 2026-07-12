@@ -61,6 +61,10 @@ import { detectQuestionFromAssistantText } from "./questionDetection";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 import { isForwardedBuiltinCommand } from "../../shared/builtinCommandForwarding";
 import { randomId } from "../../shared/randomId";
+import {
+  toVsCodeSelectionMessage,
+  type WriteApprovalSelection,
+} from "../../shared/selectionCommands";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
@@ -1741,7 +1745,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
       if (stateRef.current.sessionId) {
         startupRestorePendingRef.current = false;
         dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
-        vscodeApi.postMessage({ command: "agentSwitchMode", mode: slug });
+        vscodeApi.postMessage(
+          toVsCodeSelectionMessage({ type: "mode", mode: slug }),
+        );
       } else {
         startupRestorePendingRef.current = false;
         dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
@@ -1756,10 +1762,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
   const handleSelectModel = useCallback(
     (modelId: string) => {
-      vscodeApi.postMessage({
-        command: "agentSetModel",
-        model: modelId,
-      });
+      vscodeApi.postMessage(
+        toVsCodeSelectionMessage({ type: "model", model: modelId }),
+      );
     },
     [vscodeApi],
   );
@@ -1789,11 +1794,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   );
 
   const handleSetAgentWriteApproval = useCallback(
-    (mode: string) => {
-      vscodeApi.postMessage({
-        command: "agentSetWriteApproval",
-        mode,
-      });
+    (mode: WriteApprovalSelection) => {
+      vscodeApi.postMessage(
+        toVsCodeSelectionMessage({ type: "writeApproval", mode }),
+      );
     },
     [vscodeApi],
   );
@@ -1819,10 +1823,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         }
         case "model":
-          vscodeApi.postMessage({
-            command: "agentSetModel",
-            model: args.trim(),
-          });
+          vscodeApi.postMessage(
+            toVsCodeSelectionMessage({
+              type: "model",
+              model: args.trim(),
+            }),
+          );
           break;
         case "help":
           // Inject a help message as user text so the agent responds
@@ -2005,10 +2011,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const handleSetReasoningEffort = useCallback(
     (effort: ReasoningEffort) => {
       dispatch({ type: "SET_REASONING_EFFORT", effort });
-      vscodeApi.postMessage({
-        command: "agentSetReasoningEffort",
-        effort,
-      });
+      vscodeApi.postMessage(
+        toVsCodeSelectionMessage({ type: "reasoningEffort", effort }),
+      );
     },
     [vscodeApi],
   );

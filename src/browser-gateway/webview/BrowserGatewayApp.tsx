@@ -61,6 +61,11 @@ import {
 } from "../../shared/autoContinueProgress";
 import { isForwardedBuiltinCommand } from "../../shared/builtinCommandForwarding";
 import { randomId } from "../../shared/randomId";
+import {
+  isWriteApprovalSelection,
+  toHttpSelectionRequest,
+  type WriteApprovalSelection,
+} from "../../shared/selectionCommands";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
@@ -2453,10 +2458,14 @@ export function BrowserGatewayApp({
           sessionId: foreground.sessionId,
           effort,
         });
+        const selectionRequest = toHttpSelectionRequest({
+          type: "reasoningEffort",
+          effort,
+        });
         const response = await fetch(
           isAskAgentSelected
             ? "/api/ask-agent/thinking"
-            : buildApiPath("/api/thinking"),
+            : buildApiPath(selectionRequest.path),
           {
             method: "POST",
             credentials: "same-origin",
@@ -2464,7 +2473,7 @@ export function BrowserGatewayApp({
               "Content-Type": "application/json",
               Authorization: `Bearer ${authToken}`,
             },
-            body: JSON.stringify({ effort }),
+            body: JSON.stringify(selectionRequest.body),
           },
         );
         const body = (await response.json()) as {
@@ -2727,13 +2736,17 @@ export function BrowserGatewayApp({
     void (async () => {
       try {
         setModeStatus("Switching…");
-        const response = await fetch(buildApiPath("/api/mode"), {
+        const selectionRequest = toHttpSelectionRequest({
+          type: "mode",
+          mode: slug,
+        });
+        const response = await fetch(buildApiPath(selectionRequest.path), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify({ mode: slug }),
+          body: JSON.stringify(selectionRequest.body),
         });
         const body = (await response.json()) as {
           approved?: boolean;
@@ -2764,10 +2777,14 @@ export function BrowserGatewayApp({
           currentModel: foreground?.model ?? null,
           nextModel: modelId,
         });
+        const selectionRequest = toHttpSelectionRequest({
+          type: "model",
+          model: modelId,
+        });
         const response = await fetch(
           isAskAgentSelected
             ? "/api/ask-agent/model"
-            : buildApiPath("/api/model"),
+            : buildApiPath(selectionRequest.path),
           {
             method: "POST",
             credentials: "same-origin",
@@ -2775,7 +2792,7 @@ export function BrowserGatewayApp({
               "Content-Type": "application/json",
               Authorization: `Bearer ${authToken}`,
             },
-            body: JSON.stringify({ model: modelId }),
+            body: JSON.stringify(selectionRequest.body),
           },
         );
         const body = (await response.json()) as {
@@ -2811,17 +2828,21 @@ export function BrowserGatewayApp({
     })();
   };
 
-  const handleSetWriteApproval = (nextMode: string): void => {
+  const handleSetWriteApproval = (nextMode: WriteApprovalSelection): void => {
     if (!nextMode) return;
     void (async () => {
       try {
-        const response = await fetch(buildApiPath("/api/write-approval"), {
+        const selectionRequest = toHttpSelectionRequest({
+          type: "writeApproval",
+          mode: nextMode,
+        });
+        const response = await fetch(buildApiPath(selectionRequest.path), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify({ mode: nextMode }),
+          body: JSON.stringify(selectionRequest.body),
         });
         const body = (await response.json()) as {
           ok?: boolean;
@@ -3820,7 +3841,7 @@ export function BrowserGatewayApp({
 
       if (command === "agentSetWriteApproval") {
         const writeApprovalMode = String(data.mode ?? "").trim();
-        if (writeApprovalMode) {
+        if (isWriteApprovalSelection(writeApprovalMode)) {
           handleSetWriteApproval(writeApprovalMode);
         }
         return;

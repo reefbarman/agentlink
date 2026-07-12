@@ -47,6 +47,7 @@ import { ModelSelector } from "./ModelSelector";
 import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
 import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
+import type { WriteApprovalSelection } from "../../../shared/selectionCommands";
 import { WriteApprovalSelector } from "./WriteApprovalSelector";
 import { randomId } from "../../../shared/randomId";
 import { useEmojiPopup } from "./useEmojiPopup";
@@ -169,8 +170,8 @@ interface InputAreaProps {
   onSelectModel?: (modelId: string) => void;
   onSetCondenseThreshold?: (threshold: number) => void;
   onSignIn?: (provider: string) => void;
-  agentWriteApproval?: string;
-  onSetAgentWriteApproval?: (mode: string) => void;
+  agentWriteApproval?: WriteApprovalSelection;
+  onSetAgentWriteApproval?: (mode: WriteApprovalSelection) => void;
   autoContinueEnabled?: boolean;
   onToggleAutoContinue?: (enabled: boolean) => void;
   autoContinueStatus?: string;

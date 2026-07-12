@@ -4,6 +4,8 @@ import {
 } from "../../../shared/ui/ToolbarSelector";
 import { useEffect, useRef, useState } from "preact/hooks";
 
+import type { WriteApprovalSelection } from "../../../shared/selectionCommands";
+
 const WRITE_APPROVAL_OPTIONS = [
   { value: "prompt", label: "Prompt", icon: "shield" },
   { value: "session", label: "Session", icon: "clock" },
@@ -12,9 +14,9 @@ const WRITE_APPROVAL_OPTIONS = [
 ] as const;
 
 interface WriteApprovalSelectorProps {
-  current: string;
+  current: WriteApprovalSelection;
   disabled?: boolean;
-  onSelect: (value: string) => void;
+  onSelect: (value: WriteApprovalSelection) => void;
 }
 
 export function WriteApprovalSelector({
@@ -41,7 +43,7 @@ export function WriteApprovalSelector({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const handleSelect = (value: string) => {
+  const handleSelect = (value: WriteApprovalSelection) => {
     setOpen(false);
     if (value !== current) onSelect(value);
   };
