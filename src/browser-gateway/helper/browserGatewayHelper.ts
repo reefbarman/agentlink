@@ -164,8 +164,12 @@ import {
 import {
   matchAskAgentRoute,
   matchInternalCoreRoute,
+  matchInternalDeviceRoute,
+  matchPairedBrowserRoute,
   type AskAgentRouteHandler,
   type InternalCoreRouteHandler,
+  type InternalDeviceRouteHandler,
+  type PairedBrowserRouteHandler,
 } from "./helperRouteFamilies.js";
 
 export interface HelperRuntimeOptions {
@@ -875,13 +879,9 @@ export class BrowserGatewayHelper {
       return;
     }
 
-    // Public pairing endpoints (no cookie required — that's the whole point).
-    if (method === "GET" && pathname === "/pair") {
-      void this.handlePairingPageGet(res, null);
-      return;
-    }
-    if (method === "POST" && pathname === "/pair") {
-      void this.handlePairingPagePost(req, res);
+    const pairedBrowserRoute = matchPairedBrowserRoute(method, pathname);
+    if (pairedBrowserRoute) {
+      void this.handlePairedBrowserRoute(pairedBrowserRoute.handler, req, res);
       return;
     }
 
@@ -1120,27 +1120,50 @@ export class BrowserGatewayHelper {
       });
       return;
     }
-    if (method === "POST" && pathname === "/internal/pairing/create") {
-      await this.handlePairingCreate(req, res);
-      return;
-    }
-    if (method === "POST" && pathname === "/internal/pairing/cancel") {
-      await this.handlePairingCancel(req, res);
-      return;
-    }
-    if (method === "GET" && pathname === "/internal/pairing/status") {
-      await this.handlePairingStatus(requestUrl, res);
-      return;
-    }
-    if (method === "GET" && pathname === "/internal/devices") {
-      await this.handleDevicesList(res);
-      return;
-    }
-    if (method === "POST" && pathname === "/internal/devices/revoke") {
-      await this.handleDevicesRevoke(req, res);
+    const internalDeviceRoute = matchInternalDeviceRoute(method, pathname);
+    if (internalDeviceRoute) {
+      await this.handleInternalDeviceRoute(
+        internalDeviceRoute.handler,
+        req,
+        res,
+        requestUrl,
+      );
       return;
     }
     writeJson(res, 404, { error: "not_found" });
+  }
+
+  private async handlePairedBrowserRoute(
+    handler: PairedBrowserRouteHandler,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    switch (handler) {
+      case "pairGet":
+        return this.handlePairingPageGet(res, null);
+      case "pairPost":
+        return this.handlePairingPagePost(req, res);
+    }
+  }
+
+  private async handleInternalDeviceRoute(
+    handler: InternalDeviceRouteHandler,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    requestUrl: URL,
+  ): Promise<void> {
+    switch (handler) {
+      case "pairingCreate":
+        return this.handlePairingCreate(req, res);
+      case "pairingCancel":
+        return this.handlePairingCancel(req, res);
+      case "pairingStatus":
+        return this.handlePairingStatus(requestUrl, res);
+      case "devices":
+        return this.handleDevicesList(res);
+      case "deviceRevoke":
+        return this.handleDevicesRevoke(req, res);
+    }
   }
 
   private async handleInternalCoreRoute(

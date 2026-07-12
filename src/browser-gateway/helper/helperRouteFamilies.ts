@@ -236,6 +236,58 @@ export function matchInternalCoreRoute(
   return matchExactRoute(INTERNAL_CORE_ROUTES, method, pathname);
 }
 
+export type PairedBrowserRouteHandler = "pairGet" | "pairPost";
+
+export const PAIRED_BROWSER_ROUTES = [
+  { method: "GET", path: "/pair", handler: "pairGet" },
+  { method: "POST", path: "/pair", handler: "pairPost" },
+] as const satisfies readonly HelperExactRoute<PairedBrowserRouteHandler>[];
+
+export function matchPairedBrowserRoute(
+  method: string,
+  pathname: string,
+): HelperRouteMatch<PairedBrowserRouteHandler> | null {
+  return matchExactRoute(PAIRED_BROWSER_ROUTES, method, pathname);
+}
+
+export type InternalDeviceRouteHandler =
+  | "pairingCreate"
+  | "pairingCancel"
+  | "pairingStatus"
+  | "devices"
+  | "deviceRevoke";
+
+export const INTERNAL_DEVICE_ROUTES = [
+  {
+    method: "POST",
+    path: "/internal/pairing/create",
+    handler: "pairingCreate",
+  },
+  {
+    method: "POST",
+    path: "/internal/pairing/cancel",
+    handler: "pairingCancel",
+  },
+  {
+    method: "GET",
+    path: "/internal/pairing/status",
+    handler: "pairingStatus",
+  },
+  { method: "GET", path: "/internal/devices", handler: "devices" },
+  {
+    method: "POST",
+    path: "/internal/devices/revoke",
+    handler: "deviceRevoke",
+  },
+] as const satisfies readonly HelperExactRoute<InternalDeviceRouteHandler>[];
+
+export function matchInternalDeviceRoute(
+  method: string,
+  pathname: string,
+): HelperRouteMatch<InternalDeviceRouteHandler> | null {
+  return matchExactRoute(INTERNAL_DEVICE_ROUTES, method, pathname);
+}
+
 function matchExactRoute<THandler extends string>(
   routes: readonly HelperExactRoute<THandler>[],
   method: string,
