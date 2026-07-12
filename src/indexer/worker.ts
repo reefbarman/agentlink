@@ -50,11 +50,12 @@ import {
   readFilesBatch,
   type FileWithContent,
 } from "./workerLib.js";
+import { checkpointRemovedFileCaches } from "./removedFileDeletion.js";
 import {
-  checkpointRemovedFileCaches,
-  executeRemovedFileDeletes,
-  planRemovedFileDeletes,
-} from "./removedFileDeletion.js";
+  getFileIndexJournalPath,
+  loadFileIndexJournal,
+} from "./fileIndexJournal.js";
+import { executeJournaledRemovedFileDeletes } from "./journaledRemovedFileDeletion.js";
 import { extractStructuralFile } from "./structuralExtractor.js";
 import type { StructuralGraphCache } from "./structuralGraph.js";
 import type {
@@ -277,6 +278,8 @@ function updateStructuralCacheForFiles(
 
 async function removeFilesFromIndex(args: {
   relPaths: string[];
+  cachePath: string;
+  structuralCachePath: string;
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
   qdrantUrl: string;
@@ -286,33 +289,57 @@ async function removeFilesFromIndex(args: {
   errors: string[];
   pointsDeleted: number;
   cancelled: boolean;
+  pending: boolean;
 }> {
-  const plans = planRemovedFileDeletes(
-    args.relPaths.map((relPath) => ({
-      relPath,
+  const result = await executeJournaledRemovedFileDeletes({
+    journalPath: getFileIndexJournalPath(args.cachePath),
+    requestedFiles: args.relPaths.map((relPath) => ({
+      relPath: toJournalPath(relPath),
       pointIds: args.cache.files[relPath]?.pointIds ?? [],
     })),
-  );
-  const result = await executeRemovedFileDeletes(plans, {
     deleteBatch: (pointIds) =>
       deleteQdrantPoints(args.qdrantUrl, args.collectionName, pointIds),
+    checkpointCompleted: (journalPaths) => {
+      for (const journalPath of journalPaths) {
+        const relPath = fromJournalPath(journalPath);
+        delete args.cache.files[relPath];
+        delete args.structuralCache.files[relPath];
+      }
+      args.structuralCache.generatedAt = new Date().toISOString();
+      checkpointRemovedFileCaches({
+        writeStructuralCache: () =>
+          writeStructuralCache(args.structuralCachePath, args.structuralCache),
+        writeVectorCache: () => writeCache(args.cachePath, args.cache),
+      });
+    },
     isCancelled: () => aborted,
+    createId: randomUUID,
   });
-
-  for (const relPath of result.completedRelPaths) {
-    delete args.cache.files[relPath];
-    delete args.structuralCache.files[relPath];
-  }
-  if (result.completedRelPaths.length > 0) {
-    args.structuralCache.generatedAt = new Date().toISOString();
-  }
 
   return {
     completed: result.completedRelPaths.length,
     errors: result.errors,
     pointsDeleted: result.pointsDeleted,
     cancelled: result.cancelled,
+    pending: result.pending,
   };
+}
+
+function toJournalPath(relPath: string): string {
+  return relPath.split(path.sep).join(path.posix.sep);
+}
+
+function fromJournalPath(journalPath: string): string {
+  return journalPath.split(path.posix.sep).join(path.sep);
+}
+
+function hasDurableRemovalOperations(cachePath: string): boolean {
+  const loaded = loadFileIndexJournal(getFileIndexJournalPath(cachePath));
+  return (
+    loaded.status === "valid" &&
+    loaded.journal.operations.length > 0 &&
+    loaded.journal.operations.every((operation) => operation.kind === "remove")
+  );
 }
 
 async function backfillStructuralCacheForCachedFiles(args: {
@@ -604,10 +631,45 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         collectionName: msg.collectionName,
       });
 
+    const cache = loadCache(msg.cachePath);
+
+    // Recovery deletes are idempotent but still require the collection to exist.
+    if (hasDurableRemovalOperations(msg.cachePath)) {
+      await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
+    }
+    const recovery = await removeFilesFromIndex({
+      relPaths: [],
+      cachePath: msg.cachePath,
+      structuralCachePath,
+      cache,
+      structuralCache,
+      qdrantUrl: msg.qdrantUrl,
+      collectionName: msg.collectionName,
+    });
+    pointsDeleted += recovery.pointsDeleted;
+    errors.push(...recovery.errors);
+    if (recovery.pending || recovery.cancelled) {
+      sendComplete({
+        filesIndexed,
+        totalFilesInIndex: Object.keys(cache.files).length,
+        chunksCreated,
+        totalChunksInIndex: countCachedChunks(cache),
+        pointsUpserted,
+        pointsDeleted,
+        durationMs: Date.now() - startTime,
+        errors,
+        cancelled: recovery.cancelled || undefined,
+      });
+      return;
+    }
+
     // Force re-index: delete collection and clear cache
     if (msg.force) {
       await deleteQdrantCollection(msg.qdrantUrl, msg.collectionName);
-      writeCache(msg.cachePath, { version: 1, files: {} });
+      cache.version = 1;
+      cache.files = {};
+      delete cache.granularity;
+      writeCache(msg.cachePath, cache);
       resetStructuralCache(
         structuralCache,
         msg.workspaceRoot,
@@ -616,11 +678,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       writeStructuralCache(structuralCachePath, structuralCache);
     }
 
-    // Ensure Qdrant collection exists
+    // Ensure Qdrant collection exists after any force reset.
     await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
-
-    // Load cache
-    const cache = loadCache(msg.cachePath);
 
     // Granularity change → force full re-index
     // Treat undefined (old cache) as "standard" to avoid unnecessary re-index
@@ -675,6 +734,8 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       sendProgress("cleanup", 0, removedRelPaths.length);
       const removal = await removeFilesFromIndex({
         relPaths: removedRelPaths,
+        cachePath: msg.cachePath,
+        structuralCachePath,
         cache,
         structuralCache,
         qdrantUrl: msg.qdrantUrl,
@@ -683,12 +744,19 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       pointsDeleted += removal.pointsDeleted;
       errors.push(...removal.errors);
       sendProgress("cleanup", removal.completed, removedRelPaths.length);
-      if (removal.completed > 0) {
-        checkpointRemovedFileCaches({
-          writeStructuralCache: () =>
-            writeStructuralCache(structuralCachePath, structuralCache),
-          writeVectorCache: () => writeCache(msg.cachePath, cache),
+      if (removal.pending || removal.cancelled) {
+        sendComplete({
+          filesIndexed,
+          totalFilesInIndex: Object.keys(cache.files).length,
+          chunksCreated,
+          totalChunksInIndex: countCachedChunks(cache),
+          pointsUpserted,
+          pointsDeleted,
+          durationMs: Date.now() - startTime,
+          errors,
+          cancelled: removal.cancelled || undefined,
         });
+        return;
       }
     }
 
@@ -854,6 +922,34 @@ async function handleIncrementalUpdate(
         workspaceRoot: msg.workspaceRoot,
         collectionName: msg.collectionName,
       });
+    if (hasDurableRemovalOperations(msg.cachePath)) {
+      await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
+    }
+    const recovery = await removeFilesFromIndex({
+      relPaths: [],
+      cachePath: msg.cachePath,
+      structuralCachePath,
+      cache,
+      structuralCache,
+      qdrantUrl: msg.qdrantUrl,
+      collectionName: msg.collectionName,
+    });
+    pointsDeleted += recovery.pointsDeleted;
+    errors.push(...recovery.errors);
+    if (recovery.pending || recovery.cancelled) {
+      sendComplete({
+        filesIndexed,
+        totalFilesInIndex: Object.keys(cache.files).length,
+        chunksCreated,
+        totalChunksInIndex: countCachedChunks(cache),
+        pointsUpserted,
+        pointsDeleted,
+        durationMs: Date.now() - startTime,
+        errors,
+        cancelled: recovery.cancelled || undefined,
+      });
+      return;
+    }
 
     // Handle removed files. Cache ownership is released only after every
     // bounded Qdrant delete batch for that file succeeds.
@@ -867,6 +963,8 @@ async function handleIncrementalUpdate(
             !relPath.startsWith(`..${path.sep}`) &&
             !path.isAbsolute(relPath),
         ),
+      cachePath: msg.cachePath,
+      structuralCachePath,
       cache,
       structuralCache,
       qdrantUrl: msg.qdrantUrl,
@@ -874,14 +972,7 @@ async function handleIncrementalUpdate(
     });
     pointsDeleted += removal.pointsDeleted;
     errors.push(...removal.errors);
-    if (removal.completed > 0) {
-      checkpointRemovedFileCaches({
-        writeStructuralCache: () =>
-          writeStructuralCache(structuralCachePath, structuralCache),
-        writeVectorCache: () => writeCache(msg.cachePath, cache),
-      });
-    }
-    if (removal.cancelled) {
+    if (removal.pending || removal.cancelled) {
       sendComplete({
         filesIndexed,
         totalFilesInIndex: Object.keys(cache.files).length,
@@ -891,7 +982,7 @@ async function handleIncrementalUpdate(
         pointsDeleted,
         durationMs: Date.now() - startTime,
         errors,
-        cancelled: true,
+        cancelled: removal.cancelled || undefined,
       });
       return;
     }

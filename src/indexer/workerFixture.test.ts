@@ -12,6 +12,12 @@ import {
   onTestFinished,
 } from "vitest";
 
+import {
+  emptyFileIndexJournal,
+  getFileIndexJournalPath,
+  loadFileIndexJournal,
+  writeFileIndexJournal,
+} from "./fileIndexJournal.js";
 import type {
   ExtensionToWorkerMessage,
   IndexStats,
@@ -500,6 +506,57 @@ describe("indexer worker fixture", () => {
       expect(stats.cancelled).toBe(true);
       expect(stats.pointsDeleted).toBe(256);
       expect(readCachedPointIds(cachePath, "removed.sql")).toEqual(pointIds);
+      expect(
+        loadFileIndexJournal(getFileIndexJournalPath(cachePath)),
+      ).toMatchObject({
+        status: "valid",
+        journal: {
+          operations: [
+            { file: "removed.sql", kind: "remove", oldPointIds: pointIds },
+          ],
+        },
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "stops changed-file work when cancellation arrives during the final removed-file delete",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const changed = writeSource(root, "changed.sql", sourceContent(1));
+      const removed = path.join(root, "removed.sql");
+      writeCacheEntry(cachePath, "removed.sql", ["removed-point"]);
+      const completion = fixture.waitFor("complete");
+      fixture.send({
+        type: "incrementalUpdate",
+        added: [changed],
+        removed: [removed],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/delete-delay",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+      await fixture.waitFor(
+        "fixtureFetch",
+        (message) => message.operation === "qdrantDelete",
+      );
+      fixture.send({ type: "cancel" });
+
+      const stats = (await completion).stats;
+      expect(stats.cancelled).toBe(true);
+      expect(stats.pointsDeleted).toBe(1);
+      expect(stats.pointsUpserted).toBe(0);
+      expect(readCachedPointIds(cachePath, "removed.sql")).toBeNull();
+      expect(readCachedPointIds(cachePath, "changed.sql")).toBeNull();
+      expect(loadFileIndexJournal(getFileIndexJournalPath(cachePath))).toEqual({
+        status: "valid",
+        journal: emptyFileIndexJournal(),
+      });
+      expect(stats.metrics!.operations["qdrant.upsertPoints"]).toBe(0);
     },
     TEST_TIMEOUT_MS,
   );
@@ -533,6 +590,105 @@ describe("indexer worker fixture", () => {
         expect.stringContaining("fixture delete failure"),
       ]);
       expect(readCachedPointIds(cachePath, "removed.sql")).toEqual(pointIds);
+      expect(
+        loadFileIndexJournal(getFileIndexJournalPath(cachePath)),
+      ).toMatchObject({
+        status: "valid",
+        journal: {
+          operations: [
+            { file: "removed.sql", kind: "remove", oldPointIds: pointIds },
+          ],
+        },
+      });
+
+      await stopChild(fixture.child);
+      const recoveryFixture = await createFixture();
+      const recovered = await recoveryFixture.complete({
+        type: "incrementalUpdate",
+        added: [],
+        removed: [],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/success",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+
+      expect(recovered.errors).toEqual([]);
+      expect(recovered.pointsDeleted).toBe(600);
+      expect(readCachedPointIds(cachePath, "removed.sql")).toBeNull();
+      expect(loadFileIndexJournal(getFileIndexJournalPath(cachePath))).toEqual({
+        status: "valid",
+        journal: emptyFileIndexJournal(),
+      });
+      expect(
+        recoveryFixture.messages
+          .filter(
+            (
+              message,
+            ): message is Extract<
+              FixtureFetchObservation,
+              { operation: "qdrantDelete" }
+            > =>
+              message.type === "fixtureFetch" &&
+              message.operation === "qdrantDelete",
+          )
+          .map((message) => message.pointCount),
+      ).toEqual([256, 256, 88]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "fails closed before worker mutations for unsupported replacement recovery",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      writeCacheEntry(cachePath, "changed.sql", ["old-point"]);
+      writeFileIndexJournal(getFileIndexJournalPath(cachePath), {
+        ...emptyFileIndexJournal(),
+        operations: [
+          {
+            operationId: "replace-1",
+            file: "changed.sql",
+            kind: "replace",
+            generation: "generation-2",
+            targetHash: "target-hash",
+            oldPointIds: ["old-point"],
+            intendedBatches: [{ batch: 0, pointIds: ["new-point"] }],
+          },
+        ],
+      });
+      const error = fixture.waitFor("error");
+      fixture.send({
+        type: "incrementalUpdate",
+        added: [],
+        removed: [],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/success",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+
+      await expect(error).resolves.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining(
+          "Replacement journal recovery is not implemented for changed.sql",
+        ),
+      });
+      expect(readCachedPointIds(cachePath, "changed.sql")).toEqual([
+        "old-point",
+      ]);
+      expect(
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "qdrantDelete",
+        ),
+      ).toEqual([]);
     },
     TEST_TIMEOUT_MS,
   );
