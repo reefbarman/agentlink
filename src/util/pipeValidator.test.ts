@@ -561,6 +561,27 @@ describe("validateCommand", () => {
       expect(result!.strippedCommand).toBe("ls -la");
     });
 
+    it("preserves quoted and escaped pipe characters", () => {
+      expect(validateCommand(`echo "not | head"`)).toBeNull();
+      expect(validateCommand(`echo 'not | head'`)).toBeNull();
+      expect(validateCommand(String.raw`echo not\|head`)).toBeNull();
+    });
+
+    it("keeps logical OR distinct from pipe filtering", () => {
+      expect(validateCommand("git status || head README.md")?.type).toBe(
+        "direct",
+      );
+      expect(validateCommand("git status || echo clean")).toBeNull();
+    });
+
+    it("retains comments and newlines as ordinary pipe-validator source", () => {
+      expect(validateCommand("echo ok # apparent comment | head")?.type).toBe(
+        "pipe",
+      );
+      expect(validateCommand("echo ok\nhead README.md")).toBeNull();
+      expect(validateCommand("echo ok\nnext | head")?.type).toBe("pipe");
+    });
+
     it("rejects piped tail", () => {
       const result = validateCommand("git log | tail -20");
       expect(result).not.toBeNull();
@@ -677,6 +698,30 @@ describe("validateCommand", () => {
   describe("edge cases", () => {
     it("handles empty command", () => {
       expect(validateCommand("")).toBeNull();
+    });
+
+    it("preserves malformed quote and dangling-escape behavior", () => {
+      expect(validateCommand(`echo "unterminated | head`)).toBeNull();
+      expect(validateCommand("echo trailing\\")).toBeNull();
+      expect(validateCommand("echo trailing\\ | head")?.type).toBe("pipe");
+    });
+
+    it("distinguishes output redirection from quoted, escaped, and FD forms", () => {
+      expect(validateCommand("echo result > out.txt")?.type).toBe("direct");
+      expect(validateCommand(`echo "> out.txt"`)).toBeNull();
+      expect(validateCommand(String.raw`echo \> out.txt`)).toBeNull();
+      expect(validateCommand("echo result >&2")).toBeNull();
+      expect(validateCommand("printf result 2>&1")).toBeNull();
+    });
+
+    it("preserves raw quoted and escaped tokens for policy parsing", () => {
+      const quoted = validateCommand(`command | grep "two words"`);
+      expect(quoted?.type).toBe("pipe");
+      expect(quoted?.message).toContain('output_grep: "two words"');
+
+      const escaped = validateCommand(String.raw`command | grep two\ words`);
+      expect(escaped?.type).toBe("pipe");
+      expect(escaped?.message).toContain(String.raw`output_grep: "two\ words"`);
     });
 
     it("handles whitespace-only command", () => {

@@ -7,6 +7,8 @@
  * a helpful message suggesting the correct tool or parameters.
  */
 
+import { scanShellLexBoundaries, scanShellLexWords } from "./shellLex.js";
+
 interface PipeViolation {
   /** The piped command name (head, tail, grep) */
   command: string;
@@ -734,68 +736,13 @@ function hasOutputRedirection(command: string): boolean {
  * Does NOT split on | (single pipe) — that's handled by the pipe validator.
  */
 function splitOnCompoundOperators(command: string): string[] {
-  const segments: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-  let i = 0;
-
-  while (i < command.length) {
-    const ch = command[i];
-
-    // Backslash escape
-    if (ch === "\\" && i + 1 < command.length) {
-      current += ch + command[i + 1];
-      i += 2;
-      continue;
-    }
-
-    // Quote tracking
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      current += ch;
-      i++;
-      continue;
-    }
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    if (!inSingle && !inDouble) {
-      // && operator
-      if (ch === "&" && i + 1 < command.length && command[i + 1] === "&") {
-        segments.push(current);
-        current = "";
-        i += 2;
-        continue;
-      }
-
-      // || operator
-      if (ch === "|" && i + 1 < command.length && command[i + 1] === "|") {
-        segments.push(current);
-        current = "";
-        i += 2;
-        continue;
-      }
-
-      // ; separator
-      if (ch === ";") {
-        segments.push(current);
-        current = "";
-        i++;
-        continue;
-      }
-    }
-
-    current += ch;
-    i++;
-  }
-
-  segments.push(current);
-  return segments;
+  return splitAtBoundaries(
+    command,
+    scanShellLexBoundaries(command, {
+      separators: ["&&", "||", ";"],
+      comments: false,
+    }).boundaries,
+  );
 }
 
 /**
@@ -1146,55 +1093,26 @@ function stripQuotes(s: string): string {
  * Does NOT split on || (logical OR).
  */
 function splitOnUnquotedPipes(command: string): string[] {
+  return splitAtBoundaries(
+    command,
+    scanShellLexBoundaries(command, {
+      separators: ["|"],
+      comments: false,
+    }).boundaries,
+  );
+}
+
+function splitAtBoundaries(
+  command: string,
+  boundaries: ReturnType<typeof scanShellLexBoundaries>["boundaries"],
+): string[] {
   const segments: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-  let i = 0;
-
-  while (i < command.length) {
-    const ch = command[i];
-
-    // Backslash escape
-    if (ch === "\\" && i + 1 < command.length) {
-      current += ch + command[i + 1];
-      i += 2;
-      continue;
-    }
-
-    // Quote tracking
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      current += ch;
-      i++;
-      continue;
-    }
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    // Pipe — only outside quotes
-    if (ch === "|" && !inSingle && !inDouble) {
-      // Skip || (logical OR)
-      if (i + 1 < command.length && command[i + 1] === "|") {
-        current += "||";
-        i += 2;
-        continue;
-      }
-      segments.push(current);
-      current = "";
-      i++;
-      continue;
-    }
-
-    current += ch;
-    i++;
+  let start = 0;
+  for (const boundary of boundaries) {
+    segments.push(command.slice(start, boundary.start));
+    start = boundary.end;
   }
-
-  segments.push(current);
+  segments.push(command.slice(start));
   return segments;
 }
 
@@ -1202,43 +1120,5 @@ function splitOnUnquotedPipes(command: string): string[] {
  * Simple tokenizer: split on whitespace, respecting quotes and escapes.
  */
 function tokenize(input: string): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-
-    if (ch === "\\" && i + 1 < input.length && !inSingle) {
-      current += ch + input[i + 1];
-      i++;
-      continue;
-    }
-
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      current += ch;
-      continue;
-    }
-
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      current += ch;
-      continue;
-    }
-
-    if (/\s/.test(ch) && !inSingle && !inDouble) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += ch;
-  }
-
-  if (current) tokens.push(current);
-  return tokens;
+  return scanShellLexWords(input).words.map(({ raw }) => raw);
 }
