@@ -28,6 +28,37 @@ describe("scanShellLexBoundaries", () => {
     ]);
   });
 
+  it("does not reinterpret disallowed longest-match separators", () => {
+    expect(
+      scanShellLexBoundaries("left || right", {
+        separators: ["|"],
+        comments: false,
+      }).boundaries,
+    ).toEqual([]);
+    expect(
+      scanShellLexBoundaries("left | right", {
+        separators: ["||"],
+        comments: false,
+      }).boundaries,
+    ).toEqual([]);
+  });
+
+  it("supports a compound-only dialect without comments", () => {
+    const input = "left | middle\n# text; right || fallback";
+    expect(
+      scanShellLexBoundaries(input, {
+        separators: ["&&", "||", ";"],
+        comments: false,
+      }),
+    ).toEqual({
+      boundaries: [
+        { kind: "separator", operator: ";", start: 20, end: 21 },
+        { kind: "separator", operator: "||", start: 28, end: 30 },
+      ],
+      finalState: { quote: null, danglingEscape: false },
+    });
+  });
+
   it("returns source spans for separators and comments", () => {
     const input = "echo one && echo two # ignored\necho three | wc -l";
 

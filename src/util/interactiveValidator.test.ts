@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+
 import { validateInteractiveCommand } from "./interactiveValidator.js";
 
 describe("validateInteractiveCommand", () => {
@@ -445,6 +446,61 @@ describe("validateInteractiveCommand", () => {
       expect(result!.message).toContain("interactive editor");
     });
 
+    it.each(["&&", "||", ";"])(
+      "splits on %s and returns the first interactive violation",
+      (operator) => {
+        const result = validateInteractiveCommand(
+          `vim first ${operator} nano second`,
+        );
+        expect(result?.message).toContain('"vim" is an interactive editor');
+        expect(result?.message).not.toContain('"nano"');
+      },
+    );
+
+    it("preserves quoted and escaped compound operators", () => {
+      expect(
+        validateInteractiveCommand(`echo "safe && python"; echo safe\\;still`),
+      ).toBeNull();
+      expect(
+        validateInteractiveCommand(String.raw`echo 'safe\'; python`),
+      ).toBeNull();
+    });
+
+    it("does not treat pipes, newlines, or comments as compound boundaries", () => {
+      expect(validateInteractiveCommand("echo safe | python")).toBeNull();
+      expect(validateInteractiveCommand("echo safe\npython")).toBeNull();
+      expect(
+        validateInteractiveCommand("echo safe # ignored; python"),
+      ).not.toBeNull();
+    });
+
+    it("skips empty compound segments", () => {
+      expect(validateInteractiveCommand(";; && ; npm test || ;")).toBeNull();
+    });
+
+    it("preserves permissive malformed compound input", () => {
+      expect(validateInteractiveCommand(`echo "safe && python`)).toBeNull();
+      expect(validateInteractiveCommand("echo trailing\\")).toBeNull();
+      expect(validateInteractiveCommand(`vim "unterminated`)).not.toBeNull();
+      expect(validateInteractiveCommand("vim trailing\\")).not.toBeNull();
+    });
+
+    it("returns the first violation across different interaction policies", () => {
+      const replFirst = validateInteractiveCommand("python && vim file");
+      expect(replFirst?.message).toContain("interactive REPL");
+      expect(replFirst?.message).not.toContain("interactive editor");
+
+      const editorFirst = validateInteractiveCommand("vim file || python");
+      expect(editorFirst?.message).toContain("interactive editor");
+      expect(editorFirst?.message).not.toContain("interactive REPL");
+
+      const strictFirst = validateInteractiveCommand(
+        "set -u; git commit; python",
+      );
+      expect(strictFirst?.message).toContain("nounset modifies");
+      expect(strictFirst?.message).not.toContain("git commit");
+    });
+
     it("allows compound commands that are all safe", () => {
       expect(
         validateInteractiveCommand("npm install && npm run build && npm test"),
@@ -474,6 +530,15 @@ describe("validateInteractiveCommand", () => {
         validateInteractiveCommand("sudo npm install -g typescript"),
       ).toBeNull();
     });
+
+    it("preserves sudo flags with quoted and escaped values", () => {
+      expect(
+        validateInteractiveCommand(`sudo -u "root user" vim file`),
+      ).not.toBeNull();
+      expect(
+        validateInteractiveCommand(String.raw`sudo -u root\ user vim file`),
+      ).not.toBeNull();
+    });
   });
 
   // ── Env var prefix handling ──────────────────────────────────────
@@ -482,6 +547,15 @@ describe("validateInteractiveCommand", () => {
     it("rejects NODE_ENV=prod python (bare REPL with env prefix)", () => {
       expect(
         validateInteractiveCommand("NODE_ENV=production python"),
+      ).not.toBeNull();
+    });
+
+    it("preserves quoted and escaped assignment values as single tokens", () => {
+      expect(
+        validateInteractiveCommand(`MESSAGE="two words" python`),
+      ).not.toBeNull();
+      expect(
+        validateInteractiveCommand(String.raw`MESSAGE=two\ words python`),
       ).not.toBeNull();
     });
 

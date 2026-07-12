@@ -1,3 +1,5 @@
+import { scanShellLexBoundaries, scanShellLexWords } from "./shellLex.js";
+
 /**
  * Validate commands for known interactive patterns that would hang in an
  * automated terminal session. Returns null if the command is safe, or a
@@ -288,7 +290,7 @@ export function validateInteractiveCommand(
 }
 
 function checkSingleCommand(command: string): InteractiveViolation | null {
-  const tokens = tokenize(command);
+  const tokens = scanShellLexWords(command).words.map(({ raw }) => raw);
   if (tokens.length === 0) return null;
 
   // Skip env var prefixes (FOO=bar cmd ...)
@@ -511,59 +513,17 @@ function checkSingleCommand(command: string): InteractiveViolation | null {
  */
 function splitOnCompoundOperators(command: string): string[] {
   const segments: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-  let i = 0;
+  let segmentStart = 0;
+  const { boundaries } = scanShellLexBoundaries(command, {
+    separators: ["&&", "||", ";"],
+    comments: false,
+  });
 
-  while (i < command.length) {
-    const ch = command[i];
-
-    if (ch === "\\" && i + 1 < command.length) {
-      current += ch + command[i + 1];
-      i += 2;
-      continue;
-    }
-
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      current += ch;
-      i++;
-      continue;
-    }
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      current += ch;
-      i++;
-      continue;
-    }
-
-    if (!inSingle && !inDouble) {
-      if (ch === "&" && i + 1 < command.length && command[i + 1] === "&") {
-        segments.push(current);
-        current = "";
-        i += 2;
-        continue;
-      }
-      if (ch === "|" && i + 1 < command.length && command[i + 1] === "|") {
-        segments.push(current);
-        current = "";
-        i += 2;
-        continue;
-      }
-      if (ch === ";") {
-        segments.push(current);
-        current = "";
-        i++;
-        continue;
-      }
-    }
-
-    current += ch;
-    i++;
+  for (const boundary of boundaries) {
+    segments.push(command.slice(segmentStart, boundary.start));
+    segmentStart = boundary.end;
   }
-
-  segments.push(current);
+  segments.push(command.slice(segmentStart));
   return segments;
 }
 
@@ -623,49 +583,4 @@ function hasUnsafeStrictShellOptions(cmd: string, args: string[]): boolean {
   }
 
   return false;
-}
-
-/**
- * Simple tokenizer: split on whitespace, respecting quotes and escapes.
- */
-function tokenize(input: string): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-
-    if (ch === "\\" && i + 1 < input.length && !inSingle) {
-      current += ch + input[i + 1];
-      i++;
-      continue;
-    }
-
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      current += ch;
-      continue;
-    }
-
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      current += ch;
-      continue;
-    }
-
-    if (/\s/.test(ch) && !inSingle && !inDouble) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += ch;
-  }
-
-  if (current) tokens.push(current);
-  return tokens;
 }

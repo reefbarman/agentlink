@@ -1,9 +1,11 @@
 export type ShellLexQuote = "single" | "double";
 
+export type ShellLexSeparator = "&&" | "||" | "|" | ";" | "\n";
+
 export type ShellLexBoundary =
   | {
       kind: "separator";
-      operator: "&&" | "||" | "|" | ";" | "\n";
+      operator: ShellLexSeparator;
       start: number;
       end: number;
     }
@@ -21,6 +23,11 @@ export interface ShellLexFinalState {
 export interface ShellLexScanResult {
   boundaries: ShellLexBoundary[];
   finalState: ShellLexFinalState;
+}
+
+export interface ShellLexBoundaryOptions {
+  separators?: readonly ShellLexSeparator[];
+  comments?: boolean;
 }
 
 export interface ShellLexWord {
@@ -42,8 +49,15 @@ export interface ShellLexWordScanResult {
  * heredocs, redirections, assignments, background jobs, and PowerShell syntax
  * remain opaque source text.
  */
-export function scanShellLexBoundaries(input: string): ShellLexScanResult {
+export function scanShellLexBoundaries(
+  input: string,
+  options: ShellLexBoundaryOptions = {},
+): ShellLexScanResult {
   const boundaries: ShellLexBoundary[] = [];
+  const separators = new Set<ShellLexSeparator>(
+    options.separators ?? ["&&", "||", "|", ";", "\n"],
+  );
+  const recognizeComments = options.comments ?? true;
   let quote: ShellLexQuote | null = null;
   let danglingEscape = false;
   let segmentStart = 0;
@@ -79,6 +93,7 @@ export function scanShellLexBoundaries(input: string): ShellLexScanResult {
     }
 
     if (
+      recognizeComments &&
       ch === "#" &&
       (input.slice(segmentStart, index).trim() === "" ||
         /\s/.test(input[index - 1] ?? ""))
@@ -97,8 +112,10 @@ export function scanShellLexBoundaries(input: string): ShellLexScanResult {
       index++;
       continue;
     }
-    boundaries.push(boundary);
-    segmentStart = boundary.end;
+    if (separators.has(boundary.operator)) {
+      boundaries.push(boundary);
+      segmentStart = boundary.end;
+    }
     index = boundary.end;
   }
 
