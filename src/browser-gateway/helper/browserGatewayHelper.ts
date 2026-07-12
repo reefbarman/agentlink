@@ -28,13 +28,12 @@ import {
   BAKED_BROWSER_GATEWAY_THEME,
   readBrowserGatewayThemeCache,
 } from "../browserGatewayThemeCache.js";
-import type {
+import {
   AskAgentController,
-  AskAgentControllerPublication,
-  AskAgentControllerSnapshot,
+  type AskAgentControllerPublication,
+  type AskAgentControllerSnapshot,
+  type AskAgentControllerState,
 } from "./AskAgentController.js";
-import { freezeAskAgentControllerSnapshot } from "./AskAgentController.js";
-import { AskAgentSnapshotPublicationQueue } from "./askAgentSnapshotPublicationQueue.js";
 import {
   BROWSER_GATEWAY_HELPER_PROTOCOL_VERSION,
   type BrowserGatewayClientLeaseRequest,
@@ -76,7 +75,6 @@ import {
   type BrowserGatewayAskAgentMemoryCandidateNudge,
   type BrowserGatewayAskAgentPersistedSession,
   type BrowserGatewayAskAgentProjectHandoff,
-  type BrowserGatewayAskAgentSnapshot,
 } from "../browserGatewayAskAgentSessionStore.js";
 import { BrowserGatewayAskAgentPreferencesStore } from "../browserGatewayAskAgentPreferences.js";
 import { BrowserGatewayAskAgentHistoryStore } from "../browserGatewayAskAgentHistory.js";
@@ -563,7 +561,9 @@ type AskAgentPendingApproval = {
   resolve: (decision: DecisionMessage) => void;
 };
 
-export class BrowserGatewayHelper implements AskAgentController {
+type AskAgentSessionResponse = { readonly ok: true } & AskAgentControllerState;
+
+export class BrowserGatewayHelper {
   private readonly startedAt = new Date();
   private readonly startedAtMs = this.startedAt.getTime();
   private readonly browserBootstrapToken = randomUUID();
@@ -580,9 +580,8 @@ export class BrowserGatewayHelper implements AskAgentController {
   private readonly modelCredentialCache =
     new BrowserGatewayModelCredentialCache();
   private modelCatalogSnapshot: CoreModelCatalogSnapshot | null = null;
-  private readonly askAgentSessionStore: BrowserGatewayAskAgentSessionStore;
+  private readonly askAgentController: AskAgentController;
   private readonly askAgentEventClients = new Set<http.ServerResponse>();
-  private readonly askAgentSnapshotQueue: AskAgentSnapshotPublicationQueue<AskAgentControllerSnapshot>;
   private readonly streamingMetrics: StreamingBaselineMetrics;
   private readonly askAgentModelClient: Pick<
     BrowserGatewayAskAgentModelClient,
@@ -635,6 +634,10 @@ export class BrowserGatewayHelper implements AskAgentController {
   private lastLeaseActivityAtMs = Date.now();
   private readonly bindHost: string;
 
+  private get askAgentSessionStore(): BrowserGatewayAskAgentSessionStore {
+    return this.askAgentController.sessionStore;
+  }
+
   constructor(
     private readonly options: HelperRuntimeOptions,
     private readonly server: http.Server,
@@ -663,7 +666,8 @@ export class BrowserGatewayHelper implements AskAgentController {
     this.streamingMetrics =
       injectables.streamingMetrics ??
       getDevelopmentStreamingBaselineMetrics("ask-agent-helper", __DEV_BUILD__);
-    this.askAgentSnapshotQueue = new AskAgentSnapshotPublicationQueue({
+    this.askAgentController = new AskAgentController({
+      ownerRegistry: this.coreOwnerRegistry,
       coalesceMs: 20,
       byteLength: utf8ByteLength,
       publish: async (publication) => {
@@ -671,6 +675,8 @@ export class BrowserGatewayHelper implements AskAgentController {
         this.broadcastAskAgentPublication(publication);
       },
       serialize: (snapshot) => this.serializeAskAgentSnapshot(snapshot),
+      onSnapshotBuilt: (snapshot, durationMs) =>
+        this.recordAskAgentSnapshotBuild(snapshot, durationMs),
     });
     this.deviceStore = injectables.deviceStore ?? new DeviceStore();
     this.pairingBroker = injectables.pairingBroker ?? new PairingBroker();
@@ -681,9 +687,7 @@ export class BrowserGatewayHelper implements AskAgentController {
     this.askAgentHistoryStore =
       injectables.askAgentHistoryStore ??
       new BrowserGatewayAskAgentHistoryStore();
-    this.askAgentSessionStore = new BrowserGatewayAskAgentSessionStore(
-      this.coreOwnerRegistry,
-    );
+
     this.askAgentModelClient =
       injectables.askAgentModelClient ??
       new BrowserGatewayAskAgentModelClient({
@@ -1924,25 +1928,16 @@ export class BrowserGatewayHelper implements AskAgentController {
     }
   }
 
-  restoreState(
+  private restoreState(
     preferences: Parameters<
       BrowserGatewayAskAgentSessionStore["applyPreferences"]
     >[0],
     history: Parameters<BrowserGatewayAskAgentSessionStore["loadHistory"]>[0],
   ): void {
-    this.askAgentSessionStore.applyPreferences(preferences);
-    this.askAgentSessionStore.loadHistory(history);
+    this.askAgentController.restoreState(preferences, history);
   }
 
-  async buildSnapshot(): Promise<AskAgentControllerSnapshot> {
-    return freezeAskAgentControllerSnapshot(
-      (await this.buildAskAgentResponse()).snapshot,
-    );
-  }
-
-  private async buildAskAgentResponse(): Promise<
-    ReturnType<BrowserGatewayAskAgentSessionStore["getOrCreate"]>
-  > {
+  private async buildAskAgentResponse(): Promise<AskAgentSessionResponse> {
     const now = Date.now();
     return this.buildAskAgentSnapshotResponse(
       now,
@@ -2051,9 +2046,8 @@ export class BrowserGatewayHelper implements AskAgentController {
   private buildAskAgentSnapshotResponse(
     now: number,
     theme: BrowserGatewayThemeSnapshot,
-  ): ReturnType<BrowserGatewayAskAgentSessionStore["getOrCreate"]> {
-    const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
-    const response = this.askAgentSessionStore.getOrCreate({
+  ): AskAgentSessionResponse {
+    const state = this.askAgentController.projectState({
       now,
       theme,
       modelCredentialStatus: this.getAskAgentModelCredentialStatus(now),
@@ -2063,8 +2057,7 @@ export class BrowserGatewayHelper implements AskAgentController {
         null,
       memoryCandidateNudge: this.askAgentMemoryCandidateNudge,
     });
-    this.recordAskAgentSnapshotBuild(response.snapshot, startedAt);
-    return response;
+    return { ok: true, ...state };
   }
 
   private async persistAskAgentHistory(): Promise<void> {
@@ -3578,25 +3571,23 @@ export class BrowserGatewayHelper implements AskAgentController {
       this.askAgentModelClient.completeWithToolCalls?.bind(
         this.askAgentModelClient,
       );
-    const buildTurnSnapshot = () => {
-      const startedAt = this.streamingMetrics.enabled ? performance.now() : 0;
-      const snapshot = this.askAgentSessionStore.getOrCreate({
+    const buildTurnSnapshot = () =>
+      this.askAgentController.projectState({
         now: Date.now(),
         theme: params.theme,
         modelCredentialStatus: this.getAskAgentModelCredentialStatus(),
+        approval: this.askAgentPendingApproval?.request ?? null,
+        memoryCandidateNudge: this.askAgentMemoryCandidateNudge,
       }).snapshot;
-      this.recordAskAgentSnapshotBuild(snapshot, startedAt);
-      return freezeAskAgentControllerSnapshot(snapshot);
-    };
     const scheduleTurnSnapshot = () => {
-      void this.askAgentSnapshotQueue
-        .schedule(buildTurnSnapshot)
+      void this.askAgentController
+        .scheduleProjectedSnapshot(buildTurnSnapshot)
         .catch((error) => {
           logHelper(`ask-agent scheduled snapshot failed: ${error}`);
         });
     };
     const publishTurnSnapshot = async () => {
-      await this.askAgentSnapshotQueue.publishNow(buildTurnSnapshot);
+      await this.askAgentController.publishProjectedSnapshot(buildTurnSnapshot);
     };
 
     if (!completeWithToolCalls) {
@@ -4946,9 +4937,7 @@ export class BrowserGatewayHelper implements AskAgentController {
       const priorUserTexts =
         this.askAgentSessionStore.getActiveUserMessageTexts();
       const credential = this.getAskAgentModelCredential(now);
-      let response: ReturnType<
-        BrowserGatewayAskAgentSessionStore["sendMessage"]
-      > | null = null;
+      let response: AskAgentSessionResponse | null = null;
       const sendLogFields = {
         sessionId: typeof body.sessionId === "string" ? body.sessionId : "none",
         textChars: body.text.trim().length,
@@ -4996,10 +4985,12 @@ export class BrowserGatewayHelper implements AskAgentController {
           });
         activeTurn = this.createAskAgentActiveTurn(assistantMessage.id);
         this.askAgentActiveTurn = activeTurn;
-        const streamSnapshot = this.askAgentSessionStore.getOrCreate({
+        const streamSnapshot = this.askAgentController.projectState({
           now,
           theme,
           modelCredentialStatus: this.getAskAgentModelCredentialStatus(now),
+          approval: this.askAgentPendingApproval?.request ?? null,
+          memoryCandidateNudge: this.askAgentMemoryCandidateNudge,
         });
         await this.publishAskAgentSnapshot(streamSnapshot.snapshot);
         try {
@@ -5193,7 +5184,7 @@ export class BrowserGatewayHelper implements AskAgentController {
       now,
       await this.resolveInitialTheme(null),
     );
-    return await this.publishSnapshot(response.snapshot);
+    return await this.askAgentController.publishSnapshot(response.snapshot);
   }
 
   private serializeAskAgentSnapshot(
@@ -5212,19 +5203,10 @@ export class BrowserGatewayHelper implements AskAgentController {
     return serialized;
   }
 
-  publishSnapshot(
-    snapshot: AskAgentControllerSnapshot,
-  ): Promise<AskAgentControllerPublication> {
-    const committedSnapshot = freezeAskAgentControllerSnapshot(
-      snapshot as BrowserGatewayAskAgentSnapshot,
-    );
-    return this.askAgentSnapshotQueue.publishNow(() => committedSnapshot);
-  }
-
   private publishAskAgentSnapshot(
     snapshot: AskAgentControllerSnapshot,
   ): Promise<AskAgentControllerPublication> {
-    return this.publishSnapshot(snapshot);
+    return this.askAgentController.publishSnapshot(snapshot);
   }
 
   async dispose(): Promise<void> {
@@ -5235,7 +5217,7 @@ export class BrowserGatewayHelper implements AskAgentController {
       await activeTurn.settled;
     }
     await this.askAgentCancellation;
-    await this.askAgentSnapshotQueue.dispose();
+    await this.askAgentController.dispose();
   }
 
   private broadcastAskAgentPublication(
@@ -5273,14 +5255,11 @@ export class BrowserGatewayHelper implements AskAgentController {
   }
 
   private recordAskAgentSnapshotBuild(
-    snapshot: ReturnType<
-      BrowserGatewayAskAgentSessionStore["getOrCreate"]
-    >["snapshot"],
-    startedAt: number,
+    snapshot: AskAgentControllerSnapshot,
+    durationMs: number,
   ): void {
     if (!this.streamingMetrics.enabled) return;
     const messageCount = snapshot.session.foreground.projectedMessages.length;
-    const durationMs = performance.now() - startedAt;
     this.streamingMetrics.record({
       type: "snapshot_build",
       surface: "ask-agent-helper",
