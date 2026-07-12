@@ -11,6 +11,7 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 import { createHash } from "crypto";
 import { Semaphore } from "../util/Semaphore.js";
+import { writeAtomicJsonFile } from "./atomicJsonFile.js";
 import type { IndexWorkerMetrics } from "./workerMetrics.js";
 import type { IndexCache } from "./types.js";
 import {
@@ -125,9 +126,7 @@ export function loadCache(cachePath: string): IndexCache {
 }
 
 export function writeCache(cachePath: string, cache: IndexCache): void {
-  const dir = path.dirname(cachePath);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(cachePath, JSON.stringify(cache), "utf-8");
+  writeAtomicJsonFile(cachePath, cache);
 }
 
 export function loadStructuralCache(
@@ -150,11 +149,7 @@ export function writeStructuralCache(
   cachePath: string,
   cache: StructuralGraphCache,
 ): void {
-  const dir = path.dirname(cachePath);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmpPath = `${cachePath}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmpPath, JSON.stringify(cache), "utf-8");
-  fs.renameSync(tmpPath, cachePath);
+  writeAtomicJsonFile(cachePath, cache);
 }
 
 export function emptyStructuralCache(
