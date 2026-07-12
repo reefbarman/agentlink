@@ -152,6 +152,7 @@ import {
   type CoreModelCatalogSnapshot,
 } from "../../core/modelCatalog.js";
 import { readBoundedBody, readJsonBody } from "../nodeHttpPrimitives.js";
+import { SseHub, type SsePublication } from "../SseHub.js";
 import {
   MAX_MEMORY_NUDGES_PER_SESSION,
   detectMemoryCandidates,
@@ -584,7 +585,7 @@ export class BrowserGatewayHelper {
     new BrowserGatewayModelCredentialCache();
   private modelCatalogSnapshot: CoreModelCatalogSnapshot | null = null;
   private readonly askAgentController: AskAgentController;
-  private readonly askAgentEventClients = new Set<http.ServerResponse>();
+  private readonly askAgentSseHub: SseHub<AskAgentControllerSnapshot>;
   private readonly streamingMetrics: StreamingBaselineMetrics;
   private readonly askAgentModelClient: Pick<
     BrowserGatewayAskAgentModelClient,
@@ -655,6 +656,18 @@ export class BrowserGatewayHelper {
     this.streamingMetrics =
       injectables.streamingMetrics ??
       getDevelopmentStreamingBaselineMetrics("ask-agent-helper", __DEV_BUILD__);
+    this.askAgentSseHub = new SseHub({
+      serialize: (snapshot: AskAgentControllerSnapshot) =>
+        this.serializeAskAgentSnapshot(snapshot),
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+      flushHeaders: false,
+      onClientCountChanged: (clientCount) =>
+        this.recordAskAgentClientCount(clientCount),
+    });
     this.askAgentController = new AskAgentController({
       ownerRegistry: this.coreOwnerRegistry,
       coalesceMs: 20,
@@ -839,10 +852,7 @@ export class BrowserGatewayHelper {
     this.askAgentMemorySummaryControllers.clear();
 
     await this.dispose();
-    for (const client of this.askAgentEventClients) {
-      client.end();
-    }
-    this.askAgentEventClients.clear();
+    this.askAgentSseHub.dispose();
 
     if (this.mdnsAdvertiser) {
       try {
@@ -2148,26 +2158,13 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    const response = await this.buildAskAgentResponse();
-    req.socket.setTimeout(0);
-    res.socket?.setTimeout(0);
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
+    await this.askAgentSseHub.subscribe(req, res, async (signal) => {
+      const response = await this.buildAskAgentResponse();
+      if (signal.aborted) throw new Error("ask_agent_sse_capture_aborted");
+      return this.toAskAgentSsePublication(
+        await this.askAgentController.publishSnapshot(response.snapshot),
+      );
     });
-    this.askAgentEventClients.add(res);
-    this.recordAskAgentClientCount();
-    req.on("close", () => {
-      if (this.askAgentEventClients.delete(res)) {
-        this.recordAskAgentClientCount();
-      }
-    });
-    this.writeAskAgentEvent(
-      res,
-      "snapshot",
-      this.serializeAskAgentSnapshot(response.snapshot),
-    );
   }
 
   private getAskAgentModelProvider(): string {
@@ -4736,35 +4733,28 @@ export class BrowserGatewayHelper {
   private broadcastAskAgentPublication(
     publication: AskAgentControllerPublication,
   ): void {
+    const result = this.askAgentSseHub.broadcast(
+      this.toAskAgentSsePublication(publication),
+    );
     if (this.streamingMetrics.enabled) {
       this.streamingMetrics.record({
         type: "broadcast",
         surface: "ask-agent-helper",
-        clientCount: this.askAgentEventClients.size,
+        clientCount: result.attempted,
         bytes: publication.bytes,
       });
     }
-    for (const client of this.askAgentEventClients) {
-      try {
-        this.writeAskAgentEvent(client, "update", publication.serialized);
-      } catch {
-        this.askAgentEventClients.delete(client);
-      }
-    }
   }
 
-  private writeAskAgentEvent(
-    res: http.ServerResponse,
-    event: "snapshot" | "update",
-    serialized: string,
-  ): void {
-    if (res.destroyed || res.writableEnded) {
-      if (this.askAgentEventClients.delete(res)) {
-        this.recordAskAgentClientCount();
-      }
-      return;
-    }
-    res.write(`event: ${event}\ndata: ${serialized}\n\n`);
+  private toAskAgentSsePublication(
+    publication: AskAgentControllerPublication,
+  ): SsePublication<AskAgentControllerSnapshot> {
+    return {
+      revision: publication.revision,
+      value: publication.snapshot,
+      serialized: publication.serialized,
+      bytes: publication.bytes,
+    };
   }
 
   private recordAskAgentSnapshotBuild(
@@ -4797,12 +4787,12 @@ export class BrowserGatewayHelper {
     });
   }
 
-  private recordAskAgentClientCount(): void {
+  private recordAskAgentClientCount(clientCount: number): void {
     if (!this.streamingMetrics.enabled) return;
     this.streamingMetrics.record({
       type: "sse_clients",
       surface: "ask-agent-helper",
-      clientCount: this.askAgentEventClients.size,
+      clientCount,
     });
   }
 

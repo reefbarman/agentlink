@@ -3532,6 +3532,91 @@ describe("BrowserGatewayHelper proxy routing", () => {
     await fs.rm(extensionRootPath, { recursive: true, force: true });
   });
 
+  it("streams committed Ask Agent publications through the helper SSE hub", async () => {
+    const publications: AskAgentControllerPublication[] = [];
+    const streamingMetrics = new StreamingBaselineRecorder();
+    const modelClient = makeAskAgentToolLoopClient(async ({ onDelta }) => {
+      onDelta?.("Streamed response");
+      return { text: "Streamed response", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      streamingMetrics,
+      beforeAskAgentSnapshotPublish: (publication) => {
+        publications.push(publication);
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const sse = await fetch(`${harness.helperBase}/api/ask-agent/events`, {
+      headers: { Accept: "text/event-stream", Cookie: harness.cookie },
+    });
+    const reader = sse.body?.getReader();
+    expect(sse.ok).toBe(true);
+    expect(sse.headers.get("content-type")).toBe("text/event-stream");
+    expect(sse.headers.get("cache-control")).toBe("no-cache");
+    expect(reader).toBeTruthy();
+
+    const initial = await reader!.read();
+    const initialText = Buffer.from(initial.value ?? new Uint8Array()).toString(
+      "utf-8",
+    );
+    const initialPublication = publications.at(-1);
+    expect(initialPublication).toBeDefined();
+    expect(initialText).toBe(
+      `event: snapshot\ndata: ${initialPublication!.serialized}\n\n`,
+    );
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Stream this response" }),
+    });
+    expect(send.ok).toBe(true);
+
+    const frames: string[] = [];
+    while (!frames.join("").includes('"streaming":false')) {
+      const next = await reader!.read();
+      expect(next.done).toBe(false);
+      frames.push(
+        Buffer.from(next.value ?? new Uint8Array()).toString("utf-8"),
+      );
+    }
+    const updateText = frames.join("");
+    const updatePublications = publications.filter(
+      ({ revision }) => revision > initialPublication!.revision,
+    );
+    expect(updatePublications.length).toBeGreaterThan(0);
+    for (const publication of updatePublications) {
+      expect(updateText).toContain(
+        `event: update\ndata: ${publication.serialized}\n\n`,
+      );
+    }
+    expect(updatePublications.map(({ revision }) => revision)).toEqual(
+      updatePublications
+        .map(({ revision }) => revision)
+        .slice()
+        .sort((left, right) => left - right),
+    );
+    expect(streamingMetrics.summarize("ask-agent-helper")).toMatchObject({
+      connectedClientsMax: 1,
+      broadcastDeliveries: expect.any(Number),
+    });
+    expect(
+      streamingMetrics.summarize("ask-agent-helper").broadcastDeliveries,
+    ).toBeGreaterThanOrEqual(updatePublications.length);
+
+    await reader!.cancel();
+    await waitForExpectation(() => {
+      expect(streamingMetrics.getEvents()).toContainEqual({
+        type: "sse_clients",
+        surface: "ask-agent-helper",
+        clientCount: 0,
+      });
+    });
+  });
+
   it("publishes credential failure as a committed controller snapshot", async () => {
     const publications: AskAgentControllerPublication[] = [];
     const modelClient = makeAskAgentToolLoopClient(async () => {
