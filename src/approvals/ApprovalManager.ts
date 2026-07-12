@@ -4,18 +4,13 @@ import picomatch from "picomatch";
 import { parseMcpToolName } from "../agent/mcpToolNames.js";
 import { tryGetFirstWorkspaceRoot, getRelativePath } from "../util/paths.js";
 import type { ConfigStore } from "./ConfigStore.js";
-import {
-  CommandRuleStore,
-  type CommandRule,
-  type RuleScope,
-} from "./CommandRuleStore.js";
+import { CommandRuleStore, type CommandRule } from "./CommandRuleStore.js";
+import { PathRuleStore, type PathRule } from "./PathRuleStore.js";
+import type { RuleScope } from "./ScopedRuleStore.js";
 
-export type { CommandRule, RuleScope } from "./CommandRuleStore.js";
-
-export interface PathRule {
-  pattern: string;
-  mode: "glob" | "prefix" | "exact";
-}
+export type { CommandRule } from "./CommandRuleStore.js";
+export type { PathRule } from "./PathRuleStore.js";
+export type { RuleScope } from "./ScopedRuleStore.js";
 
 interface SessionState {
   writeApproved: boolean;
@@ -48,21 +43,24 @@ export class ApprovalManager {
   private mcpApprovals = new Set<string>();
   private configStoreListener: vscode.Disposable;
   private commandRuleStore: CommandRuleStore;
+  private pathRuleStore: PathRuleStore;
 
   constructor(
     private globalState: vscode.Memento, // kept for migration
     private configStore: ConfigStore,
   ) {
     this.loadPersistedSessions();
-    this.commandRuleStore = new CommandRuleStore(configStore, {
-      get: (sessionId) => this.sessions.get(sessionId),
-      create: (sessionId) => {
+    const sessionHost = {
+      get: (sessionId: string) => this.sessions.get(sessionId),
+      create: (sessionId: string) => {
         const session = this.newSession();
         this.sessions.set(sessionId, session);
         return session;
       },
       persist: () => this.persistSessions(),
-    });
+    };
+    this.commandRuleStore = new CommandRuleStore(configStore, sessionHost);
+    this.pathRuleStore = new PathRuleStore(configStore, sessionHost);
     this.pruneExpiredSessions();
     this.pruneTimer = setInterval(
       () => this.pruneExpiredSessions(),
@@ -412,97 +410,22 @@ export class ApprovalManager {
   // --- Path trust (outside-workspace access) ---
 
   isPathTrusted(sessionId: string, filePath: string): boolean {
-    // Check session path rules first
-    const session = this.getSession(sessionId);
-    if (
-      (session.pathRules ?? []).some((r) => this.matchesPathRule(filePath, r))
-    ) {
-      return true;
-    }
-    // Check project path rules
-    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
-    if (
-      projectConfig &&
-      (projectConfig.pathRules ?? []).some((r) =>
-        this.matchesPathRule(filePath, r),
-      )
-    ) {
-      return true;
-    }
-    // Check global path rules
-    const globalConfig = this.configStore.getGlobalConfig();
-    if (
-      (globalConfig.pathRules ?? []).some((r) =>
-        this.matchesPathRule(filePath, r),
-      )
-    ) {
-      return true;
-    }
-    return false;
+    const rulesByScope = this.pathRuleStore.get(sessionId);
+    return (["session", "project", "global"] as const).some((scope) =>
+      rulesByScope[scope].some((rule) => this.matchesPathRule(filePath, rule)),
+    );
   }
 
   addPathRule(sessionId: string, rule: PathRule, scope: RuleScope): void {
-    if (scope === "global") {
-      this.configStore.updateGlobalConfig((c) => {
-        const rules = c.pathRules ?? [];
-        if (
-          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
-        ) {
-          rules.push(rule);
-          c.pathRules = rules;
-        }
-      });
-    } else if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return;
-      this.configStore.updateProjectConfig(folder, (c) => {
-        const rules = c.pathRules ?? [];
-        if (
-          !rules.some((r) => r.pattern === rule.pattern && r.mode === rule.mode)
-        ) {
-          rules.push(rule);
-          c.pathRules = rules;
-        }
-      });
-    } else {
-      const session = this.sessions.get(sessionId) ?? this.newSession();
-      const pathRules = session.pathRules ?? [];
-      if (
-        !pathRules.some(
-          (r) => r.pattern === rule.pattern && r.mode === rule.mode,
-        )
-      ) {
-        pathRules.push(rule);
-        session.pathRules = pathRules;
-        session.lastActivity = Date.now();
-        this.sessions.set(sessionId, session);
-        this.persistSessions();
-      }
+    if (this.pathRuleStore.add(sessionId, rule, scope)) {
+      this._onDidChange.fire();
     }
-    this._onDidChange.fire();
   }
 
   removePathRule(pattern: string, scope: RuleScope, sessionId?: string): void {
-    if (scope === "global") {
-      this.configStore.updateGlobalConfig((c) => {
-        c.pathRules = (c.pathRules ?? []).filter((r) => r.pattern !== pattern);
-      });
-    } else if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return;
-      this.configStore.updateProjectConfig(folder, (c) => {
-        c.pathRules = (c.pathRules ?? []).filter((r) => r.pattern !== pattern);
-      });
-    } else if (sessionId) {
-      const session = this.sessions.get(sessionId);
-      if (session) {
-        session.pathRules = (session.pathRules ?? []).filter(
-          (r) => r.pattern !== pattern,
-        );
-        this.persistSessions();
-      }
+    if (this.pathRuleStore.remove(pattern, scope, sessionId)) {
+      this._onDidChange.fire();
     }
-    this._onDidChange.fire();
   }
 
   editPathRule(
@@ -511,32 +434,9 @@ export class ApprovalManager {
     scope: RuleScope,
     sessionId?: string,
   ): void {
-    if (scope === "global") {
-      this.configStore.updateGlobalConfig((c) => {
-        const rules = c.pathRules ?? [];
-        const idx = rules.findIndex((r) => r.pattern === oldPattern);
-        if (idx !== -1) rules[idx] = newRule;
-      });
-    } else if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return;
-      this.configStore.updateProjectConfig(folder, (c) => {
-        const rules = c.pathRules ?? [];
-        const idx = rules.findIndex((r) => r.pattern === oldPattern);
-        if (idx !== -1) rules[idx] = newRule;
-      });
-    } else if (sessionId) {
-      const session = this.sessions.get(sessionId);
-      if (session) {
-        const pathRules = session.pathRules ?? [];
-        const idx = pathRules.findIndex((r) => r.pattern === oldPattern);
-        if (idx !== -1) {
-          pathRules[idx] = newRule;
-          this.persistSessions();
-        }
-      }
+    if (this.pathRuleStore.edit(oldPattern, newRule, scope, sessionId)) {
+      this._onDidChange.fire();
     }
-    this._onDidChange.fire();
   }
 
   getPathRules(sessionId: string): {
@@ -544,13 +444,7 @@ export class ApprovalManager {
     project: PathRule[];
     global: PathRule[];
   } {
-    const session = this.getSession(sessionId);
-    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
-    return {
-      session: [...(session.pathRules ?? [])],
-      project: [...(projectConfig?.pathRules ?? [])],
-      global: [...(this.configStore.getGlobalConfig().pathRules ?? [])],
-    };
+    return this.pathRuleStore.get(sessionId);
   }
 
   // --- File-level write approval ---

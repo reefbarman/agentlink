@@ -4,7 +4,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 
 import type { CommandRule } from "./CommandRuleStore.js";
-import type { PathRule } from "./ApprovalManager.js";
+import type { PathRule } from "./PathRuleStore.js";
 import { parseJsonWithComments } from "../util/jsonc.js";
 import { withPrimaryEditorColumn } from "../util/editorPlacement.js";
 
