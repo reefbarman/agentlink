@@ -1,8 +1,9 @@
 import { EmptyState, PaneHeader } from "../../../shared/ui/Panes";
-import { useCallback, useEffect, useRef } from "preact/hooks";
 
 import type { ChatMessage } from "../types";
 import { TranscriptMessageList } from "./TranscriptMessageList";
+import { useAutoScroll } from "./useAutoScroll";
+import { useEffect } from "preact/hooks";
 
 interface TranscriptViewProps {
   task: string;
@@ -17,31 +18,13 @@ export function TranscriptView({
   streaming = false,
   onClose,
 }: TranscriptViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const shouldAutoScroll = useRef(true);
-  const programmaticScroll = useRef(false);
-
-  const scrollToBottom = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    programmaticScroll.current = true;
-    el.scrollTop = el.scrollHeight;
-  }, []);
-
-  const scrollToBottomAfterLayout = useCallback(() => {
-    let frame = 0;
-    let raf = 0;
-    const tick = () => {
-      scrollToBottom();
-      frame += 1;
-      if (frame < 3) {
-        raf = requestAnimationFrame(tick);
-      }
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [scrollToBottom]);
+  const {
+    containerRef,
+    contentRef,
+    shouldAutoScrollRef,
+    scrollToBottomAfterLayout,
+    handleScroll,
+  } = useAutoScroll({ contentPresent: messages.length > 0 });
 
   const lastMsg = messages[messages.length - 1];
   const lastBlock = lastMsg?.blocks[lastMsg.blocks.length - 1];
@@ -58,36 +41,15 @@ export function TranscriptView({
     : "empty";
 
   useEffect(() => {
-    shouldAutoScroll.current = true;
+    shouldAutoScrollRef.current = true;
     return scrollToBottomAfterLayout();
-  }, [scrollToBottomAfterLayout]);
+  }, [scrollToBottomAfterLayout, shouldAutoScrollRef]);
 
   useEffect(() => {
-    if (shouldAutoScroll.current) {
+    if (shouldAutoScrollRef.current) {
       return scrollToBottomAfterLayout();
     }
-  }, [scrollKey, streaming, scrollToBottomAfterLayout]);
-
-  useEffect(() => {
-    const content = contentRef.current;
-    if (!content || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (shouldAutoScroll.current) scrollToBottom();
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [messages.length > 0, scrollToBottom]);
-
-  const handleScroll = useCallback(() => {
-    if (programmaticScroll.current) {
-      programmaticScroll.current = false;
-      return;
-    }
-    const el = containerRef.current;
-    if (!el) return;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    shouldAutoScroll.current = distFromBottom < 150;
-  }, []);
+  }, [scrollKey, streaming, scrollToBottomAfterLayout, shouldAutoScrollRef]);
 
   return (
     <div class="transcript-overlay">

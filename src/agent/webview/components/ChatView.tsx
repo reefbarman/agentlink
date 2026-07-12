@@ -15,6 +15,7 @@ import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import type { ChatMessage } from "../types";
 import type { DetectedQuestion } from "../questionDetection";
 import { TranscriptMessageList } from "./TranscriptMessageList";
+import { useAutoScroll } from "./useAutoScroll";
 
 interface ChatViewProps {
   messages: ChatMessage[];
@@ -87,8 +88,16 @@ export function ChatView({
   streamingMetricsSurface,
   streamingMetricsScope,
 }: ChatViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
+  const hasMessages = messages.length > 0;
+  const {
+    containerRef,
+    contentRef,
+    shouldAutoScrollRef,
+    markProgrammaticScroll,
+    scrollToBottomAfterLayout,
+    cancelPendingScrolls,
+    handleScroll,
+  } = useAutoScroll({ contentPresent: hasMessages });
   const normalizedInitialMessageLimit =
     initialMessageLimit !== undefined && initialMessageLimit > 0
       ? initialMessageLimit
@@ -100,36 +109,12 @@ export function ChatView({
     scrollHeight: number;
     scrollTop: number;
   } | null>(null);
-  const shouldAutoScroll = useRef(true);
 
   useEffect(() => {
     setVisibleMessageLimit(
       normalizedInitialMessageLimit ?? Number.POSITIVE_INFINITY,
     );
   }, [normalizedInitialMessageLimit]);
-  const programmaticScroll = useRef(false);
-
-  // Helper: scroll to bottom, flagging it as programmatic so handleScroll ignores it
-  const scrollToBottom = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    programmaticScroll.current = true;
-    el.scrollTop = el.scrollHeight;
-  }, []);
-
-  const scrollToBottomAfterLayout = useCallback(() => {
-    let frame = 0;
-    let raf = 0;
-    const tick = () => {
-      scrollToBottom();
-      frame += 1;
-      if (frame < 3) {
-        raf = requestAnimationFrame(tick);
-      }
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [scrollToBottom]);
 
   // Derive a scroll key that changes whenever content grows —
   // new messages, new blocks, text/input deltas, tool results
@@ -142,7 +127,6 @@ export function ChatView({
     [messages, visibleMessageLimit],
   );
   const hiddenMessageCount = messages.length - visibleMessages.length;
-  const hasMessages = messages.length > 0;
   const lastMsg = visibleMessages[visibleMessages.length - 1];
   const lastBlock = lastMsg?.blocks[lastMsg.blocks.length - 1];
   const latestUserMessageId = useMemo(() => {
@@ -166,9 +150,9 @@ export function ChatView({
 
   // Treat a loaded/switched session as a fresh transcript and start at the bottom.
   useEffect(() => {
-    shouldAutoScroll.current = true;
+    shouldAutoScrollRef.current = true;
     return scrollToBottomAfterLayout();
-  }, [sessionId, scrollToBottomAfterLayout]);
+  }, [sessionId, scrollToBottomAfterLayout, shouldAutoScrollRef]);
 
   // Always reveal a newly submitted user turn, even if the user had scrolled up
   // while reading previous output. Subsequent assistant streaming still respects
@@ -177,28 +161,16 @@ export function ChatView({
     const previous = previousLatestUserMessageId.current;
     previousLatestUserMessageId.current = latestUserMessageId;
     if (!latestUserMessageId || previous === latestUserMessageId) return;
-    shouldAutoScroll.current = true;
+    shouldAutoScrollRef.current = true;
     return scrollToBottomAfterLayout();
-  }, [latestUserMessageId, scrollToBottomAfterLayout]);
+  }, [latestUserMessageId, scrollToBottomAfterLayout, shouldAutoScrollRef]);
 
   // Auto-scroll to bottom when content changes
   useEffect(() => {
-    if (shouldAutoScroll.current) {
+    if (shouldAutoScrollRef.current) {
       return scrollToBottomAfterLayout();
     }
-  }, [scrollKey, streaming, scrollToBottomAfterLayout]);
-
-  // Track content height changes (e.g. async diagrams) without forcing a
-  // scrollHeight read on every animation frame.
-  useEffect(() => {
-    const content = contentRef.current;
-    if (!content || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (shouldAutoScroll.current) scrollToBottom();
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [hasMessages, scrollToBottom]);
+  }, [scrollKey, streaming, scrollToBottomAfterLayout, shouldAutoScrollRef]);
 
   useLayoutEffect(() => {
     const anchor = pendingHistoryAnchorRef.current;
@@ -207,19 +179,6 @@ export function ChatView({
     pendingHistoryAnchorRef.current = null;
     el.scrollTop = anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight);
   }, [visibleMessageLimit]);
-
-  const handleScroll = useCallback(() => {
-    // Skip scroll events caused by our own programmatic scrolling
-    if (programmaticScroll.current) {
-      programmaticScroll.current = false;
-      return;
-    }
-    const el = containerRef.current;
-    if (!el) return;
-    // Only disable auto-scroll if user scrolled well away from bottom
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    shouldAutoScroll.current = distFromBottom < 150;
-  }, []);
 
   const firstUserMsg = messages.find((m) => m.role === "user");
   const firstPromptText = firstUserMsg?.content.trim() ?? "";
@@ -232,9 +191,9 @@ export function ChatView({
   const scrollToTop = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    programmaticScroll.current = true;
+    markProgrammaticScroll(0);
     el.scrollTop = 0;
-  }, []);
+  }, [containerRef, markProgrammaticScroll]);
 
   if (!hasMessages) {
     return (
@@ -273,7 +232,8 @@ export function ChatView({
                     scrollTop: el.scrollTop,
                   };
                 }
-                shouldAutoScroll.current = false;
+                shouldAutoScrollRef.current = false;
+                cancelPendingScrolls();
                 setVisibleMessageLimit(
                   (current) => current + normalizedInitialMessageLimit,
                 );

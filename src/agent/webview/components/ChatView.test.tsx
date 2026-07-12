@@ -83,6 +83,50 @@ describe("ChatView message windowing", () => {
     expect(screen.getByTitle("Message 1")).toBeTruthy();
   });
 
+  it("cancels pending bottom scrolling before revealing earlier history", () => {
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let nextId = 0;
+    globalThis.requestAnimationFrame = vi.fn(
+      (callback: FrameRequestCallback) => {
+        nextId += 1;
+        callbacks.set(nextId, callback);
+        return nextId;
+      },
+    );
+    globalThis.cancelAnimationFrame = vi.fn((id: number) => {
+      callbacks.delete(id);
+    });
+
+    const { container } = render(
+      h(ChatView, {
+        messages: makeMessages(45),
+        streaming: false,
+        sessionId: "session-1",
+        initialMessageLimit: 20,
+      }),
+    );
+    const transcript = container.querySelector(".chat-messages")!;
+    let scrollHeightReads = 0;
+    Object.defineProperties(transcript, {
+      scrollHeight: {
+        configurable: true,
+        get: () => (scrollHeightReads++ === 0 ? 1000 : 1400),
+      },
+      scrollTop: { configurable: true, writable: true, value: 200 },
+    });
+    const pendingId = nextId;
+    const staleCallback = callbacks.get(pendingId)!;
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show 20 earlier messages/ }),
+    );
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(pendingId);
+    expect(transcript.scrollTop).toBe(600);
+    staleCallback(0);
+    expect(transcript.scrollTop).toBe(600);
+  });
+
   it("observes transcript growth when an initially empty chat receives messages", () => {
     const { rerender } = render(
       h(ChatView, {
