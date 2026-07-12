@@ -3,6 +3,8 @@ import * as path from "path";
 
 import { expandSubCommands, splitCompoundCommand } from "./commandSplitter.js";
 
+import { scanShellLexWords } from "../util/shellLex.js";
+
 export type CommandTier = "safe" | "sensitive" | "dangerous";
 
 export interface CommandTierResult {
@@ -196,7 +198,7 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
     const opaque = detectOpaqueShellSyntax(subCommand);
     if (opaque) return dangerous(opaque);
 
-    const tokens = tokenize(subCommand);
+    const tokens = scanShellLexWords(subCommand).words.map(({ raw }) => raw);
     if (tokens.length === 0) return safe("empty command");
 
     const commandToken = stripQuotes(tokens[0] ?? "");
@@ -506,42 +508,6 @@ function looksLikePackageSpecifier(value: string): boolean {
     /^[a-zA-Z0-9._-]+(?:@[\w.-]+)?$/.test(value) ||
     /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+(?:@[\w.-]+)?$/.test(value)
   );
-}
-
-function tokenize(command: string): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (ch === "\\" && i + 1 < command.length && !inSingle) {
-      current += ch + command[i + 1];
-      i++;
-      continue;
-    }
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      current += ch;
-      continue;
-    }
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      current += ch;
-      continue;
-    }
-    if (/\s/.test(ch) && !inSingle && !inDouble) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
-  }
-  if (current) tokens.push(current);
-  return tokens;
 }
 
 function isFullyQuoted(value: string): boolean {

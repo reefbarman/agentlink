@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-
-import { scanShellLexBoundaries } from "./shellLex.js";
+import { scanShellLexBoundaries, scanShellLexWords } from "./shellLex.js";
 
 describe("scanShellLexBoundaries", () => {
   it.each([
@@ -67,6 +66,62 @@ describe("scanShellLexBoundaries", () => {
     ).toEqual({
       boundaries: [{ kind: "separator", operator: "&&", start: 15, end: 17 }],
       finalState: { quote: null, danglingEscape: false },
+    });
+  });
+});
+
+describe("scanShellLexWords", () => {
+  it("returns raw source-preserving word spans", () => {
+    const input = `git "status --short" 'src files'`;
+    expect(scanShellLexWords(input)).toEqual({
+      words: [
+        { start: 0, end: 3, raw: "git" },
+        { start: 4, end: 20, raw: `"status --short"` },
+        { start: 21, end: 32, raw: `'src files'` },
+      ],
+      finalState: { quote: null, danglingEscape: false },
+    });
+  });
+
+  it("keeps escaped whitespace in one raw word outside quotes", () => {
+    expect(scanShellLexWords(String.raw`git status\ --short`).words).toEqual([
+      { start: 0, end: 3, raw: "git" },
+      { start: 4, end: 19, raw: String.raw`status\ --short` },
+    ]);
+  });
+
+  it("treats backslash literally inside single quotes", () => {
+    expect(scanShellLexWords(String.raw`git 'status\' --short'`).words).toEqual(
+      [
+        { start: 0, end: 3, raw: "git" },
+        { start: 4, end: 13, raw: String.raw`'status\'` },
+        { start: 14, end: 22, raw: String.raw`--short'` },
+      ],
+    );
+  });
+
+  it("preserves empty quoted words", () => {
+    expect(scanShellLexWords(`node "" ''`).words).toEqual([
+      { start: 0, end: 4, raw: "node" },
+      { start: 5, end: 7, raw: `""` },
+      { start: 8, end: 10, raw: `''` },
+    ]);
+  });
+
+  it("reports malformed state without dropping raw words", () => {
+    expect(scanShellLexWords(`echo "unterminated`)).toEqual({
+      words: [
+        { start: 0, end: 4, raw: "echo" },
+        { start: 5, end: 18, raw: `"unterminated` },
+      ],
+      finalState: { quote: "double", danglingEscape: false },
+    });
+    expect(scanShellLexWords("echo trailing\\")).toEqual({
+      words: [
+        { start: 0, end: 4, raw: "echo" },
+        { start: 5, end: 14, raw: "trailing\\" },
+      ],
+      finalState: { quote: null, danglingEscape: true },
     });
   });
 });

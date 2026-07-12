@@ -13,12 +13,25 @@ export type ShellLexBoundary =
       end: number;
     };
 
+export interface ShellLexFinalState {
+  quote: ShellLexQuote | null;
+  danglingEscape: boolean;
+}
+
 export interface ShellLexScanResult {
   boundaries: ShellLexBoundary[];
-  finalState: {
-    quote: ShellLexQuote | null;
-    danglingEscape: boolean;
-  };
+  finalState: ShellLexFinalState;
+}
+
+export interface ShellLexWord {
+  start: number;
+  end: number;
+  raw: string;
+}
+
+export interface ShellLexWordScanResult {
+  words: ShellLexWord[];
+  finalState: ShellLexFinalState;
 }
 
 /**
@@ -93,6 +106,67 @@ export function scanShellLexBoundaries(input: string): ShellLexScanResult {
     boundaries,
     finalState: { quote, danglingEscape },
   };
+}
+
+/**
+ * Groups raw shell-like words on unquoted whitespace while preserving source.
+ *
+ * Backslash escapes the next character outside single quotes. Quotes and
+ * backslashes remain in each raw word, and malformed final state is diagnostic
+ * only. Operators, comments, substitutions, and redirections are not parsed.
+ */
+export function scanShellLexWords(input: string): ShellLexWordScanResult {
+  const words: ShellLexWord[] = [];
+  let quote: ShellLexQuote | null = null;
+  let danglingEscape = false;
+  let wordStart: number | null = null;
+  let index = 0;
+
+  const finishWord = (end: number) => {
+    if (wordStart === null) return;
+    words.push({ start: wordStart, end, raw: input.slice(wordStart, end) });
+    wordStart = null;
+  };
+
+  while (index < input.length) {
+    const ch = input[index];
+
+    if (ch === "\\" && quote !== "single") {
+      wordStart ??= index;
+      if (index + 1 < input.length) {
+        index += 2;
+        continue;
+      }
+      danglingEscape = true;
+      index++;
+      continue;
+    }
+
+    if (ch === "'" && quote !== "double") {
+      wordStart ??= index;
+      quote = quote === "single" ? null : "single";
+      index++;
+      continue;
+    }
+    if (ch === '"' && quote !== "single") {
+      wordStart ??= index;
+      quote = quote === "double" ? null : "double";
+      index++;
+      continue;
+    }
+
+    if (/\s/.test(ch) && !quote) {
+      finishWord(index);
+      index++;
+      continue;
+    }
+
+    wordStart ??= index;
+    index++;
+  }
+
+  finishWord(input.length);
+  return { words, finalState: { quote, danglingEscape } };
 }
 
 function readSeparator(

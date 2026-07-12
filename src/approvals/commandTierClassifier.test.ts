@@ -13,8 +13,12 @@ const ctx: CommandTierContext = {
   workspaceRoots: [root],
 };
 
+function classify(command: string, override: Partial<CommandTierContext> = {}) {
+  return classifyCommand(command, { ...ctx, ...override });
+}
+
 function tier(command: string, override: Partial<CommandTierContext> = {}) {
-  return classifyCommand(command, { ...ctx, ...override }).tier;
+  return classify(command, override).tier;
 }
 
 describe("command tier classifier", () => {
@@ -70,6 +74,90 @@ describe("command tier classifier", () => {
     expect(tier("echo ok>/tmp/outside.txt")).toBe("dangerous");
     expect(tier("echo ok>>generated.txt")).toBe("sensitive");
   });
+
+  it.each([
+    {
+      command: `"git" "status"`,
+      tier: "safe",
+      reason: "git status",
+    },
+    {
+      command: `git "status --short"`,
+      tier: "sensitive",
+      reason: "unrecognized git subcommand",
+    },
+    {
+      command: String.raw`git status\ --short`,
+      tier: "sensitive",
+      reason: "unrecognized git subcommand",
+    },
+    {
+      command: String.raw`git 'status\ --short'`,
+      tier: "sensitive",
+      reason: "unrecognized git subcommand",
+    },
+    {
+      command: `echo "ok > /tmp/outside.txt"`,
+      tier: "safe",
+      reason: "read-only command (echo)",
+    },
+    {
+      command: `echo ok 2>> generated.log`,
+      tier: "sensitive",
+      reason: "output redirection",
+    },
+    {
+      command: `echo ok &> /tmp/outside.log`,
+      tier: "dangerous",
+      reason: "redirection target outside workspace",
+    },
+    {
+      command: String.raw`g\it status`,
+      tier: "dangerous",
+      reason: "opaque command position",
+    },
+    {
+      command: `node "-e" 1`,
+      tier: "dangerous",
+      reason: "inline interpreter execution (node)",
+    },
+    {
+      command: `node ""`,
+      tier: "sensitive",
+      reason: "unrecognized command",
+    },
+  ])("preserves tokenizer-sensitive classification for $command", (entry) => {
+    expect(classify(entry.command).perSubCommand).toEqual([
+      {
+        command: entry.command,
+        result: { tier: entry.tier, reason: entry.reason },
+      },
+    ]);
+  });
+
+  it.each([
+    ["FOO='two words' git status", "environment assignment prefix"],
+    ["echo ${HOME}/file", "opaque shell syntax"],
+    ["echo `whoami`", "opaque shell syntax"],
+    ["echo <(cat file)", "opaque shell syntax"],
+  ])("preserves opaque-syntax reason for %s", (command, reason) => {
+    expect(classify(command).perSubCommand[0]?.result).toEqual({
+      tier: "dangerous",
+      reason,
+    });
+  });
+
+  it.each([`echo "unterminated`, "echo trailing\\"])(
+    "preserves permissive malformed classification for %s",
+    (command) => {
+      expect(classify(command).perSubCommand).toEqual([
+        {
+          command,
+          result: { tier: "safe", reason: "read-only command (echo)" },
+        },
+      ]);
+    },
+  );
 
   it("honors threshold ordering", () => {
     expect(isTierAtOrBelow("safe", "safe")).toBe(true);
