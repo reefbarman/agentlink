@@ -257,7 +257,9 @@ export function diffFiles(
 export interface ScanResult {
   /** Files that need re-indexing (paths only — no content held) */
   toIndexPaths: Array<{ absPath: string; relPath: string }>;
-  /** Relative paths of stale files to delete from index */
+  /** Relative paths absent from the workspace and safe for removed-file cleanup. */
+  removedRelPaths: string[];
+  /** Relative paths removed or changed and therefore stale in Qdrant. */
   staleRelPaths: string[];
   /** Non-fatal errors */
   errors: string[];
@@ -359,15 +361,19 @@ export async function scanFiles(
   onProgress?.(candidates.length, candidates.length);
 
   // Phase 3: Find stale files
+  const removedRelPaths: string[] = [];
   const staleRelPaths: string[] = [];
   const toIndexRelPaths = new Set(toIndexPaths.map((f) => f.relPath));
   for (const relPath of Object.keys(cache.files)) {
-    if (!currentFiles.has(relPath) || toIndexRelPaths.has(relPath)) {
+    if (!currentFiles.has(relPath)) {
+      removedRelPaths.push(relPath);
+      staleRelPaths.push(relPath);
+    } else if (toIndexRelPaths.has(relPath)) {
       staleRelPaths.push(relPath);
     }
   }
 
-  return { toIndexPaths, staleRelPaths, errors };
+  return { toIndexPaths, removedRelPaths, staleRelPaths, errors };
 }
 
 export interface FileWithContent {

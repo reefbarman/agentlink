@@ -103,7 +103,7 @@ export async function deleteQdrantPoints(
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const response = await fetchImpl(
-    `${getCollectionUrl(qdrantUrl, collectionName)}/points/delete`,
+    `${getCollectionUrl(qdrantUrl, collectionName)}/points/delete?wait=true`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

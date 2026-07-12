@@ -50,6 +50,11 @@ import {
   readFilesBatch,
   type FileWithContent,
 } from "./workerLib.js";
+import {
+  checkpointRemovedFileCaches,
+  executeRemovedFileDeletes,
+  planRemovedFileDeletes,
+} from "./removedFileDeletion.js";
 import { extractStructuralFile } from "./structuralExtractor.js";
 import type { StructuralGraphCache } from "./structuralGraph.js";
 import type {
@@ -268,6 +273,46 @@ function updateStructuralCacheForFiles(
     structuralCache.generatedAt = new Date().toISOString();
   }
   return updated;
+}
+
+async function removeFilesFromIndex(args: {
+  relPaths: string[];
+  cache: IndexCache;
+  structuralCache: StructuralGraphCache;
+  qdrantUrl: string;
+  collectionName: string;
+}): Promise<{
+  completed: number;
+  errors: string[];
+  pointsDeleted: number;
+  cancelled: boolean;
+}> {
+  const plans = planRemovedFileDeletes(
+    args.relPaths.map((relPath) => ({
+      relPath,
+      pointIds: args.cache.files[relPath]?.pointIds ?? [],
+    })),
+  );
+  const result = await executeRemovedFileDeletes(plans, {
+    deleteBatch: (pointIds) =>
+      deleteQdrantPoints(args.qdrantUrl, args.collectionName, pointIds),
+    isCancelled: () => aborted,
+  });
+
+  for (const relPath of result.completedRelPaths) {
+    delete args.cache.files[relPath];
+    delete args.structuralCache.files[relPath];
+  }
+  if (result.completedRelPaths.length > 0) {
+    args.structuralCache.generatedAt = new Date().toISOString();
+  }
+
+  return {
+    completed: result.completedRelPaths.length,
+    errors: result.errors,
+    pointsDeleted: result.pointsDeleted,
+    cancelled: result.cancelled,
+  };
 }
 
 async function backfillStructuralCacheForCachedFiles(args: {
@@ -595,7 +640,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     sendProgress("reading", 0, msg.files.length);
     const {
       toIndexPaths,
-      staleRelPaths,
+      removedRelPaths,
       errors: scanErrors,
     } = await measureIndexWorkerPhase(metrics, "scan", () =>
       scanFiles(
@@ -624,32 +669,27 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       return;
     }
 
-    // Phase 1b: Delete stale points
-    if (staleRelPaths.length > 0) {
-      sendProgress("cleanup", 0, staleRelPaths.length);
-      for (let i = 0; i < staleRelPaths.length; i++) {
-        if (aborted) break;
-        const relPath = staleRelPaths[i];
-        const cached = cache.files[relPath];
-        if (cached && cached.pointIds.length > 0) {
-          try {
-            await deleteQdrantPoints(
-              msg.qdrantUrl,
-              msg.collectionName,
-              cached.pointIds,
-            );
-            pointsDeleted += cached.pointIds.length;
-          } catch (err) {
-            errors.push(`Failed to delete points for ${relPath}: ${err}`);
-          }
-        }
-        delete cache.files[relPath];
-        delete structuralCache.files[relPath];
+    // Phase 1b: Delete files that are absent from the workspace. Changed-file
+    // ownership remains intact until the existing reindex path handles it.
+    if (removedRelPaths.length > 0) {
+      sendProgress("cleanup", 0, removedRelPaths.length);
+      const removal = await removeFilesFromIndex({
+        relPaths: removedRelPaths,
+        cache,
+        structuralCache,
+        qdrantUrl: msg.qdrantUrl,
+        collectionName: msg.collectionName,
+      });
+      pointsDeleted += removal.pointsDeleted;
+      errors.push(...removal.errors);
+      sendProgress("cleanup", removal.completed, removedRelPaths.length);
+      if (removal.completed > 0) {
+        checkpointRemovedFileCaches({
+          writeStructuralCache: () =>
+            writeStructuralCache(structuralCachePath, structuralCache),
+          writeVectorCache: () => writeCache(msg.cachePath, cache),
+        });
       }
-      sendProgress("cleanup", staleRelPaths.length, staleRelPaths.length);
-      structuralCache.generatedAt = new Date().toISOString();
-      writeCache(msg.cachePath, cache);
-      writeStructuralCache(structuralCachePath, structuralCache);
     }
 
     if (!aborted) {
@@ -815,24 +855,45 @@ async function handleIncrementalUpdate(
         collectionName: msg.collectionName,
       });
 
-    // Handle removed files
-    for (const absPath of msg.removed) {
-      const relPath = path.relative(msg.workspaceRoot, absPath);
-      const cached = cache.files[relPath];
-      if (cached && cached.pointIds.length > 0) {
-        try {
-          await deleteQdrantPoints(
-            msg.qdrantUrl,
-            msg.collectionName,
-            cached.pointIds,
-          );
-          pointsDeleted += cached.pointIds.length;
-        } catch (err) {
-          errors.push(`Failed to delete points for ${relPath}: ${err}`);
-        }
-      }
-      delete cache.files[relPath];
-      delete structuralCache.files[relPath];
+    // Handle removed files. Cache ownership is released only after every
+    // bounded Qdrant delete batch for that file succeeds.
+    const removal = await removeFilesFromIndex({
+      relPaths: msg.removed
+        .map((absPath) => path.relative(msg.workspaceRoot, absPath))
+        .filter(
+          (relPath) =>
+            relPath !== "" &&
+            relPath !== ".." &&
+            !relPath.startsWith(`..${path.sep}`) &&
+            !path.isAbsolute(relPath),
+        ),
+      cache,
+      structuralCache,
+      qdrantUrl: msg.qdrantUrl,
+      collectionName: msg.collectionName,
+    });
+    pointsDeleted += removal.pointsDeleted;
+    errors.push(...removal.errors);
+    if (removal.completed > 0) {
+      checkpointRemovedFileCaches({
+        writeStructuralCache: () =>
+          writeStructuralCache(structuralCachePath, structuralCache),
+        writeVectorCache: () => writeCache(msg.cachePath, cache),
+      });
+    }
+    if (removal.cancelled) {
+      sendComplete({
+        filesIndexed,
+        totalFilesInIndex: Object.keys(cache.files).length,
+        chunksCreated,
+        totalChunksInIndex: countCachedChunks(cache),
+        pointsUpserted,
+        pointsDeleted,
+        durationMs: Date.now() - startTime,
+        errors,
+        cancelled: true,
+      });
+      return;
     }
 
     // Handle added/changed files — diff against cache

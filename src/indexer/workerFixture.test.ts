@@ -18,11 +18,17 @@ import type {
   WorkerToExtensionMessage,
 } from "./types.js";
 
-interface FixtureFetchObservation {
-  type: "fixtureFetch";
-  operation: "embedding";
-  attempt: number;
-}
+type FixtureFetchObservation =
+  | {
+      type: "fixtureFetch";
+      operation: "embedding";
+      attempt: number;
+    }
+  | {
+      type: "fixtureFetch";
+      operation: "qdrantDelete";
+      pointCount: number;
+    };
 
 type FixtureMessage = WorkerToExtensionMessage | FixtureFetchObservation;
 
@@ -110,6 +116,38 @@ function writeSource(
 
 function sourceContent(value: number): string {
   return `select ${value} as value, '${"fixture-content-".repeat(4)}' as label;`;
+}
+
+function writeCacheEntry(
+  cachePath: string,
+  relPath: string,
+  pointIds: string[],
+): void {
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(
+    cachePath,
+    JSON.stringify({
+      version: 1,
+      granularity: "standard",
+      files: {
+        [relPath]: {
+          hash: "fixture-hash",
+          pointIds,
+          indexedAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    }),
+  );
+}
+
+function readCachedPointIds(
+  cachePath: string,
+  relPath: string,
+): string[] | null {
+  const cache = JSON.parse(fs.readFileSync(cachePath, "utf8")) as {
+    files: Record<string, { pointIds: string[] }>;
+  };
+  return cache.files[relPath]?.pointIds ?? null;
 }
 
 function cachedPointCount(cachePath: string): number {
@@ -223,6 +261,7 @@ function startMessage(options: {
   files: string[];
   bearerToken?: string;
   qdrantPath?: string;
+  force?: boolean;
 }): ExtensionToWorkerMessage {
   return {
     type: "start",
@@ -232,7 +271,7 @@ function startMessage(options: {
     qdrantUrl: `http://fixture-qdrant.invalid/${options.qdrantPath ?? "success"}`,
     embeddingBearerToken: options.bearerToken ?? "success",
     cachePath: options.cachePath,
-    force: true,
+    force: options.force ?? true,
     granularity: "standard",
   };
 }
@@ -334,8 +373,8 @@ describe("indexer worker fixture", () => {
       expect(stats.metrics!.operations).toMatchObject({
         "qdrant.deletePoints": 2,
         "qdrant.upsertPoints": 1,
-        "cache.writeVector": 2,
-        "cache.writeStructural": 2,
+        "cache.writeVector": 3,
+        "cache.writeStructural": 3,
       });
       expect(stats.metrics!.phaseDurationsMs).toEqual(
         expect.objectContaining({
@@ -343,6 +382,157 @@ describe("indexer worker fixture", () => {
           process: expect.any(Number),
         }),
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "bounds full-scan removed-file deletes before checkpointing cache absence",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const pointIds = Array.from(
+        { length: 600 },
+        (_, index) => `point-${index}`,
+      );
+      writeCacheEntry(cachePath, "removed.sql", pointIds);
+
+      const stats = await fixture.complete(
+        startMessage({ root, cachePath, files: [], force: false }),
+      );
+
+      expect(stats.errors).toEqual([]);
+      expect(stats.pointsDeleted).toBe(600);
+      expect(readCachedPointIds(cachePath, "removed.sql")).toBeNull();
+      expect(
+        fixture.messages
+          .filter(
+            (
+              message,
+            ): message is Extract<
+              FixtureFetchObservation,
+              { operation: "qdrantDelete" }
+            > =>
+              message.type === "fixtureFetch" &&
+              message.operation === "qdrantDelete",
+          )
+          .map((message) => message.pointCount),
+      ).toEqual([256, 256, 88]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "bounds incremental removed-file deletes before releasing cache ownership",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const removed = path.join(root, "removed.sql");
+      const pointIds = Array.from(
+        { length: 600 },
+        (_, index) => `point-${index}`,
+      );
+      writeCacheEntry(cachePath, "removed.sql", pointIds);
+
+      const stats = await fixture.complete({
+        type: "incrementalUpdate",
+        added: [],
+        removed: [removed],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/success",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+
+      expect(stats.errors).toEqual([]);
+      expect(stats.pointsDeleted).toBe(600);
+      expect(readCachedPointIds(cachePath, "removed.sql")).toBeNull();
+      expect(
+        fixture.messages
+          .filter(
+            (
+              message,
+            ): message is Extract<
+              FixtureFetchObservation,
+              { operation: "qdrantDelete" }
+            > =>
+              message.type === "fixtureFetch" &&
+              message.operation === "qdrantDelete",
+          )
+          .map((message) => message.pointCount),
+      ).toEqual([256, 256, 88]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "retains removed-file ownership when cancellation interrupts bounded deletes",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const removed = path.join(root, "removed.sql");
+      const pointIds = Array.from(
+        { length: 600 },
+        (_, index) => `point-${index}`,
+      );
+      writeCacheEntry(cachePath, "removed.sql", pointIds);
+      const completion = fixture.waitFor("complete");
+      fixture.send({
+        type: "incrementalUpdate",
+        added: [],
+        removed: [removed],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/delete-delay",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+      await fixture.waitFor(
+        "fixtureFetch",
+        (message) => message.operation === "qdrantDelete",
+      );
+      fixture.send({ type: "cancel" });
+
+      const stats = (await completion).stats;
+      expect(stats.cancelled).toBe(true);
+      expect(stats.pointsDeleted).toBe(256);
+      expect(readCachedPointIds(cachePath, "removed.sql")).toEqual(pointIds);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "retains removed-file cache ownership when a bounded delete fails",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const removed = path.join(root, "removed.sql");
+      const pointIds = Array.from(
+        { length: 600 },
+        (_, index) => `point-${index}`,
+      );
+      writeCacheEntry(cachePath, "removed.sql", pointIds);
+
+      const stats = await fixture.complete({
+        type: "incrementalUpdate",
+        added: [],
+        removed: [removed],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/delete-failure",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+
+      expect(stats.pointsDeleted).toBe(0);
+      expect(stats.errors).toEqual([
+        expect.stringContaining("fixture delete failure"),
+      ]);
+      expect(readCachedPointIds(cachePath, "removed.sql")).toEqual(pointIds);
     },
     TEST_TIMEOUT_MS,
   );

@@ -222,7 +222,7 @@ describe("Qdrant collection and point writes", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://qdrant/collections/al-workspace/points/delete",
+      "http://qdrant/collections/al-workspace/points/delete?wait=true",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

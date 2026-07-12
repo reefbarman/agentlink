@@ -1,8 +1,14 @@
-interface FixtureObservation {
-  type: "fixtureFetch";
-  operation: "embedding";
-  attempt: number;
-}
+type FixtureObservation =
+  | {
+      type: "fixtureFetch";
+      operation: "embedding";
+      attempt: number;
+    }
+  | {
+      type: "fixtureFetch";
+      operation: "qdrantDelete";
+      pointCount: number;
+    };
 
 let embeddingAttempts = 0;
 
@@ -49,6 +55,22 @@ globalThis.fetch = async (input, init) => {
   }
 
   if (url.includes("fixture-qdrant.invalid")) {
+    if (url.endsWith("/points/delete?wait=true") && init?.method === "POST") {
+      const request = JSON.parse(String(init.body)) as { points?: string[] };
+      observe({
+        type: "fixtureFetch",
+        operation: "qdrantDelete",
+        pointCount: request.points?.length ?? 0,
+      });
+      if (url.includes("delete-delay")) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (url.includes("delete-failure")) {
+        return response(500, "fixture delete failure", {
+          "Content-Type": "text/plain",
+        });
+      }
+    }
     if (
       url.includes("partial-failure") &&
       url.endsWith("/points") &&

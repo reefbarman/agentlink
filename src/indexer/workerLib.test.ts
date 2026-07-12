@@ -522,12 +522,43 @@ describe("scanFiles / readFilesBatch", () => {
     });
   });
 
+  it("distinguishes removed cached files from changed stale files", async () => {
+    const changed = writeFile("changed.ts", "export const value = 2;");
+    const cache: IndexCache = {
+      version: 1,
+      files: {
+        "changed.ts": {
+          hash: hashContent("export const value = 1;"),
+          pointIds: ["changed-point"],
+          indexedAt: "2026-01-01T00:00:00.000Z",
+        },
+        "removed.ts": {
+          hash: "removed-hash",
+          pointIds: ["removed-point"],
+          indexedAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    };
+
+    await expect(scanFiles([changed], tmpDir, cache)).resolves.toEqual({
+      toIndexPaths: [{ absPath: changed, relPath: "changed.ts" }],
+      removedRelPaths: ["removed.ts"],
+      staleRelPaths: ["changed.ts", "removed.ts"],
+      errors: [],
+    });
+  });
+
   it("preserves empty scan and batch results", async () => {
     const progress = vi.fn();
 
     await expect(
       scanFiles([], tmpDir, { version: 1, files: {} }, progress),
-    ).resolves.toEqual({ toIndexPaths: [], staleRelPaths: [], errors: [] });
+    ).resolves.toEqual({
+      toIndexPaths: [],
+      removedRelPaths: [],
+      staleRelPaths: [],
+      errors: [],
+    });
     expect(progress).toHaveBeenCalledOnce();
     expect(progress).toHaveBeenCalledWith(0, 0);
     await expect(readFilesBatch([], [])).resolves.toEqual([]);
