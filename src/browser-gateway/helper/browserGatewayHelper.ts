@@ -161,18 +161,14 @@ import {
   type StreamingBaselineMetrics,
   utf8ByteLength,
 } from "../../shared/streamingBaselineMetrics.js";
-import {
-  matchAskAgentRoute,
-  matchInternalCoreRoute,
-  matchInternalDeviceRoute,
-  matchPairedBrowserRoute,
-  matchPublicHelperRoute,
-  type AskAgentRouteHandler,
-  type InternalCoreRouteHandler,
-  type InternalDeviceRouteHandler,
-  type PairedBrowserRouteHandler,
-  type PublicHelperRouteHandler,
+import type {
+  AskAgentRouteHandler,
+  InternalCoreRouteHandler,
+  InternalDeviceRouteHandler,
+  PairedBrowserRouteHandler,
+  PublicHelperRouteHandler,
 } from "./helperRouteFamilies.js";
+import { HelperHttpRouter } from "./HelperHttpRouter.js";
 
 export interface HelperRuntimeOptions {
   port: number;
@@ -616,6 +612,7 @@ export class BrowserGatewayHelper {
     string,
     string
   >();
+  private readonly httpRouter: HelperHttpRouter<AuthResult>;
   private readonly deviceStore: DeviceStore;
   private readonly pairingBroker: PairingBroker;
   private mdnsAdvertiser: MdnsAdvertiser | null = null;
@@ -712,6 +709,35 @@ export class BrowserGatewayHelper {
     this.askAgentLogPath =
       options.askAgentLogPath ?? getDefaultAskAgentLogPath();
     this.bindHost = options.lanAccess ? "0.0.0.0" : "127.0.0.1";
+    this.httpRouter = new HelperHttpRouter(options.port, {
+      isInternalAuthorized: (req) => this.isInternalClientAuthorized(req),
+      authenticate: async (req) => {
+        const auth = await this.authenticateRequest(req);
+        return auth.kind === "none" ? null : auth;
+      },
+      recordAuthenticatedActivity: (auth) => this.recordDeviceActivity(auth),
+      handleAskAgent: (handler, req, res) =>
+        this.handleAskAgentRoute(handler, req, res),
+      handleInternalCore: (handler, req, res) =>
+        this.handleInternalCoreRoute(handler, req, res),
+      handleInternalDevice: (handler, req, res, requestUrl) =>
+        this.handleInternalDeviceRoute(handler, req, res, requestUrl),
+      handlePairedBrowser: (handler, req, res) =>
+        this.handlePairedBrowserRoute(handler, req, res),
+      handlePublic: (handler, pathname, req, res, requestUrl) =>
+        this.handlePublicRoute(handler, pathname, req, res, requestUrl),
+      handleInstances: (requestUrl, res) =>
+        this.handleInstancesRequest(requestUrl, res),
+      handleProxy: (req, res, requestUrl) =>
+        this.handleProxyRequest(req, res, requestUrl),
+      handleShutdown: (res) => {
+        writeJson(res, 202, { ok: true });
+        setImmediate(() => {
+          void this.stop("admin_shutdown");
+        });
+      },
+      writeJson,
+    });
     setBrowserGatewayRegistryLogger(logHelper);
     logHelper(
       `constructed pid=${process.pid} port=${options.port} bindHost=${this.bindHost} registry=${getBrowserGatewayRegistryPath()} askAgentLog=${JSON.stringify(this.askAgentLogPath)} extensionRoot=${JSON.stringify(options.extensionRootPath)}`,
@@ -850,73 +876,7 @@ export class BrowserGatewayHelper {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): void => {
-    const method = req.method ?? "GET";
-    const rawUrl = req.url ?? "/";
-    const requestUrl = new URL(rawUrl, `http://127.0.0.1:${this.options.port}`);
-    const pathname = requestUrl.pathname;
-
-    // Internal extension-to-helper endpoints (auth: clientSharedSecret).
-    if (pathname.startsWith("/internal/")) {
-      if (!this.isInternalClientAuthorized(req)) {
-        writeJson(res, 401, { error: "unauthorized" });
-        return;
-      }
-      void this.handleInternalRequest(method, pathname, req, res, requestUrl);
-      return;
-    }
-
-    const pairedBrowserRoute = matchPairedBrowserRoute(method, pathname);
-    if (pairedBrowserRoute) {
-      void this.handlePairedBrowserRoute(pairedBrowserRoute.handler, req, res);
-      return;
-    }
-
-    const publicRoute = matchPublicHelperRoute(method, pathname);
-    if (publicRoute) {
-      void this.handlePublicRoute(
-        publicRoute.handler,
-        pathname,
-        req,
-        res,
-        requestUrl,
-      );
-      return;
-    }
-
-    const askAgentRoute = matchAskAgentRoute(method, pathname);
-    if (askAgentRoute) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleAskAgentRoute(askAgentRoute.handler, req, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/api/instances") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleInstancesRequest(requestUrl, res);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (method === "GET" && pathname === "/events") {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleProxyRequest(req, res, requestUrl);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    if (pathname.startsWith("/api/")) {
-      void this.authThen(req, res, async (auth) => {
-        await this.handleProxyRequest(req, res, requestUrl);
-        void this.recordDeviceActivity(auth);
-      });
-      return;
-    }
-
-    writeJson(res, 404, { error: "not_found" });
+    this.httpRouter.handle(req, res);
   };
 
   private async handleAskAgentRoute(
@@ -1000,51 +960,6 @@ export class BrowserGatewayHelper {
       case "stop":
         return this.handleAskAgentStopRequest(res);
     }
-  }
-
-  private async authThen(
-    req: http.IncomingMessage,
-    res: http.ServerResponse,
-    handler: (auth: AuthResult) => Promise<void>,
-  ): Promise<void> {
-    const auth = await this.authenticateRequest(req);
-    if (auth.kind === "none") {
-      writeJson(res, 401, { error: "unauthorized" });
-      return;
-    }
-    await handler(auth);
-  }
-
-  private async handleInternalRequest(
-    method: string,
-    pathname: string,
-    req: http.IncomingMessage,
-    res: http.ServerResponse,
-    requestUrl: URL,
-  ): Promise<void> {
-    const internalCoreRoute = matchInternalCoreRoute(method, pathname);
-    if (internalCoreRoute) {
-      await this.handleInternalCoreRoute(internalCoreRoute.handler, req, res);
-      return;
-    }
-    if (method === "POST" && pathname === "/internal/shutdown") {
-      writeJson(res, 202, { ok: true });
-      setImmediate(() => {
-        void this.stop("admin_shutdown");
-      });
-      return;
-    }
-    const internalDeviceRoute = matchInternalDeviceRoute(method, pathname);
-    if (internalDeviceRoute) {
-      await this.handleInternalDeviceRoute(
-        internalDeviceRoute.handler,
-        req,
-        res,
-        requestUrl,
-      );
-      return;
-    }
-    writeJson(res, 404, { error: "not_found" });
   }
 
   private async handlePublicRoute(
