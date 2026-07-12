@@ -6,12 +6,7 @@ import type {
   ApprovalRequest,
   DecisionMessage,
 } from "../../approvals/webview/types";
-import type {
-  ChatMessage,
-  ExtensionMessage,
-  ReasoningEffort,
-  SessionSummary,
-} from "./types";
+import type { ChatMessage, ReasoningEffort, SessionSummary } from "./types";
 import type {
   McpConfigSnapshot,
   McpManagerScope,
@@ -65,6 +60,7 @@ import {
   toVsCodeSelectionMessage,
   type WriteApprovalSelection,
 } from "../../shared/selectionCommands";
+import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
@@ -179,11 +175,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   // Guards against stale delta events arriving after agentDone (stop race condition).
   // Set true when a turn starts, false when agentDone fires.
   const streamingRef = useRef(false);
-  // Buffers for coalescing streaming deltas — flushed once per animation frame.
-  const textDeltaBuf = useRef("");
-  const thinkingDeltaBuf = useRef(new Map<string, string>());
-  const toolInputDeltaBuf = useRef(new Map<string, string>());
-  const deltaRafRef = useRef<number | null>(null);
+
   const [injection, setInjection] = useState<Injection | null>(null);
   const [autoContinueEnabled, setAutoContinueEnabled] = useState(false);
   const [autoContinueStatus, setAutoContinueStatus] = useState("");
@@ -298,98 +290,17 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     };
   }, [vscodeApi]);
 
-  useEffect(() => {
-    // Drain all delta buffers, dispatching one action per buffer.
-    // React 18 batches these synchronous dispatches into a single render.
-    const drainDeltaBuffers = () => {
-      if (textDeltaBuf.current) {
-        dispatch({ type: "TEXT_DELTA", text: textDeltaBuf.current });
-        textDeltaBuf.current = "";
-      }
-      for (const [thinkingId, text] of thinkingDeltaBuf.current) {
-        dispatch({ type: "THINKING_DELTA", thinkingId, text });
-      }
-      thinkingDeltaBuf.current.clear();
-      for (const [toolCallId, partialJson] of toolInputDeltaBuf.current) {
-        dispatch({ type: "TOOL_INPUT_DELTA", toolCallId, partialJson });
-      }
-      toolInputDeltaBuf.current.clear();
-    };
-    const scheduleDeltaFlush = () => {
-      if (deltaRafRef.current !== null) return;
-      deltaRafRef.current = requestAnimationFrame(() => {
-        deltaRafRef.current = null;
-        drainDeltaBuffers();
-      });
-    };
-    const flushDeltasNow = () => {
-      if (deltaRafRef.current !== null) {
-        cancelAnimationFrame(deltaRafRef.current);
-        deltaRafRef.current = null;
-      }
-      drainDeltaBuffers();
-    };
-
-    const handler = (e: MessageEvent) => {
-      const msg = e.data as ExtensionMessage;
-
-      const currentSessionId = stateRef.current.sessionId;
-      const eventSessionId =
-        "sessionId" in msg
-          ? (msg as { sessionId: string }).sessionId
-          : undefined;
-      const isBackgroundEvent =
-        msg.type === "agentBgThinkingStart" ||
-        msg.type === "agentBgThinkingDelta" ||
-        msg.type === "agentBgThinkingEnd" ||
-        msg.type === "agentBgTextDelta" ||
-        msg.type === "agentBgToolStart" ||
-        msg.type === "agentBgToolInputDelta" ||
-        msg.type === "agentBgToolComplete" ||
-        msg.type === "agentBgApiRequest" ||
-        msg.type === "agentBgError" ||
-        msg.type === "agentBgDone";
-
-      const reportDrop = (
-        reason: "session_mismatch" | "streaming_false",
-      ): void => {
-        vscodeApi.postMessage({
-          command: "agentStreamDrop",
-          reason,
-          eventType: msg.type,
-          eventSessionId: eventSessionId ?? null,
-          currentSessionId: stateRef.current.sessionId,
-          streaming: streamingRef.current,
-        });
-      };
-
-      // Filter session-scoped foreground events from non-foreground sessions.
-      // agentSessionLoaded is excluded — it intentionally switches the active session.
-      // showBgTranscript is excluded — it carries the bg session's ID but is a
-      // response to a user-initiated action, not a stream event.
-      if (
-        shouldDropSessionScopedEvent(
-          msg.type,
-          eventSessionId,
-          currentSessionId,
-          isBackgroundEvent,
-        )
-      ) {
-        console.debug(
-          `[agentlink-webview] dropping ${msg.type}: session mismatch (event=${eventSessionId}, current=${currentSessionId ?? "null"})`,
-        );
-        reportDrop("session_mismatch");
-        return;
-      }
-
-      const dropIfNotStreaming = () => {
-        if (streamingRef.current) return false;
-        console.debug(
-          `[agentlink-webview] dropping ${msg.type}: streamingRef=false (eventSession=${eventSessionId ?? "none"}, current=${stateRef.current.sessionId ?? "null"})`,
-        );
-        reportDrop("streaming_false");
-        return true;
-      };
+  useWebviewMessageConnection({
+    vscodeApi,
+    sessionIdRef: {
+      get current() {
+        return stateRef.current.sessionId;
+      },
+    },
+    streamingRef,
+    dispatchDelta: dispatch,
+    onMessage: (msg, controls) => {
+      const { dropIfNotStreaming, flushDeltasNow } = controls;
 
       switch (msg.type) {
         case "stateUpdate":
@@ -409,11 +320,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         case "agentThinkingDelta":
           if (dropIfNotStreaming()) break;
-          thinkingDeltaBuf.current.set(
-            msg.thinkingId,
-            (thinkingDeltaBuf.current.get(msg.thinkingId) ?? "") + msg.text,
-          );
-          scheduleDeltaFlush();
+          controls.appendThinkingDelta(msg.thinkingId, msg.text);
           break;
         case "agentThinkingEnd":
           if (dropIfNotStreaming()) break;
@@ -441,12 +348,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         case "agentToolInputDelta":
           if (dropIfNotStreaming()) break;
-          toolInputDeltaBuf.current.set(
-            msg.toolCallId,
-            (toolInputDeltaBuf.current.get(msg.toolCallId) ?? "") +
-              msg.partialJson,
-          );
-          scheduleDeltaFlush();
+          controls.appendToolInputDelta(msg.toolCallId, msg.partialJson);
           break;
         case "agentToolComplete":
           if (dropIfNotStreaming()) break;
@@ -492,8 +394,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             kind: "text",
             chars: msg.text.length,
           });
-          textDeltaBuf.current += msg.text;
-          scheduleDeltaFlush();
+          controls.appendTextDelta(msg.text);
           break;
         case "agentApiRequest":
           if (dropIfNotStreaming()) break;
@@ -1310,19 +1211,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         }
       }
-    };
-
-    window.addEventListener("message", handler);
-
-    // Tell extension we're ready
-    vscodeApi.postMessage({ command: "webviewReady" });
-
-    return () => {
-      window.removeEventListener("message", handler);
-      if (deltaRafRef.current !== null)
-        cancelAnimationFrame(deltaRafRef.current);
-    };
-  }, [vscodeApi]);
+    },
+  });
 
   const handleSend = useCallback(
     (

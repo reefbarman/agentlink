@@ -1,0 +1,265 @@
+/** @vitest-environment jsdom */
+
+import { cleanup, render } from "@testing-library/preact";
+import { h } from "preact";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  useWebviewMessageConnection,
+  type StreamingDeltaAction,
+  type WebviewMessageControls,
+} from "./useWebviewMessageConnection";
+import type { ExtensionMessage } from "./types";
+
+interface TestRef<T> {
+  current: T;
+}
+
+function Harness({
+  postMessage,
+  sessionIdRef,
+  streamingRef,
+  dispatchDelta,
+  onMessage,
+}: {
+  postMessage: (message: unknown) => void;
+  sessionIdRef: TestRef<string | null>;
+  streamingRef: TestRef<boolean>;
+  dispatchDelta: (action: StreamingDeltaAction) => void;
+  onMessage: (msg: ExtensionMessage, controls: WebviewMessageControls) => void;
+}) {
+  useWebviewMessageConnection({
+    vscodeApi: { postMessage },
+    sessionIdRef,
+    streamingRef,
+    dispatchDelta,
+    onMessage,
+  });
+  return null;
+}
+
+function sendMessage(message: ExtensionMessage): void {
+  window.dispatchEvent(new MessageEvent("message", { data: message }));
+}
+
+describe("useWebviewMessageConnection", () => {
+  const animationFrames: FrameRequestCallback[] = [];
+  let animationFrameId = 0;
+
+  beforeEach(() => {
+    animationFrames.length = 0;
+    animationFrameId = 0;
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        animationFrames.push(callback);
+        animationFrameId += 1;
+        return animationFrameId;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("registers once, posts the ready handshake, and tears down the listener", () => {
+    const addEventListener = vi.spyOn(window, "addEventListener");
+    const removeEventListener = vi.spyOn(window, "removeEventListener");
+    const postMessage = vi.fn();
+    const onMessage = vi.fn();
+    const { unmount } = render(
+      <Harness
+        postMessage={postMessage}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: false }}
+        dispatchDelta={vi.fn()}
+        onMessage={onMessage}
+      />,
+    );
+
+    const registration = addEventListener.mock.calls.find(
+      ([type]) => type === "message",
+    );
+    expect(registration).toBeDefined();
+    expect(postMessage).toHaveBeenCalledWith({ command: "webviewReady" });
+
+    unmount();
+
+    expect(removeEventListener).toHaveBeenCalledWith(
+      "message",
+      registration?.[1],
+    );
+  });
+
+  it("coalesces text, thinking, and tool-input deltas into one animation frame", () => {
+    const dispatchDelta = vi.fn<(action: StreamingDeltaAction) => void>();
+    render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        dispatchDelta={dispatchDelta}
+        onMessage={(msg, controls) => {
+          if (controls.dropIfNotStreaming()) return;
+          if (msg.type === "agentTextDelta") {
+            controls.appendTextDelta(msg.text);
+          } else if (msg.type === "agentThinkingDelta") {
+            controls.appendThinkingDelta(msg.thinkingId, msg.text);
+          } else if (msg.type === "agentToolInputDelta") {
+            controls.appendToolInputDelta(msg.toolCallId, msg.partialJson);
+          }
+        }}
+      />,
+    );
+
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "hello ",
+    });
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "world",
+    });
+    sendMessage({
+      type: "agentThinkingDelta",
+      sessionId: "session-1",
+      thinkingId: "thinking-1",
+      text: "reasoning",
+    });
+    sendMessage({
+      type: "agentToolInputDelta",
+      sessionId: "session-1",
+      toolCallId: "tool-1",
+      partialJson: '{"path":',
+    });
+
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(dispatchDelta).not.toHaveBeenCalled();
+
+    animationFrames.shift()?.(0);
+
+    expect(dispatchDelta.mock.calls.map(([action]) => action)).toEqual([
+      { type: "TEXT_DELTA", text: "hello world" },
+      {
+        type: "THINKING_DELTA",
+        thinkingId: "thinking-1",
+        text: "reasoning",
+      },
+      {
+        type: "TOOL_INPUT_DELTA",
+        toolCallId: "tool-1",
+        partialJson: '{"path":',
+      },
+    ]);
+  });
+
+  it("rejects session-mismatched events before routing them", () => {
+    const postMessage = vi.fn();
+    const onMessage = vi.fn();
+    render(
+      <Harness
+        postMessage={postMessage}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        dispatchDelta={vi.fn()}
+        onMessage={onMessage}
+      />,
+    );
+
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-2",
+      text: "stale",
+    });
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith({
+      command: "agentStreamDrop",
+      reason: "session_mismatch",
+      eventType: "agentTextDelta",
+      eventSessionId: "session-2",
+      currentSessionId: "session-1",
+      streaming: true,
+    });
+  });
+
+  it("rejects stale deltas after done marks the stream inactive", () => {
+    const postMessage = vi.fn();
+    const streamingRef = { current: true };
+    const dispatchDelta = vi.fn();
+    render(
+      <Harness
+        postMessage={postMessage}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={streamingRef}
+        dispatchDelta={dispatchDelta}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentDone") {
+            controls.flushDeltasNow();
+            streamingRef.current = false;
+          } else if (
+            msg.type === "agentTextDelta" &&
+            !controls.dropIfNotStreaming()
+          ) {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+      />,
+    );
+
+    sendMessage({
+      type: "agentDone",
+      sessionId: "session-1",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "late",
+    });
+
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+    expect(dispatchDelta).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenLastCalledWith({
+      command: "agentStreamDrop",
+      reason: "streaming_false",
+      eventType: "agentTextDelta",
+      eventSessionId: "session-1",
+      currentSessionId: "session-1",
+      streaming: false,
+    });
+  });
+
+  it("cancels a pending delta frame during teardown", () => {
+    const { unmount } = render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "session-1" }}
+        streamingRef={{ current: true }}
+        dispatchDelta={vi.fn()}
+        onMessage={(msg, controls) => {
+          if (msg.type === "agentTextDelta") {
+            controls.appendTextDelta(msg.text);
+          }
+        }}
+      />,
+    );
+    sendMessage({
+      type: "agentTextDelta",
+      sessionId: "session-1",
+      text: "pending",
+    });
+
+    unmount();
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
+  });
+});
