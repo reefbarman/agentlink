@@ -73,7 +73,7 @@ globalThis.fetch = async (input, init) => {
     }
     if (
       url.includes("partial-failure") &&
-      url.endsWith("/points") &&
+      url.endsWith("/points?wait=true") &&
       init?.method === "PUT"
     ) {
       return response(500, "fixture upsert failure", {

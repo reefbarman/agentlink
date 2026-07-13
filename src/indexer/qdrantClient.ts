@@ -83,7 +83,7 @@ export async function upsertQdrantPoints(
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const response = await fetchImpl(
-    `${getCollectionUrl(qdrantUrl, collectionName)}/points`,
+    `${getCollectionUrl(qdrantUrl, collectionName)}/points?wait=true`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -113,6 +113,31 @@ export async function deleteQdrantPoints(
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`Qdrant delete failed: ${error}`);
+  }
+}
+
+export async function setQdrantPointVisibility(
+  qdrantUrl: string,
+  collectionName: string,
+  pointIds: string[],
+  visible: boolean,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  if (pointIds.length === 0) return;
+  const response = await fetchImpl(
+    `${getCollectionUrl(qdrantUrl, collectionName)}/points/payload?wait=true`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        payload: { indexVisible: visible },
+        points: pointIds,
+      }),
+    },
+  );
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Qdrant visibility update failed: ${error}`);
   }
 }
 

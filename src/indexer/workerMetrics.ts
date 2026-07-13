@@ -3,6 +3,7 @@ export type IndexWorkerOperation =
   | "qdrant.deleteCollection"
   | "qdrant.deletePoints"
   | "qdrant.upsertPoints"
+  | "qdrant.setPointVisibility"
   | "cache.writeVector"
   | "cache.writeStructural";
 
@@ -26,6 +27,7 @@ const OPERATIONS: IndexWorkerOperation[] = [
   "qdrant.deleteCollection",
   "qdrant.deletePoints",
   "qdrant.upsertPoints",
+  "qdrant.setPointVisibility",
   "cache.writeVector",
   "cache.writeStructural",
 ];

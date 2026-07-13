@@ -477,6 +477,18 @@ describe("semantic search auth", () => {
           (body) => !JSON.stringify(body.filter).includes("pathSegments"),
         ),
       ).toBe(true);
+      expect(
+        requestBodies.every((body) =>
+          body.filter.must_not.some(
+            (condition: unknown) =>
+              JSON.stringify(condition) ===
+              JSON.stringify({
+                key: "indexVisible",
+                match: { value: false },
+              }),
+          ),
+        ),
+      ).toBe(true);
     } finally {
       workspace.workspaceFolders = originalFolders;
     }

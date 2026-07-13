@@ -32,6 +32,7 @@ describe("index worker metrics", () => {
         "qdrant.deleteCollection": 0,
         "qdrant.deletePoints": 2,
         "qdrant.upsertPoints": 0,
+        "qdrant.setPointVisibility": 0,
         "cache.writeVector": 1,
         "cache.writeStructural": 1,
       },

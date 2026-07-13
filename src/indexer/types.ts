@@ -143,6 +143,10 @@ export interface CachedFileEntry {
   mtimeMs?: number;
   /** File size in bytes — used for fast stat-based skip */
   size?: number;
+  /** Durable replacement generation for protocol-created entries. */
+  generation?: string;
+  /** New points remain hidden until journal cleanup and publication complete. */
+  visibility?: "pending" | "current";
 }
 
 export interface IndexCache {

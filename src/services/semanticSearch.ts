@@ -337,7 +337,10 @@ export function rerankResults(
 
 /** Build the base filter object for Qdrant queries */
 function buildQdrantFilter(directoryPrefix?: string): Record<string, unknown> {
-  const mustNot = [{ key: "type", match: { value: "metadata" } }];
+  const mustNot = [
+    { key: "type", match: { value: "metadata" } },
+    { key: "indexVisible", match: { value: false } },
+  ];
   const must: Array<{ key: string; match: { value: string } }> = [];
 
   if (directoryPrefix) {
@@ -716,7 +719,10 @@ export async function semanticFileQuery(
 
     // Build filter: must match this exact file
     const filter: Record<string, unknown> = {
-      must_not: [{ key: "type", match: { value: "metadata" } }],
+      must_not: [
+        { key: "type", match: { value: "metadata" } },
+        { key: "indexVisible", match: { value: false } },
+      ],
       must: [{ key: "filePath", match: { value: normalizedPath } }],
     };
 

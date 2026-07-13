@@ -379,8 +379,9 @@ describe("indexer worker fixture", () => {
       expect(stats.metrics!.operations).toMatchObject({
         "qdrant.deletePoints": 2,
         "qdrant.upsertPoints": 1,
-        "cache.writeVector": 3,
-        "cache.writeStructural": 3,
+        "qdrant.setPointVisibility": 2,
+        "cache.writeVector": 5,
+        "cache.writeStructural": 5,
       });
       expect(stats.metrics!.phaseDurationsMs).toEqual(
         expect.objectContaining({
@@ -562,6 +563,58 @@ describe("indexer worker fixture", () => {
   );
 
   it(
+    "reports cancellation and retains changed-file ownership during replacement cleanup",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const changed = writeSource(root, "changed.sql", sourceContent(2));
+      writeCacheEntry(cachePath, "changed.sql", ["old-point"]);
+      const completion = fixture.waitFor("complete");
+      fixture.send({
+        type: "incrementalUpdate",
+        added: [changed],
+        removed: [],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/delete-delay",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+      await fixture.waitFor(
+        "fixtureFetch",
+        (message) => message.operation === "qdrantDelete",
+      );
+      fixture.send({ type: "cancel" });
+
+      const stats = (await completion).stats;
+      expect(stats).toMatchObject({
+        cancelled: true,
+        pointsDeleted: 1,
+        pointsUpserted: 0,
+      });
+      expect(readCachedPointIds(cachePath, "changed.sql")).toEqual([
+        "old-point",
+      ]);
+      expect(
+        loadFileIndexJournal(getFileIndexJournalPath(cachePath)),
+      ).toMatchObject({
+        status: "valid",
+        journal: {
+          operations: [
+            {
+              file: "changed.sql",
+              kind: "replace",
+              oldPointIds: ["old-point"],
+            },
+          ],
+        },
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "retains removed-file cache ownership when a bounded delete fails",
     async () => {
       const fixture = await createFixture();
@@ -641,7 +694,7 @@ describe("indexer worker fixture", () => {
   );
 
   it(
-    "fails closed before worker mutations for unsupported replacement recovery",
+    "recovers journaled changed-file ownership before new worker work",
     async () => {
       const fixture = await createFixture();
       const { root, cachePath } = createWorkspace();
@@ -660,8 +713,8 @@ describe("indexer worker fixture", () => {
           },
         ],
       });
-      const error = fixture.waitFor("error");
-      fixture.send({
+
+      const stats = await fixture.complete({
         type: "incrementalUpdate",
         added: [],
         removed: [],
@@ -673,22 +726,30 @@ describe("indexer worker fixture", () => {
         granularity: "standard",
       });
 
-      await expect(error).resolves.toMatchObject({
-        fatal: true,
-        message: expect.stringContaining(
-          "Replacement journal recovery is not implemented for changed.sql",
-        ),
+      expect(stats).toMatchObject({
+        pointsDeleted: 2,
+        pointsUpserted: 0,
+        errors: [],
       });
-      expect(readCachedPointIds(cachePath, "changed.sql")).toEqual([
-        "old-point",
-      ]);
+      expect(readCachedPointIds(cachePath, "changed.sql")).toBeNull();
+      expect(loadFileIndexJournal(getFileIndexJournalPath(cachePath))).toEqual({
+        status: "valid",
+        journal: emptyFileIndexJournal(),
+      });
       expect(
-        fixture.messages.filter(
-          (message) =>
-            message.type === "fixtureFetch" &&
-            message.operation === "qdrantDelete",
-        ),
-      ).toEqual([]);
+        fixture.messages
+          .filter(
+            (
+              message,
+            ): message is Extract<
+              FixtureFetchObservation,
+              { operation: "qdrantDelete" }
+            > =>
+              message.type === "fixtureFetch" &&
+              message.operation === "qdrantDelete",
+          )
+          .map((message) => message.pointCount),
+      ).toEqual([2]);
     },
     TEST_TIMEOUT_MS,
   );

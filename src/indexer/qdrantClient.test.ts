@@ -7,6 +7,7 @@ import {
   ensureQdrantCollection,
   normalizeQdrantUrl,
   queryQdrantPoints,
+  setQdrantPointVisibility,
   upsertQdrantPoints,
   type QdrantPayloadIndex,
   type QdrantPoint,
@@ -181,7 +182,7 @@ describe("Qdrant collection and point writes", () => {
     );
   });
 
-  it("upserts points with the existing request contract", async () => {
+  it("waits for point upserts to complete", async () => {
     const fetchMock = vi.fn(async () => response({ ok: true }));
 
     await upsertQdrantPoints(
@@ -192,7 +193,7 @@ describe("Qdrant collection and point writes", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://qdrant/collections/al-workspace/points",
+      "http://qdrant/collections/al-workspace/points?wait=true",
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -227,6 +228,30 @@ describe("Qdrant collection and point writes", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ points: ["point-1", "point-2"] }),
+      },
+    );
+  });
+
+  it("waits for point visibility updates to complete", async () => {
+    const fetchMock = vi.fn(async () => response({ ok: true }));
+
+    await setQdrantPointVisibility(
+      "http://qdrant/",
+      "al-workspace",
+      ["point-1", "point-2"],
+      false,
+      fetchMock,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://qdrant/collections/al-workspace/points/payload?wait=true",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payload: { indexVisible: false },
+          points: ["point-1", "point-2"],
+        }),
       },
     );
   });

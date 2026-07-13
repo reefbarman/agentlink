@@ -28,6 +28,7 @@ import {
 import {
   getStructuralCachePath,
   hashContent,
+  loadCache,
   loadStructuralCache,
 } from "../../indexer/workerLib.js";
 import {
@@ -42,6 +43,7 @@ import { WorkingSetStore } from "../../tools/context/WorkingSetStore.js";
 import { approveOutsideWorkspaceAccess } from "../../tools/pathAccessUI.js";
 import { getAlCollectionName } from "../../indexer/collectionName.js";
 import { isAgentlinkTmpArtifact } from "../../util/agentlinkTmpArtifacts.js";
+import { projectVisibleStructuralGraph } from "../../indexer/structuralGraph.js";
 import { resolveAndOpenDocument } from "../../tools/languageFeatures.js";
 import { semanticSearch } from "../../services/semanticSearch.js";
 
@@ -163,7 +165,10 @@ export function createVscodeStructuralGraphProvider(
       );
       const structuralCachePath = getStructuralCachePath(vectorCachePath);
       const graphExists = fs.existsSync(structuralCachePath);
-      const graph = loadStructuralCache(structuralCachePath, workspaceRoot);
+      const graph = projectVisibleStructuralGraph(
+        loadStructuralCache(structuralCachePath, workspaceRoot),
+        loadCache(vectorCachePath),
+      );
       return {
         graph,
         workspaceRoot,
