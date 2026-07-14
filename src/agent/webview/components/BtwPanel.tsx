@@ -2,6 +2,7 @@ import { useEffect, useRef, useMemo } from "preact/hooks";
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
 import type { BtwBudget } from "../types";
+import { renderMarkdownTaskCheckbox } from "./markdownTaskCheckbox";
 
 export interface BtwState {
   requestId: string;
@@ -41,6 +42,9 @@ function renderMarkdown(text: string): string {
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;")}</code></pre>`;
+      },
+      checkbox({ checked }: { checked: boolean }) {
+        return renderMarkdownTaskCheckbox(checked);
       },
     },
   });

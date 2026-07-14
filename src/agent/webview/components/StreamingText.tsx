@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import mermaid from "mermaid";
 import embed, { type VisualizationSpec } from "vega-embed";
 import { matchFilePaths } from "./filePathLinks";
+import { renderMarkdownTaskCheckbox } from "./markdownTaskCheckbox";
 
 type SpecialBlock =
   | { kind: "mermaid"; source: string }
@@ -113,6 +114,9 @@ function parseMarkdown(text: string): {
       code({ text, lang }: { text: string; lang?: string }) {
         const langClass = lang ? ` class="language-${lang}"` : "";
         return `<pre><code${langClass}>${escapeHtml(text)}</code></pre>`;
+      },
+      checkbox({ checked }: { checked: boolean }) {
+        return renderMarkdownTaskCheckbox(checked);
       },
     },
   });

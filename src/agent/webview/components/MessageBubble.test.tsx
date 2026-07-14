@@ -228,6 +228,37 @@ describe("MessageBubble slash-command rendering", () => {
     expect(fencedCode?.textContent).toBe("const answer = 42;");
   });
 
+  it("renders Markdown task-list markers without native input controls", () => {
+    const message: ChatMessage = {
+      id: "assistant-task-list",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "text",
+          text: "- [ ] Run the smoke test\n- [x] Build passes",
+        },
+      ],
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} streaming={false} />,
+    );
+
+    const markers = container.querySelectorAll(".markdown-task-checkbox");
+    expect(markers).toHaveLength(2);
+    expect(
+      markers[0]?.classList.contains("markdown-task-checkbox-checked"),
+    ).toBe(false);
+    expect(
+      markers[1]?.classList.contains("markdown-task-checkbox-checked"),
+    ).toBe(true);
+    expect(container.querySelector(".markdown-body input")).toBeNull();
+    expect(screen.getByText("Run the smoke test")).toBeTruthy();
+    expect(screen.getByText("Build passes")).toBeTruthy();
+  });
+
   it("renders inline @path mentions as clickable file links in user text", () => {
     const onOpenFile = vi.fn();
     const message: ChatMessage = {

@@ -767,6 +767,31 @@ body {
   margin: 4px 0;
 }
 
+.markdown-task-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.35em;
+  border: 1px solid var(--vscode-checkbox-border, currentColor);
+  border-radius: 2px;
+  color: var(--vscode-checkbox-foreground, currentColor);
+  background: var(--vscode-checkbox-background, transparent);
+  font-size: 0.85em;
+  line-height: 1;
+  vertical-align: -0.08em;
+}
+
+.markdown-task-checkbox-checked {
+  border-color: var(--vscode-checkbox-selectBorder, var(--vscode-focusBorder));
+  background: var(
+    --vscode-checkbox-selectBackground,
+    var(--vscode-focusBorder)
+  );
+  color: var(--vscode-checkbox-selectForeground, #ffffff);
+}
+
 .markdown-body a {
   color: var(--vscode-textLink-foreground);
   text-decoration: none;
