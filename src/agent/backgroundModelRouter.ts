@@ -206,8 +206,11 @@ export async function resolveBackgroundRoute(
   const strategy = rule.providerStrategy ?? "same";
   const specificProvider = rule.specificProvider;
 
-  // Keep general tasks on the same model unless route policy says otherwise.
+  // Keep same-provider tasks on the foreground model when requested by policy.
+  // An opposite-provider strategy always takes precedence over this fast path,
+  // even if a future config edit accidentally enables both flags.
   if (
+    strategy !== "opposite" &&
     rule.useForegroundModelByDefault &&
     foreground.model &&
     allModels.some((m) => m.id === foreground.model) &&

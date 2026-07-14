@@ -9,15 +9,15 @@
   "taskClasses": {
     "review_code": {
       "preferredMode": "review",
-      "providerStrategy": "same",
-      "useForegroundModelByDefault": true,
+      "providerStrategy": "opposite",
+      "useForegroundModelByDefault": false,
       "requireReviewCapableModel": true
     },
     "review_plan": {
       "preferredMode": "review",
-      "providerStrategy": "same",
+      "providerStrategy": "opposite",
       "modelTier": "balanced",
-      "useForegroundModelByDefault": true,
+      "useForegroundModelByDefault": false,
       "requireReviewCapableModel": false
     },
     "readonly-research": {
