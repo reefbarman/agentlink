@@ -100,6 +100,8 @@ function extractAgentDisplayArgs(
       return String(input.command ?? "").slice(0, 80);
     case "get_terminal_output":
       return String(input.terminal_id ?? "");
+    case "get_background_result":
+      return String(input.sessionId ?? "");
     case "close_terminals":
       return Array.isArray(input.names)
         ? (input.names as string[]).join(", ")

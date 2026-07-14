@@ -1115,6 +1115,46 @@ describe("MessageBubble slash-command rendering", () => {
     ).not.toBeNull();
   });
 
+  it("offers background continuation while waiting for a background agent result", () => {
+    const onContinueInBackground = vi.fn();
+    const message: ChatMessage = {
+      id: "assistant-background-result",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      blocks: [
+        {
+          type: "tool_call",
+          id: "tool-background-result",
+          name: "get_background_result",
+          inputJson: JSON.stringify({ sessionId: "bg-session-1" }),
+          result: "",
+          complete: false,
+        },
+      ],
+    };
+
+    render(
+      <MessageBubble
+        message={message}
+        streaming={true}
+        onContinueToolCallInBackground={onContinueInBackground}
+        onCompleteToolCall={vi.fn()}
+        onCancelToolCall={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Continue get_background_result in background",
+      }),
+    );
+
+    expect(onContinueInBackground).toHaveBeenCalledWith(
+      "tool-background-result",
+    );
+  });
+
   it("does not render inline controls for completed tool calls", () => {
     const message: ChatMessage = {
       id: "assistant-complete-tool",

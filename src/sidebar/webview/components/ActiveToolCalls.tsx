@@ -65,7 +65,11 @@ export function ActiveToolCalls({ calls, postCommand }: Props) {
             {c.canContinueInBackground && (
               <button
                 class="btn"
-                title="Return control to the agent while the command keeps running"
+                title={
+                  c.toolName === "get_background_result"
+                    ? "Return control to the agent while the background agent keeps running"
+                    : "Return control to the agent while the command keeps running"
+                }
                 onClick={() =>
                   postCommand("continueToolCallInBackground", { id: c.id })
                 }

@@ -573,7 +573,9 @@ export function ToolCallBlock({
     mcpApprovalPromotion?.scopes.filter(
       (scope) => !promotedScopes.has(scope),
     ) ?? [];
-  const canContinueInBackground = toolCall.name === "execute_command";
+  const canContinueInBackground =
+    toolCall.name === "execute_command" ||
+    toolCall.name === "get_background_result";
   const showRunningActions =
     !complete &&
     (onContinueToolCallInBackground || onCompleteToolCall || onCancelToolCall);
@@ -645,8 +647,12 @@ export function ToolCallBlock({
               <button
                 type="button"
                 class="tool-call-inline-action"
-                aria-label="Continue execute_command in background"
-                title="Return control to the agent while the command keeps running"
+                aria-label={`Continue ${toolCall.name} in background`}
+                title={
+                  toolCall.name === "get_background_result"
+                    ? "Return control to the agent while the background agent keeps running"
+                    : "Return control to the agent while the command keeps running"
+                }
                 onClick={() => onContinueToolCallInBackground(toolCall.id)}
               >
                 <i class="codicon codicon-debug-continue" aria-hidden="true" />

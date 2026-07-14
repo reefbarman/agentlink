@@ -96,6 +96,35 @@ describe("AgentToolCallTracker continueInBackground", () => {
     });
   });
 
+  it("returns control from get_background_result without stopping the background agent", () => {
+    const tracker = new AgentToolCallTracker();
+    const forceResolve = vi.fn();
+    tracker.registerAgentCall(
+      "call-background-result",
+      "get_background_result",
+      "bg-session-1",
+      "session-1",
+      forceResolve,
+      JSON.stringify({ sessionId: "bg-session-1" }),
+    );
+
+    expect(tracker.getActiveCalls()[0]).toMatchObject({
+      canContinueInBackground: true,
+    });
+
+    tracker.continueInBackground("call-background-result");
+
+    expect(mocks.detachTerminal).not.toHaveBeenCalled();
+    expect(mocks.interruptTerminal).not.toHaveBeenCalled();
+    expect(JSON.parse(forceResolve.mock.calls[0][0].content[0].text)).toEqual({
+      status: "continued-in-background",
+      done: false,
+      sessionId: "bg-session-1",
+      message:
+        "Returned control to the agent. The background agent is still running; use get_background_status to check progress or get_background_result when ready to wait again.",
+    });
+  });
+
   it("ignores background requests for other tools", async () => {
     const tracker = new AgentToolCallTracker();
     tracker.registerAgentCall(

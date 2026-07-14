@@ -232,6 +232,10 @@ function inferBgResultStatus(
   return "completed";
 }
 
+function isContinuedInBackgroundResult(resultText: string): boolean {
+  return parseJsonObject(resultText)?.status === "continued-in-background";
+}
+
 function getBgSessionIdFromToolInput(
   input: unknown,
   fallbackInputJson?: string,
@@ -878,7 +882,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
             });
 
-            if (sessionId) {
+            if (sessionId && !isContinuedInBackgroundResult(toolResult)) {
               const status = inferBgResultStatus(toolResult);
               let task = "Background Agent";
               for (let i = blocks.length - 1; i >= 0; i--) {
@@ -1500,7 +1504,10 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
       // When get_background_result completes, add a visible result block so
       // the output is not only available inside the raw tool-call details.
-      if (action.toolName === "get_background_result") {
+      if (
+        action.toolName === "get_background_result" &&
+        !isContinuedInBackgroundResult(action.result)
+      ) {
         const toolBlock = target.blocks.find(
           (b) => b.type === "tool_call" && b.id === action.toolCallId,
         );

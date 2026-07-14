@@ -36,6 +36,14 @@ export interface TrackedCallInfo {
 // ── AgentToolCallTracker ─────────────────────────────────────────────────────
 
 const COMPLETED_TTL_MS = 8_000;
+const BACKGROUND_CONTINUABLE_TOOLS = new Set([
+  "execute_command",
+  "get_background_result",
+]);
+
+function canContinueInBackground(toolName: string): boolean {
+  return BACKGROUND_CONTINUABLE_TOOLS.has(toolName);
+}
 
 export class AgentToolCallTracker extends EventEmitter {
   private activeCalls = new Map<string, TrackedCall>();
@@ -56,7 +64,7 @@ export class AgentToolCallTracker extends EventEmitter {
         params: c.params,
         startedAt: c.startedAt,
         status: "active" as const,
-        canContinueInBackground: c.toolName === "execute_command",
+        canContinueInBackground: canContinueInBackground(c.toolName),
       }),
     );
     const recent: TrackedCallInfo[] = [...this.recentCalls.values()];
@@ -165,9 +173,35 @@ export class AgentToolCallTracker extends EventEmitter {
 
   continueInBackground(id: string): void {
     const call = this.activeCalls.get(id);
-    if (!call || call.toolName !== "execute_command") {
+    if (!call || !canContinueInBackground(call.toolName)) {
       this.log(
-        `BACKGROUND_MISS (${id.slice(0, 8)}) — no active execute_command`,
+        `BACKGROUND_MISS (${id.slice(0, 8)}) — no active background-continuable tool`,
+      );
+      return;
+    }
+
+    if (call.toolName === "get_background_result") {
+      let backgroundSessionId: string | undefined;
+      try {
+        const params = call.params ? JSON.parse(call.params) : undefined;
+        if (typeof params?.sessionId === "string") {
+          backgroundSessionId = params.sessionId;
+        }
+      } catch {
+        // The handoff still works without the session ID in the result payload.
+      }
+
+      this.log(
+        `BACKGROUND_RETURN ${call.toolName} (${id.slice(0, 8)}), sessionId=${backgroundSessionId ?? "unknown"}`,
+      );
+      call.forceResolve(
+        successResult({
+          status: "continued-in-background",
+          done: false,
+          ...(backgroundSessionId ? { sessionId: backgroundSessionId } : {}),
+          message:
+            "Returned control to the agent. The background agent is still running; use get_background_status to check progress or get_background_result when ready to wait again.",
+        }),
       );
       return;
     }

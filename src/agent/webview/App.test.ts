@@ -153,6 +153,46 @@ describe("webview App reducer background agent launch blocks", () => {
     );
   });
 
+  it("does not treat returning control as a completed background agent result", () => {
+    const bgSessionId = "bg-result-still-running";
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "run review",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "tool-bg-result-running",
+      toolName: "get_background_result",
+    });
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "tool-bg-result-running",
+      toolName: "get_background_result",
+      result: JSON.stringify({
+        status: "continued-in-background",
+        done: false,
+        sessionId: bgSessionId,
+      }),
+      durationMs: 20,
+      input: { sessionId: bgSessionId },
+    });
+
+    const assistant = state.messages[state.messages.length - 1];
+    expect(assistant?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "tool-bg-result-running",
+          complete: true,
+        }),
+      ]),
+    );
+    expect(
+      assistant?.blocks.some((block) => block.type === "bg_agent_result"),
+    ).toBe(false);
+  });
+
   it("marks incomplete tool calls complete when the turn errors", () => {
     const toolCallId = "tool-error-stop";
 
@@ -1957,6 +1997,56 @@ describe("webview App reducer background agent launch blocks", () => {
         status: "completed",
         resultText,
       },
+    ]);
+  });
+
+  it("does not restore a background-result handoff as a final result block", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+    const bgSessionId = "bg-result-restored-running";
+    const handoffResult = JSON.stringify({
+      status: "continued-in-background",
+      done: false,
+      sessionId: bgSessionId,
+    });
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "keep working" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "bg-result-handoff-tool",
+            name: "get_background_result",
+            input: { sessionId: bgSessionId },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "bg-result-handoff-tool",
+            content: handoffResult,
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    const toolMessage = restored.find((message) =>
+      message.blocks.some(
+        (block) =>
+          block.type === "tool_call" && block.id === "bg-result-handoff-tool",
+      ),
+    );
+    expect(toolMessage?.blocks).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        id: "bg-result-handoff-tool",
+        result: handoffResult,
+        complete: true,
+      }),
     ]);
   });
 
