@@ -764,8 +764,8 @@ describe("indexer worker fixture", () => {
         "qdrant.ensureCollection": 1,
         "qdrant.deleteCollection": 1,
         "qdrant.upsertPoints": expect.any(Number),
-        "cache.writeVector": 6,
-        "cache.writeStructural": 4,
+        "cache.writeVector": 5,
+        "cache.writeStructural": 3,
       });
       expect(
         stats.metrics!.operations["qdrant.upsertPoints"],
@@ -775,7 +775,7 @@ describe("indexer worker fixture", () => {
       expect(stats.metrics!.maxRetainedContentBytes).toBeLessThan(
         totalSourceBytes,
       );
-      expect(stats.metrics!.cacheWriteBytes).toBeGreaterThan(0);
+      expect(stats.metrics!.cacheWriteBytes).toBeLessThan(149_490);
       expect(stats.metrics!.maxHeapUsedBytes).toBeGreaterThan(0);
       expect(stats.metrics!.phaseDurationsMs).toEqual(
         expect.objectContaining({
@@ -824,9 +824,10 @@ describe("indexer worker fixture", () => {
         "qdrant.deletePoints": 2,
         "qdrant.upsertPoints": 1,
         "qdrant.setPointVisibility": 2,
-        "cache.writeVector": 4,
-        "cache.writeStructural": 4,
+        "cache.writeVector": 3,
+        "cache.writeStructural": 3,
       });
+      expect(stats.metrics!.cacheWriteBytes).toBeLessThan(2_812);
       expect(stats.metrics!.phaseDurationsMs).toEqual(
         expect.objectContaining({
           diff: expect.any(Number),

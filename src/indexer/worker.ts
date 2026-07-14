@@ -164,7 +164,22 @@ function createCacheCheckpointCoordinator(args: {
     writeVector: () => writeCache(args.cachePath, args.cache),
     writeStructural: () =>
       writeStructuralCache(args.structuralCachePath, args.structuralCache),
+    schedule: (run) => {
+      const timeout = setTimeout(run, 25);
+      timeout.unref();
+      return () => clearTimeout(timeout);
+    },
   });
+}
+
+function scheduleCacheMetadataCheckpoint(args: {
+  cache: IndexCache;
+  granularity: ChunkGranularity;
+  checkpoints: CacheCheckpointCoordinator;
+}): void {
+  if (args.cache.granularity === args.granularity) return;
+  args.cache.granularity = args.granularity;
+  args.checkpoints.scheduleVector();
 }
 
 async function deleteQdrantCollection(
@@ -946,6 +961,8 @@ async function processFileBatch(
           status: "current",
         };
       }
+      structuralCache.generatedAt = new Date().toISOString();
+      config.checkpoints.scheduleStructural();
       config.checkpoints.checkpointBoth(["vector", "structural"]);
       const additionPointIds = additions.flatMap((addition) =>
         addition.points.map((point) => point.id),
@@ -1113,6 +1130,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
   let chunksCreated = 0;
   let pointsUpserted = 0;
   let pointsDeleted = 0;
+  let checkpoints: CacheCheckpointCoordinator | undefined;
 
   // Distribute granularity to all chunkers
   setTreeSitterGranularity(msg.granularity);
@@ -1131,7 +1149,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       msg.cachePath,
       msg.force,
     );
-    const checkpoints = createCacheCheckpointCoordinator({
+    checkpoints = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
       cache,
@@ -1302,12 +1320,17 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       );
       sampleHeapUsed();
       if (structuralBackfillCount > 0) {
-        checkpoints.checkpointStructural();
+        checkpoints.scheduleStructural();
       }
     }
 
     if (aborted || toIndexPaths.length === 0) {
-      checkpoints.checkpointBoth(["vector", "structural"]);
+      scheduleCacheMetadataCheckpoint({
+        cache,
+        granularity: msg.granularity,
+        checkpoints,
+      });
+      checkpoints.drain();
       sendComplete({
         filesIndexed: 0,
         totalFilesInIndex: Object.keys(cache.files).length,
@@ -1383,10 +1406,12 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       // batchFiles, result, and all intermediate arrays are now out of scope
     }
 
-    // Final cache save
-    cache.granularity = msg.granularity;
-    structuralCache.generatedAt = new Date().toISOString();
-    checkpoints.checkpointBoth(["vector", "structural"]);
+    scheduleCacheMetadataCheckpoint({
+      cache,
+      granularity: msg.granularity,
+      checkpoints,
+    });
+    checkpoints.drain();
 
     sendComplete({
       filesIndexed,
@@ -1400,7 +1425,18 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       cancelled: aborted || undefined,
     });
   } catch (err) {
+    try {
+      checkpoints?.drain();
+    } catch (checkpointError) {
+      sendError(
+        `Indexing failed: ${err}; cache checkpoint failed: ${checkpointError}`,
+        true,
+      );
+      return;
+    }
     sendError(`Indexing failed: ${err}`, true);
+  } finally {
+    checkpoints?.cancelScheduled();
   }
 }
 
@@ -1416,6 +1452,7 @@ async function handleIncrementalUpdate(
   let chunksCreated = 0;
   let pointsUpserted = 0;
   let pointsDeleted = 0;
+  let checkpoints: CacheCheckpointCoordinator | undefined;
 
   // Distribute granularity to all chunkers
   setTreeSitterGranularity(msg.granularity);
@@ -1430,7 +1467,7 @@ async function handleIncrementalUpdate(
         workspaceRoot: msg.workspaceRoot,
         collectionName: msg.collectionName,
       });
-    const checkpoints = createCacheCheckpointCoordinator({
+    checkpoints = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
       cache,
@@ -1570,9 +1607,12 @@ async function handleIncrementalUpdate(
       }
     }
 
-    cache.granularity = msg.granularity;
-    structuralCache.generatedAt = new Date().toISOString();
-    checkpoints.checkpointBoth(["vector", "structural"]);
+    scheduleCacheMetadataCheckpoint({
+      cache,
+      granularity: msg.granularity,
+      checkpoints,
+    });
+    checkpoints.drain();
 
     sendComplete({
       filesIndexed,
@@ -1586,7 +1626,18 @@ async function handleIncrementalUpdate(
       cancelled: aborted || undefined,
     });
   } catch (err) {
+    try {
+      checkpoints?.drain();
+    } catch (checkpointError) {
+      sendError(
+        `Incremental update failed: ${err}; cache checkpoint failed: ${checkpointError}`,
+        true,
+      );
+      return;
+    }
     sendError(`Incremental update failed: ${err}`, true);
+  } finally {
+    checkpoints?.cancelScheduled();
   }
 }
 
