@@ -50,7 +50,7 @@ import {
   readFilesBatch,
   type FileWithContent,
 } from "./workerLib.js";
-import { checkpointRemovedFileCaches } from "./removedFileDeletion.js";
+import { CacheCheckpointCoordinator } from "./CacheCheckpointCoordinator.js";
 import {
   emptyFileIndexJournal,
   getFileIndexJournalPath,
@@ -152,6 +152,19 @@ function writeStructuralCache(
 ): void {
   writeStructuralCacheFile(cachePath, cache);
   metrics.recordOperation("cache.writeStructural", serializedByteLength(cache));
+}
+
+function createCacheCheckpointCoordinator(args: {
+  cachePath: string;
+  structuralCachePath: string;
+  cache: IndexCache;
+  structuralCache: StructuralGraphCache;
+}): CacheCheckpointCoordinator {
+  return new CacheCheckpointCoordinator({
+    writeVector: () => writeCache(args.cachePath, args.cache),
+    writeStructural: () =>
+      writeStructuralCache(args.structuralCachePath, args.structuralCache),
+  });
 }
 
 async function deleteQdrantCollection(
@@ -411,7 +424,6 @@ function resetStructuralCache(
 
 async function resetCollectionOwnership(args: {
   cachePath: string;
-  structuralCachePath: string;
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
   workspaceRoot: string;
@@ -419,6 +431,7 @@ async function resetCollectionOwnership(args: {
   collectionName: string;
   granularity: ChunkGranularity;
   interruptedTarget: CollectionResetTarget | null;
+  checkpoints: CacheCheckpointCoordinator;
 }): Promise<void> {
   const resetStatePath = getCollectionResetStatePath(args.cachePath);
   const currentTarget = {
@@ -445,13 +458,12 @@ async function resetCollectionOwnership(args: {
   args.cache.version = 1;
   args.cache.files = {};
   args.cache.granularity = args.granularity;
-  writeCache(args.cachePath, args.cache);
   resetStructuralCache(
     args.structuralCache,
     args.workspaceRoot,
     args.collectionName,
   );
-  writeStructuralCache(args.structuralCachePath, args.structuralCache);
+  args.checkpoints.checkpointBoth(["vector", "structural"]);
   completeCollectionReset(resetStatePath, currentTarget);
 }
 
@@ -486,11 +498,11 @@ function updateStructuralCacheForFiles(
 async function removeFilesFromIndex(args: {
   relPaths: string[];
   cachePath: string;
-  structuralCachePath: string;
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
   qdrantUrl: string;
   collectionName: string;
+  checkpoints: CacheCheckpointCoordinator;
 }): Promise<{
   completed: number;
   errors: string[];
@@ -513,11 +525,7 @@ async function removeFilesFromIndex(args: {
         delete args.structuralCache.files[relPath];
       }
       args.structuralCache.generatedAt = new Date().toISOString();
-      checkpointRemovedFileCaches({
-        writeStructuralCache: () =>
-          writeStructuralCache(args.structuralCachePath, args.structuralCache),
-        writeVectorCache: () => writeCache(args.cachePath, args.cache),
-      });
+      args.checkpoints.checkpointBoth(["structural", "vector"]);
     },
     isCancelled: () => aborted,
     createId: randomUUID,
@@ -552,10 +560,9 @@ function hasDurableIndexOperations(
 }
 
 function createFileReplacementStore(args: {
-  cachePath: string;
-  structuralCachePath: string;
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
+  checkpoints: CacheCheckpointCoordinator;
 }): FileReplacementStore {
   return {
     getVector(file) {
@@ -573,25 +580,25 @@ function createFileReplacementStore(args: {
       const relPath = fromJournalPath(file);
       if (entry) args.cache.files[relPath] = entry;
       else delete args.cache.files[relPath];
-      writeCache(args.cachePath, args.cache);
+      args.checkpoints.checkpointVector();
     },
     checkpointStructural(file, entry) {
       const relPath = fromJournalPath(file);
       if (entry) args.structuralCache.files[relPath] = entry;
       else delete args.structuralCache.files[relPath];
       args.structuralCache.generatedAt = new Date().toISOString();
-      writeStructuralCache(args.structuralCachePath, args.structuralCache);
+      args.checkpoints.checkpointStructural();
     },
   };
 }
 
 async function recoverChangedFileReplacements(args: {
   cachePath: string;
-  structuralCachePath: string;
   cache: IndexCache;
   structuralCache: StructuralGraphCache;
   qdrantUrl: string;
   collectionName: string;
+  checkpoints: CacheCheckpointCoordinator;
 }): Promise<{ cancelled: boolean; pointsDeleted: number }> {
   const recovered = await recoverJournaledFileReplacements({
     journalPath: getFileIndexJournalPath(args.cachePath),
@@ -725,9 +732,9 @@ interface BatchConfig {
   collectionName: string;
   embeddingBearerToken: string;
   cachePath: string;
-  structuralCachePath: string;
   workspaceRoot: string;
   granularity: ChunkGranularity;
+  checkpoints: CacheCheckpointCoordinator;
 }
 
 interface BatchResult {
@@ -939,8 +946,7 @@ async function processFileBatch(
           status: "current",
         };
       }
-      writeCache(config.cachePath, cache);
-      writeStructuralCache(config.structuralCachePath, structuralCache);
+      config.checkpoints.checkpointBoth(["vector", "structural"]);
       const additionPointIds = additions.flatMap((addition) =>
         addition.points.map((point) => point.id),
       );
@@ -978,13 +984,12 @@ async function processFileBatch(
           visibility: "current",
         };
       }
-      writeCache(config.cachePath, cache);
+      config.checkpoints.checkpointVector();
       writeFileIndexJournal(journalPath, emptyFileIndexJournal());
       filesIndexed += additions.length;
     } catch (error) {
       errors.push(`Qdrant upsert failed: ${error}`);
-      writeCache(config.cachePath, cache);
-      writeStructuralCache(config.structuralCachePath, structuralCache);
+      config.checkpoints.checkpointBoth(["vector", "structural"]);
       return {
         filesIndexed,
         chunksCreated,
@@ -1039,10 +1044,9 @@ async function processFileBatch(
           cacheEntry,
         },
         store: createFileReplacementStore({
-          cachePath: config.cachePath,
-          structuralCachePath: config.structuralCachePath,
           cache,
           structuralCache,
+          checkpoints: config.checkpoints,
         }),
         remote: {
           async deletePoints(pointIds) {
@@ -1127,6 +1131,12 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       msg.cachePath,
       msg.force,
     );
+    const checkpoints = createCacheCheckpointCoordinator({
+      cachePath: msg.cachePath,
+      structuralCachePath,
+      cache,
+      structuralCache,
+    });
     const rebuildRequested =
       msg.force || (cache.granularity ?? "standard") !== msg.granularity;
 
@@ -1139,11 +1149,11 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       ? { cancelled: false, pointsDeleted: 0 }
       : await recoverChangedFileReplacements({
           cachePath: msg.cachePath,
-          structuralCachePath,
           cache,
           structuralCache,
           qdrantUrl: msg.qdrantUrl,
           collectionName: msg.collectionName,
+          checkpoints,
         });
     pointsDeleted += replacementRecovery.pointsDeleted;
     if (replacementRecovery.cancelled) {
@@ -1171,11 +1181,11 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       : await removeFilesFromIndex({
           relPaths: [],
           cachePath: msg.cachePath,
-          structuralCachePath,
           cache,
           structuralCache,
           qdrantUrl: msg.qdrantUrl,
           collectionName: msg.collectionName,
+          checkpoints,
         });
     pointsDeleted += recovery.pointsDeleted;
     errors.push(...recovery.errors);
@@ -1198,7 +1208,6 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     if (rebuildRequested) {
       await resetCollectionOwnership({
         cachePath: msg.cachePath,
-        structuralCachePath,
         cache,
         structuralCache,
         workspaceRoot: msg.workspaceRoot,
@@ -1206,6 +1215,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
         collectionName: msg.collectionName,
         granularity: msg.granularity,
         interruptedTarget: resetTarget,
+        checkpoints,
       });
     }
 
@@ -1252,11 +1262,11 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       const removal = await removeFilesFromIndex({
         relPaths: removedRelPaths,
         cachePath: msg.cachePath,
-        structuralCachePath,
         cache,
         structuralCache,
         qdrantUrl: msg.qdrantUrl,
         collectionName: msg.collectionName,
+        checkpoints,
       });
       pointsDeleted += removal.pointsDeleted;
       errors.push(...removal.errors);
@@ -1292,13 +1302,12 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       );
       sampleHeapUsed();
       if (structuralBackfillCount > 0) {
-        writeStructuralCache(structuralCachePath, structuralCache);
+        checkpoints.checkpointStructural();
       }
     }
 
     if (aborted || toIndexPaths.length === 0) {
-      writeCache(msg.cachePath, cache);
-      writeStructuralCache(structuralCachePath, structuralCache);
+      checkpoints.checkpointBoth(["vector", "structural"]);
       sendComplete({
         filesIndexed: 0,
         totalFilesInIndex: Object.keys(cache.files).length,
@@ -1321,9 +1330,9 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       collectionName: msg.collectionName,
       embeddingBearerToken: msg.embeddingBearerToken,
       cachePath: msg.cachePath,
-      structuralCachePath,
       workspaceRoot: msg.workspaceRoot,
       granularity: msg.granularity,
+      checkpoints,
     };
 
     for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
@@ -1377,8 +1386,7 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     // Final cache save
     cache.granularity = msg.granularity;
     structuralCache.generatedAt = new Date().toISOString();
-    writeCache(msg.cachePath, cache);
-    writeStructuralCache(structuralCachePath, structuralCache);
+    checkpoints.checkpointBoth(["vector", "structural"]);
 
     sendComplete({
       filesIndexed,
@@ -1422,16 +1430,22 @@ async function handleIncrementalUpdate(
         workspaceRoot: msg.workspaceRoot,
         collectionName: msg.collectionName,
       });
+    const checkpoints = createCacheCheckpointCoordinator({
+      cachePath: msg.cachePath,
+      structuralCachePath,
+      cache,
+      structuralCache,
+    });
     if (hasDurableIndexOperations(msg.cachePath, cache)) {
       await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
     }
     const replacementRecovery = await recoverChangedFileReplacements({
       cachePath: msg.cachePath,
-      structuralCachePath,
       cache,
       structuralCache,
       qdrantUrl: msg.qdrantUrl,
       collectionName: msg.collectionName,
+      checkpoints,
     });
     pointsDeleted += replacementRecovery.pointsDeleted;
     if (replacementRecovery.cancelled) {
@@ -1451,11 +1465,11 @@ async function handleIncrementalUpdate(
     const recovery = await removeFilesFromIndex({
       relPaths: [],
       cachePath: msg.cachePath,
-      structuralCachePath,
       cache,
       structuralCache,
       qdrantUrl: msg.qdrantUrl,
       collectionName: msg.collectionName,
+      checkpoints,
     });
     pointsDeleted += recovery.pointsDeleted;
     errors.push(...recovery.errors);
@@ -1487,11 +1501,11 @@ async function handleIncrementalUpdate(
             !path.isAbsolute(relPath),
         ),
       cachePath: msg.cachePath,
-      structuralCachePath,
       cache,
       structuralCache,
       qdrantUrl: msg.qdrantUrl,
       collectionName: msg.collectionName,
+      checkpoints,
     });
     pointsDeleted += removal.pointsDeleted;
     errors.push(...removal.errors);
@@ -1527,9 +1541,9 @@ async function handleIncrementalUpdate(
         collectionName: msg.collectionName,
         embeddingBearerToken: msg.embeddingBearerToken,
         cachePath: msg.cachePath,
-        structuralCachePath,
         workspaceRoot: msg.workspaceRoot,
         granularity: msg.granularity,
+        checkpoints,
       };
 
       for (let i = 0; i < toIndex.length; i += FILE_BATCH_SIZE) {
@@ -1558,8 +1572,7 @@ async function handleIncrementalUpdate(
 
     cache.granularity = msg.granularity;
     structuralCache.generatedAt = new Date().toISOString();
-    writeCache(msg.cachePath, cache);
-    writeStructuralCache(structuralCachePath, structuralCache);
+    checkpoints.checkpointBoth(["vector", "structural"]);
 
     sendComplete({
       filesIndexed,
