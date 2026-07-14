@@ -26,6 +26,11 @@ export interface AgentToolListRequest {
   mode?: AgentToolMode;
   mcpToolDefs?: CoreToolDefinition[];
   isBackground?: boolean;
+  backgroundExpectedResult?:
+    | "text"
+    | "review_findings"
+    | "patch"
+    | "verification";
   toolProfile?: string;
   skillAllowedTools?: string[];
   allMcpToolDefsForSkillAllowlist?: CoreToolDefinition[];
@@ -69,6 +74,11 @@ export interface AgentToolExecutionContext {
   onSkillLoad?: (skillName: string) => void;
   skillAllowedTools?: string[];
   onFinalStatus?: (marker: FinalMessageMarker) => void;
+  backgroundExpectedResult?:
+    | "text"
+    | "review_findings"
+    | "patch"
+    | "verification";
   onCompleteTodos?: () => unknown[];
   getSessionImages?: () => SessionImageReference[];
   pendingQuestionRecovery?: PendingQuestionRecoveryContext;

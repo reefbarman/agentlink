@@ -97,6 +97,7 @@ const mocks = vi.hoisted(() => {
           return undefined;
         },
         getLastAssistantText: vi.fn(() => assistantText),
+        getLastFinalMarker: vi.fn(() => undefined),
         getFullAssistantTranscript: vi.fn(() => assistantText),
       };
       return mockSession;
@@ -1205,9 +1206,38 @@ describe("AgentSessionManager background agents", () => {
       "lightweight",
     );
     const session = Array.from((mgr as any).sessions.values()).at(-1) as any;
-    expect(session.addUserMessage).toHaveBeenCalledWith(
-      expect.stringContaining('"type":"review_findings"'),
+    expect(session.addUserMessage).toHaveBeenCalledWith("review thoroughly");
+  });
+
+  it("renders structured final-marker results for the foreground", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const structuredResult = {
+      type: "review_findings" as const,
+      findings: [
+        {
+          severity: "medium" as const,
+          message: "Retry state is not persisted.",
+          path: "src/indexer/workerLib.ts",
+          line: 88,
+        },
+      ],
+      reviewedScope: "abc123..def456",
+      emptyDiff: false,
+    };
+    const resolved = (mgr as any).resolveBackgroundResult(
+      {
+        getLastFinalMarker: () => ({ result: structuredResult }),
+        getLastAssistantText: () => undefined,
+        fleetMetadata: { delegation: { expectedResult: "review_findings" } },
+      },
+      "fallback",
     );
+
+    expect(resolved.structuredResult).toEqual(structuredResult);
+    expect(resolved.resultText).toContain(
+      "**MEDIUM** — `src/indexer/workerLib.ts:88`: Retry state is not persisted.",
+    );
+    expect(resolved.resultText).not.toContain('"type":"review_findings"');
   });
 
   it("records durable native fleet identity and completion", async () => {

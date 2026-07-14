@@ -636,6 +636,9 @@ export class AgentEngine {
         }
         const providerMcpToolDefs =
           session.mcpToolDisclosure?.inlineTools ?? connectedMcpToolDefs;
+        const backgroundExpectedResult = opts?.isBackground
+          ? session.fleetMetadata?.delegation?.expectedResult
+          : undefined;
         const rawTools = this.toolRuntime
           ? [
               ...this.toolRuntime.listTools({
@@ -645,6 +648,13 @@ export class AgentEngine {
                 toolProfile: opts?.toolProfile,
                 skillAllowedTools: session.getActiveSkillAllowedTools(),
                 allMcpToolDefsForSkillAllowlist: connectedMcpToolDefs,
+                backgroundExpectedResult:
+                  backgroundExpectedResult === "text" ||
+                  backgroundExpectedResult === "review_findings" ||
+                  backgroundExpectedResult === "patch" ||
+                  backgroundExpectedResult === "verification"
+                    ? backgroundExpectedResult
+                    : undefined,
               }),
               todoTool,
             ]
@@ -1438,6 +1448,13 @@ export class AgentEngine {
           onFinalStatus: (marker) => {
             pendingFinalMarker = marker;
           },
+          backgroundExpectedResult:
+            backgroundExpectedResult === "text" ||
+            backgroundExpectedResult === "review_findings" ||
+            backgroundExpectedResult === "patch" ||
+            backgroundExpectedResult === "verification"
+              ? backgroundExpectedResult
+              : undefined,
           onCompleteTodos: () => {
             currentTodos = completeTodos(currentTodos);
             pendingCompletedTodoUpdate = currentTodos;

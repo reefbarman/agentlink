@@ -15,6 +15,8 @@ export interface FinalMarkerToolCall {
 export interface FinalMessageMarker {
   status: FinalMessageStatus;
   summary?: string;
+  /** Structured result returned by a background agent to its coordinator. */
+  result?: import("../agent/FleetWorkflows.js").FleetResultEnvelope;
   source: "tool" | "engine";
   continueAction?: FinalMessageContinueAction;
   /** UI-owned marker that hides a consumed/stale Continue action. */

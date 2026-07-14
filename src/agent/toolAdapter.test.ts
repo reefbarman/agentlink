@@ -384,9 +384,35 @@ describe("getAgentTools", () => {
   });
 
   it("keeps final status and memory proposals available to background agents", () => {
+    const tools = getAgentTools(undefined, undefined, true);
+    expect(tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["set_task_status", "propose_memory"]),
+    );
     expect(
-      getAgentTools(undefined, undefined, true).map((t) => t.name),
-    ).toEqual(expect.arrayContaining(["set_task_status", "propose_memory"]));
+      tools.find((tool) => tool.name === "set_task_status")?.input_schema
+        .properties?.result,
+    ).toBeDefined();
+    expect(
+      getAgentTools().find((tool) => tool.name === "set_task_status")
+        ?.input_schema.properties?.result,
+    ).toBeUndefined();
+  });
+
+  it("exposes the expected structured result on background final status", () => {
+    const tool = getAgentTools(
+      undefined,
+      undefined,
+      true,
+      "review",
+      undefined,
+      undefined,
+      "review_findings",
+    ).find((candidate) => candidate.name === "set_task_status");
+    expect(tool).toBeDefined();
+    expect(tool?.description).toContain("instead of printing serialized JSON");
+    expect(JSON.stringify(tool?.input_schema.properties?.result)).toContain(
+      '"reviewedScope"',
+    );
   });
 
   it("excludes final status from explicitly profile-restricted tool sets", () => {
@@ -967,6 +993,57 @@ describe("dispatchToolCall", () => {
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: JSON.stringify({ ok: true }),
+    });
+  });
+
+  it("records a validated structured background result", async () => {
+    const onFinalStatus = vi.fn();
+    const structuredResult = {
+      type: "review_findings",
+      findings: [],
+      reviewedScope: "abc123..def456",
+      emptyDiff: false,
+    } as const;
+    const result = await dispatchToolCall(
+      "set_task_status",
+      { status: "completed", result: structuredResult },
+      {
+        ...mockCtx,
+        onFinalStatus,
+        backgroundExpectedResult: "review_findings",
+      },
+    );
+
+    expect(onFinalStatus).toHaveBeenCalledWith({
+      status: "completed",
+      source: "tool",
+      result: structuredResult,
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: JSON.stringify({ ok: true }),
+    });
+  });
+
+  it("rejects missing or mismatched structured background results", async () => {
+    const onFinalStatus = vi.fn();
+    const result = await dispatchToolCall(
+      "set_task_status",
+      {
+        status: "completed",
+        result: { type: "text", text: "No issues" },
+      },
+      {
+        ...mockCtx,
+        onFinalStatus,
+        backgroundExpectedResult: "review_findings",
+      },
+    );
+
+    expect(onFinalStatus).not.toHaveBeenCalled();
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
+      error:
+        "Background completion requires a valid review_findings result in set_task_status.result",
     });
   });
 

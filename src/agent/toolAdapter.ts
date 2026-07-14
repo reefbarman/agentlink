@@ -23,6 +23,7 @@ import type {
   FleetWorkflowOutcome,
   FleetWorkflowRequest,
 } from "./FleetWorkflows.js";
+import { isFleetResultEnvelope } from "./FleetWorkflows.js";
 import type { FleetAutomation } from "./FleetAutomationStore.js";
 import {
   getMcpConfigFilePaths,
@@ -409,7 +410,7 @@ const ASK_USER_TOOL: ToolDefinition = {
   },
 };
 
-/** Schema for the final task status meta-tool (foreground sessions only). */
+/** Base schema for final task status; background result fields are added per run. */
 const SET_TASK_STATUS_TOOL: ToolDefinition = {
   name: "set_task_status",
   description:
@@ -445,6 +446,111 @@ const SET_TASK_STATUS_TOOL: ToolDefinition = {
     required: ["status"],
   },
 };
+
+type ExpectedBackgroundResult =
+  | "text"
+  | "review_findings"
+  | "patch"
+  | "verification";
+
+function getSetTaskStatusTool(
+  expectedResult?: ExpectedBackgroundResult,
+  isBackground = false,
+): ToolDefinition {
+  if (!isBackground) return SET_TASK_STATUS_TOOL;
+  const resultSchemas: Record<
+    ExpectedBackgroundResult,
+    Record<string, unknown>
+  > = {
+    text: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["text"] },
+        text: { type: "string" },
+      },
+      required: ["type", "text"],
+      additionalProperties: false,
+    },
+    review_findings: {
+      type: "object",
+      description:
+        "Resolve the exact requested change set before reviewing. Set emptyDiff=true when it is empty or unavailable; never use an empty findings list to imply a clean review unless the scope was actually found and reviewed.",
+      properties: {
+        type: { type: "string", enum: ["review_findings"] },
+        findings: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              severity: {
+                type: "string",
+                enum: ["critical", "high", "medium", "low"],
+              },
+              message: { type: "string" },
+              path: { type: "string" },
+              line: { type: "number" },
+            },
+            required: ["severity", "message"],
+            additionalProperties: false,
+          },
+        },
+        reviewedScope: {
+          type: "string",
+          description:
+            "The exact commit range, diff, or file list that was actually reviewed, or what was checked when no change set could be found.",
+        },
+        emptyDiff: { type: "boolean" },
+      },
+      required: ["type", "findings", "reviewedScope", "emptyDiff"],
+      additionalProperties: false,
+    },
+    patch: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["patch"] },
+        summary: { type: "string" },
+        files: { type: "array", items: { type: "string" } },
+        verification: { type: "string" },
+      },
+      required: ["type", "summary", "files"],
+      additionalProperties: false,
+    },
+    verification: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["verification"] },
+        passed: { type: "boolean" },
+        summary: { type: "string" },
+        screenshots: { type: "array", items: { type: "string" } },
+        logs: { type: "array", items: { type: "string" } },
+      },
+      required: ["type", "passed", "summary"],
+      additionalProperties: false,
+    },
+  };
+  const resultSchema = expectedResult
+    ? resultSchemas[expectedResult]
+    : {
+        type: "object",
+        description:
+          "Optional coordinator-facing result. Use type='text' with text for general information or summaries, type='review_findings' for reviews, type='patch' for implementation results, or type='verification' for verification evidence.",
+        additionalProperties: true,
+      };
+  const resultGuidance = expectedResult
+    ? `This background task expects a structured ${expectedResult} result; include it in the result field when completing the task instead of printing serialized JSON in assistant text.`
+    : "For coordinator-facing information or summaries, you may return a structured result instead of serializing data into assistant text.";
+  return {
+    ...SET_TASK_STATUS_TOOL,
+    description: `${SET_TASK_STATUS_TOOL.description} ${resultGuidance} The result field is the coordinator-facing output, so summary may be omitted and should not duplicate it.`,
+    input_schema: {
+      ...SET_TASK_STATUS_TOOL.input_schema,
+      properties: {
+        ...SET_TASK_STATUS_TOOL.input_schema.properties,
+        result: resultSchema,
+      },
+    },
+  };
+}
 
 /** Schema for the switch_mode meta-tool (always available, regardless of mode). */
 const SWITCH_MODE_TOOL: ToolDefinition = {
@@ -850,6 +956,7 @@ export function getAgentTools(
   toolProfile?: string,
   skillAllowedTools?: string[],
   allMcpToolDefsForSkillAllowlist?: ToolDefinition[],
+  backgroundExpectedResult?: ExpectedBackgroundResult,
 ): ToolDefinition[] {
   const mcpToolNames = (mcpToolDefs ?? []).map((t) => t.name);
   const allowed = mode ? getToolsForMode(mode, mcpToolNames) : null;
@@ -942,7 +1049,9 @@ export function getAgentTools(
       ? [CALL_MCP_TOOL]
       : []),
     ...(profileAllowlist ? [] : [ASK_USER_TOOL]),
-    ...(profileAllowlist ? [] : [SET_TASK_STATUS_TOOL]),
+    ...(!profileAllowlist || isBackground
+      ? [getSetTaskStatusTool(backgroundExpectedResult, Boolean(isBackground))]
+      : []),
     ...(profileAllowlist ? [] : [SWITCH_MODE_TOOL]),
     ...(profileAllowlist ? [] : BG_AGENT_TOOLS),
   ];
@@ -1434,6 +1543,8 @@ export interface ToolDispatchContext {
   pendingQuestionRecovery?: AgentToolExecutionRequest["context"]["pendingQuestionRecovery"];
   /** Records the intended final marker for the current foreground turn. */
   onFinalStatus?: (marker: FinalMessageMarker) => void;
+  /** Structured result contract requested by the parent of a background session. */
+  backgroundExpectedResult?: ExpectedBackgroundResult;
   /** Marks the current foreground todo list complete and returns the updated tree. */
   onCompleteTodos?: () => TodoItem[];
   /** Final status/todo implementation for runtimes that can own foreground session markers. */
@@ -1500,6 +1611,7 @@ export function createAgentToolRuntime(
         request.toolProfile,
         request.skillAllowedTools,
         request.allMcpToolDefsForSkillAllowlist,
+        request.backgroundExpectedResult,
       );
     },
     async executeTool(request: AgentToolExecutionRequest) {
@@ -1514,6 +1626,7 @@ export function createAgentToolRuntime(
           ...ctx,
           sessionId: request.context.sessionId,
           mode: request.context.mode,
+          backgroundExpectedResult: request.context.backgroundExpectedResult,
           trackerCtx: request.context
             .trackerCtx as ToolDispatchContext["trackerCtx"],
           toolAbortSignal: request.context.toolAbortSignal,
@@ -1883,6 +1996,41 @@ export async function dispatchToolCall(
           ],
         };
       }
+      const expectedResult = ctx.backgroundExpectedResult;
+      const structuredResult = params.result;
+      if (status === "completed" && expectedResult) {
+        if (
+          !isFleetResultEnvelope(structuredResult) ||
+          structuredResult.type !== expectedResult ||
+          (expectedResult === "review_findings" &&
+            structuredResult.type === "review_findings" &&
+            (typeof structuredResult.reviewedScope !== "string" ||
+              typeof structuredResult.emptyDiff !== "boolean"))
+        ) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: `Background completion requires a valid ${expectedResult} result in set_task_status.result`,
+                }),
+              },
+            ],
+          };
+        }
+      } else if (
+        structuredResult !== undefined &&
+        !isFleetResultEnvelope(structuredResult)
+      ) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: "Invalid structured result" }),
+            },
+          ],
+        };
+      }
       let summary =
         typeof params.summary === "string" ? params.summary.trim() : "";
       if (isTeaserOnlyFinalSummary(summary)) {
@@ -1901,6 +2049,7 @@ export async function dispatchToolCall(
         status,
         source: "tool",
         ...(summary ? { summary } : {}),
+        ...(structuredResult ? { result: structuredResult } : {}),
         ...(continueLabel && continuePrompt
           ? { continueAction: { label: continueLabel, prompt: continuePrompt } }
           : {}),

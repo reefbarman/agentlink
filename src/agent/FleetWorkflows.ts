@@ -247,6 +247,69 @@ export function scoreFleetCandidate(result: FleetResultEnvelope): number {
   return Math.min(25, result.text.trim().length / 100);
 }
 
+/** Convert a validated background result into readable coordinator/UI text. */
+export function formatFleetResultEnvelope(result: FleetResultEnvelope): string {
+  if (result.type === "text") return result.text;
+  if (result.type === "patch") {
+    const lines = [result.summary];
+    if (result.files.length > 0) {
+      lines.push(
+        "",
+        "**Files**",
+        ...result.files.map((file) => `- \`${file}\``),
+      );
+    }
+    if (result.verification) {
+      lines.push("", "**Verification**", result.verification);
+    }
+    return lines.join("\n");
+  }
+  if (result.type === "verification") {
+    const lines = [
+      `**Verification ${result.passed ? "passed" : "failed"}**`,
+      "",
+      result.summary,
+    ];
+    if (result.screenshots?.length) {
+      lines.push(
+        "",
+        "**Screenshots**",
+        ...result.screenshots.map((file) => `- \`${file}\``),
+      );
+    }
+    if (result.logs?.length) {
+      lines.push("", "**Evidence**", ...result.logs.map((log) => `- ${log}`));
+    }
+    return lines.join("\n");
+  }
+
+  const lines: string[] = [];
+  if (result.emptyDiff) {
+    lines.push("**Review could not resolve a change set.**");
+  } else if (result.findings.length === 0) {
+    lines.push("**Review found no issues.**");
+  } else {
+    lines.push(
+      `**Review found ${result.findings.length} issue${result.findings.length === 1 ? "" : "s"}.**`,
+    );
+  }
+  if (result.reviewedScope) {
+    lines.push("", `**Reviewed scope:** ${result.reviewedScope}`);
+  }
+  if (result.findings.length > 0) {
+    lines.push("", "**Findings**");
+    for (const finding of result.findings) {
+      const location = finding.path
+        ? ` — \`${finding.path}${finding.line ? `:${finding.line}` : ""}\``
+        : "";
+      lines.push(
+        `- **${finding.severity.toUpperCase()}**${location}: ${finding.message}`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
 export function withFleetResultInstruction(
   expected: SpawnBackgroundRequest["expectedResult"],
   message: string,

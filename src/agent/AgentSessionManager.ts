@@ -75,6 +75,7 @@ import {
 } from "./backgroundDisplayStatus.js";
 import { BackgroundSummaryScheduler } from "./BackgroundSummaryScheduler.js";
 import {
+  formatFleetResultEnvelope,
   parseFleetResultEnvelope,
   planFleetWorkflow,
   scoreFleetCandidate,
@@ -2926,10 +2927,7 @@ export class AgentSessionManager {
         "spawn_background_agent requires non-empty task and message",
       );
     }
-    const executionMessage = withFleetResultInstruction(
-      request.expectedResult,
-      message,
-    );
+    const executionMessage = message;
 
     const parent = parentSessionId
       ? this.sessions.get(parentSessionId)
@@ -2970,6 +2968,12 @@ export class AgentSessionManager {
     parentSessionId = parent?.id;
 
     if (backendRoute.backend === "acp") {
+      // ACP agents do not use AgentLink's set_task_status tool, so keep the
+      // serialized-envelope fallback at that external boundary only.
+      const acpExecutionMessage = withFleetResultInstruction(
+        request.expectedResult,
+        message,
+      );
       const resolvedMode = request.mode?.trim() || "review";
       const taskClass = request.taskClass?.trim() || "review";
       const session = await this.host.createSession({
@@ -3048,7 +3052,7 @@ export class AgentSessionManager {
             agent: backendRoute.agent,
             cwd: this.cwd,
             additionalDirectories: this.getAcpAdditionalDirectories(),
-            prompt: executionMessage,
+            prompt: acpExecutionMessage,
             signal: session.abortSignal,
             onEvent: (event) => {
               if (event.type === "stderr") {
@@ -3150,9 +3154,10 @@ export class AgentSessionManager {
             const fallbackMsg = this.bgErrors.get(session.id)
               ? `ACP background agent stopped: ${this.bgErrors.get(session.id)}`
               : "(ACP background agent completed without output)";
-            const resultText = session.getLastAssistantText() ?? fallbackMsg;
+            const { resultText, structuredResult } =
+              this.resolveBackgroundResult(session, fallbackMsg);
             this.cancelOwnedChildrenOnCompletion(session.id);
-            this.finalizeFleetMetadata(session, resultText);
+            this.finalizeFleetMetadata(session, resultText, structuredResult);
             this.saveSession(session.id);
             this.bgFinalResults.set(session.id, resultText);
             for (const t of this.bgSafetyTimers.get(session.id) ?? []) {
@@ -3446,9 +3451,12 @@ export class AgentSessionManager {
       const fallbackMsg = this.bgErrors.get(session.id)
         ? `Background agent stopped: ${this.bgErrors.get(session.id)}`
         : "(background agent completed without output)";
-      const resultText = session.getLastAssistantText() ?? fallbackMsg;
+      const { resultText, structuredResult } = this.resolveBackgroundResult(
+        session,
+        fallbackMsg,
+      );
       this.cancelOwnedChildrenOnCompletion(session.id);
-      this.finalizeFleetMetadata(session, resultText);
+      this.finalizeFleetMetadata(session, resultText, structuredResult);
       this.saveSession(session.id);
 
       // Store result BEFORE resolving waiters to close the race window
@@ -4118,7 +4126,11 @@ export class AgentSessionManager {
 
     // Already done (belt + suspenders)
     if (this.getProjectedBgStatus(session).done) {
-      return Promise.resolve(session.getLastAssistantText() ?? "(no result)");
+      return Promise.resolve(
+        session.fleetMetadata?.finalResult ??
+          session.getLastAssistantText() ??
+          "(no result)",
+      );
     }
 
     return new Promise((resolve) => {
@@ -4274,17 +4286,20 @@ export class AgentSessionManager {
   private finalizeFleetMetadata(
     session: AgentSession,
     resultText: string,
+    structuredResult?: import("./FleetWorkflows.js").FleetResultEnvelope,
   ): void {
     const fleet = session.fleetMetadata;
     if (!fleet) return;
     this.bgBudgetWrapUps.delete(session.id);
     fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
     fleet.finalResult = resultText;
-    fleet.structuredResult = parseFleetResultEnvelope(
-      fleet.delegation
-        ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
-      resultText,
-    );
+    fleet.structuredResult =
+      structuredResult ??
+      parseFleetResultEnvelope(
+        fleet.delegation
+          ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
+        resultText,
+      );
     const meta = this.bgMeta.get(session.id);
     if (meta) {
       fleet.budgetUsage = {
@@ -4314,6 +4329,39 @@ export class AgentSessionManager {
       fleet.terminalReason = undefined;
       this.appendFleetEvent(session, "completed", "Agent completed");
     }
+  }
+
+  private resolveBackgroundResult(
+    session: AgentSession,
+    fallbackText: string,
+  ): {
+    resultText: string;
+    structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
+  } {
+    // Some host/test session adapters predate getLastFinalMarker; keep text
+    // completion compatible while native AgentSession exposes structured data.
+    const marker = session.getLastFinalMarker?.();
+    if (marker?.result) {
+      return {
+        resultText: formatFleetResultEnvelope(marker.result),
+        structuredResult: marker.result,
+      };
+    }
+
+    const rawText =
+      session.getLastAssistantText() ?? marker?.summary ?? fallbackText;
+    const structuredResult = parseFleetResultEnvelope(
+      session.fleetMetadata?.delegation
+        ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
+      rawText,
+    );
+    return {
+      resultText:
+        structuredResult.type === "text"
+          ? structuredResult.text
+          : formatFleetResultEnvelope(structuredResult),
+      structuredResult,
+    };
   }
 
   private enforceBackgroundBudget(session: AgentSession): boolean {
@@ -4577,15 +4625,20 @@ export class AgentSessionManager {
           record.status === "completed"
             ? undefined
             : (record.error ?? `worktree_${record.status}`);
-        session.fleetMetadata.finalResult =
+        const rawResult =
           record.resultText ??
           record.error ??
           "Worktree agent ended without output";
-        session.fleetMetadata.structuredResult = parseFleetResultEnvelope(
+        const structuredResult = parseFleetResultEnvelope(
           session.fleetMetadata.delegation
             ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
-          session.fleetMetadata.finalResult,
+          rawResult,
         );
+        session.fleetMetadata.structuredResult = structuredResult;
+        session.fleetMetadata.finalResult =
+          structuredResult.type === "text"
+            ? structuredResult.text
+            : formatFleetResultEnvelope(structuredResult);
         session.fleetMetadata.completedAt = Date.now();
         const meta = this.bgMeta.get(session.id);
         if (meta && record.usage) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseFleetResultEnvelope,
+  formatFleetResultEnvelope,
   planFleetWorkflow,
   scoreFleetCandidate,
   withFleetResultInstruction,
@@ -99,6 +100,26 @@ describe("fleet workflows", () => {
     );
     expect(instruction).toContain("emptyDiff");
     expect(instruction).toContain("reviewedScope");
+  });
+
+  it("formats structured review results as readable markdown", () => {
+    expect(
+      formatFleetResultEnvelope({
+        type: "review_findings",
+        findings: [
+          {
+            severity: "high",
+            message: "The checkpoint can be lost.",
+            path: "src/indexer/workerLib.ts",
+            line: 42,
+          },
+        ],
+        reviewedScope: "abc123..def456",
+        emptyDiff: false,
+      }),
+    ).toContain(
+      "**HIGH** — `src/indexer/workerLib.ts:42`: The checkpoint can be lost.",
+    );
   });
 
   it("rejects malformed envelopes and artifact paths outside the workspace", () => {

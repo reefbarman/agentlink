@@ -604,6 +604,15 @@ export class AgentSession {
     return undefined;
   }
 
+  /** Return the most recent final marker, including structured background results. */
+  getLastFinalMarker(): FinalMessageMarker | undefined {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const marker = this.messages[i].uiHint?.finalMarker;
+      if (marker) return marker;
+    }
+    return undefined;
+  }
+
   /**
    * Concatenate all assistant text blocks across the full conversation.
    * Used for the "full transcript" view on background agent result blocks.
