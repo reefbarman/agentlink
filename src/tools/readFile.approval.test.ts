@@ -255,6 +255,53 @@ describe("handleReadFile outside-workspace approval ordering", () => {
     });
   });
 
+  it("converts BMP files to PNG image blocks for the agent", async () => {
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: "/workspace/assets/pixel.bmp",
+      inWorkspace: true,
+    });
+    isBinaryFileMock.mockReturnValue(true);
+
+    const bmp = Buffer.alloc(58);
+    bmp.write("BM", 0, "ascii");
+    bmp.writeUInt32LE(bmp.length, 2);
+    bmp.writeUInt32LE(54, 10);
+    bmp.writeUInt32LE(40, 14);
+    bmp.writeInt32LE(1, 18);
+    bmp.writeInt32LE(-1, 22);
+    bmp.writeUInt16LE(1, 26);
+    bmp.writeUInt16LE(24, 28);
+    bmp.writeUInt32LE(4, 34);
+    bmp.set([0, 0, 255, 0], 54);
+
+    statMock.mockResolvedValue({ size: bmp.length });
+    readFileMock.mockResolvedValue(bmp);
+
+    const approvalManager = {
+      isPathTrusted: vi.fn(() => true),
+    } as unknown as ApprovalManager;
+    const approvalPanel = {} as ApprovalPanelProvider;
+
+    const result = await handleReadFile(
+      { path: "assets/pixel.bmp", include_symbols: false },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toMatchObject({
+      type: "image",
+      mimeType: "image/png",
+    });
+    const image = result.content[0];
+    expect(image.type).toBe("image");
+    if (image.type !== "image") throw new Error("Expected image result");
+    expect(Buffer.from(image.data, "base64").subarray(1, 4).toString()).toBe(
+      "PNG",
+    );
+  });
+
   it("reads text content when editor enrichment provider is degraded", async () => {
     resolveAndValidatePathMock.mockReturnValue({
       absolutePath: "/workspace/src/example.ts",
