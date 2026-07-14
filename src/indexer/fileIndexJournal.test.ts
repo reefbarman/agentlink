@@ -7,6 +7,7 @@ import {
   emptyFileIndexJournal,
   getFileIndexJournalPath,
   loadFileIndexJournal,
+  resetFileIndexJournal,
   validateFileIndexJournal,
   writeFileIndexJournal,
   type FileIndexJournal,
@@ -102,6 +103,17 @@ describe("fileIndexJournal", () => {
       writeFileIndexJournal(journalPath, emptyFileIndexJournal()),
     ).toThrow("Refusing to replace corrupt file index journal");
     expect(fs.readFileSync(journalPath, "utf8")).toBe(corrupt);
+  });
+
+  it("resets corrupt ownership after confirmed collection deletion", () => {
+    fs.writeFileSync(journalPath, "not json", "utf8");
+
+    resetFileIndexJournal(journalPath);
+
+    expect(loadFileIndexJournal(journalPath)).toEqual({
+      status: "valid",
+      journal: emptyFileIndexJournal(),
+    });
   });
 
   it("preserves a dangling journal symlink as an unreadable artifact", () => {

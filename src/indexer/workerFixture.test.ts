@@ -18,11 +18,16 @@ import {
   loadFileIndexJournal,
   writeFileIndexJournal,
 } from "./fileIndexJournal.js";
+import {
+  getCollectionResetStatePath,
+  loadCollectionResetState,
+} from "./collectionResetState.js";
 import type {
   ExtensionToWorkerMessage,
   IndexStats,
   WorkerToExtensionMessage,
 } from "./types.js";
+import { loadIndexCache } from "./workerLib.js";
 
 type FixtureFetchObservation =
   | {
@@ -34,6 +39,18 @@ type FixtureFetchObservation =
       type: "fixtureFetch";
       operation: "qdrantDelete";
       pointCount: number;
+    }
+  | {
+      type: "fixtureFetch";
+      operation: "qdrantMutation";
+      method: string;
+      pathname: string;
+    }
+  | {
+      type: "fixtureFetch";
+      operation: "qdrantVisibility";
+      pointCount: number;
+      visible: boolean;
     };
 
 type FixtureMessage = WorkerToExtensionMessage | FixtureFetchObservation;
@@ -128,6 +145,7 @@ function writeCacheEntry(
   cachePath: string,
   relPath: string,
   pointIds: string[],
+  options: { visibility?: "pending" | "current" } = {},
 ): void {
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
   fs.writeFileSync(
@@ -140,6 +158,7 @@ function writeCacheEntry(
           hash: "fixture-hash",
           pointIds,
           indexedAt: "2026-01-01T00:00:00.000Z",
+          ...options,
         },
       },
     }),
@@ -283,6 +302,431 @@ function startMessage(options: {
 }
 
 describe("indexer worker fixture", () => {
+  it.each(["full", "incremental"])(
+    "fails closed before Qdrant mutation when a %s run finds a dangling vector cache",
+    async (kind) => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.symlinkSync(path.join(root, "missing-cache-target"), cachePath);
+      const error = fixture.waitFor("error");
+      fixture.send(
+        kind === "full"
+          ? startMessage({ root, cachePath, files: [], force: false })
+          : {
+              type: "incrementalUpdate",
+              added: [],
+              removed: [],
+              workspaceRoot: root,
+              collectionName: "fixture",
+              qdrantUrl: "http://fixture-qdrant.invalid/success",
+              embeddingBearerToken: "success",
+              cachePath,
+              granularity: "standard",
+            },
+      );
+
+      await expect(error).resolves.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining("Vector cache is corrupt"),
+      });
+      expect(
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "qdrantMutation",
+        ),
+      ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "fails closed before Qdrant mutation when same-file journal ownership is only partial",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      writeCacheEntry(cachePath, "changed.sql", ["old-point", "extra-point"]);
+      writeFileIndexJournal(getFileIndexJournalPath(cachePath), {
+        ...emptyFileIndexJournal(),
+        operations: [
+          {
+            operationId: "replace-partial",
+            file: "changed.sql",
+            kind: "replace",
+            generation: "generation-2",
+            targetHash: "target-hash",
+            oldPointIds: ["old-point"],
+            intendedBatches: [{ batch: 0, pointIds: ["new-point"] }],
+          },
+        ],
+      });
+      const error = fixture.waitFor("error");
+      fixture.send(startMessage({ root, cachePath, files: [], force: false }));
+
+      await expect(error).resolves.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining(
+          "does not match a recoverable vector cache state",
+        ),
+      });
+      expect(
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "qdrantMutation",
+        ),
+      ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "fails closed before Qdrant mutation when journal ownership conflicts with the vector cache",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      writeCacheEntry(cachePath, "owner.sql", ["shared-point"]);
+      writeFileIndexJournal(getFileIndexJournalPath(cachePath), {
+        ...emptyFileIndexJournal(),
+        operations: [
+          {
+            operationId: "replace-conflict",
+            file: "other.sql",
+            kind: "replace",
+            generation: "generation-2",
+            targetHash: "target-hash",
+            oldPointIds: ["shared-point"],
+            intendedBatches: [{ batch: 0, pointIds: ["new-point"] }],
+          },
+        ],
+      });
+      const error = fixture.waitFor("error");
+      fixture.send(startMessage({ root, cachePath, files: [], force: false }));
+
+      await expect(error).resolves.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining(
+          "conflicts with vector cache ownership",
+        ),
+      });
+      expect(
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "qdrantMutation",
+        ),
+      ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "fails closed before Qdrant mutation when a non-forced full run finds corrupt ownership",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(cachePath, "not json", "utf8");
+      const error = fixture.waitFor("error");
+      fixture.send(startMessage({ root, cachePath, files: [], force: false }));
+
+      await expect(error).resolves.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining(
+          "Vector cache is corrupt; run a forced re-index",
+        ),
+      });
+      expect(
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "qdrantMutation",
+        ),
+      ).toEqual([]);
+      expect(fs.readFileSync(cachePath, "utf8")).toBe("not json");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "fails closed before Qdrant mutation when an incremental run finds corrupt ownership",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(
+        cachePath,
+        JSON.stringify({ version: 99, files: {} }),
+        "utf8",
+      );
+      const error = fixture.waitFor("error");
+      fixture.send({
+        type: "incrementalUpdate",
+        added: [],
+        removed: [],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/success",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+
+      await expect(error).resolves.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining(
+          "Vector cache is corrupt; run a forced re-index",
+        ),
+      });
+      expect(
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "qdrantMutation",
+        ),
+      ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "fails closed before Qdrant mutation when pending ownership has a corrupt journal",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      writeCacheEntry(cachePath, "pending.sql", ["point-1"], {
+        visibility: "pending",
+      });
+      fs.writeFileSync(getFileIndexJournalPath(cachePath), "not json", "utf8");
+      const error = fixture.waitFor("error");
+      fixture.send(startMessage({ root, cachePath, files: [], force: false }));
+
+      await expect(error).resolves.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining("File index journal is corrupt"),
+      });
+      expect(
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "qdrantMutation",
+        ),
+      ).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "preserves ownership behind a durable fence when collection deletion fails",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      writeCacheEntry(cachePath, "stale.sql", ["stale-point"]);
+      writeFileIndexJournal(getFileIndexJournalPath(cachePath), {
+        ...emptyFileIndexJournal(),
+        operations: [
+          {
+            operationId: "remove-1",
+            file: "stale.sql",
+            kind: "remove",
+            generation: "generation-1",
+            targetHash: null,
+            oldPointIds: ["stale-point"],
+            intendedBatches: [],
+          },
+        ],
+      });
+      const originalCache = fs.readFileSync(cachePath, "utf8");
+      const journalPath = getFileIndexJournalPath(cachePath);
+      const originalJournal = fs.readFileSync(journalPath, "utf8");
+      const error = fixture.waitFor("error");
+      fixture.send(
+        startMessage({
+          root,
+          cachePath,
+          files: [],
+          force: true,
+          qdrantPath: "collection-delete-failure",
+        }),
+      );
+
+      await expect(error).resolves.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining("Qdrant collection delete failed"),
+      });
+      expect(fs.readFileSync(cachePath, "utf8")).toBe(originalCache);
+      expect(fs.readFileSync(journalPath, "utf8")).toBe(originalJournal);
+      expect(
+        loadCollectionResetState(getCollectionResetStatePath(cachePath)),
+      ).toMatchObject({
+        status: "valid",
+        state: { status: "in-progress" },
+      });
+      expect(
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "qdrantMutation",
+        ),
+      ).toHaveLength(1);
+
+      const blocked = fixture.waitFor("error", (message) =>
+        message.message.includes("Collection reset state"),
+      );
+      fixture.send(startMessage({ root, cachePath, files: [], force: false }));
+      await expect(blocked).resolves.toMatchObject({ fatal: true });
+      expect(
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "qdrantMutation",
+        ),
+      ).toHaveLength(1);
+
+      const stats = await fixture.complete(
+        startMessage({
+          root,
+          cachePath,
+          files: [],
+          force: true,
+          qdrantPath: "replacement-target",
+        }),
+      );
+      expect(stats.errors).toEqual([]);
+      expect(loadFileIndexJournal(journalPath)).toEqual({
+        status: "valid",
+        journal: emptyFileIndexJournal(),
+      });
+      expect(
+        loadCollectionResetState(getCollectionResetStatePath(cachePath)),
+      ).toMatchObject({
+        status: "valid",
+        state: {
+          status: "complete",
+          qdrantUrl: "http://fixture-qdrant.invalid/replacement-target",
+          collectionName: "fixture",
+        },
+      });
+      const mutations = fixture.messages.filter(
+        (
+          message,
+        ): message is Extract<
+          FixtureFetchObservation,
+          { operation: "qdrantMutation" }
+        > =>
+          message.type === "fixtureFetch" &&
+          message.operation === "qdrantMutation",
+      );
+      expect(mutations).toEqual([
+        expect.objectContaining({
+          method: "DELETE",
+          pathname: "/collection-delete-failure/collections/fixture",
+        }),
+        expect.objectContaining({
+          method: "DELETE",
+          pathname: "/collection-delete-failure/collections/fixture",
+        }),
+        expect.objectContaining({
+          method: "DELETE",
+          pathname: "/replacement-target/collections/fixture",
+        }),
+      ]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each(["pending cache", "non-empty journal"])(
+    "starts forced rebuild with collection deletion for valid %s ownership",
+    async (ownership) => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      writeCacheEntry(
+        cachePath,
+        "stale.sql",
+        ["stale-point"],
+        ownership === "pending cache" ? { visibility: "pending" } : {},
+      );
+      if (ownership === "non-empty journal") {
+        writeFileIndexJournal(getFileIndexJournalPath(cachePath), {
+          ...emptyFileIndexJournal(),
+          operations: [
+            {
+              operationId: "remove-1",
+              file: "stale.sql",
+              kind: "remove",
+              generation: "generation-1",
+              targetHash: null,
+              oldPointIds: ["stale-point"],
+              intendedBatches: [],
+            },
+          ],
+        });
+      }
+
+      await fixture.complete(
+        startMessage({ root, cachePath, files: [], force: true }),
+      );
+
+      const mutations = fixture.messages.filter(
+        (
+          message,
+        ): message is Extract<
+          FixtureFetchObservation,
+          { operation: "qdrantMutation" }
+        > =>
+          message.type === "fixtureFetch" &&
+          message.operation === "qdrantMutation",
+      );
+      expect(mutations[0]).toMatchObject({
+        method: "DELETE",
+        pathname: "/success/collections/fixture",
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "recovers corrupt ownership through a forced collection rebuild",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const source = writeSource(root, "recovered.sql", sourceContent(1));
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      writeCacheEntry(cachePath, "stale.sql", ["stale-point"]);
+      fs.writeFileSync(getFileIndexJournalPath(cachePath), "not json", "utf8");
+
+      const stats = await fixture.complete(
+        startMessage({ root, cachePath, files: [source], force: true }),
+      );
+
+      expect(stats).toMatchObject({ filesIndexed: 1, errors: [] });
+      expect(readCachedPointIds(cachePath, "recovered.sql")).not.toBeNull();
+      expect(loadFileIndexJournal(getFileIndexJournalPath(cachePath))).toEqual({
+        status: "valid",
+        journal: emptyFileIndexJournal(),
+      });
+      const mutations = fixture.messages.filter(
+        (
+          message,
+        ): message is Extract<
+          FixtureFetchObservation,
+          { operation: "qdrantMutation" }
+        > =>
+          message.type === "fixtureFetch" &&
+          message.operation === "qdrantMutation",
+      );
+      expect(mutations[0]).toMatchObject({
+        method: "DELETE",
+        pathname: "/success/collections/fixture",
+      });
+      expect(mutations.some((mutation) => mutation.method === "PUT")).toBe(
+        true,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it(
     "records a two-batch initial-index baseline with a representative large file",
     async () => {
@@ -320,7 +764,7 @@ describe("indexer worker fixture", () => {
         "qdrant.ensureCollection": 1,
         "qdrant.deleteCollection": 1,
         "qdrant.upsertPoints": expect.any(Number),
-        "cache.writeVector": 4,
+        "cache.writeVector": 6,
         "cache.writeStructural": 4,
       });
       expect(
@@ -380,8 +824,8 @@ describe("indexer worker fixture", () => {
         "qdrant.deletePoints": 2,
         "qdrant.upsertPoints": 1,
         "qdrant.setPointVisibility": 2,
-        "cache.writeVector": 5,
-        "cache.writeStructural": 5,
+        "cache.writeVector": 4,
+        "cache.writeStructural": 4,
       });
       expect(stats.metrics!.phaseDurationsMs).toEqual(
         expect.objectContaining({
@@ -803,8 +1247,138 @@ describe("indexer worker fixture", () => {
       expect(stats.errors).toEqual([]);
       expect(stats.filesIndexed).toBe(1);
       expect(
-        fixture.messages.filter((message) => message.type === "fixtureFetch"),
+        fixture.messages.filter(
+          (message) =>
+            message.type === "fixtureFetch" &&
+            message.operation === "embedding",
+        ),
       ).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "retains pending addition ownership when cancellation arrives during visibility",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const source = writeSource(root, "visibility.sql", sourceContent(1));
+      const visibility = fixture.waitFor(
+        "fixtureFetch",
+        (message) => message.operation === "qdrantVisibility",
+      );
+      const complete = fixture.waitFor("complete");
+      fixture.send(
+        startMessage({
+          root,
+          cachePath,
+          files: [source],
+          qdrantPath: "visibility-delay",
+        }),
+      );
+      await visibility;
+      fixture.send({ type: "cancel" });
+
+      const stats = (await complete).stats;
+      expect(stats.cancelled).toBe(true);
+      expect(stats.filesIndexed).toBe(0);
+      expect(
+        loadFileIndexJournal(getFileIndexJournalPath(cachePath)),
+      ).toMatchObject({
+        status: "valid",
+        journal: {
+          operations: [expect.objectContaining({ file: "visibility.sql" })],
+        },
+      });
+      expect(loadIndexCache(cachePath)).toMatchObject({
+        status: "valid",
+        cache: {
+          files: {
+            "visibility.sql": expect.objectContaining({
+              visibility: "pending",
+            }),
+          },
+        },
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "bounds replacement visibility batches and preserves completed counts on failure",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const source = writeSource(root, "changed.sql", sourceContent(2));
+      const oldPointIds = Array.from(
+        { length: 250 },
+        (_, index) => `old-${index}`,
+      );
+      writeCacheEntry(cachePath, "changed.sql", oldPointIds);
+
+      const stats = await fixture.complete(
+        startMessage({
+          root,
+          cachePath,
+          files: [source],
+          force: false,
+          qdrantPath: "visibility-failure",
+        }),
+      );
+
+      expect(stats.pointsDeleted).toBe(250);
+      expect(stats.pointsUpserted).toBeGreaterThan(0);
+      expect(stats.errors).toEqual([
+        expect.stringContaining("fixture visibility failure"),
+      ]);
+      const visibilityCalls = fixture.messages.filter(
+        (
+          message,
+        ): message is Extract<
+          FixtureFetchObservation,
+          { operation: "qdrantVisibility" }
+        > =>
+          message.type === "fixtureFetch" &&
+          message.operation === "qdrantVisibility",
+      );
+      expect(visibilityCalls.length).toBeGreaterThanOrEqual(4);
+      expect(visibilityCalls.every((call) => call.pointCount <= 100)).toBe(
+        true,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "stops later file batches while failed addition ownership remains journaled",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const files = Array.from({ length: 51 }, (_, index) =>
+        writeSource(root, `pending/file-${index}.sql`, sourceContent(index)),
+      );
+
+      const stats = await fixture.complete(
+        startMessage({
+          root,
+          cachePath,
+          files,
+          qdrantPath: "partial-failure",
+        }),
+      );
+
+      expect(stats.filesIndexed).toBe(0);
+      expect(stats.totalFilesInIndex).toBe(0);
+      expect(stats.metrics!.operations["qdrant.upsertPoints"]).toBe(1);
+      const loaded = loadFileIndexJournal(getFileIndexJournalPath(cachePath));
+      expect(loaded.status).toBe("valid");
+      if (loaded.status !== "valid") throw new Error("Expected valid journal");
+      expect(loaded.journal.operations).toHaveLength(50);
+      expect(
+        loaded.journal.operations.some(
+          (operation) => operation.file === "pending/file-50.sql",
+        ),
+      ).toBe(false);
     },
     TEST_TIMEOUT_MS,
   );
@@ -830,7 +1404,33 @@ describe("indexer worker fixture", () => {
         expect.stringContaining("fixture upsert failure"),
       ]);
       expect(stats.metrics!.operations["qdrant.upsertPoints"]).toBe(1);
-      expect(stats.totalFilesInIndex).toBe(1);
+      expect(stats.totalFilesInIndex).toBe(0);
+      expect(readCachedPointIds(cachePath, "partial.sql")).toBeNull();
+      expect(
+        loadFileIndexJournal(getFileIndexJournalPath(cachePath)),
+      ).toMatchObject({
+        status: "valid",
+        journal: {
+          operations: [
+            expect.objectContaining({
+              file: "partial.sql",
+              kind: "replace",
+              oldPointIds: [],
+            }),
+          ],
+        },
+      });
+
+      const recovered = await fixture.complete(
+        startMessage({ root, cachePath, files: [source], force: false }),
+      );
+      expect(recovered.errors).toEqual([]);
+      expect(recovered.filesIndexed).toBe(1);
+      expect(readCachedPointIds(cachePath, "partial.sql")).not.toBeNull();
+      expect(loadFileIndexJournal(getFileIndexJournalPath(cachePath))).toEqual({
+        status: "valid",
+        journal: emptyFileIndexJournal(),
+      });
     },
     TEST_TIMEOUT_MS,
   );

@@ -8,9 +8,22 @@ type FixtureObservation =
       type: "fixtureFetch";
       operation: "qdrantDelete";
       pointCount: number;
+    }
+  | {
+      type: "fixtureFetch";
+      operation: "qdrantMutation";
+      method: string;
+      pathname: string;
+    }
+  | {
+      type: "fixtureFetch";
+      operation: "qdrantVisibility";
+      pointCount: number;
+      visible: boolean;
     };
 
 let embeddingAttempts = 0;
+let collectionDeleteFailures = 0;
 
 function response(
   status: number,
@@ -55,6 +68,44 @@ globalThis.fetch = async (input, init) => {
   }
 
   if (url.includes("fixture-qdrant.invalid")) {
+    if (init?.method && init.method !== "GET") {
+      observe({
+        type: "fixtureFetch",
+        operation: "qdrantMutation",
+        method: init.method,
+        pathname: new URL(url).pathname,
+      });
+    }
+    if (
+      url.includes("collection-delete-failure") &&
+      /\/collections\/[^/]+$/.test(url) &&
+      init?.method === "DELETE" &&
+      collectionDeleteFailures++ === 0
+    ) {
+      return response(500, "fixture collection delete failure", {
+        "Content-Type": "text/plain",
+      });
+    }
+    if (url.endsWith("/points/payload?wait=true") && init?.method === "POST") {
+      const request = JSON.parse(String(init.body)) as {
+        payload?: { indexVisible?: boolean };
+        points?: string[];
+      };
+      observe({
+        type: "fixtureFetch",
+        operation: "qdrantVisibility",
+        pointCount: request.points?.length ?? 0,
+        visible: request.payload?.indexVisible === true,
+      });
+      if (url.includes("visibility-delay")) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      if (url.includes("visibility-failure") && request.payload?.indexVisible) {
+        return response(500, "fixture visibility failure", {
+          "Content-Type": "text/plain",
+        });
+      }
+    }
     if (url.endsWith("/points/delete?wait=true") && init?.method === "POST") {
       const request = JSON.parse(String(init.body)) as { points?: string[] };
       observe({

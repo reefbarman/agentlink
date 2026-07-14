@@ -11,6 +11,7 @@ import {
   hashContent,
   isBinaryContent,
   loadCache,
+  loadIndexCache,
   loadStructuralCache,
   readFilesBatch,
   scanFiles,
@@ -160,11 +161,26 @@ describe("loadCache / writeCache", () => {
     expect(fs.existsSync(cachePath)).toBe(true);
   });
 
-  it("returns empty cache for corrupt JSON", () => {
-    const cachePath = path.join(tmpDir, "corrupt.json");
-    fs.writeFileSync(cachePath, "not json!!!", "utf-8");
-    const cache = loadCache(cachePath);
-    expect(cache).toEqual({ version: 1, files: {} });
+  it("distinguishes missing, valid, and corrupt cache records", () => {
+    const missingPath = path.join(tmpDir, "missing.json");
+    expect(loadIndexCache(missingPath)).toEqual({
+      status: "missing",
+      cache: { version: 1, files: {} },
+    });
+
+    const validPath = path.join(tmpDir, "valid.json");
+    writeCache(validPath, { version: 1, files: {} });
+    expect(loadIndexCache(validPath)).toEqual({
+      status: "valid",
+      cache: { version: 1, files: {} },
+    });
+
+    const corruptPath = path.join(tmpDir, "corrupt.json");
+    fs.writeFileSync(corruptPath, "not json!!!", "utf-8");
+    expect(loadIndexCache(corruptPath)).toMatchObject({
+      status: "corrupt",
+    });
+    expect(loadCache(corruptPath)).toEqual({ version: 1, files: {} });
   });
 
   it("returns empty cache for wrong version", () => {
@@ -174,8 +190,71 @@ describe("loadCache / writeCache", () => {
       JSON.stringify({ version: 99, files: {} }),
       "utf-8",
     );
-    const cache = loadCache(cachePath);
-    expect(cache).toEqual({ version: 1, files: {} });
+    expect(loadIndexCache(cachePath)).toEqual({
+      status: "corrupt",
+      error: "Unsupported or malformed vector cache",
+    });
+    expect(loadCache(cachePath)).toEqual({ version: 1, files: {} });
+  });
+
+  it.each([
+    [
+      "malformed entry",
+      {
+        version: 1,
+        files: { "src/foo.ts": { hash: "hash", pointIds: "point-1" } },
+      },
+    ],
+    [
+      "duplicate point ownership",
+      {
+        version: 1,
+        files: {
+          "src/foo.ts": {
+            hash: "hash",
+            pointIds: ["point-1", "point-1"],
+            indexedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      },
+    ],
+    [
+      "cross-file point ownership",
+      {
+        version: 1,
+        files: {
+          "src/foo.ts": {
+            hash: "hash-1",
+            pointIds: ["point-1"],
+            indexedAt: "2026-01-01T00:00:00.000Z",
+          },
+          "src/bar.ts": {
+            hash: "hash-2",
+            pointIds: ["point-1"],
+            indexedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      },
+    ],
+    [
+      "invalid visibility",
+      {
+        version: 1,
+        files: {
+          "src/foo.ts": {
+            hash: "hash",
+            pointIds: ["point-1"],
+            indexedAt: "2026-01-01T00:00:00.000Z",
+            visibility: "published",
+          },
+        },
+      },
+    ],
+  ])("rejects %s", (_, value) => {
+    const cachePath = path.join(tmpDir, "invalid.json");
+    fs.writeFileSync(cachePath, JSON.stringify(value), "utf-8");
+
+    expect(loadIndexCache(cachePath)).toMatchObject({ status: "corrupt" });
   });
 });
 

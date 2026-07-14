@@ -114,19 +114,103 @@ export function buildPathSegments(relPath: string): Record<string, string> {
 
 // --- Cache I/O ---
 
-export function loadCache(cachePath: string): IndexCache {
+export type IndexCacheLoadResult =
+  | { status: "missing"; cache: IndexCache }
+  | { status: "valid"; cache: IndexCache }
+  | { status: "corrupt"; error: string };
+
+export function loadIndexCache(cachePath: string): IndexCacheLoadResult {
+  let raw: string;
   try {
-    const raw = fs.readFileSync(cachePath, "utf-8");
-    const parsed = JSON.parse(raw) as IndexCache;
-    if (parsed.version === 1 && parsed.files) return parsed;
-  } catch {
-    // Missing or corrupt — start fresh
+    raw = fs.readFileSync(cachePath, "utf-8");
+  } catch (error) {
+    if (isMissingFile(error)) {
+      const entryError = inspectMissingCacheEntry(cachePath);
+      return entryError === null
+        ? { status: "missing", cache: { version: 1, files: {} } }
+        : { status: "corrupt", error: entryError };
+    }
+    return { status: "corrupt", error: describeError(error) };
   }
-  return { version: 1, files: {} };
+
+  try {
+    return { status: "valid", cache: validateIndexCache(JSON.parse(raw)) };
+  } catch (error) {
+    return { status: "corrupt", error: describeError(error) };
+  }
+}
+
+export function loadCache(cachePath: string): IndexCache {
+  const loaded = loadIndexCache(cachePath);
+  return loaded.status === "corrupt" ? { version: 1, files: {} } : loaded.cache;
 }
 
 export function writeCache(cachePath: string, cache: IndexCache): void {
   writeAtomicJsonFile(cachePath, cache);
+}
+
+function validateIndexCache(value: unknown): IndexCache {
+  if (!isRecord(value) || value.version !== 1 || !isRecord(value.files)) {
+    throw new Error("Unsupported or malformed vector cache");
+  }
+  if (
+    value.granularity !== undefined &&
+    value.granularity !== "standard" &&
+    value.granularity !== "fine"
+  ) {
+    throw new Error("Invalid vector cache granularity");
+  }
+
+  const files: IndexCache["files"] = {};
+  const ownedPointIds = new Set<string>();
+  for (const [file, entry] of Object.entries(value.files)) {
+    if (
+      file.length === 0 ||
+      !isRecord(entry) ||
+      typeof entry.hash !== "string" ||
+      entry.hash.length === 0 ||
+      !Array.isArray(entry.pointIds) ||
+      entry.pointIds.some(
+        (pointId) => typeof pointId !== "string" || pointId.length === 0,
+      ) ||
+      new Set(entry.pointIds).size !== entry.pointIds.length ||
+      typeof entry.indexedAt !== "string" ||
+      (entry.mtimeMs !== undefined && typeof entry.mtimeMs !== "number") ||
+      (entry.size !== undefined && typeof entry.size !== "number") ||
+      (entry.generation !== undefined &&
+        typeof entry.generation !== "string") ||
+      (entry.visibility !== undefined &&
+        entry.visibility !== "pending" &&
+        entry.visibility !== "current")
+    ) {
+      throw new Error(`Malformed vector cache entry for ${file || "<empty>"}`);
+    }
+    if (entry.pointIds.some((pointId) => ownedPointIds.has(pointId))) {
+      throw new Error(`Vector cache point IDs have multiple owners at ${file}`);
+    }
+    for (const pointId of entry.pointIds) ownedPointIds.add(pointId);
+    files[file] = {
+      hash: entry.hash,
+      pointIds: [...entry.pointIds],
+      indexedAt: entry.indexedAt,
+      ...(entry.mtimeMs !== undefined ? { mtimeMs: entry.mtimeMs } : {}),
+      ...(entry.size !== undefined ? { size: entry.size } : {}),
+      ...(entry.generation !== undefined
+        ? { generation: entry.generation }
+        : {}),
+      ...(entry.visibility !== undefined
+        ? { visibility: entry.visibility }
+        : {}),
+    };
+  }
+
+  return {
+    version: 1,
+    files,
+    ...(value.granularity !== undefined
+      ? { granularity: value.granularity }
+      : {}),
+  };
 }
 
 export function loadStructuralCache(
@@ -163,6 +247,31 @@ export function emptyStructuralCache(
     generatedAt: new Date(0).toISOString(),
     files: {},
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function inspectMissingCacheEntry(cachePath: string): string | null {
+  try {
+    fs.lstatSync(cachePath);
+    return "Vector cache path exists but could not be read";
+  } catch (error) {
+    return isMissingFile(error) ? null : describeError(error);
+  }
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function getStructuralCachePath(cachePath: string): string {

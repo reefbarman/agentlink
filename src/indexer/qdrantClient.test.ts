@@ -170,16 +170,31 @@ describe("ensureQdrantCollection", () => {
 });
 
 describe("Qdrant collection and point writes", () => {
-  it("deletes a collection without interpreting the response status", async () => {
-    const fetchMock = vi.fn(async () => response({ status: 500 }));
+  it.each([200, 404])(
+    "accepts collection deletion status %s as confirmed absence",
+    async (status) => {
+      const fetchMock = vi.fn(async () =>
+        response({ status, ok: status >= 200 && status < 300 }),
+      );
+
+      await expect(
+        deleteQdrantCollection("http://qdrant/", "al-workspace", fetchMock),
+      ).resolves.toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://qdrant/collections/al-workspace",
+        { method: "DELETE" },
+      );
+    },
+  );
+
+  it("preserves a collection deletion error", async () => {
+    const fetchMock = vi.fn(async () =>
+      response({ status: 500, text: "delete failed" }),
+    );
 
     await expect(
-      deleteQdrantCollection("http://qdrant/", "al-workspace", fetchMock),
-    ).resolves.toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://qdrant/collections/al-workspace",
-      { method: "DELETE" },
-    );
+      deleteQdrantCollection("http://qdrant", "al-workspace", fetchMock),
+    ).rejects.toThrow("Qdrant collection delete failed: delete failed");
   });
 
   it("waits for point upserts to complete", async () => {

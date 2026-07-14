@@ -67,6 +67,11 @@ export function writeFileIndexJournal(
   writeAtomicJsonFile(journalPath, validateFileIndexJournal(journal));
 }
 
+/** Replace all prior ownership after the remote collection is confirmed absent. */
+export function resetFileIndexJournal(journalPath: string): void {
+  writeAtomicJsonFile(journalPath, emptyFileIndexJournal());
+}
+
 export function validateFileIndexJournal(value: unknown): FileIndexJournal {
   if (!isRecord(value) || value.version !== FILE_INDEX_JOURNAL_VERSION) {
     throw new Error("Unsupported file index journal version");

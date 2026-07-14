@@ -71,9 +71,16 @@ export async function deleteQdrantCollection(
   collectionName: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
-  await fetchImpl(getCollectionUrl(qdrantUrl, collectionName), {
-    method: "DELETE",
-  });
+  const response = await fetchImpl(
+    getCollectionUrl(qdrantUrl, collectionName),
+    {
+      method: "DELETE",
+    },
+  );
+  if (!response.ok && response.status !== 404) {
+    const error = await response.text();
+    throw new Error(`Qdrant collection delete failed: ${error}`);
+  }
 }
 
 export async function upsertQdrantPoints(
