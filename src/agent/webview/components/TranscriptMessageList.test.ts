@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, render, screen } from "@testing-library/preact";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "../types";
 import { StreamingBaselineRecorder } from "../../../shared/streamingBaselineMetrics";
@@ -456,11 +456,11 @@ describe("TranscriptMessageList streaming baseline metrics", () => {
     );
 
     expect(recorder.summarize("vscode-webview", "session-1")).toMatchObject({
-      historyRenders: 1,
-      unchangedHistoryRenders: 1,
+      historyRenders: 0,
+      unchangedHistoryRenders: 0,
       activeRenders: 1,
-      historyCommits: 1,
-      unchangedHistoryCommits: 1,
+      historyCommits: 0,
+      unchangedHistoryCommits: 0,
       activeCommits: 1,
     });
     cleanup();
@@ -516,14 +516,298 @@ describe("TranscriptMessageList streaming baseline metrics", () => {
 
     expect(recorder.summarize("browser-webview", "long-session")).toMatchObject(
       {
-        historyRenders: 2_388,
-        unchangedHistoryRenders: 2_388,
+        historyRenders: 0,
+        unchangedHistoryRenders: 0,
         activeRenders: 12,
-        historyCommits: 2_388,
-        unchangedHistoryCommits: 2_388,
+        historyCommits: 0,
+        unchangedHistoryCommits: 0,
         activeCommits: 12,
       },
     );
+    cleanup();
+  });
+
+  it("rerenders only a semantically changed historical row", () => {
+    const history: ChatMessage = {
+      id: "history-changing",
+      role: "assistant",
+      content: "",
+      timestamp: 1,
+      blocks: [{ type: "text", text: "Before" }],
+    };
+    const active: ChatMessage = {
+      id: "active-stable",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+      blocks: [{ type: "text", text: "Active" }],
+    };
+    const recorder = new StreamingBaselineRecorder();
+    const { rerender } = render(
+      h(TranscriptMessageList, {
+        messages: [history, active],
+        streaming: true,
+        streamingMetrics: recorder,
+        streamingMetricsSurface: "vscode-webview",
+        streamingMetricsScope: "changed-history",
+      }),
+    );
+    recorder.reset();
+
+    rerender(
+      h(TranscriptMessageList, {
+        messages: [
+          { ...history, blocks: [{ type: "text", text: "After" }] },
+          active,
+        ],
+        streaming: true,
+        streamingMetrics: recorder,
+        streamingMetricsSurface: "vscode-webview",
+        streamingMetricsScope: "changed-history",
+      }),
+    );
+
+    expect(screen.getByText("After")).toBeTruthy();
+    expect(
+      recorder.summarize("vscode-webview", "changed-history"),
+    ).toMatchObject({
+      historyRenders: 1,
+      unchangedHistoryRenders: 0,
+      activeRenders: 0,
+      historyCommits: 1,
+      unchangedHistoryCommits: 0,
+      activeCommits: 0,
+    });
+    cleanup();
+  });
+
+  it("rerenders only a row whose matched background session changes", () => {
+    const history: ChatMessage = {
+      id: "history-background",
+      role: "assistant",
+      content: "",
+      timestamp: 1,
+      blocks: [
+        {
+          type: "bg_agent",
+          sessionId: "bg-live",
+          task: "Inspect tests",
+          message: "Inspect the focused tests.",
+        },
+      ],
+    };
+    const active: ChatMessage = {
+      id: "active-background",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+      blocks: [{ type: "text", text: "Waiting" }],
+    };
+    const recorder = new StreamingBaselineRecorder();
+    const baseProps = {
+      messages: [history, active],
+      streaming: true,
+      streamingMetrics: recorder,
+      streamingMetricsSurface: "vscode-webview" as const,
+      streamingMetricsScope: "background-state",
+    };
+    const { rerender } = render(
+      h(TranscriptMessageList, {
+        ...baseProps,
+        bgSessions: [
+          { id: "bg-live", task: "Inspect tests", status: "streaming" },
+        ],
+      }),
+    );
+    recorder.reset();
+
+    rerender(
+      h(TranscriptMessageList, {
+        ...baseProps,
+        bgSessions: [
+          {
+            id: "bg-live",
+            task: "Inspect tests",
+            status: "tool_executing",
+            currentTool: "npm test",
+            displayStatus: "Running focused tests",
+          },
+        ],
+      }),
+    );
+
+    expect(screen.getByText("Running focused tests")).toBeTruthy();
+    expect(
+      recorder.summarize("vscode-webview", "background-state"),
+    ).toMatchObject({
+      historyRenders: 1,
+      activeRenders: 0,
+      historyCommits: 1,
+      activeCommits: 0,
+    });
+    cleanup();
+  });
+
+  it("rerenders only an existing warning group when another warning is appended", () => {
+    const warning = (id: string, attempt: number): ChatMessage => ({
+      id,
+      role: "warning",
+      content: "",
+      timestamp: attempt,
+      blocks: [],
+      warningMessage: `Connection error — retrying request (attempt ${attempt}/4)`,
+      warningRetry: { retryAttempt: attempt, retryMaxAttempts: 4 },
+    });
+    const active: ChatMessage = {
+      id: "active-warning",
+      role: "assistant",
+      content: "",
+      timestamp: 4,
+      blocks: [{ type: "text", text: "Recovering" }],
+    };
+    const recorder = new StreamingBaselineRecorder();
+    const baseProps = {
+      streaming: true,
+      streamingMetrics: recorder,
+      streamingMetricsSurface: "vscode-webview" as const,
+      streamingMetricsScope: "warning-group",
+    };
+    const first = warning("warning-1", 1);
+    const second = warning("warning-2", 2);
+    const { rerender } = render(
+      h(TranscriptMessageList, {
+        ...baseProps,
+        messages: [first, second, active],
+      }),
+    );
+    recorder.reset();
+
+    rerender(
+      h(TranscriptMessageList, {
+        ...baseProps,
+        messages: [first, second, warning("warning-3", 3), active],
+      }),
+    );
+
+    expect(screen.getByText("Technical details (3)")).toBeTruthy();
+    expect(recorder.summarize("vscode-webview", "warning-group")).toMatchObject(
+      {
+        historyRenders: 1,
+        activeRenders: 0,
+        historyCommits: 1,
+        activeCommits: 0,
+      },
+    );
+    cleanup();
+  });
+
+  it("rerenders only the row targeted by detected-question state", () => {
+    const target: ChatMessage = {
+      id: "question-target",
+      role: "assistant",
+      content: "",
+      timestamp: 1,
+      blocks: [{ type: "text", text: "Should I continue?" }],
+    };
+    const unrelated: ChatMessage = {
+      id: "question-unrelated",
+      role: "user",
+      content: "Earlier prompt",
+      timestamp: 2,
+      blocks: [],
+    };
+    const recorder = new StreamingBaselineRecorder();
+    const baseProps = {
+      messages: [target, unrelated],
+      streaming: false,
+      streamingMetrics: recorder,
+      streamingMetricsSurface: "vscode-webview" as const,
+      streamingMetricsScope: "question-state",
+    };
+    const { rerender } = render(h(TranscriptMessageList, baseProps));
+    recorder.reset();
+
+    rerender(
+      h(TranscriptMessageList, {
+        ...baseProps,
+        detectedQuestion: {
+          messageId: target.id,
+          kind: "yes_no",
+          prompt: "Should I continue?",
+          options: [
+            { label: "Yes", payload: "Yes" },
+            { label: "No", payload: "No" },
+          ],
+        },
+      }),
+    );
+
+    expect(screen.getByText("Detected choice prompt")).toBeTruthy();
+    expect(
+      recorder.summarize("vscode-webview", "question-state"),
+    ).toMatchObject({
+      historyRenders: 1,
+      activeRenders: 0,
+      historyCommits: 1,
+      activeCommits: 0,
+    });
+    cleanup();
+  });
+
+  it("uses replacement callbacks without rerendering unchanged rows", () => {
+    const message: ChatMessage = {
+      id: "detected-question",
+      role: "assistant",
+      content: "",
+      timestamp: 1,
+      blocks: [{ type: "text", text: "Should I continue?" }],
+    };
+    const question = {
+      messageId: message.id,
+      kind: "yes_no" as const,
+      prompt: "Should I continue?",
+      options: [
+        { label: "Yes", payload: "Yes" },
+        { label: "No", payload: "No" },
+      ],
+    };
+    const firstAnswer = vi.fn();
+    const latestAnswer = vi.fn();
+    const recorder = new StreamingBaselineRecorder();
+    const baseProps = {
+      messages: [message],
+      streaming: false,
+      detectedQuestion: question,
+      streamingMetrics: recorder,
+      streamingMetricsSurface: "browser-webview" as const,
+      streamingMetricsScope: "callback-replacement",
+    };
+    const { rerender } = render(
+      h(TranscriptMessageList, {
+        ...baseProps,
+        onDetectedQuestionAnswer: firstAnswer,
+      }),
+    );
+    recorder.reset();
+
+    rerender(
+      h(TranscriptMessageList, {
+        ...baseProps,
+        onDetectedQuestionAnswer: latestAnswer,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Yes" }));
+
+    expect(firstAnswer).not.toHaveBeenCalled();
+    expect(latestAnswer).toHaveBeenCalledWith("Yes");
+    expect(
+      recorder.summarize("browser-webview", "callback-replacement"),
+    ).toMatchObject({
+      historyRenders: 0,
+      unchangedHistoryRenders: 0,
+      historyCommits: 0,
+      unchangedHistoryCommits: 0,
+    });
     cleanup();
   });
 

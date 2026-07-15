@@ -5,6 +5,7 @@ import { CheckpointRow } from "./CheckpointRow";
 import { CondenseRow } from "./CondenseRow";
 import type { DetectedQuestion } from "../questionDetection";
 import { Fragment, type ComponentChildren } from "preact";
+import { memo } from "preact/compat";
 import { MessageBubble } from "./MessageBubble";
 import { ModelChangeDivider } from "./ModelChangeDivider";
 import { WarningRow } from "./WarningRow";
@@ -74,6 +75,20 @@ type BgAgentResultContentBlock = Extract<
   { type: "bg_agent_result" }
 >;
 
+const messageRevisionCache = new WeakMap<ChatMessage, string>();
+const assistantSegmentCache = new WeakMap<
+  ChatMessage,
+  Map<string, ChatMessage>
+>();
+
+function messageRevision(message: ChatMessage): string {
+  const cached = messageRevisionCache.get(message);
+  if (cached !== undefined) return cached;
+  const revision = JSON.stringify(message);
+  messageRevisionCache.set(message, revision);
+  return revision;
+}
+
 function isTopLevelChatBlock(
   block: ContentBlock,
 ): block is BgAgentResultContentBlock {
@@ -85,15 +100,25 @@ function cloneAssistantSegment(
   id: string,
   blocks: ContentBlock[],
 ): ChatMessage {
+  let segments = assistantSegmentCache.get(source);
+  const cached = segments?.get(id);
+  if (cached) return cached;
+
   const { apiRequest, error, finalMarker, ...base } = source;
   void apiRequest;
   void error;
   void finalMarker;
-  return {
+  const segment = {
     ...base,
     id,
     blocks,
   };
+  if (!segments) {
+    segments = new Map();
+    assistantSegmentCache.set(source, segments);
+  }
+  segments.set(id, segment);
+  return segment;
 }
 
 function isBackgroundResultToolCall(
@@ -116,26 +141,21 @@ function TranscriptMetricRow({
   children,
   messageId,
   metrics,
+  revision,
   scope,
-  sourceMessage,
   surface,
 }: {
   active: boolean;
   children: ComponentChildren;
   messageId: string;
   metrics: StreamingBaselineMetrics | undefined;
+  revision: string;
   scope: string;
-  sourceMessage: ChatMessage;
   surface:
     | Extract<StreamingBaselineSurface, "vscode-webview" | "browser-webview">
     | undefined;
 }) {
-  const previousSourceMessage = useRef<ChatMessage | undefined>(undefined);
   const previousRevision = useRef<string | undefined>(undefined);
-  const revision =
-    previousSourceMessage.current === sourceMessage
-      ? previousRevision.current
-      : JSON.stringify(sourceMessage);
   const unchanged =
     previousRevision.current !== undefined &&
     previousRevision.current === revision;
@@ -163,7 +183,6 @@ function TranscriptMetricRow({
         unchanged,
       });
     }
-    previousSourceMessage.current = sourceMessage;
     previousRevision.current = revision;
   });
 
@@ -295,6 +314,367 @@ function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
   return rows;
 }
 
+interface TranscriptRowActions {
+  onDetectedQuestionAnswer?: (payload: string) => void;
+  onDismissDetectedQuestion?: (messageId: string) => void;
+  onOpenFile?: (path: string, line?: number) => void;
+  onRevealToolCallTerminal?: (id: string) => void;
+  onContinueToolCallInBackground?: (id: string) => void;
+  onCompleteToolCall?: (id: string) => void;
+  onCancelToolCall?: (id: string) => void;
+  onPromoteMcpToolApproval?: TranscriptMessageListProps["onPromoteMcpToolApproval"];
+  onOpenSpecialBlockPanel?: TranscriptMessageListProps["onOpenSpecialBlockPanel"];
+  onRetry?: () => void;
+  onSignIn?: () => void;
+  onSignInAnotherAccount?: () => void;
+  onCondense?: () => void;
+  onStopBackground?: (sessionId: string) => void;
+  onOpenTranscript?: (sessionId: string) => void;
+  onFinalMarkerContinue?: (prompt: string) => void;
+  onRevertCheckpoint?: (sessionId: string, checkpointId: string) => void;
+  onViewCheckpointDiff?: TranscriptMessageListProps["onViewCheckpointDiff"];
+}
+
+interface MemoizedTranscriptRowProps {
+  actions: TranscriptRowActions;
+  active: boolean;
+  bgSessions?: BgSessionInfoProps[];
+  detectedQuestion?: (DetectedQuestion & { messageId: string }) | null;
+  isLatest: boolean;
+  lastMessageHasError: boolean;
+  metrics?: StreamingBaselineMetrics;
+  metricsScope: string;
+  metricsSurface?: Extract<
+    StreamingBaselineSurface,
+    "vscode-webview" | "browser-webview"
+  >;
+  revision: string;
+  row: TranscriptRow;
+  sessionId?: string | null;
+}
+
+function renderTranscriptRow({
+  actions,
+  active,
+  bgSessions,
+  detectedQuestion,
+  isLatest,
+  lastMessageHasError,
+  metrics,
+  metricsScope,
+  metricsSurface,
+  revision,
+  row,
+  sessionId,
+}: MemoizedTranscriptRowProps) {
+  const { key, message, sourceMessage, bgAgentResultOnly, warningMessages } =
+    row;
+  const content =
+    message.role === "condense" ? (
+      <CondenseRow message={message} />
+    ) : message.role === "warning" ? (
+      <WarningRow
+        messages={warningMessages ?? [message]}
+        resolved={!isLatest && !lastMessageHasError}
+        onRetry={
+          isLatest && message.error && actions.onRetry
+            ? () => actions.onRetry?.()
+            : undefined
+        }
+      />
+    ) : (
+      <Fragment>
+        {message.role === "user" &&
+          message.checkpointId &&
+          actions.onRevertCheckpoint && (
+            <CheckpointRow
+              checkpointId={message.checkpointId}
+              sessionId={sessionId ?? null}
+              onRevert={(...args) => actions.onRevertCheckpoint?.(...args)}
+              onViewDiff={
+                actions.onViewCheckpointDiff
+                  ? (...args) => actions.onViewCheckpointDiff?.(...args)
+                  : undefined
+              }
+            />
+          )}
+        <MessageBubble
+          message={message}
+          streaming={active && message.role === "assistant"}
+          detectedQuestion={
+            message.role === "assistant" && !bgAgentResultOnly
+              ? detectedQuestion
+              : null
+          }
+          onDetectedQuestionAnswer={
+            actions.onDetectedQuestionAnswer
+              ? (payload) => actions.onDetectedQuestionAnswer?.(payload)
+              : undefined
+          }
+          onDismissDetectedQuestion={
+            actions.onDismissDetectedQuestion
+              ? detectedQuestion
+                ? () => actions.onDismissDetectedQuestion?.(sourceMessage.id)
+                : (messageId) => actions.onDismissDetectedQuestion?.(messageId)
+              : undefined
+          }
+          onOpenFile={
+            actions.onOpenFile
+              ? (...args) => actions.onOpenFile?.(...args)
+              : undefined
+          }
+          onRevealToolCallTerminal={
+            actions.onRevealToolCallTerminal
+              ? (id) => actions.onRevealToolCallTerminal?.(id)
+              : undefined
+          }
+          onContinueToolCallInBackground={
+            actions.onContinueToolCallInBackground
+              ? (id) => actions.onContinueToolCallInBackground?.(id)
+              : undefined
+          }
+          onCompleteToolCall={
+            actions.onCompleteToolCall
+              ? (id) => actions.onCompleteToolCall?.(id)
+              : undefined
+          }
+          onCancelToolCall={
+            actions.onCancelToolCall
+              ? (id) => actions.onCancelToolCall?.(id)
+              : undefined
+          }
+          onPromoteMcpToolApproval={
+            actions.onPromoteMcpToolApproval
+              ? (promotion) => actions.onPromoteMcpToolApproval?.(promotion)
+              : undefined
+          }
+          onOpenSpecialBlockPanel={
+            canOpenSpecialBlockPanel(message) && actions.onOpenSpecialBlockPanel
+              ? (block) => actions.onOpenSpecialBlockPanel?.(block)
+              : undefined
+          }
+          onRetry={
+            isLatest && message.error && actions.onRetry
+              ? () => actions.onRetry?.()
+              : undefined
+          }
+          onSignIn={
+            isLatest && message.error && actions.onSignIn
+              ? () => actions.onSignIn?.()
+              : undefined
+          }
+          onSignInAnotherAccount={
+            isLatest && message.error && actions.onSignInAnotherAccount
+              ? () => actions.onSignInAnotherAccount?.()
+              : undefined
+          }
+          onCondense={
+            isLatest && message.error && actions.onCondense
+              ? () => actions.onCondense?.()
+              : undefined
+          }
+          bgSessions={bgSessions}
+          onStopBackground={
+            actions.onStopBackground
+              ? (backgroundSessionId) =>
+                  actions.onStopBackground?.(backgroundSessionId)
+              : undefined
+          }
+          onOpenTranscript={
+            actions.onOpenTranscript
+              ? (backgroundSessionId) =>
+                  actions.onOpenTranscript?.(backgroundSessionId)
+              : undefined
+          }
+          onFinalMarkerContinue={
+            actions.onFinalMarkerContinue
+              ? (prompt) => actions.onFinalMarkerContinue?.(prompt)
+              : undefined
+          }
+        />
+      </Fragment>
+    );
+
+  return (
+    <Fragment>
+      {row.modelChange && (
+        <ModelChangeDivider
+          previousModel={row.modelChange.previousModel}
+          model={row.modelChange.model}
+        />
+      )}
+      {metrics && metricsSurface ? (
+        <TranscriptMetricRow
+          active={active}
+          messageId={key}
+          metrics={metrics}
+          revision={revision}
+          scope={metricsScope}
+          surface={metricsSurface}
+        >
+          {content}
+        </TranscriptMetricRow>
+      ) : (
+        content
+      )}
+    </Fragment>
+  );
+}
+
+const MemoizedTranscriptRow = memo(
+  renderTranscriptRow,
+  (previous, next) =>
+    previous.revision === next.revision &&
+    previous.metrics === next.metrics &&
+    previous.metricsScope === next.metricsScope &&
+    previous.metricsSurface === next.metricsSurface,
+);
+
+function relevantBackgroundSessions(
+  message: ChatMessage,
+  bgSessions: BgSessionInfoProps[] | undefined,
+): Array<{
+  id: string;
+  status: BgSessionInfoProps["status"] | null;
+  currentTool?: string;
+  displayStatus?: string;
+}> {
+  if (message.role !== "assistant") return [];
+  return message.blocks.flatMap((block) => {
+    if (block.type !== "bg_agent") return [];
+    const session = bgSessions?.find(({ id }) => id === block.sessionId);
+    return [
+      {
+        id: block.sessionId,
+        status: session?.status ?? null,
+        currentTool: session?.currentTool,
+        displayStatus: session?.displayStatus,
+      },
+    ];
+  });
+}
+
+function canOpenSpecialBlockPanel(message: ChatMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    (message.blocks.some((block) => block.type === "text") ||
+      Boolean(message.finalMarker?.summary))
+  );
+}
+
+function rowActionAvailability(
+  row: TranscriptRow,
+  actions: TranscriptRowActions,
+  detectedQuestion:
+    | (DetectedQuestion & { messageId: string })
+    | null
+    | undefined,
+  isLatest: boolean,
+): Record<string, boolean> {
+  const { message } = row;
+  if (message.role === "condense") return {};
+  if (message.role === "warning") {
+    return {
+      retry: Boolean(isLatest && message.error && actions.onRetry),
+    };
+  }
+
+  const assistantBlocks = message.role === "assistant" ? message.blocks : [];
+  const hasToolCall = assistantBlocks.some(
+    (block) => block.type === "tool_call",
+  );
+  const hasBackgroundAgent = assistantBlocks.some(
+    (block) => block.type === "bg_agent",
+  );
+  const hasBackgroundResult = assistantBlocks.some(
+    (block) => block.type === "bg_agent_result",
+  );
+  const hasError = Boolean(isLatest && message.error);
+
+  return {
+    detectedQuestionAnswer: Boolean(
+      detectedQuestion && actions.onDetectedQuestionAnswer,
+    ),
+    dismissDetectedQuestion: Boolean(
+      detectedQuestion && actions.onDismissDetectedQuestion,
+    ),
+    openFile: Boolean(actions.onOpenFile),
+    revealToolCallTerminal: Boolean(
+      hasToolCall && actions.onRevealToolCallTerminal,
+    ),
+    continueToolCallInBackground: Boolean(
+      hasToolCall && actions.onContinueToolCallInBackground,
+    ),
+    completeToolCall: Boolean(hasToolCall && actions.onCompleteToolCall),
+    cancelToolCall: Boolean(hasToolCall && actions.onCancelToolCall),
+    promoteMcpToolApproval: Boolean(
+      hasToolCall && actions.onPromoteMcpToolApproval,
+    ),
+    openSpecialBlockPanel: Boolean(
+      canOpenSpecialBlockPanel(message) && actions.onOpenSpecialBlockPanel,
+    ),
+    retry: Boolean(hasError && actions.onRetry),
+    signIn: Boolean(hasError && actions.onSignIn),
+    signInAnotherAccount: Boolean(hasError && actions.onSignInAnotherAccount),
+    condense: Boolean(hasError && actions.onCondense),
+    stopBackground: Boolean(hasBackgroundAgent && actions.onStopBackground),
+    openTranscript: Boolean(hasBackgroundResult && actions.onOpenTranscript),
+    finalMarkerContinue: Boolean(
+      message.finalMarker && actions.onFinalMarkerContinue,
+    ),
+    revertCheckpoint: Boolean(
+      message.role === "user" &&
+      message.checkpointId &&
+      actions.onRevertCheckpoint,
+    ),
+    viewCheckpointDiff: Boolean(
+      message.role === "user" &&
+      message.checkpointId &&
+      actions.onViewCheckpointDiff,
+    ),
+  };
+}
+
+function createRowRevision(params: {
+  actions: TranscriptRowActions;
+  active: boolean;
+  bgSessions?: BgSessionInfoProps[];
+  detectedQuestion?: (DetectedQuestion & { messageId: string }) | null;
+  isLatest: boolean;
+  lastMessageHasError: boolean;
+  row: TranscriptRow;
+  sessionId?: string | null;
+}): string {
+  const { actions, row } = params;
+  return JSON.stringify({
+    message: messageRevision(row.message),
+    warningMessages: row.warningMessages?.map(messageRevision),
+    modelChange: row.modelChange,
+    active: params.active,
+    isLatest:
+      row.message.role === "warning" || row.message.error
+        ? params.isLatest
+        : undefined,
+    lastMessageHasError:
+      row.message.role === "warning" ? params.lastMessageHasError : undefined,
+    detectedQuestion: params.detectedQuestion,
+    backgroundSessions: relevantBackgroundSessions(
+      row.message,
+      params.bgSessions,
+    ),
+    checkpointSessionId:
+      row.message.role === "user" && row.message.checkpointId
+        ? (params.sessionId ?? null)
+        : undefined,
+    actions: rowActionAvailability(
+      row,
+      actions,
+      params.detectedQuestion,
+      params.isLatest,
+    ),
+  });
+}
+
 export function TranscriptMessageList({
   messages,
   streaming,
@@ -338,122 +718,71 @@ export function TranscriptMessageList({
     }
   }
 
-  const renderRow = (
-    key: string,
-    msg: ChatMessage,
-    sourceMessage: ChatMessage,
-    bgAgentResultOnly: boolean,
-    warningMessages?: ChatMessage[],
-  ) =>
-    msg.role === "condense" ? (
-      <CondenseRow message={msg} />
-    ) : msg.role === "warning" ? (
-      <WarningRow
-        messages={warningMessages ?? [msg]}
-        resolved={sourceMessage !== lastMessage && !lastMessage?.error}
-        onRetry={
-          sourceMessage === lastMessage && msg.error ? onRetry : undefined
-        }
-      />
-    ) : (
-      <Fragment>
-        {msg.role === "user" && msg.checkpointId && onRevertCheckpoint && (
-          <CheckpointRow
-            checkpointId={msg.checkpointId}
-            sessionId={sessionId ?? null}
-            onRevert={onRevertCheckpoint}
-            onViewDiff={onViewCheckpointDiff}
-          />
-        )}
-        <MessageBubble
-          message={msg}
-          streaming={streamingRowKey === key && msg.role === "assistant"}
-          detectedQuestion={
-            msg.role === "assistant" &&
-            !bgAgentResultOnly &&
-            detectedQuestion?.messageId === sourceMessage.id
-              ? detectedQuestion
-              : null
-          }
-          onDetectedQuestionAnswer={onDetectedQuestionAnswer}
-          onDismissDetectedQuestion={
-            detectedQuestion?.messageId === sourceMessage.id
-              ? () => onDismissDetectedQuestion?.(sourceMessage.id)
-              : onDismissDetectedQuestion
-          }
-          onOpenFile={onOpenFile}
-          onRevealToolCallTerminal={onRevealToolCallTerminal}
-          onContinueToolCallInBackground={onContinueToolCallInBackground}
-          onCompleteToolCall={onCompleteToolCall}
-          onCancelToolCall={onCancelToolCall}
-          onPromoteMcpToolApproval={onPromoteMcpToolApproval}
-          onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
-          onRetry={
-            sourceMessage === lastMessage && msg.error ? onRetry : undefined
-          }
-          onSignIn={
-            sourceMessage === lastMessage && msg.error ? onSignIn : undefined
-          }
-          onSignInAnotherAccount={
-            sourceMessage === lastMessage && msg.error
-              ? onSignInAnotherAccount
-              : undefined
-          }
-          onCondense={
-            sourceMessage === lastMessage && msg.error ? onCondense : undefined
-          }
-          bgSessions={bgSessions}
-          onStopBackground={onStopBackground}
-          onOpenTranscript={onOpenTranscript}
-          onFinalMarkerContinue={onFinalMarkerContinue}
-        />
-      </Fragment>
-    );
+  const actionsRef = useRef<TranscriptRowActions>({});
+  // Preact renders synchronously, so memoized rows can safely read the latest
+  // callbacks from this stable carrier without callback identity waking them.
+  Object.assign(actionsRef.current, {
+    onDetectedQuestionAnswer,
+    onDismissDetectedQuestion,
+    onOpenFile,
+    onRevealToolCallTerminal,
+    onContinueToolCallInBackground,
+    onCompleteToolCall,
+    onCancelToolCall,
+    onPromoteMcpToolApproval,
+    onOpenSpecialBlockPanel,
+    onRetry,
+    onSignIn,
+    onSignInAnotherAccount,
+    onCondense,
+    onStopBackground,
+    onOpenTranscript,
+    onFinalMarkerContinue,
+    onRevertCheckpoint,
+    onViewCheckpointDiff,
+  });
+  const actions = actionsRef.current;
+  const lastMessageHasError = Boolean(lastMessage?.error);
 
   return (
     <>
-      {rows.map(
-        ({
-          key,
-          message: msg,
-          sourceMessage,
-          bgAgentResultOnly,
-          warningMessages,
-          modelChange,
-        }) => {
-          const content = renderRow(
-            key,
-            msg,
-            sourceMessage,
-            bgAgentResultOnly,
-            warningMessages,
-          );
-          return (
-            <Fragment key={key}>
-              {modelChange && (
-                <ModelChangeDivider
-                  previousModel={modelChange.previousModel}
-                  model={modelChange.model}
-                />
-              )}
-              {streamingMetrics && streamingMetricsSurface ? (
-                <TranscriptMetricRow
-                  active={streamingRowKey === key}
-                  messageId={key}
-                  metrics={streamingMetrics}
-                  scope={streamingMetricsScope}
-                  sourceMessage={sourceMessage}
-                  surface={streamingMetricsSurface}
-                >
-                  {content}
-                </TranscriptMetricRow>
-              ) : (
-                content
-              )}
-            </Fragment>
-          );
-        },
-      )}
+      {rows.map((row) => {
+        const active = streamingRowKey === row.key;
+        const isLatest = row.sourceMessage === lastMessage;
+        const rowQuestion =
+          row.message.role === "assistant" &&
+          !row.bgAgentResultOnly &&
+          detectedQuestion?.messageId === row.sourceMessage.id
+            ? detectedQuestion
+            : null;
+        const revision = createRowRevision({
+          actions,
+          active,
+          bgSessions,
+          detectedQuestion: rowQuestion,
+          isLatest,
+          lastMessageHasError,
+          row,
+          sessionId,
+        });
+        return (
+          <MemoizedTranscriptRow
+            key={row.key}
+            actions={actions}
+            active={active}
+            bgSessions={bgSessions}
+            detectedQuestion={rowQuestion}
+            isLatest={isLatest}
+            lastMessageHasError={lastMessageHasError}
+            metrics={streamingMetrics}
+            metricsScope={streamingMetricsScope}
+            metricsSurface={streamingMetricsSurface}
+            revision={revision}
+            row={row}
+            sessionId={sessionId}
+          />
+        );
+      })}
     </>
   );
 }
