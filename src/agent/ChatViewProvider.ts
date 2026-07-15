@@ -821,15 +821,7 @@ function stripMediaForTransport(
   });
 }
 
-function countUserTurns(messages: import("./types.js").AgentMessage[]): number {
-  let count = 0;
-  for (const m of messages) {
-    if (m.role === "user" && typeof m.content === "string") count++;
-  }
-  return count;
-}
-
-function getTailChunkByUserTurns(
+export function getTailChunkByUserTurns(
   messages: import("./types.js").AgentMessage[],
   tailTurns: number,
 ): {
@@ -849,70 +841,57 @@ function getTailChunkByUserTurns(
     };
   }
 
-  let seenUserTurns = 0;
-  let startIndex = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role === "user" && typeof m.content === "string") {
-      seenUserTurns++;
-      if (seenUserTurns > tailTurns) {
-        startIndex = i + 1;
-        break;
-      }
+  const userMessageIndexes: number[] = [];
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (message.role === "user" && typeof message.content === "string") {
+      userMessageIndexes.push(index);
     }
   }
 
+  const startTurn = Math.max(0, userMessageIndexes.length - tailTurns);
+  const startIndex = startTurn === 0 ? 0 : userMessageIndexes[startTurn];
   const chunk = messages.slice(startIndex);
-  const prefix = messages.slice(0, startIndex);
-  const userTurnOffset = countUserTurns(prefix);
   return {
     chunk,
-    userTurnOffset,
+    userTurnOffset: startTurn,
     hasMoreBefore: startIndex > 0,
   };
 }
 
-function getBackfillChunksByUserTurns(
-  prefix: import("./types.js").AgentMessage[],
+export function getPreviousChunkByUserTurns(
+  messages: import("./types.js").AgentMessage[],
+  beforeUserTurnOffset: number,
   batchTurns: number,
-): Array<{
+): {
   messages: import("./types.js").AgentMessage[];
   userTurnOffset: number;
   hasMoreBefore: boolean;
-}> {
-  if (prefix.length === 0) return [];
-  const batch = Math.max(1, batchTurns);
-
-  const chunks: Array<{
-    messages: import("./types.js").AgentMessage[];
-    userTurnOffset: number;
-    hasMoreBefore: boolean;
-  }> = [];
-
-  let cursor = prefix.length;
-  while (cursor > 0) {
-    let turnsInChunk = 0;
-    let start = cursor;
-    for (let i = cursor - 1; i >= 0; i--) {
-      start = i;
-      const m = prefix[i];
-      if (m.role === "user" && typeof m.content === "string") {
-        turnsInChunk++;
-        if (turnsInChunk >= batch) break;
-      }
+} {
+  const userMessageIndexes: number[] = [];
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (message.role === "user" && typeof message.content === "string") {
+      userMessageIndexes.push(index);
     }
-
-    const chunkMessages = prefix.slice(start, cursor);
-    const userTurnOffset = countUserTurns(prefix.slice(0, start));
-    chunks.push({
-      messages: chunkMessages,
-      userTurnOffset,
-      hasMoreBefore: start > 0,
-    });
-    cursor = start;
   }
 
-  return chunks.reverse();
+  const endTurn = Math.max(
+    0,
+    Math.min(beforeUserTurnOffset, userMessageIndexes.length),
+  );
+  const startTurn = Math.max(0, endTurn - Math.max(1, batchTurns));
+  const startIndex = startTurn === 0 ? 0 : userMessageIndexes[startTurn];
+  const endIndex =
+    endTurn < userMessageIndexes.length
+      ? userMessageIndexes[endTurn]
+      : messages.length;
+
+  return {
+    messages: messages.slice(startIndex, endIndex),
+    userTurnOffset: startTurn,
+    hasMoreBefore: startTurn > 0,
+  };
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -3807,14 +3786,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.postMessage({ type: "agentRestoreSessionStart" });
           this.sessionManager
             ?.restoreLastSession()
-            .then(async (session) => {
-              if (session) {
-                await this.sessionManager?.restorePersistedBackgroundSessions(
-                  session.id,
-                );
-              }
-              return session;
-            })
             .then((session) => {
               if (session) {
                 this.postSessionLoaded(session, {
@@ -4871,6 +4842,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           checkpoints: this.getSessionCheckpoints(session.id),
         });
         this.sendInitialState();
+        break;
+      }
+
+      case "agentLoadEarlierSessionMessages": {
+        const sessionId = msg.sessionId as string;
+        const beforeUserTurnOffset = Number(msg.beforeUserTurnOffset);
+        if (
+          !sessionId ||
+          !Number.isInteger(beforeUserTurnOffset) ||
+          beforeUserTurnOffset <= 0
+        ) {
+          break;
+        }
+        const session = this.sessionManager.getForegroundSession();
+        if (!session || session.id !== sessionId) break;
+        const chunk = getPreviousChunkByUserTurns(
+          session.getAllMessages(),
+          beforeUserTurnOffset,
+          RESTORE_BACKFILL_BATCH_TURNS,
+        );
+        this.postMessage({
+          type: "agentSessionChunk",
+          sessionId,
+          messages: chunk.messages,
+          userTurnOffset: chunk.userTurnOffset,
+          hasMoreBefore: chunk.hasMoreBefore,
+          checkpoints: this.getSessionCheckpoints(sessionId),
+        });
         break;
       }
 
@@ -7166,7 +7165,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     opts?: {
       restored?: boolean;
       tailTurns?: number;
-      backfillBatchTurns?: number;
       checkpoints?: Array<{ turnIndex: number; checkpointId: string }>;
     },
   ): void {
@@ -7195,25 +7193,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (session.runState?.phase === "awaiting_question") {
       this.restorePendingQuestionRecovery(session, session.runState.question);
-    }
-
-    if (!tail.hasMoreBefore) return;
-
-    const prefix = all.slice(0, all.length - tail.chunk.length);
-    const chunks = getBackfillChunksByUserTurns(
-      prefix,
-      opts?.backfillBatchTurns ?? RESTORE_BACKFILL_BATCH_TURNS,
-    );
-    const checkpoints = opts?.checkpoints;
-    for (const chunk of chunks) {
-      this.postMessage({
-        type: "agentSessionChunk",
-        sessionId: session.id,
-        messages: chunk.messages,
-        userTurnOffset: chunk.userTurnOffset,
-        hasMoreBefore: chunk.hasMoreBefore,
-        checkpoints,
-      });
     }
   }
 

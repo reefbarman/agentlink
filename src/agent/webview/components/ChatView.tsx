@@ -52,6 +52,8 @@ interface ChatViewProps {
   onOpenTranscript?: (sessionId: string) => void;
   onFinalMarkerContinue?: (prompt: string) => void;
   initialMessageLimit?: number;
+  earlierUserTurnCount?: number;
+  onLoadEarlierMessages?: () => void;
   streamingMetrics?: StreamingBaselineMetrics;
   streamingMetricsSurface?: Extract<
     StreamingBaselineSurface,
@@ -84,6 +86,8 @@ export function ChatView({
   onOpenTranscript,
   onFinalMarkerContinue,
   initialMessageLimit,
+  earlierUserTurnCount = 0,
+  onLoadEarlierMessages,
   streamingMetrics,
   streamingMetricsSurface,
   streamingMetricsScope,
@@ -244,6 +248,29 @@ export function ChatView({
               <span>{hiddenMessageCount} hidden</span>
             </button>
           )}
+          {hiddenMessageCount === 0 &&
+            earlierUserTurnCount > 0 &&
+            onLoadEarlierMessages && (
+              <button
+                type="button"
+                class="load-earlier-messages"
+                onClick={() => {
+                  const el = containerRef.current;
+                  if (el) {
+                    pendingHistoryAnchorRef.current = {
+                      scrollHeight: el.scrollHeight,
+                      scrollTop: el.scrollTop,
+                    };
+                  }
+                  shouldAutoScrollRef.current = false;
+                  cancelPendingScrolls();
+                  onLoadEarlierMessages();
+                }}
+              >
+                Show earlier messages
+                <span>{earlierUserTurnCount} earlier turns</span>
+              </button>
+            )}
           <TranscriptMessageList
             messages={visibleMessages}
             streaming={streaming}

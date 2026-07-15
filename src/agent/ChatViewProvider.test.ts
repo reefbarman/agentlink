@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentMessage } from "./types.js";
 
 type Listener<T> = (value: T) => void;
 
@@ -262,6 +263,40 @@ describe("reasoning effort message validation", () => {
       resolveReasoningEffortMessage({ effort: "high" }, true),
     ).toBeUndefined();
     expect(resolveReasoningEffortMessage("unsupported", false)).toBe("none");
+  });
+});
+
+describe("restored session pagination", () => {
+  it("keeps complete turns and loads older history in bounded chunks", async () => {
+    const { getPreviousChunkByUserTurns, getTailChunkByUserTurns } =
+      await import("./ChatViewProvider.js");
+    const messages: AgentMessage[] = Array.from({ length: 20 }, (_, index) => [
+      { role: "user" as const, content: `prompt ${index}` },
+      {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: `response ${index}` }],
+      },
+    ]).flat();
+
+    const tail = getTailChunkByUserTurns(messages, 8);
+    expect(tail.userTurnOffset).toBe(12);
+    expect(tail.chunk[0]).toEqual(
+      expect.objectContaining({ role: "user", content: "prompt 12" }),
+    );
+
+    const previous = getPreviousChunkByUserTurns(
+      messages,
+      tail.userTurnOffset,
+      5,
+    );
+    expect(previous.userTurnOffset).toBe(7);
+    expect(previous.hasMoreBefore).toBe(true);
+    expect(previous.messages[0]).toEqual(
+      expect.objectContaining({ role: "user", content: "prompt 7" }),
+    );
+    expect(previous.messages.at(-1)).toEqual(
+      expect.objectContaining({ role: "assistant" }),
+    );
   });
 });
 

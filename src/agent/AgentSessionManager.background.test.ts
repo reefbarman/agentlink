@@ -956,6 +956,54 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("only exposes agents belonging to the current foreground session", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const firstForeground = await mgr.createSession("code");
+    const firstAgent = await mgr.spawnBackground({
+      task: "first session agent",
+      message: "work",
+    });
+    const secondForeground = await mgr.createSession("code");
+    const secondAgent = await mgr.spawnBackground({
+      task: "second session agent",
+      message: "work",
+    });
+
+    expect(mgr.getBgSessionInfos().map((info) => info.id)).toEqual([
+      secondAgent.sessionId,
+    ]);
+
+    mgr.switchTo(firstForeground.id);
+    expect(mgr.getBgSessionInfos().map((info) => info.id)).toEqual([
+      firstAgent.sessionId,
+    ]);
+    mgr.switchTo(secondForeground.id);
+  });
+
+  it("hides completed agents after six hours", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground({
+      task: "stale agent",
+      message: "work",
+    });
+    await waitFor(
+      () =>
+        (mgr as any).sessions.get(spawned.sessionId).fleetMetadata.lifecycle,
+      (lifecycle) => lifecycle === "completed",
+    );
+
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const staleTimestamp = Date.now() - 6 * 60 * 60 * 1000 - 1;
+    session.lastActiveAt = staleTimestamp;
+    session.fleetMetadata.completedAt = staleTimestamp;
+
+    expect(mgr.getBgSessionInfos()).toEqual([]);
+  });
+
   it("prefers the structured set_task_status result when the final turn has no prose", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
@@ -1454,6 +1502,7 @@ describe("AgentSessionManager background agents", () => {
   });
 
   it("only restores background sessions from the current foreground tree", async () => {
+    const now = Date.now();
     const summaries = ["current-bg", "historical-bg"].map((id) => ({
       schemaVersion: 1,
       id,
@@ -1463,8 +1512,8 @@ describe("AgentSessionManager background agents", () => {
       messageCount: 1,
       totalInputTokens: 0,
       totalOutputTokens: 0,
-      createdAt: 1,
-      lastActiveAt: 1,
+      createdAt: now,
+      lastActiveAt: now,
       background: true,
     }));
     const store = {

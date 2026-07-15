@@ -200,10 +200,10 @@ export function BackgroundSessionStrip({
   onResume,
   onMarkRead,
 }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [filter, setFilter] = useState<
     "all" | "active" | "attention" | "completed" | "archived"
-  >("all");
+  >("active");
   const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
   const [providerFilter, setProviderFilter] = useState("");
   const [workspaceFilter, setWorkspaceFilter] = useState("");

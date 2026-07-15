@@ -85,6 +85,8 @@ import {
 } from "./FleetWorkflows.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
 
+const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
 /** Incremental progress emitted while a /btw side question runs. */
 export type BtwProgressEvent =
   | { type: "text_delta"; text: string }
@@ -4956,8 +4958,27 @@ export class AgentSessionManager {
    * Return status info for all background sessions (for the UI strip).
    */
   getBgSessionInfos(): BgSessionInfo[] {
+    const foregroundId = this.foregroundId;
+    const visibleAfter = Date.now() - FLEET_VISIBILITY_MAX_AGE_MS;
     const infos = Array.from(this.sessions.values())
-      .filter((s) => s.background)
+      .filter((session) => {
+        if (!session.background) return false;
+
+        const fleet = session.fleetMetadata;
+        if (foregroundId) {
+          const parentId =
+            fleet?.parentSessionId ?? this.bgParents.get(session.id)?.sessionId;
+          const belongsToForeground =
+            fleet?.rootSessionId === foregroundId || parentId === foregroundId;
+          if (!belongsToForeground) return false;
+        }
+
+        const { done } = this.getProjectedBgStatus(session);
+        if (!done || fleet?.lifecycle === "paused") return true;
+        const mostRecentActivity =
+          fleet?.completedAt ?? session.lastActiveAt ?? session.createdAt;
+        return mostRecentActivity >= visibleAfter;
+      })
       .map((s): BgSessionInfo => {
         const { status, done: isDone } = this.getProjectedBgStatus(s);
         const meta = this.bgMeta.get(s.id);

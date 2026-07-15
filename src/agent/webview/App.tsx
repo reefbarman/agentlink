@@ -205,6 +205,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   } | null>(null);
   const startupRestorePendingRef = useRef(true);
   const loadingSessionIdRef = useRef<string | null>(null);
+  const historyLoadPendingRef = useRef(false);
   const messageQueueRef = useRef(state.messageQueue);
   messageQueueRef.current = state.messageQueue;
   const reasoningEffortRef = useRef<ReasoningEffort>(
@@ -737,6 +738,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             break;
           }
           startupRestorePendingRef.current = false;
+          historyLoadPendingRef.current = false;
           loadingSessionIdRef.current = msg.sessionId;
           if (msg.hasMoreBefore !== true) {
             loadingSessionIdRef.current = null;
@@ -768,6 +770,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           ) {
             break;
           }
+          historyLoadPendingRef.current = false;
           if (msg.hasMoreBefore !== true) {
             loadingSessionIdRef.current = null;
           }
@@ -1594,6 +1597,24 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     },
     [vscodeApi],
   );
+
+  const handleLoadEarlierSessionMessages = useCallback(() => {
+    const snapshot = fullStateRef.current;
+    const sessionId = snapshot.chatState.sessionId;
+    if (
+      !sessionId ||
+      snapshot.loadedUserTurnOffset <= 0 ||
+      historyLoadPendingRef.current
+    ) {
+      return;
+    }
+    historyLoadPendingRef.current = true;
+    vscodeApi.postMessage({
+      command: "agentLoadEarlierSessionMessages",
+      sessionId,
+      beforeUserTurnOffset: snapshot.loadedUserTurnOffset,
+    });
+  }, [vscodeApi]);
   const handleSteerBackground = useCallback(
     (sessionId: string, message: string) => {
       vscodeApi.postMessage({ command: "steerBgAgent", sessionId, message });
@@ -2282,6 +2303,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           messages={state.messages}
           streaming={state.streaming}
           sessionId={state.chatState.sessionId}
+          earlierUserTurnCount={state.loadedUserTurnOffset}
+          onLoadEarlierMessages={handleLoadEarlierSessionMessages}
           detectedQuestion={state.detectedQuestion}
           onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
           onDismissDetectedQuestion={handleDismissDetectedQuestion}
