@@ -9,6 +9,9 @@ describe("AnthropicProvider capabilities", () => {
   const provider = new AnthropicProvider();
 
   it("reports 1M context for Sonnet and Opus", () => {
+    expect(provider.getCapabilities("claude-sonnet-5").contextWindow).toBe(
+      1_000_000,
+    );
     expect(provider.getCapabilities("claude-sonnet-4-6").contextWindow).toBe(
       1_000_000,
     );
@@ -24,6 +27,9 @@ describe("AnthropicProvider capabilities", () => {
   });
 
   it("reports max output tokens for exposed models", () => {
+    expect(provider.getCapabilities("claude-sonnet-5").maxOutputTokens).toBe(
+      128_000,
+    );
     expect(provider.getCapabilities("claude-sonnet-4-6").maxOutputTokens).toBe(
       64_000,
     );
@@ -264,6 +270,7 @@ describe("AnthropicProvider dynamic model capabilities", () => {
       1_000_000,
     );
     expect(provider.listModels().map((m) => m.id)).toEqual([
+      "claude-sonnet-5",
       "claude-sonnet-4-6",
       "claude-opus-4-8",
       "claude-haiku-4-5-20251001",
@@ -334,6 +341,7 @@ describe("AnthropicProvider dynamic model capabilities", () => {
     const models = await provider.listAvailableModels();
     expect(list).not.toHaveBeenCalled();
     expect(models.map((m) => m.id)).toEqual([
+      "claude-sonnet-5",
       "claude-sonnet-4-6",
       "claude-opus-4-8",
       "claude-haiku-4-5-20251001",

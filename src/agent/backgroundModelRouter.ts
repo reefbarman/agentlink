@@ -28,6 +28,9 @@ interface TaskRouteRule {
 interface RoutingConfig {
   defaults: TaskRouteRule & { taskClass: string };
   taskClasses: Record<string, TaskRouteRule>;
+  reviewModelPreferences?: Partial<
+    Record<string, Partial<Record<ModelTier, string[]>>>
+  >;
   fallbackProviderOrder: string[];
 }
 
@@ -91,6 +94,25 @@ function inferReviewTier(
   return deepSignals.some((pattern) => pattern.test(text))
     ? "deep_reasoning"
     : "balanced";
+}
+
+function pickPreferredReviewModel(
+  candidates: ModelInfo[],
+  tier: ModelTier,
+): ModelInfo | undefined {
+  const providers = unique(candidates.map((candidate) => candidate.provider));
+  for (const provider of providers) {
+    const preferences =
+      routingConfig.reviewModelPreferences?.[provider]?.[tier];
+    for (const modelId of preferences ?? []) {
+      const match = candidates.find(
+        (candidate) =>
+          candidate.provider === provider && candidate.id === modelId,
+      );
+      if (match) return match;
+    }
+  }
+  return undefined;
 }
 
 function scoreModel(model: ModelInfo, tier: ModelTier): number {
@@ -279,7 +301,13 @@ export async function resolveBackgroundRoute(
     );
     let picked = ranked[0];
 
-    if (modelTier !== "cheap") {
+    const preferredReviewModel = taskClass.startsWith("review_")
+      ? pickPreferredReviewModel(candidates, modelTier)
+      : undefined;
+
+    if (preferredReviewModel) {
+      picked = preferredReviewModel;
+    } else if (modelTier !== "cheap") {
       // On the codex/gpt side, default non-cheap background work to the current
       // flagship model rather than letting the heuristic land on an older or
       // OAuth-unavailable model. Cheap-tier tasks keep their scored pick.
@@ -290,9 +318,8 @@ export async function resolveBackgroundRoute(
         if (codexDefault) picked = codexDefault;
       }
 
-      // Prefer Opus 4.8 for non-cheap Anthropic background work. If it is not
-      // available to the account, keep the scored fallback instead of routing
-      // to an unavailable model ID.
+      // Non-review Anthropic work retains the stronger Opus default. Review
+      // model order is controlled by reviewModelPreferences above.
       const anthropicDefault = candidates.find(
         (m) => m.id === ANTHROPIC_BACKGROUND_DEFAULT_MODEL,
       );
@@ -301,9 +328,12 @@ export async function resolveBackgroundRoute(
 
     const preferredHit = preferredAuthenticated.includes(picked.provider);
     const fallbackUsed = !preferredHit;
+    const selectionDetail = preferredReviewModel
+      ? `, model=${picked.id}, policy=review-preference`
+      : `, model=${picked.id}`;
     const routingReason = fallbackUsed
-      ? `fallback to ${picked.provider}/${picked.id} (strategy=${strategy}, tier=${modelTier})`
-      : `routed by ${strategy} provider strategy (tier=${modelTier})`;
+      ? `fallback to ${picked.provider}/${picked.id} (strategy=${strategy}, tier=${modelTier}${preferredReviewModel ? ", policy=review-preference" : ""})`
+      : `routed by ${strategy} provider strategy (tier=${modelTier}${selectionDetail})`;
 
     return {
       resolvedMode,

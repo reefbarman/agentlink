@@ -16,6 +16,17 @@ export const ANTHROPIC_MODEL_CAPABILITIES: Record<
   string,
   AnthropicModelCapabilities
 > = {
+  "claude-sonnet-5": {
+    supportsThinking: true,
+    supportsAdaptiveThinking: true,
+    supportsCaching: true,
+    supportsImages: true,
+    supportsToolUse: true,
+    contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
+    reasoningEfforts: [...CLAUDE_REASONING_EFFORTS],
+    defaultReasoningEffort: "high",
+  },
   "claude-opus-4-8": {
     supportsThinking: true,
     supportsAdaptiveThinking: true,
@@ -51,6 +62,7 @@ export const ANTHROPIC_MODEL_CAPABILITIES: Record<
 
 /** Display names for the statically-known models (merge base + offline fallback). */
 export const ANTHROPIC_MODEL_DISPLAY_NAMES: Record<string, string> = {
+  "claude-sonnet-5": "Claude Sonnet 5",
   "claude-sonnet-4-6": "Claude Sonnet 4.6",
   "claude-opus-4-8": "Claude Opus 4.8",
   "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
@@ -58,6 +70,7 @@ export const ANTHROPIC_MODEL_DISPLAY_NAMES: Record<string, string> = {
 
 /** Static-listing order preserved from the original hard-coded `listModels()`. */
 export const ANTHROPIC_STATIC_MODEL_ORDER = [
+  "claude-sonnet-5",
   "claude-sonnet-4-6",
   "claude-opus-4-8",
   "claude-haiku-4-5-20251001",

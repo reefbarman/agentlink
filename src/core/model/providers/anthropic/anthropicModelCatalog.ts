@@ -94,8 +94,8 @@ export interface AnthropicModelsApi {
   list(): Promise<{ data: SdkModelInfo[] }> | AsyncIterable<SdkModelInfo>;
 }
 
-// Version 2 invalidates snapshots persisted before claude-fable-5 became listable.
-export const ANTHROPIC_MODEL_CATALOG_SCHEMA_VERSION = 2;
+// Version 3 invalidates snapshots persisted before claude-sonnet-5 was added.
+export const ANTHROPIC_MODEL_CATALOG_SCHEMA_VERSION = 3;
 
 /** Default auto-refresh TTL (Q2: 6h). Stale only gates refresh, never read. */
 export const ANTHROPIC_MODEL_CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
