@@ -4,6 +4,7 @@ import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
 
 const mocks = vi.hoisted(() => ({
   detachTerminal: vi.fn<(terminalId: string) => boolean>(),
+  revealTerminal: vi.fn<(terminalId: string) => boolean>(),
   interruptTerminal: vi.fn<(terminalId: string) => void>(),
   getCurrentOutput: vi.fn<(terminalId: string) => string | undefined>(),
   getBackgroundState: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../integrations/TerminalManager.js", () => ({
   getTerminalManager: () => ({
     detachTerminal: mocks.detachTerminal,
+    revealTerminal: mocks.revealTerminal,
     interruptTerminal: mocks.interruptTerminal,
     getCurrentOutput: mocks.getCurrentOutput,
     getBackgroundState: mocks.getBackgroundState,
@@ -28,6 +30,8 @@ describe("AgentToolCallTracker continueInBackground", () => {
     vi.useRealTimers();
     mocks.detachTerminal.mockReset();
     mocks.detachTerminal.mockReturnValue(true);
+    mocks.revealTerminal.mockReset();
+    mocks.revealTerminal.mockReturnValue(true);
     mocks.interruptTerminal.mockReset();
     mocks.getCurrentOutput.mockReset();
     mocks.getBackgroundState.mockReset();
@@ -139,6 +143,66 @@ describe("AgentToolCallTracker continueInBackground", () => {
     await Promise.resolve();
 
     expect(mocks.detachTerminal).not.toHaveBeenCalled();
+  });
+});
+
+describe("AgentToolCallTracker revealTerminal", () => {
+  beforeEach(() => {
+    mocks.revealTerminal.mockReset();
+    mocks.revealTerminal.mockReturnValue(true);
+  });
+
+  it("reveals the terminal assigned to a running execute_command", async () => {
+    const tracker = new AgentToolCallTracker();
+    const context = tracker.registerAgentCall(
+      "call-reveal",
+      "execute_command",
+      "npm test",
+      "session-1",
+      vi.fn(),
+    );
+    context.setTerminalId("term_reveal");
+
+    tracker.revealTerminal("call-reveal");
+
+    await vi.waitFor(() => {
+      expect(mocks.revealTerminal).toHaveBeenCalledWith("term_reveal");
+    });
+  });
+
+  it("honors a reveal click made before terminal assignment", async () => {
+    const tracker = new AgentToolCallTracker();
+    const context = tracker.registerAgentCall(
+      "call-pending-reveal",
+      "execute_command",
+      "npm test",
+      "session-1",
+      vi.fn(),
+    );
+
+    tracker.revealTerminal("call-pending-reveal");
+    expect(mocks.revealTerminal).not.toHaveBeenCalled();
+
+    context.setTerminalId("term_pending_reveal");
+
+    await vi.waitFor(() => {
+      expect(mocks.revealTerminal).toHaveBeenCalledWith("term_pending_reveal");
+    });
+  });
+
+  it("does not reveal terminals for other running tools", () => {
+    const tracker = new AgentToolCallTracker();
+    tracker.registerAgentCall(
+      "call-read",
+      "read_file",
+      "src/index.ts",
+      "session-1",
+      vi.fn(),
+    );
+
+    tracker.revealTerminal("call-read");
+
+    expect(mocks.revealTerminal).not.toHaveBeenCalled();
   });
 });
 

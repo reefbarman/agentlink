@@ -1030,6 +1030,7 @@ describe("MessageBubble slash-command rendering", () => {
   });
 
   it("renders inline controls for running tool calls", () => {
+    const onRevealTerminal = vi.fn();
     const onContinueInBackground = vi.fn();
     const onComplete = vi.fn();
     const onCancel = vi.fn();
@@ -1054,11 +1055,14 @@ describe("MessageBubble slash-command rendering", () => {
       <MessageBubble
         message={message}
         streaming={true}
+        onRevealToolCallTerminal={onRevealTerminal}
         onContinueToolCallInBackground={onContinueInBackground}
         onCompleteToolCall={onComplete}
         onCancelToolCall={onCancel}
       />,
     );
+
+    fireEvent.click(screen.getByTitle("Show the running terminal"));
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -1072,6 +1076,7 @@ describe("MessageBubble slash-command rendering", () => {
       screen.getByRole("button", { name: "Cancel execute_command" }),
     );
 
+    expect(onRevealTerminal).toHaveBeenCalledWith("tool-running");
     expect(onContinueInBackground).toHaveBeenCalledWith("tool-running");
     expect(onComplete).toHaveBeenCalledWith("tool-running");
     expect(onCancel).toHaveBeenCalledWith("tool-running");

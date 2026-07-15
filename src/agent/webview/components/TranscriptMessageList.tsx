@@ -22,6 +22,7 @@ interface TranscriptMessageListProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onRevealToolCallTerminal?: (id: string) => void;
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
   onCancelToolCall?: (id: string) => void;
@@ -302,6 +303,7 @@ export function TranscriptMessageList({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onRevealToolCallTerminal,
   onContinueToolCallInBackground,
   onCompleteToolCall,
   onCancelToolCall,
@@ -380,6 +382,7 @@ export function TranscriptMessageList({
               : onDismissDetectedQuestion
           }
           onOpenFile={onOpenFile}
+          onRevealToolCallTerminal={onRevealToolCallTerminal}
           onContinueToolCallInBackground={onContinueToolCallInBackground}
           onCompleteToolCall={onCompleteToolCall}
           onCancelToolCall={onCancelToolCall}

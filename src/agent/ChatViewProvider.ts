@@ -4011,6 +4011,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "revealToolCallTerminal": {
+        const id = msg.id as string | undefined;
+        if (id) {
+          this.toolCallTracker?.revealTerminal(id);
+        }
+        break;
+      }
+
       case "cancelToolCall": {
         const id = msg.id as string | undefined;
         if (id) {

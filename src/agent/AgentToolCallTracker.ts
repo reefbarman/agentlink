@@ -20,6 +20,7 @@ export interface TrackedCall {
   forceResolve: (result: ToolResult) => void;
   terminalId?: string;
   backgroundRequested?: boolean;
+  revealTerminalRequested?: boolean;
 }
 
 export interface TrackedCallInfo {
@@ -95,10 +96,35 @@ export class AgentToolCallTracker extends EventEmitter {
       this.log(
         `TERMINAL_ASSIGNED ${call.toolName} (${toolCallId.slice(0, 8)}), terminalId=${terminalId}`,
       );
-      if (call.backgroundRequested) {
-        void this.detachExecuteCommand(call);
+      if (call.backgroundRequested) void this.detachExecuteCommand(call);
+      if (call.revealTerminalRequested) {
+        void this.revealExecuteCommandTerminal(call);
       }
     }
+  }
+
+  /** Reveal the managed terminal backing a running execute_command call. */
+  revealTerminal(id: string): void {
+    const call = this.activeCalls.get(id);
+    if (!call || call.toolName !== "execute_command") {
+      this.log(
+        `REVEAL_TERMINAL_MISS (${id.slice(0, 8)}) — no active execute_command tool`,
+      );
+      return;
+    }
+
+    call.revealTerminalRequested = true;
+    if (call.terminalId) void this.revealExecuteCommandTerminal(call);
+  }
+
+  private async revealExecuteCommandTerminal(call: TrackedCall): Promise<void> {
+    if (!call.terminalId) return;
+    const { getTerminalManager } =
+      await import("../integrations/TerminalManager.js");
+    const revealed = getTerminalManager().revealTerminal(call.terminalId);
+    this.log(
+      `REVEAL_TERMINAL ${call.toolName} (${call.id.slice(0, 8)}), terminalId=${call.terminalId}, revealed=${revealed}`,
+    );
   }
 
   // ── Agent call registration (lightweight — no wrapping) ──────────────────

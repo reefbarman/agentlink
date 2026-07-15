@@ -1964,6 +1964,13 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
+  const handleRevealToolCallTerminal = useCallback(
+    (id: string) => {
+      vscodeApi.postMessage({ command: "revealToolCallTerminal", id });
+    },
+    [vscodeApi],
+  );
+
   const handleContinueToolCallInBackground = useCallback(
     (id: string) => {
       vscodeApi.postMessage({ command: "continueToolCallInBackground", id });
@@ -2309,6 +2316,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onDetectedQuestionAnswer={handleDetectedQuestionAnswer}
           onDismissDetectedQuestion={handleDismissDetectedQuestion}
           onOpenFile={handleOpenFile}
+          onRevealToolCallTerminal={handleRevealToolCallTerminal}
           onContinueToolCallInBackground={handleContinueToolCallInBackground}
           onCompleteToolCall={handleCompleteToolCall}
           onCancelToolCall={handleCancelToolCall}

@@ -8,6 +8,7 @@ export type ToolCallData = ContentBlock & { type: "tool_call" };
 interface ToolCallBlockProps {
   toolCall: ToolCallData;
   onOpenFile?: (path: string, line?: number) => void;
+  onRevealToolCallTerminal?: (id: string) => void;
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
   onCancelToolCall?: (id: string) => void;
@@ -528,6 +529,7 @@ export function getToolCallVisualState(toolCall: {
 export function ToolCallBlock({
   toolCall,
   onOpenFile,
+  onRevealToolCallTerminal,
   onContinueToolCallInBackground,
   onCompleteToolCall,
   onCancelToolCall,
@@ -581,6 +583,10 @@ export function ToolCallBlock({
     (onContinueToolCallInBackground || onCompleteToolCall || onCancelToolCall);
   const resultImages =
     complete && toolCall.resultImages ? toolCall.resultImages : [];
+  const revealsRunningTerminal =
+    !complete &&
+    toolCall.name === "execute_command" &&
+    !!onRevealToolCallTerminal;
 
   return (
     <div class={`tool-call-block ${statusClass}`}>
@@ -589,7 +595,16 @@ export function ToolCallBlock({
       >
         <button
           class="tool-call-header"
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => {
+            if (revealsRunningTerminal) {
+              onRevealToolCallTerminal(toolCall.id);
+              return;
+            }
+            setExpanded(!expanded);
+          }}
+          title={
+            revealsRunningTerminal ? "Show the running terminal" : undefined
+          }
           type="button"
         >
           <i

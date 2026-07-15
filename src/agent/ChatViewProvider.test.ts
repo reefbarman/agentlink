@@ -40,6 +40,35 @@ const mockGetConfiguration = vi.fn(() => ({
   update: vi.fn(),
 }));
 
+describe("tool terminal reveal messages", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("forwards the running tool call id to the tracker", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const revealTerminal = vi.fn();
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {};
+    provider.setToolCallTracker({ revealTerminal } as never);
+
+    await (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage({
+      command: "revealToolCallTerminal",
+      id: "tool-running",
+    });
+
+    expect(revealTerminal).toHaveBeenCalledWith("tool-running");
+  });
+});
+
 vi.mock("vscode", () => ({
   EventEmitter: MockEventEmitter,
   window: {

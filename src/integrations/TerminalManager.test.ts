@@ -121,6 +121,34 @@ describe("TerminalManager terminal selection", () => {
     Reflect.deleteProperty(vscode.window as object, "terminals");
   });
 
+  it("reveals and focuses a managed terminal by id", () => {
+    const manager = new TerminalManager();
+    const show = vi.fn();
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      {
+        id: "term_reveal",
+        name: "AgentLink",
+        cwd: "/workspace",
+        busy: true,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal: {
+          show,
+          sendText: vi.fn(),
+          dispose: vi.fn(),
+        },
+      },
+    ];
+
+    expect(manager.revealTerminal("term_reveal")).toBe(true);
+    expect(show).toHaveBeenCalledWith(false);
+    expect(manager.revealTerminal("term_missing")).toBe(false);
+  });
+
   it("emits terminal open, command, and state events for sendText fallback execution", async () => {
     const manager = new TerminalManager();
     const openEvents: unknown[] = [];

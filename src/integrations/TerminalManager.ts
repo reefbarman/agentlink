@@ -1469,6 +1469,14 @@ export class TerminalManager {
     return cleanTerminalOutput(managed.outputBuffer);
   }
 
+  /** Reveal and focus a managed terminal by ID. */
+  revealTerminal(terminalId: string): boolean {
+    const managed = this.terminals.find((t) => t.id === terminalId);
+    if (!managed) return false;
+    managed.terminal.show(false);
+    return true;
+  }
+
   /**
    * Get the background execution state of a terminal.
    * Returns undefined if the terminal is not found.

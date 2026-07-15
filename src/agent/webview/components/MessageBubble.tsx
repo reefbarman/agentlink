@@ -60,6 +60,7 @@ interface MessageBubbleProps {
   onDetectedQuestionAnswer?: (payload: string) => void;
   onDismissDetectedQuestion?: (messageId: string) => void;
   onOpenFile?: (path: string, line?: number) => void;
+  onRevealToolCallTerminal?: (id: string) => void;
   onContinueToolCallInBackground?: (id: string) => void;
   onCompleteToolCall?: (id: string) => void;
   onCancelToolCall?: (id: string) => void;
@@ -89,6 +90,7 @@ export function MessageBubble({
   onDetectedQuestionAnswer,
   onDismissDetectedQuestion,
   onOpenFile,
+  onRevealToolCallTerminal,
   onContinueToolCallInBackground,
   onCompleteToolCall,
   onCancelToolCall,
@@ -309,6 +311,7 @@ export function MessageBubble({
                 key={`group-${segment.blocks[0].id}`}
                 blocks={segment.blocks}
                 onOpenFile={onOpenFile}
+                onRevealToolCallTerminal={onRevealToolCallTerminal}
                 onContinueToolCallInBackground={onContinueToolCallInBackground}
                 onCompleteToolCall={onCompleteToolCall}
                 onCancelToolCall={onCancelToolCall}
@@ -328,6 +331,7 @@ export function MessageBubble({
                   key={block.id}
                   toolCall={block}
                   onOpenFile={onOpenFile}
+                  onRevealToolCallTerminal={onRevealToolCallTerminal}
                   onContinueToolCallInBackground={
                     onContinueToolCallInBackground
                   }
