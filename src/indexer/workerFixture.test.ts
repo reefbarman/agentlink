@@ -830,7 +830,71 @@ describe("indexer worker fixture", () => {
       expect(stats.metrics!.cacheWriteBytes).toBeLessThan(2_812);
       expect(stats.metrics!.phaseDurationsMs).toEqual(
         expect.objectContaining({
-          diff: expect.any(Number),
+          scan: expect.any(Number),
+          read: expect.any(Number),
+          process: expect.any(Number),
+        }),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "bounds retained content for a large incremental change set",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const fileCount = 101;
+      const initialFiles = Array.from({ length: fileCount }, (_, index) =>
+        writeSource(root, `src/incremental-${index}.sql`, sourceContent(index)),
+      );
+      await fixture.complete(
+        startMessage({ root, cachePath, files: initialFiles }),
+      );
+
+      const changedFiles = initialFiles.map((file, index) => {
+        const content = `${sourceContent(index + fileCount)} ${"changed-content ".repeat(40)}`;
+        fs.writeFileSync(file, content, "utf8");
+        return { file, bytes: Buffer.byteLength(content, "utf8") };
+      });
+      const totalChangedBytes = changedFiles.reduce(
+        (total, entry) => total + entry.bytes,
+        0,
+      );
+      const largestBatchBytes = changedFiles
+        .map((entry) => entry.bytes)
+        .sort((left, right) => right - left)
+        .slice(0, 50)
+        .reduce((total, bytes) => total + bytes, 0);
+
+      const stats = await fixture.complete({
+        type: "incrementalUpdate",
+        added: changedFiles.map((entry) => entry.file),
+        removed: [],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/success",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+
+      expect(stats).toMatchObject({
+        filesIndexed: fileCount,
+        totalFilesInIndex: fileCount,
+        errors: [],
+      });
+      expect(stats.metrics!.maxActiveReads).toBeLessThanOrEqual(10);
+      expect(stats.metrics!.maxRetainedContentBytes).toBeLessThanOrEqual(
+        largestBatchBytes,
+      );
+      expect(stats.metrics!.maxRetainedContentBytes).toBeLessThan(
+        totalChangedBytes,
+      );
+      expect(stats.metrics!.phaseDurationsMs).toEqual(
+        expect.objectContaining({
+          scan: expect.any(Number),
+          read: expect.any(Number),
           process: expect.any(Number),
         }),
       );

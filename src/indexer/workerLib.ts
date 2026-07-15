@@ -289,114 +289,137 @@ export function hashContent(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-// --- Incremental diff ---
-
-export interface DiffResult {
-  /** Files that are new or changed (need re-indexing) */
-  toIndex: Array<{
-    absPath: string;
-    relPath: string;
-    content: string;
-    hash: string;
-  }>;
-  /** Non-fatal errors encountered during file reading */
-  errors: string[];
-}
+// --- Memory-efficient async scan and read ---
 
 const IO_CONCURRENCY = 10;
 
-/**
- * Given a list of file paths and the current cache, determine which files
- * need indexing and which can be skipped.
- */
-export function diffFiles(
-  files: string[],
-  workspaceRoot: string,
-  cache: IndexCache,
-  metrics?: IndexWorkerMetrics,
-): DiffResult {
-  const toIndex: DiffResult["toIndex"] = [];
-  const errors: string[] = [];
+type ScanMode = "full" | "incremental";
 
-  for (let fi = 0; fi < files.length; fi++) {
-    const absPath = files[fi];
-    // Skip paths outside the workspace (e.g. Windows paths on WSL)
-    if (!absPath.startsWith(workspaceRoot)) continue;
-
-    const relPath = path.relative(workspaceRoot, absPath);
-
-    // Safety: skip if relative path escapes the workspace
-    if (relPath.startsWith("..")) continue;
-
-    // Skip files with non-indexable extensions
-    const ext = path.extname(absPath).toLowerCase();
-    if (ext && !INDEXABLE_EXTENSIONS.has(ext)) continue;
-
-    let readActive = false;
-    try {
-      const stat = fs.statSync(absPath);
-      if (!stat.isFile()) continue;
-      if (stat.size > MAX_FILE_SIZE || stat.size === 0) continue;
-
-      metrics?.readStarted();
-      readActive = true;
-      const content = fs.readFileSync(absPath, "utf-8");
-      if (isBinaryContent(content)) continue;
-
-      const hash = hashContent(content);
-
-      // Skip if cached and unchanged
-      const cached = cache.files[relPath];
-      if (cached && cached.hash === hash) continue;
-
-      metrics?.contentRetained(Buffer.byteLength(content, "utf8"));
-      toIndex.push({ absPath, relPath, content, hash });
-    } catch (err) {
-      errors.push(`Failed to read ${relPath}: ${err}`);
-    } finally {
-      if (readActive) metrics?.readFinished();
-    }
-  }
-
-  return { toIndex, errors };
+export interface ScanFilesOptions {
+  /** Full scans infer removals and may use cached stat metadata. */
+  mode?: ScanMode;
+  onProgress?: (scanned: number, total: number) => void;
+  metrics?: IndexWorkerMetrics;
+  isCancelled?: () => boolean;
 }
-
-// --- Memory-efficient scan (for large codebases) ---
 
 export interface ScanResult {
   /** Files that need re-indexing (paths only — no content held) */
   toIndexPaths: Array<{ absPath: string; relPath: string }>;
-  /** Relative paths absent from the workspace and safe for removed-file cleanup. */
+  /** Relative paths absent from a full workspace scan. Always empty incrementally. */
   removedRelPaths: string[];
   /** Relative paths removed or changed and therefore stale in Qdrant. */
   staleRelPaths: string[];
+  /** Whether hash-equal files refreshed cache stat metadata. */
+  cacheMetadataChanged: boolean;
   /** Non-fatal errors */
   errors: string[];
 }
 
+interface ScanOutcome {
+  toIndexPath?: { absPath: string; relPath: string };
+  cacheMetadataChanged?: boolean;
+  error?: string;
+}
+
+interface StableFileRead {
+  content: string;
+  contentBytes: number;
+  stat: fs.Stats;
+}
+
+async function readStableFile(
+  absPath: string,
+  initialStat: fs.Stats,
+  isCancelled?: () => boolean,
+): Promise<StableFileRead | undefined> {
+  let expectedStat = initialStat;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (isCancelled?.()) return undefined;
+    if (
+      !expectedStat.isFile() ||
+      expectedStat.size === 0 ||
+      expectedStat.size > MAX_FILE_SIZE
+    ) {
+      return undefined;
+    }
+
+    const handle = await fsp.open(absPath, "r");
+    try {
+      const preReadStat = await handle.stat();
+      if (isCancelled?.()) return undefined;
+      if (
+        !preReadStat.isFile() ||
+        preReadStat.size === 0 ||
+        preReadStat.size > MAX_FILE_SIZE
+      ) {
+        return undefined;
+      }
+
+      const buffer = Buffer.allocUnsafe(MAX_FILE_SIZE + 1);
+      let contentBytes = 0;
+      while (contentBytes < buffer.length) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          contentBytes,
+          buffer.length - contentBytes,
+          contentBytes,
+        );
+        if (isCancelled?.()) return undefined;
+        if (bytesRead === 0) break;
+        contentBytes += bytesRead;
+      }
+      if (contentBytes === 0 || contentBytes > MAX_FILE_SIZE) return undefined;
+
+      const postReadStat = await handle.stat();
+      if (isCancelled?.()) return undefined;
+      const pathStat = await fsp.stat(absPath);
+      if (isCancelled?.()) return undefined;
+      if (
+        postReadStat.size === contentBytes &&
+        postReadStat.dev === preReadStat.dev &&
+        postReadStat.ino === preReadStat.ino &&
+        postReadStat.size === preReadStat.size &&
+        postReadStat.mtimeMs === preReadStat.mtimeMs &&
+        postReadStat.ctimeMs === preReadStat.ctimeMs &&
+        pathStat.isFile() &&
+        pathStat.size > 0 &&
+        pathStat.size <= MAX_FILE_SIZE &&
+        pathStat.dev === postReadStat.dev &&
+        pathStat.ino === postReadStat.ino &&
+        pathStat.size === postReadStat.size &&
+        pathStat.mtimeMs === postReadStat.mtimeMs &&
+        pathStat.ctimeMs === postReadStat.ctimeMs
+      ) {
+        return {
+          content: buffer.subarray(0, contentBytes).toString("utf8"),
+          contentBytes,
+          stat: postReadStat,
+        };
+      }
+      expectedStat = pathStat;
+    } finally {
+      await handle.close();
+    }
+  }
+  return undefined;
+}
+
 /**
- * Scan all files to determine which need indexing, without retaining content.
- *
- * Uses a two-tier skip strategy to minimize I/O on large codebases:
- * 1. **Stat-based fast skip**: if mtime and size match the cache, skip without reading.
- * 2. **Hash-based skip**: if stat changed, read + hash to check for actual content change.
- *
- * Uses async I/O with concurrency limiting (like Roo-Code's pLimit approach)
- * to avoid blocking the event loop and saturating CPU.
+ * Scan files without retaining their content. Full scans may use stat metadata
+ * and infer removals from a complete workspace inventory. Incremental scans
+ * always hash watcher candidates and never infer removals from their partial list.
  */
 export async function scanFiles(
   files: string[],
   workspaceRoot: string,
   cache: IndexCache,
-  onProgress?: (scanned: number, total: number) => void,
-  metrics?: IndexWorkerMetrics,
+  options: ScanFilesOptions = {},
 ): Promise<ScanResult> {
-  const toIndexPaths: ScanResult["toIndexPaths"] = [];
-  const errors: string[] = [];
+  const mode = options.mode ?? "full";
   const currentFiles = new Set<string>();
-
-  // Phase 1: Quick synchronous filtering (no I/O) — build candidate list
   const candidates: Array<{ absPath: string; relPath: string }> = [];
+
   for (const absPath of files) {
     if (!absPath.startsWith(workspaceRoot)) continue;
     const relPath = path.relative(workspaceRoot, absPath);
@@ -408,73 +431,87 @@ export async function scanFiles(
     candidates.push({ absPath, relPath });
   }
 
-  // Phase 2: Async I/O with concurrency limiting
   const semaphore = new Semaphore(IO_CONCURRENCY);
   let scanned = 0;
-
-  const scanPromises = candidates.map(async ({ absPath, relPath }) => {
-    const release = await semaphore.acquire();
-    try {
-      metrics?.readStarted();
-      const stat = await fsp.stat(absPath);
-      if (!stat.isFile()) return;
-      if (stat.size > MAX_FILE_SIZE || stat.size === 0) return;
-
-      // Fast path: stat-based skip
-      const cached = cache.files[relPath];
-      if (
-        cached &&
-        cached.mtimeMs !== undefined &&
-        cached.size !== undefined &&
-        cached.mtimeMs === stat.mtimeMs &&
-        cached.size === stat.size
-      ) {
-        return;
-      }
-
-      // Slow path: read + hash
-      const content = await fsp.readFile(absPath, "utf-8");
-      const contentBytes = Buffer.byteLength(content, "utf8");
-      metrics?.contentRetained(contentBytes);
+  const outcomes = await Promise.all(
+    candidates.map(async ({ absPath, relPath }): Promise<ScanOutcome> => {
+      const release = await semaphore.acquire();
+      let readActive = false;
       try {
-        if (isBinaryContent(content)) return;
+        if (options.isCancelled?.()) return {};
+        options.metrics?.readStarted();
+        readActive = true;
 
-        const hash = hashContent(content);
+        const stat = await fsp.stat(absPath);
+        if (options.isCancelled?.()) return {};
+        if (!stat.isFile()) return {};
+        if (stat.size > MAX_FILE_SIZE || stat.size === 0) return {};
 
-        if (cached && cached.hash === hash) {
-          cached.mtimeMs = stat.mtimeMs;
-          cached.size = stat.size;
-          return;
+        const cached = cache.files[relPath];
+        if (
+          mode === "full" &&
+          cached?.mtimeMs !== undefined &&
+          cached.size !== undefined &&
+          cached.mtimeMs === stat.mtimeMs &&
+          cached.size === stat.size
+        ) {
+          return {};
         }
 
-        toIndexPaths.push({ absPath, relPath });
-      } finally {
-        metrics?.contentReleased(contentBytes);
-      }
-    } catch (err) {
-      errors.push(`Failed to scan ${relPath}: ${err}`);
-    } finally {
-      metrics?.readFinished();
-      try {
-        scanned++;
-        if (scanned % 100 === 0) {
-          onProgress?.(scanned, candidates.length);
+        const read = await readStableFile(absPath, stat, options.isCancelled);
+        if (!read) return {};
+        options.metrics?.contentRetained(read.contentBytes);
+        try {
+          if (isBinaryContent(read.content)) return {};
+
+          const hash = hashContent(read.content);
+          if (cached?.hash === hash) {
+            const cacheMetadataChanged =
+              cached.mtimeMs !== read.stat.mtimeMs ||
+              cached.size !== read.stat.size;
+            cached.mtimeMs = read.stat.mtimeMs;
+            cached.size = read.stat.size;
+            return { cacheMetadataChanged };
+          }
+
+          return { toIndexPath: { absPath, relPath } };
+        } finally {
+          options.metrics?.contentReleased(read.contentBytes);
         }
+      } catch (err) {
+        if (options.isCancelled?.()) return {};
+        return { error: `Failed to scan ${relPath}: ${err}` };
       } finally {
-        release();
+        if (readActive) options.metrics?.readFinished();
+        try {
+          scanned++;
+          if (scanned % 100 === 0) {
+            options.onProgress?.(scanned, candidates.length);
+          }
+        } finally {
+          release();
+        }
       }
-    }
-  });
+    }),
+  );
 
-  await Promise.all(scanPromises);
-  onProgress?.(candidates.length, candidates.length);
+  options.onProgress?.(candidates.length, candidates.length);
 
-  // Phase 3: Find stale files
+  const toIndexPaths = outcomes.flatMap((outcome) =>
+    outcome.toIndexPath ? [outcome.toIndexPath] : [],
+  );
+  const errors = outcomes.flatMap((outcome) =>
+    outcome.error ? [outcome.error] : [],
+  );
+  const cacheMetadataChanged = outcomes.some(
+    (outcome) => outcome.cacheMetadataChanged,
+  );
   const removedRelPaths: string[] = [];
   const staleRelPaths: string[] = [];
-  const toIndexRelPaths = new Set(toIndexPaths.map((f) => f.relPath));
+  const toIndexRelPaths = new Set(toIndexPaths.map((file) => file.relPath));
+
   for (const relPath of Object.keys(cache.files)) {
-    if (!currentFiles.has(relPath)) {
+    if (mode === "full" && !currentFiles.has(relPath)) {
       removedRelPaths.push(relPath);
       staleRelPaths.push(relPath);
     } else if (toIndexRelPaths.has(relPath)) {
@@ -482,55 +519,100 @@ export async function scanFiles(
     }
   }
 
-  return { toIndexPaths, removedRelPaths, staleRelPaths, errors };
+  return {
+    toIndexPaths,
+    removedRelPaths,
+    staleRelPaths,
+    cacheMetadataChanged,
+    errors,
+  };
 }
 
 export interface FileWithContent {
   absPath: string;
   relPath: string;
   content: string;
+  contentBytes: number;
   hash: string;
   mtimeMs?: number;
   size?: number;
 }
 
+export interface ReadFilesBatchOptions {
+  cache?: IndexCache;
+  metrics?: IndexWorkerMetrics;
+  isCancelled?: () => boolean;
+  onCacheMetadataChanged?: () => void;
+}
+
+interface ReadOutcome {
+  file?: FileWithContent;
+  error?: string;
+}
+
 /**
- * Read content for a batch of file paths. Used after scanFiles() to
- * load only the files needed for the current processing batch.
- * Uses async I/O with concurrency limiting to avoid CPU saturation.
+ * Read and revalidate one bounded file batch. Results retain content until the
+ * caller finishes processing the batch and releases the corresponding metrics.
  */
 export async function readFilesBatch(
   paths: Array<{ absPath: string; relPath: string }>,
   errors: string[],
-  metrics?: IndexWorkerMetrics,
+  options: ReadFilesBatchOptions = {},
 ): Promise<FileWithContent[]> {
-  const result: FileWithContent[] = [];
   const semaphore = new Semaphore(IO_CONCURRENCY);
+  const outcomes = await Promise.all(
+    paths.map(async ({ absPath, relPath }): Promise<ReadOutcome> => {
+      const release = await semaphore.acquire();
+      let readActive = false;
+      try {
+        if (options.isCancelled?.()) return {};
+        options.metrics?.readStarted();
+        readActive = true;
 
-  const promises = paths.map(async ({ absPath, relPath }) => {
-    const release = await semaphore.acquire();
-    try {
-      metrics?.readStarted();
-      const stat = await fsp.stat(absPath);
-      const content = await fsp.readFile(absPath, "utf-8");
-      const hash = hashContent(content);
-      metrics?.contentRetained(Buffer.byteLength(content, "utf8"));
-      result.push({
-        absPath,
-        relPath,
-        content,
-        hash,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      });
-    } catch (err) {
-      errors.push(`Failed to read ${relPath}: ${err}`);
-    } finally {
-      metrics?.readFinished();
-      release();
-    }
-  });
+        const stat = await fsp.stat(absPath);
+        if (options.isCancelled?.()) return {};
+        if (!stat.isFile()) return {};
+        if (stat.size > MAX_FILE_SIZE || stat.size === 0) return {};
 
-  await Promise.all(promises);
-  return result;
+        const read = await readStableFile(absPath, stat, options.isCancelled);
+        if (!read || isBinaryContent(read.content)) return {};
+
+        const hash = hashContent(read.content);
+        const cached = options.cache?.files[relPath];
+        if (cached?.hash === hash) {
+          const cacheMetadataChanged =
+            cached.mtimeMs !== read.stat.mtimeMs ||
+            cached.size !== read.stat.size;
+          cached.mtimeMs = read.stat.mtimeMs;
+          cached.size = read.stat.size;
+          if (cacheMetadataChanged) options.onCacheMetadataChanged?.();
+          return {};
+        }
+
+        options.metrics?.contentRetained(read.contentBytes);
+        return {
+          file: {
+            absPath,
+            relPath,
+            content: read.content,
+            contentBytes: read.contentBytes,
+            hash,
+            mtimeMs: read.stat.mtimeMs,
+            size: read.stat.size,
+          },
+        };
+      } catch (err) {
+        if (options.isCancelled?.()) return {};
+        return { error: `Failed to read ${relPath}: ${err}` };
+      } finally {
+        if (readActive) options.metrics?.readFinished();
+        release();
+      }
+    }),
+  );
+
+  errors.push(
+    ...outcomes.flatMap((outcome) => (outcome.error ? [outcome.error] : [])),
+  );
+  return outcomes.flatMap((outcome) => (outcome.file ? [outcome.file] : []));
 }

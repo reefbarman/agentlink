@@ -45,7 +45,6 @@ import {
   loadStructuralCache,
   writeCache as writeCacheFile,
   writeStructuralCache as writeStructuralCacheFile,
-  diffFiles,
   scanFiles,
   readFilesBatch,
   type FileWithContent,
@@ -100,7 +99,6 @@ import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import {
   createIndexWorkerMetrics,
   measureIndexWorkerPhase,
-  measureIndexWorkerPhaseSync,
   serializedByteLength,
 } from "./workerMetrics.js";
 
@@ -669,15 +667,16 @@ async function backfillStructuralCacheForCachedFiles(args: {
     const files = await readFilesBatch(
       missingStructuralPaths.slice(i, i + FILE_BATCH_SIZE),
       readErrors,
-      metrics,
+      { metrics, isCancelled: () => aborted },
     );
     args.errors.push(...readErrors);
 
     const retainedBytes = files.reduce(
-      (total, file) => total + Buffer.byteLength(file.content, "utf8"),
+      (total, file) => total + file.contentBytes,
       0,
     );
     try {
+      if (aborted) return updated;
       updated += updateStructuralCacheForFiles(
         args.structuralCache,
         files.filter(
@@ -1149,12 +1148,13 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       msg.cachePath,
       msg.force,
     );
-    checkpoints = createCacheCheckpointCoordinator({
+    const checkpointCoordinator = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
       cache,
       structuralCache,
     });
+    checkpoints = checkpointCoordinator;
     const rebuildRequested =
       msg.force || (cache.granularity ?? "standard") !== msg.granularity;
 
@@ -1245,20 +1245,21 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
     const {
       toIndexPaths,
       removedRelPaths,
+      cacheMetadataChanged,
       errors: scanErrors,
     } = await measureIndexWorkerPhase(metrics, "scan", () =>
-      scanFiles(
-        msg.files,
-        msg.workspaceRoot,
-        cache,
-        (scanned, total) => sendProgress("reading", scanned, total),
+      scanFiles(msg.files, msg.workspaceRoot, cache, {
+        onProgress: (scanned, total) => sendProgress("reading", scanned, total),
         metrics,
-      ),
+        isCancelled: () => aborted,
+      }),
     );
     errors.push(...scanErrors);
+    if (cacheMetadataChanged) checkpoints.scheduleVector();
     sendProgress("reading", msg.files.length, msg.files.length);
 
     if (aborted) {
+      checkpoints.drain();
       sendComplete({
         filesIndexed,
         totalFilesInIndex: Object.keys(cache.files).length,
@@ -1370,25 +1371,30 @@ async function handleStart(msg: StartIndexMessage): Promise<void> {
       // Read content for this batch only
       const batchErrors: string[] = [];
       const batchFiles = await measureIndexWorkerPhase(metrics, "read", () =>
-        readFilesBatch(batchPaths, batchErrors, metrics),
+        readFilesBatch(batchPaths, batchErrors, {
+          cache,
+          metrics,
+          isCancelled: () => aborted,
+          onCacheMetadataChanged: () => checkpointCoordinator.scheduleVector(),
+        }),
       );
       errors.push(...batchErrors);
 
-      if (batchFiles.length === 0) continue;
-
-      // Process batch through chunk → embed → journaled replacement pipeline
-      sendProgress(
-        "indexing",
-        batchStart,
-        totalFiles,
-        `batch ${batchNum + 1}/${totalBatches}`,
-      );
-
       const retainedBytes = batchFiles.reduce(
-        (total, file) => total + Buffer.byteLength(file.content, "utf8"),
+        (total, file) => total + file.contentBytes,
         0,
       );
       try {
+        if (aborted || batchFiles.length === 0) continue;
+
+        // Process batch through chunk → embed → journaled replacement pipeline
+        sendProgress(
+          "indexing",
+          batchStart,
+          totalFiles,
+          `batch ${batchNum + 1}/${totalBatches}`,
+        );
+
         const result = await measureIndexWorkerPhase(metrics, "process", () =>
           processFileBatch(batchFiles, batchConfig, cache, structuralCache),
         );
@@ -1467,12 +1473,13 @@ async function handleIncrementalUpdate(
         workspaceRoot: msg.workspaceRoot,
         collectionName: msg.collectionName,
       });
-    checkpoints = createCacheCheckpointCoordinator({
+    const checkpointCoordinator = createCacheCheckpointCoordinator({
       cachePath: msg.cachePath,
       structuralCachePath,
       cache,
       structuralCache,
     });
+    checkpoints = checkpointCoordinator;
     if (hasDurableIndexOperations(msg.cachePath, cache)) {
       await ensureQdrantCollectionForIndex(msg.qdrantUrl, msg.collectionName);
     }
@@ -1561,18 +1568,26 @@ async function handleIncrementalUpdate(
       return;
     }
 
-    // Handle added/changed files — diff against cache
-    const { toIndex, errors: readErrors } = measureIndexWorkerPhaseSync(
-      metrics,
-      "diff",
-      () => diffFiles(msg.added, msg.workspaceRoot, cache, metrics),
+    // Scan only the watcher candidates. Incremental mode always hashes them and
+    // never infers removals from this partial path list.
+    const {
+      toIndexPaths,
+      cacheMetadataChanged,
+      errors: scanErrors,
+    } = await measureIndexWorkerPhase(metrics, "scan", () =>
+      scanFiles(msg.added, msg.workspaceRoot, cache, {
+        mode: "incremental",
+        metrics,
+        isCancelled: () => aborted,
+      }),
     );
     sampleHeapUsed();
-    errors.push(...readErrors);
+    errors.push(...scanErrors);
+    if (cacheMetadataChanged) checkpoints.scheduleVector();
 
-    // Process in batches using processFileBatch. Existing ownership remains
+    // Read and process one bounded batch at a time. Existing ownership remains
     // intact until each replacement intent is durable.
-    if (toIndex.length > 0 && !aborted) {
+    if (toIndexPaths.length > 0 && !aborted) {
       const batchConfig: BatchConfig = {
         qdrantUrl: msg.qdrantUrl,
         collectionName: msg.collectionName,
@@ -1583,14 +1598,30 @@ async function handleIncrementalUpdate(
         checkpoints,
       };
 
-      for (let i = 0; i < toIndex.length; i += FILE_BATCH_SIZE) {
+      for (let i = 0; i < toIndexPaths.length; i += FILE_BATCH_SIZE) {
         if (aborted) break;
-        const batch = toIndex.slice(i, i + FILE_BATCH_SIZE);
+        const batchErrors: string[] = [];
+        const batch = await measureIndexWorkerPhase(metrics, "read", () =>
+          readFilesBatch(
+            toIndexPaths.slice(i, i + FILE_BATCH_SIZE),
+            batchErrors,
+            {
+              cache,
+              metrics,
+              isCancelled: () => aborted,
+              onCacheMetadataChanged: () =>
+                checkpointCoordinator.scheduleVector(),
+            },
+          ),
+        );
+        errors.push(...batchErrors);
+
         const retainedBytes = batch.reduce(
-          (total, file) => total + Buffer.byteLength(file.content, "utf8"),
+          (total, file) => total + file.contentBytes,
           0,
         );
         try {
+          if (aborted || batch.length === 0) continue;
           const result = await measureIndexWorkerPhase(metrics, "process", () =>
             processFileBatch(batch, batchConfig, cache, structuralCache),
           );
