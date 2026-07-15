@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as os from "os";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -131,11 +132,17 @@ describe("handleListFiles", () => {
     });
   });
 
-  it("does not bypass outside-workspace approval for temporary artifacts", async () => {
+  it("bypasses outside-workspace approval for AgentLink temporary artifacts", async () => {
+    const outputPath = path.join(
+      os.tmpdir(),
+      "agentlink-output-123",
+      "output.txt",
+    );
     resolveAndValidatePathMock.mockReturnValue({
-      absolutePath: "/tmp/agentlink-output-123/output.txt",
+      absolutePath: outputPath,
       inWorkspace: false,
     });
+    statMock.mockResolvedValue({ isDirectory: () => false });
     const rejectingApprovalManager = {
       isPathTrusted: vi.fn(() => false),
     } as unknown as ApprovalManager;
@@ -144,17 +151,18 @@ describe("handleListFiles", () => {
     const { handleListFiles } = await import("./listFiles.js");
 
     const result = await handleListFiles(
-      { path: "/tmp/agentlink-output-123/output.txt" },
+      { path: outputPath },
       rejectingApprovalManager,
       approvalPanel,
       sessionId,
     );
 
-    expect(approveOutsideWorkspaceAccessMock).toHaveBeenCalledOnce();
-    expect(statMock).not.toHaveBeenCalled();
+    expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
+    expect(statMock).toHaveBeenCalledWith(outputPath);
     expect(JSON.parse(result.content[0].text)).toEqual({
-      status: "rejected",
-      path: "/tmp/agentlink-output-123/output.txt",
+      error:
+        "Path is a file, not a directory — use read_file to read its contents",
+      path: outputPath,
     });
   });
 

@@ -16,6 +16,11 @@ describe("isAgentlinkTmpArtifact", () => {
     expect(isAgentlinkTmpArtifact(filePath)).toBe(true);
   });
 
+  it("recognizes the AgentLink truncated-result root itself", () => {
+    expect(isAgentlinkTmpArtifact("/tmp/agentlink-results")).toBe(true);
+    expect(isAgentlinkTmpArtifact("/tmp/agentlink-results/")).toBe(true);
+  });
+
   it.runIf(process.platform === "darwin")(
     "recognizes macOS /var and /private/var aliases for terminal output files",
     () => {

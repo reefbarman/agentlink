@@ -4,6 +4,7 @@ import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
+import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 
 // --- Types ---
 
@@ -31,7 +32,11 @@ export async function resolveAndOpenDocument(
   const { absolutePath, inWorkspace } = resolveAndValidatePath(inputPath);
   const relPath = getRelativePath(absolutePath);
 
-  if (!inWorkspace && !approvalManager.isPathTrusted(sessionId, absolutePath)) {
+  if (
+    !inWorkspace &&
+    !isAgentlinkTmpArtifact(absolutePath) &&
+    !approvalManager.isPathTrusted(sessionId, absolutePath)
+  ) {
     const { approved, reason } = await approveOutsideWorkspaceAccess(
       absolutePath,
       approvalManager,

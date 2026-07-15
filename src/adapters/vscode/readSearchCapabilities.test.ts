@@ -201,7 +201,7 @@ describe("createVscodePathAccessProvider", () => {
     );
   });
 
-  it("allows temporary AgentLink artifacts without UI approval when requested", async () => {
+  it("allows temporary AgentLink artifacts without UI approval", async () => {
     const approvalManager = { isPathTrusted: vi.fn(() => false) };
     const provider = createVscodePathAccessProvider(
       approvalManager as never,
@@ -215,7 +215,6 @@ describe("createVscodePathAccessProvider", () => {
         inWorkspace: false,
         sessionId: "session-3",
         kind: "read",
-        allowTemporaryArtifact: true,
       }),
     ).resolves.toEqual({ approved: true });
 

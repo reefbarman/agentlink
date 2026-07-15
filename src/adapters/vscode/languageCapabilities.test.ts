@@ -1,3 +1,6 @@
+import * as os from "os";
+import * as path from "path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createVscodeCodeActionsProvider,
@@ -525,6 +528,38 @@ describe("createVscodeNavigationProvider", () => {
       approvalPanel,
       "session-1",
     );
+  });
+
+  it("reads AgentLink temporary output without requesting approval", async () => {
+    const outputPath = path.join(
+      os.tmpdir(),
+      "agentlink-output-abc123",
+      "output.txt",
+    );
+    resolveAndValidatePath.mockReturnValue({
+      absolutePath: outputPath,
+      inWorkspace: false,
+    });
+    openTextDocument.mockResolvedValue({ uri: { fsPath: outputPath } });
+    executeCommand.mockResolvedValue([]);
+    const approvalManager = { isPathTrusted: vi.fn(() => false) };
+    const provider = createVscodeNavigationProvider(
+      approvalManager as never,
+      {} as never,
+    );
+
+    await expect(
+      provider.goToDefinition({
+        path: outputPath,
+        line: 1,
+        column: 1,
+        sessionId: "background-review",
+      }),
+    ).resolves.toMatchObject({ content: expect.any(Array) });
+
+    expect(approveOutsideWorkspaceAccess).not.toHaveBeenCalled();
+    expect(approvalManager.isPathTrusted).not.toHaveBeenCalled();
+    expect(openTextDocument).toHaveBeenCalledWith({ fsPath: outputPath });
   });
 });
 

@@ -60,7 +60,11 @@ export const AGENTLINK_TMP_ARTIFACT_PREFIXES: readonly string[] = (() => {
 })();
 
 export function isAgentlinkTmpArtifact(filePath: string): boolean {
-  return AGENTLINK_TMP_ARTIFACT_PREFIXES.some((prefix) =>
-    filePath.startsWith(prefix),
+  const normalizedPath = trimTrailingSeparators(filePath);
+  return AGENTLINK_TMP_ARTIFACT_PREFIXES.some(
+    (prefix) =>
+      filePath.startsWith(prefix) ||
+      (prefix.endsWith(path.sep) &&
+        normalizedPath === trimTrailingSeparators(prefix)),
   );
 }

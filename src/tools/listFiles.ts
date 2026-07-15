@@ -11,6 +11,7 @@ import { execRipgrepFiles, getRipgrepBinPath } from "../util/ripgrep.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import { approveOutsideWorkspaceAccess } from "./pathAccessUI.js";
+import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import { resolveAndValidatePath } from "../util/paths.js";
 import { semanticFileList } from "../services/semanticSearch.js";
 
@@ -34,6 +35,9 @@ function createLegacyListFilesProviders(
     pathAccessProvider: {
       async ensureAccess(request) {
         if (request.inWorkspace) {
+          return { approved: true };
+        }
+        if (isAgentlinkTmpArtifact(request.absolutePath)) {
           return { approved: true };
         }
         if (

@@ -215,10 +215,7 @@ export function createVscodePathAccessProvider(
         return { approved: true };
       }
 
-      if (
-        request.allowTemporaryArtifact &&
-        isAgentlinkTmpArtifact(request.absolutePath)
-      ) {
+      if (isAgentlinkTmpArtifact(request.absolutePath)) {
         return { approved: true };
       }
 

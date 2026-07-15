@@ -41,10 +41,7 @@ function createLegacySearchFilesProviders(
         if (request.inWorkspace) {
           return { approved: true };
         }
-        if (
-          request.allowTemporaryArtifact &&
-          isAgentlinkTmpArtifact(request.absolutePath)
-        ) {
+        if (isAgentlinkTmpArtifact(request.absolutePath)) {
           return { approved: true };
         }
         if (
@@ -235,7 +232,6 @@ export async function handleSearchFiles(
       inWorkspace,
       sessionId,
       kind: "read",
-      allowTemporaryArtifact: true,
     });
     if (!access.approved) {
       return {

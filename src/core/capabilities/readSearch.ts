@@ -25,7 +25,6 @@ export interface PathAccessRequest {
   inWorkspace: boolean;
   sessionId: string;
   kind: "read";
-  allowTemporaryArtifact?: boolean;
 }
 
 export interface PathAccessProvider {
