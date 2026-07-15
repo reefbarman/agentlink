@@ -249,8 +249,13 @@ function ServerForm({
         </p>
       )}
       <div class="mcp-manager-form-actions">
-        <button type="submit">Save server</button>
-        <button type="button" onClick={onCancel}>
+        <button
+          class="mcp-manager-button mcp-manager-button-primary"
+          type="submit"
+        >
+          Save server
+        </button>
+        <button class="mcp-manager-button" type="button" onClick={onCancel}>
           Cancel
         </button>
       </div>
@@ -316,26 +321,32 @@ export function McpManagerPanel({
       </div>
       <div class="mcp-manager-tabs">
         <button
-          class={showStatus ? "active" : ""}
+          class={`mcp-manager-button${showStatus ? " active" : ""}`}
           onClick={() => setView("status")}
         >
           Status
         </button>
         <button
-          class={showConfig ? "active" : ""}
+          class={`mcp-manager-button${showConfig ? " active" : ""}`}
           onClick={() => setView("config")}
         >
           Config
         </button>
         {snapshot.capabilities.canEditConfig && (
           <button
-            class={view === "add" ? "active" : ""}
+            class={`mcp-manager-button${view === "add" ? " active" : ""}`}
             onClick={() => setView("add")}
           >
             Add server
           </button>
         )}
-        <button onClick={onRefresh}>Refresh</button>
+        <button
+          class="mcp-manager-button mcp-manager-refresh"
+          onClick={onRefresh}
+        >
+          <i class="codicon codicon-refresh" />
+          Refresh
+        </button>
       </div>
       {error && <p class="mcp-status-empty">{error}</p>}
       {snapshot.unavailableReason && (
@@ -451,7 +462,10 @@ export function McpManagerPanel({
                     {source.inherited && <code>inherited</code>}
                     {snapshot.capabilities.canOpenRawConfig &&
                       source.editable && (
-                        <button onClick={() => onOpenRawConfig?.(source.scope)}>
+                        <button
+                          class="mcp-manager-button"
+                          onClick={() => onOpenRawConfig?.(source.scope)}
+                        >
                           Open raw
                         </button>
                       )}
@@ -484,6 +498,7 @@ export function McpManagerPanel({
                       entry.preferredEditScope && (
                         <span class="mcp-status-actions">
                           <button
+                            class="mcp-manager-button"
                             onClick={() => {
                               setEditingServer(entry.name);
                               setView("edit");
@@ -492,6 +507,7 @@ export function McpManagerPanel({
                             Edit
                           </button>
                           <button
+                            class="mcp-manager-button mcp-manager-button-danger"
                             onClick={() =>
                               onRemoveServer?.(
                                 entry.preferredEditScope!,

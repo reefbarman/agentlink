@@ -3993,6 +3993,98 @@ body {
   margin-left: auto;
 }
 
+.mcp-manager-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  overflow-x: auto;
+}
+
+.mcp-manager-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--vscode-button-secondaryBorder, transparent);
+  border-radius: 2px;
+  background: var(
+    --vscode-button-secondaryBackground,
+    rgba(127, 127, 127, 0.2)
+  );
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mcp-manager-button:hover:not(:disabled) {
+  background: var(
+    --vscode-button-secondaryHoverBackground,
+    rgba(127, 127, 127, 0.3)
+  );
+}
+
+.mcp-manager-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.mcp-manager-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.mcp-manager-button.active,
+.mcp-manager-button-primary {
+  border-color: var(--vscode-button-border, transparent);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.mcp-manager-button.active:hover:not(:disabled),
+.mcp-manager-button-primary:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.mcp-manager-button-danger {
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 45%,
+    transparent
+  );
+  background: transparent;
+  color: var(--vscode-errorForeground);
+}
+
+.mcp-manager-button-danger:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 12%,
+    transparent
+  );
+}
+
+.mcp-manager-refresh {
+  margin-left: auto;
+}
+
+.mcp-manager-refresh .codicon {
+  font-size: 12px;
+}
+
+.mcp-manager-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .mcp-status-empty {
   margin: 0;
   padding: 6px 12px;
