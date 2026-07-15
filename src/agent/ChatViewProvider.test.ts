@@ -2044,3 +2044,152 @@ describe("ChatViewProvider session state sync", () => {
     expect(missing).toBe(false);
   });
 });
+
+describe("handleModeSwitch resume queueing", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  const session = () => ({
+    id: "session-1",
+    mode: "architect",
+    model: "claude-sonnet-4-6",
+    background: false,
+    status: "streaming",
+    reasoningEffort: "high",
+    lastInputTokens: 0,
+    lastOutputTokens: 0,
+    estimatedTotalUsed: 0,
+    getAllMessages: () => [] as unknown[],
+  });
+
+  async function makeProvider(manager: Record<string, unknown>) {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    provider.setSessionManager(manager as never);
+    return provider;
+  }
+
+  it("queues a mode-switch resume after an in-place silent switch", async () => {
+    const fg = session();
+    const queueModeSwitchResume = vi.fn();
+    const provider = await makeProvider({
+      getForegroundSession: vi.fn(() => fg),
+      switchSessionMode: vi.fn(async () => fg),
+      queueModeSwitchResume,
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    });
+
+    const result = await provider.handleModeSwitch(
+      "code",
+      'ask_user: "Looks good"',
+      true,
+      fg.id,
+    );
+
+    expect(result).toMatchObject({ approved: true, mode: "code" });
+    expect(queueModeSwitchResume).toHaveBeenCalledWith("session-1", "code", {
+      reason: 'ask_user: "Looks good"',
+      followUp: undefined,
+    });
+  });
+
+  it("does not report success when the target session no longer exists", async () => {
+    const queueModeSwitchResume = vi.fn();
+    const provider = await makeProvider({
+      getForegroundSession: vi.fn(() => undefined),
+      switchSessionMode: vi.fn(async () => null),
+      queueModeSwitchResume,
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    });
+
+    const result = await provider.handleModeSwitch(
+      "code",
+      undefined,
+      true,
+      "stale-session",
+    );
+
+    expect(result.approved).toBe(false);
+    expect(result.rejectionReason).toContain("session no longer exists");
+    expect(queueModeSwitchResume).not.toHaveBeenCalled();
+    // The legacy fallback must not fire: it makes the webview create a brand
+    // new session mid-run.
+    expect(
+      mockPostMessage.mock.calls.some(
+        ([message]) => message.type === "agentModeSwitchRequest",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not report success when the in-place switch throws", async () => {
+    const fg = session();
+    const queueModeSwitchResume = vi.fn();
+    const provider = await makeProvider({
+      getForegroundSession: vi.fn(() => fg),
+      switchSessionMode: vi.fn(async () => {
+        throw new Error("prompt artifacts unavailable");
+      }),
+      queueModeSwitchResume,
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    });
+
+    const result = await provider.handleModeSwitch("code", undefined, true);
+
+    expect(result.approved).toBe(false);
+    expect(result.rejectionReason).toContain("prompt artifacts unavailable");
+    expect(queueModeSwitchResume).not.toHaveBeenCalled();
+    expect(
+      mockPostMessage.mock.calls.some(
+        ([message]) => message.type === "agentModeSwitchRequest",
+      ),
+    ).toBe(false);
+  });
+
+  it("still falls back to a new session when no session exists at all", async () => {
+    const provider = await makeProvider({
+      getForegroundSession: vi.fn(() => undefined),
+      switchSessionMode: vi.fn(async () => null),
+      queueModeSwitchResume: vi.fn(),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    });
+
+    const result = await provider.handleModeSwitch("code", undefined, true);
+
+    expect(result.approved).toBe(true);
+    expect(
+      mockPostMessage.mock.calls.some(
+        ([message]) =>
+          message.type === "agentModeSwitchRequest" && message.mode === "code",
+      ),
+    ).toBe(true);
+  });
+});

@@ -1758,13 +1758,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     try {
       const targetSessionId =
         sessionId ?? this.sessionManager.getForegroundSession()?.id;
-      const session = targetSessionId
-        ? await this.sessionManager.switchSessionMode(targetSessionId, mode)
-        : null;
-      if (!session) {
+      if (!targetSessionId) {
         // No active session yet — fall back to creating a new session in target mode.
         this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
         return { approved: true, mode, followUp };
+      }
+      const session = await this.sessionManager.switchSessionMode(
+        targetSessionId,
+        mode,
+      );
+      if (!session) {
+        // Don't report success: the engine ends the turn after an approved
+        // switch and relies on a queued resume that was never queued here.
+        const rejectionReason = `Mode switch to "${mode}" failed: session no longer exists`;
+        this.log(`[mode] ${rejectionReason} (session ${targetSessionId})`);
+        return { approved: false, mode, followUp, rejectionReason };
       }
       // Reset session-level write approval when switching modes — "session"
       // approval was granted for the previous mode, not the new one.
@@ -1783,9 +1791,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       );
       return { approved: true, mode, followUp };
     } catch (err) {
+      // Don't report success: the engine ends the turn after an approved
+      // switch and relies on a queued resume that was never queued here.
+      const rejectionReason = `Mode switch to "${mode}" failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`;
       this.log(`[mode] failed to switch mode in-place: ${err}`);
-      this.postMessage({ type: "agentModeSwitchRequest", mode, reason });
-      return { approved: true, mode, followUp };
+      return { approved: false, mode, followUp, rejectionReason };
     }
   }
 

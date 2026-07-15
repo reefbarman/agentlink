@@ -87,6 +87,15 @@ import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeSto
 
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * Per-turn budget for auto-continuing after a mode switch. Kept separate from
+ * MAX_AUTO_CONTINUE: each queued resume traces back to an explicit approval
+ * (mode-switch approval or an ask_user answer mapped to a mode), so the todo
+ * auto-continue budget must not silently swallow the continuation — the turn
+ * would end right after the user's answer with no indication of why.
+ */
+const MAX_MODE_SWITCH_RESUMES = 10;
+
 /** Incremental progress emitted while a /btw side question runs. */
 export type BtwProgressEvent =
   | { type: "text_delta"; text: string }
@@ -1438,6 +1447,7 @@ export class AgentSessionManager {
 
       const MAX_AUTO_CONTINUE = 5;
       let autoContinueCount = 0;
+      let modeSwitchResumeCount = 0;
       let lastTodos: TodoItem[] = [];
 
       let resolveRunSettled!: () => void;
@@ -1498,28 +1508,12 @@ export class AgentSessionManager {
             break;
           }
 
-          const pendingModeResume =
-            naturalDone && autoContinueCount < MAX_AUTO_CONTINUE
-              ? session.consumePendingModeResume()
-              : null;
-          if (pendingModeResume) {
-            autoContinueCount++;
-            const reason = pendingModeResume.reason?.trim();
-            const followUp = pendingModeResume.followUp?.trim();
-            const details = [
-              `You just switched this session to ${pendingModeResume.mode} mode.`,
-              "Continue immediately in the new mode and start the next concrete implementation step now.",
-            ];
-            if (reason) {
-              details.push(`Switch reason: ${reason}`);
-            }
-            if (followUp) {
-              details.push(`User follow-up: ${followUp}`);
-            }
-            this.log?.(
-              `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): resumed after switch to ${pendingModeResume.mode}`,
-            );
-            session.addUserMessage(details.join("\n"));
+          const modeResumePrompt = naturalDone
+            ? this.takeModeSwitchResumePrompt(session, modeSwitchResumeCount)
+            : null;
+          if (modeResumePrompt) {
+            modeSwitchResumeCount++;
+            session.addUserMessage(modeResumePrompt);
             session.status = "streaming";
             continue;
           }
@@ -1852,15 +1846,46 @@ export class AgentSessionManager {
     );
     this.onSessionsChanged?.();
 
+    let modeSwitchResumeCount = 0;
     try {
-      for await (const event of this.getEngine().run(session)) {
-        if (event.type === "done") {
-          if (!session.background) {
-            session.runState = undefined;
+      while (true) {
+        let naturalDone = false;
+        for await (const event of this.getEngine().run(session)) {
+          if (event.type === "done") {
+            // Defer done — a queued mode-switch resume may continue this turn.
+            this.saveSession(session.id);
+            naturalDone = true;
+            continue;
           }
-          await this.saveSessionNow(session.id);
+          this.recordAndEmitEvent(session.id, event);
         }
-        this.recordAndEmitEvent(session.id, event);
+
+        // Aborted or the engine ended without done — nothing to resume.
+        if (!naturalDone) break;
+
+        const modeResumePrompt = this.takeModeSwitchResumePrompt(
+          session,
+          modeSwitchResumeCount,
+        );
+        if (modeResumePrompt) {
+          modeSwitchResumeCount++;
+          session.addUserMessage(modeResumePrompt);
+          session.status = "streaming";
+          continue;
+        }
+
+        if (!session.background) {
+          session.runState = undefined;
+        }
+        await this.saveSessionNow(session.id);
+        this.recordAndEmitEvent(session.id, {
+          type: "done",
+          totalInputTokens: session.totalInputTokens,
+          totalOutputTokens: session.totalOutputTokens,
+          totalCacheReadTokens: session.totalCacheReadTokens,
+          totalCacheCreationTokens: session.totalCacheCreationTokens,
+        });
+        break;
       }
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : String(err);
@@ -1946,6 +1971,42 @@ export class AgentSessionManager {
   }
 
   /**
+   * Consume a queued mode-switch resume and build the continuation prompt.
+   * Returns null when nothing is queued or the per-turn resume budget is
+   * exhausted. The drop is logged — a silently dropped resume looks to the
+   * user like the agent stopping dead right after their answer.
+   */
+  private takeModeSwitchResumePrompt(
+    session: AgentSession,
+    resumesUsed: number,
+  ): string | null {
+    const pending = session.consumePendingModeResume();
+    if (!pending) return null;
+    if (resumesUsed >= MAX_MODE_SWITCH_RESUMES) {
+      this.log?.(
+        `[agent] dropped mode-switch resume to ${pending.mode}: limit ${MAX_MODE_SWITCH_RESUMES} reached for this turn`,
+      );
+      return null;
+    }
+    this.log?.(
+      `[agent] auto-continuing (mode resume ${resumesUsed + 1}/${MAX_MODE_SWITCH_RESUMES}): resumed after switch to ${pending.mode}`,
+    );
+    const reason = pending.reason?.trim();
+    const followUp = pending.followUp?.trim();
+    const details = [
+      `You just switched this session to ${pending.mode} mode.`,
+      "Continue immediately in the new mode and start the next concrete implementation step now.",
+    ];
+    if (reason) {
+      details.push(`Switch reason: ${reason}`);
+    }
+    if (followUp) {
+      details.push(`User follow-up: ${followUp}`);
+    }
+    return details.join("\n");
+  }
+
+  /**
    * Manually condense the foreground session's context.
    * Emits condense or condense_error events via onEvent.
    */
@@ -2003,12 +2064,41 @@ export class AgentSessionManager {
       this.saveSession(session.id);
 
       if (!isAutomatic && condenseSucceeded) {
+        let modeSwitchResumeCount = 0;
         try {
-          for await (const event of engine.run(session)) {
-            if (event.type === "done") {
-              this.saveSession(session.id);
+          while (true) {
+            let naturalDone = false;
+            for await (const event of engine.run(session)) {
+              if (event.type === "done") {
+                // Defer done — a queued mode-switch resume may continue this turn.
+                this.saveSession(session.id);
+                naturalDone = true;
+                continue;
+              }
+              this.recordAndEmitEvent(session.id, event);
             }
-            this.recordAndEmitEvent(session.id, event);
+
+            if (!naturalDone) break;
+
+            const modeResumePrompt = this.takeModeSwitchResumePrompt(
+              session,
+              modeSwitchResumeCount,
+            );
+            if (modeResumePrompt) {
+              modeSwitchResumeCount++;
+              session.addUserMessage(modeResumePrompt);
+              session.status = "streaming";
+              continue;
+            }
+
+            this.recordAndEmitEvent(session.id, {
+              type: "done",
+              totalInputTokens: session.totalInputTokens,
+              totalOutputTokens: session.totalOutputTokens,
+              totalCacheReadTokens: session.totalCacheReadTokens,
+              totalCacheCreationTokens: session.totalCacheCreationTokens,
+            });
+            break;
           }
         } catch (err: unknown) {
           const error = err instanceof Error ? err.message : String(err);

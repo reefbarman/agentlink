@@ -2060,4 +2060,58 @@ describe("AgentSessionManager background agents", () => {
     expect(fg.consumePendingModeResume()).toBeNull();
     expect(mocks.runBehavior).toHaveBeenCalledTimes(2);
   });
+
+  it("continues mode-switch resumes independently of the todo auto-continue budget, capped per turn", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const fg = await mgr.createSession("architect");
+    const addUserMessageSpy = vi.spyOn(fg, "addUserMessage");
+
+    // Every run queues another resume, as if each continuation switched modes
+    // again. The old shared MAX_AUTO_CONTINUE budget stopped this at 5.
+    mocks.runBehavior.mockImplementation(async function* () {
+      mgr.queueModeSwitchResume(fg.id, "code");
+      yield { type: "done" };
+    });
+    mocks.runBehavior.mockClear();
+
+    await mgr.sendMessage(fg.id, "plan the fix", fg.mode);
+
+    // 1 initial run + 10 resumes; the 11th queued resume is dropped with a log.
+    expect(mocks.runBehavior).toHaveBeenCalledTimes(11);
+    expect(addUserMessageSpy).toHaveBeenCalledTimes(11);
+    expect(fg.consumePendingModeResume()).toBeNull();
+  });
+
+  it("resumes after a queued mode switch when retrying a session", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const fg = await mgr.createSession("architect");
+    const addUserMessageSpy = vi.spyOn(fg, "addUserMessage");
+    const events: Array<{ type: string }> = [];
+    mgr.onEvent = (_sessionId, event) => {
+      events.push(event as { type: string });
+    };
+    // Fresh generator per run — the resumed run must also complete naturally.
+    mocks.runBehavior.mockImplementation(async function* () {
+      yield { type: "done" };
+    });
+
+    mgr.queueModeSwitchResume(fg.id, "code", {
+      reason: "Implementation should happen in code mode",
+      followUp: "start with the concrete fix",
+    });
+
+    await mgr.retrySession(fg.id);
+
+    expect(addUserMessageSpy).toHaveBeenCalledWith(
+      expect.stringContaining("You just switched this session to code mode."),
+    );
+    expect(mocks.runBehavior).toHaveBeenCalledTimes(2);
+    expect(fg.consumePendingModeResume()).toBeNull();
+    // The intermediate done is deferred; exactly one done reaches listeners.
+    expect(events.filter((event) => event.type === "done")).toHaveLength(1);
+  });
 });
