@@ -77,6 +77,7 @@ export interface ProgressMessage {
 export interface IndexWorkerMetricsSnapshot {
   operations: Record<string, number>;
   cacheWriteBytes: number;
+  cacheWriteBytesByKind: Record<"vector" | "structural", number>;
   phaseDurationsMs: Record<string, number>;
   maxActiveReads: number;
   maxRetainedContentBytes: number;

@@ -7,12 +7,30 @@ import {
   buildLineStarts,
   extractStructuralFile,
   getLineNumberAtOffset,
+  type StructuralExtractorMetrics,
 } from "./structuralExtractor.js";
 
 import { hashContent } from "./workerLib.js";
 
 function normalize(entries: unknown): unknown {
   return JSON.parse(JSON.stringify(entries));
+}
+
+function createMetrics(): StructuralExtractorMetrics {
+  return {
+    lineLookupComparisons: 0,
+    relativeSpecifiers: 0,
+    resolutionCandidateChecks: 0,
+    resolvedRelativeSpecifiers: 0,
+  };
+}
+
+function listSourceFiles(directory: string): string[] {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) return listSourceFiles(entryPath);
+    return /\.(?:[cm]?js|jsx|tsx?)$/.test(entry.name) ? [entryPath] : [];
+  });
 }
 
 describe("line offset index", () => {
@@ -37,6 +55,19 @@ describe("line offset index", () => {
     expect(getLineNumberAtOffset(starts, 4)).toBe(1);
     expect(getLineNumberAtOffset(starts, 5)).toBe(2);
   });
+
+  it("keeps pathological million-line lookups logarithmic", () => {
+    const lineCount = 1_000_000;
+    const starts = Array.from({ length: lineCount }, (_, index) => index * 2);
+    const metrics = createMetrics();
+
+    expect(
+      [-1, 0, lineCount - 1, starts.at(-1)!, starts.at(-1)! + 100].map(
+        (offset) => getLineNumberAtOffset(starts, offset, metrics),
+      ),
+    ).toEqual([1, 1, 500_000, lineCount, lineCount]);
+    expect(metrics.lineLookupComparisons).toBeLessThanOrEqual(100);
+  });
 });
 
 describe("extractStructuralFile", () => {
@@ -59,7 +90,11 @@ describe("extractStructuralFile", () => {
     return absPath;
   }
 
-  function extract(relPath: string, content: string) {
+  function extract(
+    relPath: string,
+    content: string,
+    metrics?: StructuralExtractorMetrics,
+  ) {
     const absPath = writeFile(relPath, content);
     const stat = fs.statSync(absPath);
     return extractStructuralFile({
@@ -71,8 +106,44 @@ describe("extractStructuralFile", () => {
       indexedAt: "2026-01-01T00:00:00.000Z",
       size: stat.size,
       mtimeMs: stat.mtimeMs,
+      metrics,
     });
   }
+
+  it("bounds module-resolution candidate checks", () => {
+    writeFile("src/direct.ts", "export const direct = true;");
+    writeFile("src/generated.ts", "export const generated = true;");
+    writeFile("src/folder/index.ts", "export const folder = true;");
+    const metrics = createMetrics();
+
+    const entry = extract(
+      "src/candidates.ts",
+      [
+        'import { direct } from "./direct";',
+        'import { generated } from "./generated.js";',
+        'import { folder } from "./folder";',
+        'import { missing } from "./missing";',
+        'import { external } from "external-package";',
+      ].join("\n"),
+      metrics,
+    );
+
+    expect(entry.imports.map((entry) => entry.resolvedRelPath)).toEqual([
+      "src/direct.ts",
+      "src/generated.ts",
+      "src/folder/index.ts",
+      undefined,
+      undefined,
+    ]);
+    expect(metrics).toMatchObject({
+      relativeSpecifiers: 4,
+      resolutionCandidateChecks: 27,
+      resolvedRelativeSpecifiers: 3,
+    });
+    expect(metrics.resolutionCandidateChecks).toBeLessThanOrEqual(
+      metrics.relativeSpecifiers * 15,
+    );
+  });
 
   it("extracts static JS/TS imports and resolves relative specifiers", () => {
     writeFile("src/bar.ts", "export const Bar = 1;");
@@ -303,6 +374,39 @@ describe("extractStructuralFile", () => {
     expect(entry.imports[9_999]).toEqual(
       expect.objectContaining({ specifier: "package-9999", line: 10_000 }),
     );
+  });
+
+  it("measures repository module-resolution candidate amplification", () => {
+    const repositoryRoot = process.cwd();
+    const sourceRoot = path.join(repositoryRoot, "src");
+    const metrics = createMetrics();
+    const files = listSourceFiles(sourceRoot);
+
+    for (const absPath of files) {
+      const content = fs.readFileSync(absPath, "utf8");
+      extractStructuralFile({
+        content,
+        absPath,
+        relPath: path.relative(repositoryRoot, absPath),
+        workspaceRoot: repositoryRoot,
+        hash: hashContent(content),
+        metrics,
+      });
+    }
+
+    expect(files.length).toBeGreaterThan(500);
+    expect(metrics.relativeSpecifiers).toBeGreaterThan(0);
+    expect(metrics.resolutionCandidateChecks).toBeLessThanOrEqual(
+      metrics.relativeSpecifiers * 15,
+    );
+    expect(metrics.resolvedRelativeSpecifiers).toBeLessThanOrEqual(
+      metrics.relativeSpecifiers,
+    );
+    if (process.env.AGENTLINK_INDEXER_REPORT === "1") {
+      process.stdout.write(
+        `${JSON.stringify({ structural: { files: files.length, ...metrics } })}\n`,
+      );
+    }
   });
 
   it("records metadata and language", () => {

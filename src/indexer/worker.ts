@@ -60,7 +60,7 @@ import {
 } from "./fileIndexJournal.js";
 import { executeJournaledRemovedFileDeletes } from "./journaledRemovedFileDeletion.js";
 import {
-  executeJournaledFileReplacement,
+  executeJournaledFileReplacements,
   recoverJournaledFileReplacements,
   type FileReplacementStore,
 } from "./journaledFileReplacement.js";
@@ -602,6 +602,23 @@ function createFileReplacementStore(args: {
       args.structuralCache.generatedAt = new Date().toISOString();
       args.checkpoints.checkpointStructural();
     },
+    checkpointVectors(entries) {
+      for (const [file, entry] of entries) {
+        const relPath = fromJournalPath(file);
+        if (entry) args.cache.files[relPath] = entry;
+        else delete args.cache.files[relPath];
+      }
+      args.checkpoints.checkpointVector();
+    },
+    checkpointStructurals(entries) {
+      for (const [file, entry] of entries) {
+        const relPath = fromJournalPath(file);
+        if (entry) args.structuralCache.files[relPath] = entry;
+        else delete args.structuralCache.files[relPath];
+      }
+      args.structuralCache.generatedAt = new Date().toISOString();
+      args.checkpoints.checkpointStructural();
+    },
   };
 }
 
@@ -1017,48 +1034,46 @@ async function processFileBatch(
     }
   }
 
-  // 5. Durably replace changed files one at a time.
-  for (let i = 0; i < files.length; i++) {
-    if (aborted) break;
-    const file = files[i];
-    const ids = filePointIds.get(i) ?? [];
-    const ownedPoints = filePoints.get(i) ?? [];
+  // 5. Durably replace changed files as one bounded ownership batch.
+  const replacements = files.flatMap((file, fileIndex) => {
+    const prior = priorEntries[fileIndex];
+    const points = filePoints.get(fileIndex) ?? [];
+    if (!prior || points.length === 0) return [];
     const indexedAt = new Date().toISOString();
-    const structuralEntry = extractStructuralFile({
-      content: file.content,
-      absPath: file.absPath,
-      relPath: file.relPath,
-      workspaceRoot: config.workspaceRoot,
-      hash: file.hash,
-      indexedAt,
-      mtimeMs: file.mtimeMs,
-      size: file.size,
-    });
-    if (ids.length === 0) continue;
-
-    const cacheEntry = {
-      hash: file.hash,
-      pointIds: ids,
-      indexedAt,
-      mtimeMs: file.mtimeMs,
-      size: file.size,
-    };
-    const prior = priorEntries[i];
-    if (!prior) continue;
+    return [
+      {
+        file: toJournalPath(file.relPath),
+        generation: randomUUID(),
+        targetHash: file.hash,
+        oldPointIds: prior.pointIds,
+        points,
+        structuralEntry: extractStructuralFile({
+          content: file.content,
+          absPath: file.absPath,
+          relPath: file.relPath,
+          workspaceRoot: config.workspaceRoot,
+          hash: file.hash,
+          indexedAt,
+          mtimeMs: file.mtimeMs,
+          size: file.size,
+        }),
+        cacheEntry: {
+          hash: file.hash,
+          pointIds: points.map((point) => point.id),
+          indexedAt,
+          mtimeMs: file.mtimeMs,
+          size: file.size,
+        },
+      },
+    ];
+  });
+  if (replacements.length > 0) {
     let completedDeletes = 0;
     let completedUpserts = 0;
     try {
-      const replacement = await executeJournaledFileReplacement({
+      const replacement = await executeJournaledFileReplacements({
         journalPath: getFileIndexJournalPath(config.cachePath),
-        replacement: {
-          file: toJournalPath(file.relPath),
-          generation: randomUUID(),
-          targetHash: file.hash,
-          oldPointIds: prior.pointIds,
-          points: ownedPoints,
-          structuralEntry,
-          cacheEntry,
-        },
+        replacements,
         store: createFileReplacementStore({
           cache,
           structuralCache,
@@ -1094,7 +1109,17 @@ async function processFileBatch(
       });
       pointsDeleted += completedDeletes;
       pointsUpserted += completedUpserts;
-      if (replacement.committed) filesIndexed++;
+      filesIndexed += replacement.committedFiles;
+      if (replacement.cancelled) {
+        return {
+          filesIndexed,
+          chunksCreated,
+          pointsUpserted,
+          pointsDeleted,
+          errors,
+          pendingOwnership: true,
+        };
+      }
     } catch (error) {
       pointsDeleted += completedDeletes;
       pointsUpserted += completedUpserts;

@@ -26,6 +26,12 @@ export interface FileReplacementStore {
   getPendingVectors(): Array<[string, CachedFileEntry]>;
   checkpointVector(file: string, entry: CachedFileEntry | null): void;
   checkpointStructural(file: string, entry: StructuralFileEntry | null): void;
+  checkpointVectors?(
+    entries: Array<[file: string, entry: CachedFileEntry | null]>,
+  ): void;
+  checkpointStructurals?(
+    entries: Array<[file: string, entry: StructuralFileEntry | null]>,
+  ): void;
 }
 
 export interface FileReplacementRemote {
@@ -36,6 +42,13 @@ export interface FileReplacementRemote {
 
 export interface FileReplacementResult {
   committed: boolean;
+  cancelled: boolean;
+  pointsDeleted: number;
+  pointsUpserted: number;
+}
+
+export interface FileReplacementBatchResult {
+  committedFiles: number;
   cancelled: boolean;
   pointsDeleted: number;
   pointsUpserted: number;
@@ -77,12 +90,12 @@ export async function recoverJournaledFileReplacements(args: {
     );
   }
 
-  const recoveredFiles: string[] = [];
   let pointsDeleted = 0;
-  let journal = loaded.journal;
+  const vectorMutations: Array<[string, CachedFileEntry | null]> = [];
+  const structuralMutations: Array<[string, StructuralFileEntry | null]> = [];
   for (const operation of replacements) {
     if (args.isCancelled()) {
-      return { recoveredFiles, cancelled: true, pointsDeleted };
+      return { recoveredFiles: [], cancelled: true, pointsDeleted };
     }
     const intendedIds = operation.intendedBatches.flatMap(
       (batch) => batch.pointIds,
@@ -101,15 +114,20 @@ export async function recoverJournaledFileReplacements(args: {
 
     if (exactVector && exactStructural) {
       if (vector.visibility !== "current") {
-        await args.remote.setVisibility(intendedIds, true);
-        args.store.checkpointVector(operation.file, {
-          ...vector,
-          visibility: "current",
-        });
+        const published = await setOwnedPointVisibility(
+          intendedIds,
+          true,
+          args.remote,
+          args.isCancelled,
+        );
+        if (published.cancelled) {
+          return { recoveredFiles: [], cancelled: true, pointsDeleted };
+        }
+        vectorMutations.push([
+          operation.file,
+          { ...vector, visibility: "current" },
+        ]);
       }
-      journal = withoutOperation(journal, operation.operationId);
-      writeFileIndexJournal(args.journalPath, journal);
-      recoveredFiles.push(operation.file);
       continue;
     }
 
@@ -120,14 +138,15 @@ export async function recoverJournaledFileReplacements(args: {
     );
     pointsDeleted += cleanup.pointsDeleted;
     if (cleanup.cancelled) {
-      return { recoveredFiles, cancelled: true, pointsDeleted };
+      return { recoveredFiles: [], cancelled: true, pointsDeleted };
     }
-    args.store.checkpointStructural(operation.file, null);
-    args.store.checkpointVector(operation.file, null);
-    journal = withoutOperation(journal, operation.operationId);
-    writeFileIndexJournal(args.journalPath, journal);
-    recoveredFiles.push(operation.file);
+    structuralMutations.push([operation.file, null]);
+    vectorMutations.push([operation.file, null]);
   }
+
+  checkpointStructuralEntries(args.store, structuralMutations);
+  checkpointVectorEntries(args.store, vectorMutations);
+  writeFileIndexJournal(args.journalPath, emptyFileIndexJournal());
 
   const reconciled = await reconcilePendingVisibility(
     args.store,
@@ -135,7 +154,11 @@ export async function recoverJournaledFileReplacements(args: {
     args.isCancelled,
   );
   pointsDeleted += reconciled.pointsDeleted;
-  return { recoveredFiles, cancelled: reconciled.cancelled, pointsDeleted };
+  return {
+    recoveredFiles: replacements.map((operation) => operation.file),
+    cancelled: reconciled.cancelled,
+    pointsDeleted,
+  };
 }
 
 export async function executeJournaledFileReplacement(args: {
@@ -146,6 +169,26 @@ export async function executeJournaledFileReplacement(args: {
   isCancelled: () => boolean;
   createId: () => string;
 }): Promise<FileReplacementResult> {
+  const result = await executeJournaledFileReplacements({
+    ...args,
+    replacements: [args.replacement],
+  });
+  return {
+    committed: result.committedFiles === 1,
+    cancelled: result.cancelled,
+    pointsDeleted: result.pointsDeleted,
+    pointsUpserted: result.pointsUpserted,
+  };
+}
+
+export async function executeJournaledFileReplacements(args: {
+  journalPath: string;
+  replacements: PreparedFileReplacement[];
+  store: FileReplacementStore;
+  remote: FileReplacementRemote;
+  isCancelled: () => boolean;
+  createId: () => string;
+}): Promise<FileReplacementBatchResult> {
   const existing = loadFileIndexJournal(args.journalPath);
   if (existing.status === "corrupt") {
     throw new Error(`File index journal is corrupt: ${existing.error}`);
@@ -155,92 +198,187 @@ export async function executeJournaledFileReplacement(args: {
       "Cannot begin replacement while journal operations are active",
     );
   }
-
-  const batches = groupPointIds(args.replacement.points, 100);
-  if (batches.length === 0) {
-    throw new Error("Replacement requires at least one prepared point");
+  if (args.replacements.length === 0) {
+    return {
+      committedFiles: 0,
+      cancelled: args.isCancelled(),
+      pointsDeleted: 0,
+      pointsUpserted: 0,
+    };
   }
-  const operationId = args.createId();
+
+  const operations = args.replacements.map((replacement) => {
+    const intendedBatches = groupPointIds(replacement.points, 100);
+    if (intendedBatches.length === 0) {
+      throw new Error(
+        `Replacement requires prepared points for ${replacement.file}`,
+      );
+    }
+    return {
+      operationId: args.createId(),
+      file: replacement.file,
+      kind: "replace" as const,
+      generation: replacement.generation,
+      targetHash: replacement.targetHash,
+      oldPointIds: replacement.oldPointIds,
+      intendedBatches,
+    };
+  });
   writeFileIndexJournal(args.journalPath, {
     ...emptyFileIndexJournal(),
-    operations: [
-      {
-        operationId,
-        file: args.replacement.file,
-        kind: "replace",
-        generation: args.replacement.generation,
-        targetHash: args.replacement.targetHash,
-        oldPointIds: args.replacement.oldPointIds,
-        intendedBatches: batches,
-      },
-    ],
+    operations,
   });
 
-  args.store.checkpointStructural(args.replacement.file, null);
-  await args.remote.setVisibility(args.replacement.oldPointIds, false);
-  if (args.isCancelled()) {
+  checkpointStructuralEntries(
+    args.store,
+    args.replacements.map((replacement) => [replacement.file, null]),
+  );
+  const oldPointIds = unique(
+    args.replacements.flatMap((replacement) => replacement.oldPointIds),
+  );
+  const hidden = await setOwnedPointVisibility(
+    oldPointIds,
+    false,
+    args.remote,
+    args.isCancelled,
+  );
+  if (hidden.cancelled) {
     return {
-      committed: false,
+      committedFiles: 0,
       cancelled: true,
       pointsDeleted: 0,
       pointsUpserted: 0,
     };
   }
+
   const oldCleanup = await deleteOwnedPoints(
-    args.replacement.oldPointIds,
+    oldPointIds,
     args.remote,
     args.isCancelled,
   );
   if (oldCleanup.cancelled) {
     return {
-      committed: false,
+      committedFiles: 0,
       cancelled: true,
       pointsDeleted: oldCleanup.pointsDeleted,
       pointsUpserted: 0,
     };
   }
 
+  const points = args.replacements.flatMap((replacement) => replacement.points);
   let pointsUpserted = 0;
-  for (let index = 0; index < args.replacement.points.length; index += 100) {
-    const batch = args.replacement.points.slice(index, index + 100);
-    await args.remote.upsertPoints(batch);
-    pointsUpserted += batch.length;
+  for (let index = 0; index < points.length; index += 100) {
     if (args.isCancelled()) {
       return {
-        committed: false,
+        committedFiles: 0,
         cancelled: true,
         pointsDeleted: oldCleanup.pointsDeleted,
         pointsUpserted,
       };
     }
+    const batch = points.slice(index, index + 100);
+    await args.remote.upsertPoints(batch);
+    pointsUpserted += batch.length;
+  }
+  if (args.isCancelled()) {
+    return {
+      committedFiles: 0,
+      cancelled: true,
+      pointsDeleted: oldCleanup.pointsDeleted,
+      pointsUpserted,
+    };
   }
 
-  const pending: CachedFileEntry = {
-    ...args.replacement.cacheEntry,
-    generation: args.replacement.generation,
-    visibility: "pending",
-  };
-  args.store.checkpointVector(args.replacement.file, pending);
-  args.store.checkpointStructural(args.replacement.file, {
-    ...args.replacement.structuralEntry,
-    generation: args.replacement.generation,
-    status: "current",
-  });
-  await args.remote.setVisibility(
-    args.replacement.points.map((point) => point.id),
-    true,
+  const pendingEntries = args.replacements.map(
+    (replacement): [string, CachedFileEntry] => [
+      replacement.file,
+      {
+        ...replacement.cacheEntry,
+        generation: replacement.generation,
+        visibility: "pending",
+      },
+    ],
   );
-  args.store.checkpointVector(args.replacement.file, {
-    ...pending,
-    visibility: "current",
-  });
+  checkpointVectorEntries(args.store, pendingEntries);
+  checkpointStructuralEntries(
+    args.store,
+    args.replacements.map((replacement) => [
+      replacement.file,
+      {
+        ...replacement.structuralEntry,
+        generation: replacement.generation,
+        status: "current",
+      },
+    ]),
+  );
+
+  const published = await setOwnedPointVisibility(
+    points.map((point) => point.id),
+    true,
+    args.remote,
+    args.isCancelled,
+  );
+  if (published.cancelled) {
+    return {
+      committedFiles: 0,
+      cancelled: true,
+      pointsDeleted: oldCleanup.pointsDeleted,
+      pointsUpserted,
+    };
+  }
+
+  checkpointVectorEntries(
+    args.store,
+    pendingEntries.map(([file, entry]) => [
+      file,
+      { ...entry, visibility: "current" },
+    ]),
+  );
   writeFileIndexJournal(args.journalPath, emptyFileIndexJournal());
   return {
-    committed: true,
+    committedFiles: args.replacements.length,
     cancelled: args.isCancelled(),
     pointsDeleted: oldCleanup.pointsDeleted,
     pointsUpserted,
   };
+}
+
+function checkpointVectorEntries(
+  store: FileReplacementStore,
+  entries: Array<[file: string, entry: CachedFileEntry | null]>,
+): void {
+  if (entries.length === 0) return;
+  if (store.checkpointVectors) {
+    store.checkpointVectors(entries);
+    return;
+  }
+  for (const [file, entry] of entries) store.checkpointVector(file, entry);
+}
+
+function checkpointStructuralEntries(
+  store: FileReplacementStore,
+  entries: Array<[file: string, entry: StructuralFileEntry | null]>,
+): void {
+  if (entries.length === 0) return;
+  if (store.checkpointStructurals) {
+    store.checkpointStructurals(entries);
+    return;
+  }
+  for (const [file, entry] of entries) store.checkpointStructural(file, entry);
+}
+
+async function setOwnedPointVisibility(
+  pointIds: string[],
+  visible: boolean,
+  remote: FileReplacementRemote,
+  isCancelled: () => boolean,
+): Promise<{ cancelled: boolean }> {
+  for (let index = 0; index < pointIds.length; index += 100) {
+    if (isCancelled()) return { cancelled: true };
+    await remote.setVisibility(pointIds.slice(index, index + 100), visible);
+    if (isCancelled()) return { cancelled: true };
+  }
+  return { cancelled: false };
 }
 
 async function deleteOwnedPoints(
@@ -268,10 +406,12 @@ async function reconcilePendingVisibility(
   remote: FileReplacementRemote,
   isCancelled: () => boolean,
 ): Promise<{ pointsDeleted: number; cancelled: boolean }> {
-  let pointsDeleted = 0;
-  const entries = store.getPendingVectors();
-  for (const [file, vector] of entries) {
-    if (isCancelled()) return { pointsDeleted, cancelled: true };
+  const vectorMutations: Array<[string, CachedFileEntry | null]> = [];
+  const structuralMutations: Array<[string, StructuralFileEntry | null]> = [];
+  const pointIdsToDelete: string[] = [];
+  const pointIdsToPublish: string[] = [];
+  for (const [file, vector] of store.getPendingVectors()) {
+    if (isCancelled()) return { pointsDeleted: 0, cancelled: true };
     const structural = store.getStructural(file);
     if (
       !vector.generation ||
@@ -279,21 +419,38 @@ async function reconcilePendingVisibility(
       structural.hash !== vector.hash ||
       structural.status !== "current"
     ) {
-      const cleanup = await deleteOwnedPoints(
-        vector.pointIds,
-        remote,
-        isCancelled,
-      );
-      pointsDeleted += cleanup.pointsDeleted;
-      if (cleanup.cancelled) return { pointsDeleted, cancelled: true };
-      store.checkpointStructural(file, null);
-      store.checkpointVector(file, null);
+      pointIdsToDelete.push(...vector.pointIds);
+      structuralMutations.push([file, null]);
+      vectorMutations.push([file, null]);
       continue;
     }
-    await remote.setVisibility(vector.pointIds, true);
-    store.checkpointVector(file, { ...vector, visibility: "current" });
+    pointIdsToPublish.push(...vector.pointIds);
+    vectorMutations.push([file, { ...vector, visibility: "current" }]);
   }
-  return { pointsDeleted, cancelled: isCancelled() };
+
+  const cleanup = await deleteOwnedPoints(
+    unique(pointIdsToDelete),
+    remote,
+    isCancelled,
+  );
+  if (cleanup.cancelled) return cleanup;
+
+  const published = await setOwnedPointVisibility(
+    unique(pointIdsToPublish),
+    true,
+    remote,
+    isCancelled,
+  );
+  if (published.cancelled) {
+    return { pointsDeleted: cleanup.pointsDeleted, cancelled: true };
+  }
+
+  checkpointStructuralEntries(store, structuralMutations);
+  checkpointVectorEntries(store, vectorMutations);
+  return {
+    pointsDeleted: cleanup.pointsDeleted,
+    cancelled: isCancelled(),
+  };
 }
 
 function groupPointIds(points: QdrantPoint[], size: number) {
@@ -305,18 +462,6 @@ function groupPointIds(points: QdrantPoint[], size: number) {
     });
   }
   return batches;
-}
-
-function withoutOperation(
-  journal: ReturnType<typeof emptyFileIndexJournal>,
-  operationId: string,
-) {
-  return {
-    ...journal,
-    operations: journal.operations.filter(
-      (operation) => operation.operationId !== operationId,
-    ),
-  };
 }
 
 function sameIds(left: string[], right: string[]): boolean {

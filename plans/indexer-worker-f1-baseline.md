@@ -16,7 +16,18 @@ _Reproducible fixture: `src/indexer/workerFixture.test.ts`._
   - Current baseline risk for F2: the vector cache reports one indexed file even though Qdrant reports no successful points.
 - [x] **Per-run observations:** completion metrics include scan/read/diff/process phase durations, UTF-8 cache bytes, maximum active reads, maximum retained content bytes, and sampled heap high-water bytes. Timing and heap values are intentionally not pinned because they vary by host.
 
-Run the fixture with:
+## F6 throughput closeout
+
+_Reproducible report command: `AGENTLINK_INDEXER_REPORT=1 npx vitest run src/indexer/workerFixture.test.ts src/indexer/structuralExtractor.test.ts`._
+
+- [x] **101-file changed set:** three bounded worker batches complete with 3 Qdrant delete calls, 3 upsert calls, and 6 visibility calls.
+- [x] **Cache amplification:** vector and structural writes fall from 202 each before batched replacement to 6 each. Total serialized cache bytes fall from 12,871,121 to 350,904 (186,012 vector; 164,892 structural).
+- [x] **Memory/read bounds:** maximum active reads remain 10 and maximum retained content remains 36,900 bytes.
+- [x] **Host observation:** the final reported run completed in 148 ms (`scan`: 6 ms, `read`: 5 ms, `process`: 136 ms). Timing remains non-gating because it varies by host.
+- [x] **Structural resolution decision:** 644 files produced 1,814 relative specifiers, 2,263 candidate checks, and 1,813 resolutions—1.25 candidate checks per relative specifier. A module-resolution stat-cache rewrite is measurement-skipped as immaterial.
+- [x] **Correctness:** journal-first ownership transitions, cancellation/failure retention, exact/non-exact restart recovery, bounded requests, coalesced recovery checkpoints, retained-content release, and read/search consistency remain covered by focused fixtures.
+
+Run the base fixture with:
 
 ```sh
 npx vitest run src/indexer/workerFixture.test.ts

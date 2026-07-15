@@ -37,6 +37,7 @@ describe("index worker metrics", () => {
         "cache.writeStructural": 1,
       },
       cacheWriteBytes: 200,
+      cacheWriteBytesByKind: { vector: 120, structural: 80 },
       phaseDurationsMs: {},
       maxActiveReads: 2,
       maxRetainedContentBytes: 650,

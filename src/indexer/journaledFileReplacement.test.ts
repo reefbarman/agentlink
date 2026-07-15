@@ -11,6 +11,7 @@ import {
 } from "./fileIndexJournal.js";
 import {
   executeJournaledFileReplacement,
+  executeJournaledFileReplacements,
   recoverJournaledFileReplacements,
   type FileReplacementStore,
   type PreparedFileReplacement,
@@ -26,6 +27,38 @@ function structural(file: string, hash: string): StructuralFileEntry {
     imports: [],
     exports: [],
     symbols: [],
+  };
+}
+
+function replacementFor(
+  file: string,
+  suffix: string,
+  oldPointIds: string[] = [`old-${suffix}`],
+): PreparedFileReplacement {
+  const hash = `hash-${suffix}`;
+  return {
+    file,
+    generation: `generation-${suffix}`,
+    targetHash: hash,
+    oldPointIds,
+    points: [
+      {
+        id: `new-${suffix}-1`,
+        vector: [0.1],
+        payload: { filePath: file, indexVisible: false },
+      },
+      {
+        id: `new-${suffix}-2`,
+        vector: [0.2],
+        payload: { filePath: file, indexVisible: false },
+      },
+    ],
+    structuralEntry: structural(file, hash),
+    cacheEntry: {
+      hash,
+      pointIds: [`new-${suffix}-1`, `new-${suffix}-2`],
+      indexedAt: "2026-01-01T00:00:00.000Z",
+    },
   };
 }
 
@@ -114,6 +147,26 @@ describe("journaled file replacement", () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
+  function coalescingStore(): FileReplacementStore {
+    return {
+      ...store,
+      checkpointVectors(entries) {
+        events.push(`vectors:${entries.length}`);
+        for (const [file, entry] of entries) {
+          if (entry) vectors.set(file, entry);
+          else vectors.delete(file);
+        }
+      },
+      checkpointStructurals(entries) {
+        events.push(`structurals:${entries.length}`);
+        for (const [file, entry] of entries) {
+          if (entry) structures.set(file, entry);
+          else structures.delete(file);
+        }
+      },
+    };
+  }
+
   it("journals all IDs before hiding or mutating Qdrant", async () => {
     vectors.set("src/changed.ts", {
       hash: "hash-1",
@@ -164,6 +217,230 @@ describe("journaled file replacement", () => {
     expect(loadFileIndexJournal(journalPath)).toEqual({
       status: "valid",
       journal: emptyFileIndexJournal(),
+    });
+  });
+
+  it("commits multiple replacements with coalesced cache checkpoints", async () => {
+    const replacements = [
+      replacementFor("src/first.ts", "first"),
+      replacementFor("src/second.ts", "second"),
+    ];
+    for (const replacement of replacements) {
+      vectors.set(replacement.file, {
+        hash: `old-${replacement.targetHash}`,
+        pointIds: replacement.oldPointIds,
+        indexedAt: "2025-01-01T00:00:00.000Z",
+      });
+      structures.set(
+        replacement.file,
+        structural(replacement.file, `old-${replacement.targetHash}`),
+      );
+    }
+    remote.setVisibility.mockImplementation(async (_ids, visible) => {
+      expect(loadFileIndexJournal(journalPath)).toMatchObject({
+        status: "valid",
+        journal: { operations: [{ kind: "replace" }, { kind: "replace" }] },
+      });
+      events.push(`visible:${visible}`);
+    });
+
+    const result = await executeJournaledFileReplacements({
+      journalPath,
+      replacements,
+      store: coalescingStore(),
+      remote,
+      isCancelled: () => false,
+      createId: (() => {
+        let id = 0;
+        return () => `operation-${++id}`;
+      })(),
+    });
+
+    expect(result).toEqual({
+      committedFiles: 2,
+      cancelled: false,
+      pointsDeleted: 2,
+      pointsUpserted: 4,
+    });
+    expect(events).toEqual([
+      "structurals:2",
+      "visible:false",
+      "delete",
+      "upsert",
+      "vectors:2",
+      "structurals:2",
+      "visible:true",
+      "vectors:2",
+    ]);
+    expect(
+      remote.setVisibility.mock.calls.map(([ids, visible]) => [
+        ids.length,
+        visible,
+      ]),
+    ).toEqual([
+      [2, false],
+      [4, true],
+    ]);
+    expect(loadFileIndexJournal(journalPath)).toEqual({
+      status: "valid",
+      journal: emptyFileIndexJournal(),
+    });
+    expect(
+      [...vectors.values()].every((entry) => entry.visibility === "current"),
+    ).toBe(true);
+  });
+
+  it("recovers mixed exact and invalid operations with one checkpoint per cache", async () => {
+    const exact = replacementFor("src/exact.ts", "exact");
+    const invalid = replacementFor("src/invalid.ts", "invalid");
+    writeFileIndexJournal(journalPath, {
+      ...emptyFileIndexJournal(),
+      operations: [exact, invalid].map((entry, index) => ({
+        operationId: `operation-${index}`,
+        file: entry.file,
+        kind: "replace",
+        generation: entry.generation,
+        targetHash: entry.targetHash,
+        oldPointIds: entry.oldPointIds,
+        intendedBatches: [
+          {
+            batch: 0,
+            pointIds: entry.points.map((point) => point.id),
+          },
+        ],
+      })),
+    });
+    vectors.set(exact.file, {
+      ...exact.cacheEntry,
+      generation: exact.generation,
+      visibility: "pending",
+    });
+    structures.set(exact.file, {
+      ...exact.structuralEntry,
+      generation: exact.generation,
+      status: "current",
+    });
+    vectors.set(invalid.file, {
+      hash: "old-invalid",
+      pointIds: invalid.oldPointIds,
+      indexedAt: "2025-01-01T00:00:00.000Z",
+    });
+
+    const result = await recoverJournaledFileReplacements({
+      journalPath,
+      store: coalescingStore(),
+      remote,
+      isCancelled: () => false,
+    });
+
+    expect(result).toEqual({
+      recoveredFiles: [exact.file, invalid.file],
+      cancelled: false,
+      pointsDeleted: 3,
+    });
+    expect(remote.setVisibility).toHaveBeenCalledWith(
+      exact.points.map((point) => point.id),
+      true,
+    );
+    expect(remote.deletePoints).toHaveBeenCalledWith([
+      ...invalid.oldPointIds,
+      ...invalid.points.map((point) => point.id),
+    ]);
+    expect(events).toEqual([
+      "visible:true",
+      "delete",
+      "structurals:1",
+      "vectors:2",
+    ]);
+    expect(vectors.get(exact.file)?.visibility).toBe("current");
+    expect(vectors.has(invalid.file)).toBe(false);
+    expect(loadFileIndexJournal(journalPath)).toEqual({
+      status: "valid",
+      journal: emptyFileIndexJournal(),
+    });
+  });
+
+  it("retains the full journal when a coalesced cache checkpoint fails", async () => {
+    const replacements = [
+      replacementFor("src/first.ts", "first"),
+      replacementFor("src/second.ts", "second"),
+    ];
+    const failingStore = coalescingStore();
+    failingStore.checkpointVectors = () => {
+      throw new Error("vector checkpoint failed");
+    };
+
+    await expect(
+      executeJournaledFileReplacements({
+        journalPath,
+        replacements,
+        store: failingStore,
+        remote,
+        isCancelled: () => false,
+        createId: (() => {
+          let id = 0;
+          return () => `operation-${++id}`;
+        })(),
+      }),
+    ).rejects.toThrow("vector checkpoint failed");
+
+    expect(loadFileIndexJournal(journalPath)).toMatchObject({
+      status: "valid",
+      journal: {
+        operations: [{ file: "src/first.ts" }, { file: "src/second.ts" }],
+      },
+    });
+    expect(vectors.size).toBe(0);
+  });
+
+  it("leaves the full recovery journal and caches unchanged on remote failure", async () => {
+    const exact = replacementFor("src/exact.ts", "exact");
+    const invalid = replacementFor("src/invalid.ts", "invalid");
+    const journal = {
+      ...emptyFileIndexJournal(),
+      operations: [exact, invalid].map((entry, index) => ({
+        operationId: `operation-${index}`,
+        file: entry.file,
+        kind: "replace" as const,
+        generation: entry.generation,
+        targetHash: entry.targetHash,
+        oldPointIds: entry.oldPointIds,
+        intendedBatches: [
+          {
+            batch: 0,
+            pointIds: entry.points.map((point) => point.id),
+          },
+        ],
+      })),
+    };
+    writeFileIndexJournal(journalPath, journal);
+    vectors.set(exact.file, {
+      ...exact.cacheEntry,
+      generation: exact.generation,
+      visibility: "pending",
+    });
+    structures.set(exact.file, {
+      ...exact.structuralEntry,
+      generation: exact.generation,
+      status: "current",
+    });
+    const originalVector = vectors.get(exact.file);
+    remote.deletePoints.mockRejectedValueOnce(new Error("cleanup failed"));
+
+    await expect(
+      recoverJournaledFileReplacements({
+        journalPath,
+        store: coalescingStore(),
+        remote,
+        isCancelled: () => false,
+      }),
+    ).rejects.toThrow("cleanup failed");
+
+    expect(vectors.get(exact.file)).toEqual(originalVector);
+    expect(events).toEqual(["visible:true"]);
+    expect(loadFileIndexJournal(journalPath)).toEqual({
+      status: "valid",
+      journal,
     });
   });
 
@@ -361,6 +638,71 @@ describe("journaled file replacement", () => {
     });
   });
 
+  it("bounds exact pending recovery visibility and retains ownership on cancellation", async () => {
+    const intendedPointIds = Array.from(
+      { length: 250 },
+      (_, index) => `new-${index}`,
+    );
+    const journal = {
+      ...emptyFileIndexJournal(),
+      operations: [
+        {
+          operationId: "operation-1",
+          file: "src/changed.ts",
+          kind: "replace" as const,
+          generation: "generation-2",
+          targetHash: "hash-2",
+          oldPointIds: ["old-1"],
+          intendedBatches: [
+            { batch: 0, pointIds: intendedPointIds.slice(0, 100) },
+            { batch: 1, pointIds: intendedPointIds.slice(100, 200) },
+            { batch: 2, pointIds: intendedPointIds.slice(200) },
+          ],
+        },
+      ],
+    };
+    writeFileIndexJournal(journalPath, journal);
+    vectors.set("src/changed.ts", {
+      hash: "hash-2",
+      pointIds: intendedPointIds,
+      indexedAt: "2026-01-01T00:00:00.000Z",
+      generation: "generation-2",
+      visibility: "pending",
+    });
+    structures.set("src/changed.ts", {
+      ...structural("src/changed.ts", "hash-2"),
+      generation: "generation-2",
+      status: "current",
+    });
+    remote.setVisibility.mockImplementationOnce(async () => {
+      events.push("visible:true");
+      cancelled = true;
+    });
+
+    const result = await recoverJournaledFileReplacements({
+      journalPath,
+      store,
+      remote,
+      isCancelled: () => cancelled,
+    });
+
+    expect(result).toEqual({
+      recoveredFiles: [],
+      cancelled: true,
+      pointsDeleted: 0,
+    });
+    expect(remote.setVisibility).toHaveBeenCalledTimes(1);
+    expect(remote.setVisibility).toHaveBeenCalledWith(
+      intendedPointIds.slice(0, 100),
+      true,
+    );
+    expect(vectors.get("src/changed.ts")?.visibility).toBe("pending");
+    expect(loadFileIndexJournal(journalPath)).toEqual({
+      status: "valid",
+      journal,
+    });
+  });
+
   it("reconciles journal-cleared pending visibility idempotently", async () => {
     vectors.set("src/changed.ts", {
       hash: "hash-2",
@@ -384,6 +726,53 @@ describe("journaled file replacement", () => {
 
     expect(remote.setVisibility).toHaveBeenCalledWith(["new-1", "new-2"], true);
     expect(vectors.get("src/changed.ts")?.visibility).toBe("current");
+  });
+
+  it("coalesces journal-cleared pending recovery checkpoints", async () => {
+    for (let index = 0; index < 3; index++) {
+      const file = `src/current-${index}.ts`;
+      vectors.set(file, {
+        hash: `hash-${index}`,
+        pointIds: [`point-${index}`],
+        indexedAt: "2026-01-01T00:00:00.000Z",
+        generation: `generation-${index}`,
+        visibility: "pending",
+      });
+      structures.set(file, {
+        ...structural(file, `hash-${index}`),
+        generation: `generation-${index}`,
+        status: "current",
+      });
+    }
+    vectors.set("src/invalid.ts", {
+      hash: "hash-invalid",
+      pointIds: ["point-invalid"],
+      indexedAt: "2026-01-01T00:00:00.000Z",
+      generation: "generation-invalid",
+      visibility: "pending",
+    });
+
+    await recoverJournaledFileReplacements({
+      journalPath,
+      store: coalescingStore(),
+      remote,
+      isCancelled: () => false,
+    });
+
+    expect(events).toEqual([
+      "delete",
+      "visible:true",
+      "structurals:1",
+      "vectors:4",
+    ]);
+    expect(remote.setVisibility).toHaveBeenCalledWith(
+      ["point-0", "point-1", "point-2"],
+      true,
+    );
+    expect(vectors.has("src/invalid.ts")).toBe(false);
+    expect(
+      [...vectors.values()].every((entry) => entry.visibility === "current"),
+    ).toBe(true);
   });
 
   it("counts bounded invalid pending-cache cleanup", async () => {

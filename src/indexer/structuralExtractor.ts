@@ -8,6 +8,13 @@ import type {
   StructuralSymbol,
 } from "./structuralGraph.js";
 
+export interface StructuralExtractorMetrics {
+  lineLookupComparisons: number;
+  relativeSpecifiers: number;
+  resolutionCandidateChecks: number;
+  resolvedRelativeSpecifiers: number;
+}
+
 export interface ExtractStructuralFileOptions {
   content: string;
   absPath: string;
@@ -17,6 +24,7 @@ export interface ExtractStructuralFileOptions {
   indexedAt?: string;
   size?: number;
   mtimeMs?: number;
+  metrics?: StructuralExtractorMetrics;
 }
 
 const SOURCE_EXTENSIONS = [
@@ -80,7 +88,11 @@ function extractImports(
       buildImport({
         specifier,
         kind: "static",
-        line: getLineNumberAtOffset(lineStarts, match.index ?? 0),
+        line: getLineNumberAtOffset(
+          lineStarts,
+          match.index ?? 0,
+          options.metrics,
+        ),
         imported: parseImportedNames(importClause),
         options,
       }),
@@ -95,7 +107,11 @@ function extractImports(
       buildImport({
         specifier,
         kind: "reexport",
-        line: getLineNumberAtOffset(lineStarts, match.index ?? 0),
+        line: getLineNumberAtOffset(
+          lineStarts,
+          match.index ?? 0,
+          options.metrics,
+        ),
         imported: parseNamedList(match[1]),
         options,
       }),
@@ -144,10 +160,12 @@ export function buildLineStarts(lines: string[]): number[] {
 export function getLineNumberAtOffset(
   lineStarts: number[],
   offset: number,
+  metrics?: Pick<StructuralExtractorMetrics, "lineLookupComparisons">,
 ): number {
   let low = 0;
   let high = lineStarts.length;
   while (low < high) {
+    if (metrics) metrics.lineLookupComparisons++;
     const middle = low + Math.floor((high - low) / 2);
     if (lineStarts[middle] <= offset) low = middle + 1;
     else high = middle;
@@ -337,20 +355,27 @@ function resolveSpecifier(
 ): string | undefined {
   if (!isRelativeSpecifier(specifier)) return undefined;
 
+  if (options.metrics) options.metrics.relativeSpecifiers++;
   const sourceDir = path.dirname(options.absPath);
   const candidateBase = path.resolve(sourceDir, specifier);
   for (const candidate of buildResolutionCandidates(
     candidateBase,
     options.absPath,
   )) {
-    if (isFile(candidate))
+    if (options.metrics) options.metrics.resolutionCandidateChecks++;
+    if (isFile(candidate)) {
+      if (options.metrics) options.metrics.resolvedRelativeSpecifiers++;
       return toWorkspaceRelPath(candidate, options.workspaceRoot);
+    }
   }
 
   for (const indexFile of INDEX_EXTENSIONS) {
     const candidate = path.join(candidateBase, indexFile);
-    if (isFile(candidate))
+    if (options.metrics) options.metrics.resolutionCandidateChecks++;
+    if (isFile(candidate)) {
+      if (options.metrics) options.metrics.resolvedRelativeSpecifiers++;
       return toWorkspaceRelPath(candidate, options.workspaceRoot);
+    }
   }
 
   return undefined;

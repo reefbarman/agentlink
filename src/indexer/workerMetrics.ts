@@ -38,6 +38,7 @@ export function createIndexWorkerMetrics(): IndexWorkerMetrics {
   ) as Record<IndexWorkerOperation, number>;
   const phaseDurationsMs: Record<string, number> = {};
   let cacheWriteBytes = 0;
+  const cacheWriteBytesByKind = { vector: 0, structural: 0 };
   let activeReads = 0;
   let retainedContentBytes = 0;
   let maxActiveReads = 0;
@@ -47,11 +48,12 @@ export function createIndexWorkerMetrics(): IndexWorkerMetrics {
   return {
     recordOperation(operation, bytes = 0) {
       operations[operation]++;
-      if (
-        operation === "cache.writeVector" ||
-        operation === "cache.writeStructural"
-      ) {
+      if (operation === "cache.writeVector") {
         cacheWriteBytes += bytes;
+        cacheWriteBytesByKind.vector += bytes;
+      } else if (operation === "cache.writeStructural") {
+        cacheWriteBytes += bytes;
+        cacheWriteBytesByKind.structural += bytes;
       }
     },
     recordPhaseDuration(phase, durationMs) {
@@ -81,6 +83,7 @@ export function createIndexWorkerMetrics(): IndexWorkerMetrics {
       return {
         operations: { ...operations },
         cacheWriteBytes,
+        cacheWriteBytesByKind: { ...cacheWriteBytesByKind },
         phaseDurationsMs: { ...phaseDurationsMs },
         maxActiveReads,
         maxRetainedContentBytes,

@@ -141,6 +141,22 @@ function sourceContent(value: number): string {
   return `select ${value} as value, '${"fixture-content-".repeat(4)}' as label;`;
 }
 
+function reportScenario(name: string, stats: IndexStats): void {
+  if (process.env.AGENTLINK_INDEXER_REPORT !== "1") return;
+  process.stdout.write(
+    `${JSON.stringify({
+      scenario: name,
+      durationMs: stats.durationMs,
+      filesIndexed: stats.filesIndexed,
+      pointsUpserted: stats.pointsUpserted,
+      pointsDeleted: stats.pointsDeleted,
+      cancelled: stats.cancelled ?? false,
+      errors: stats.errors.length,
+      metrics: stats.metrics,
+    })}\n`,
+  );
+}
+
 function writeCacheEntry(
   cachePath: string,
   relPath: string,
@@ -784,6 +800,7 @@ describe("indexer worker fixture", () => {
           process: expect.any(Number),
         }),
       );
+      reportScenario("initial-index", stats);
     },
     TEST_TIMEOUT_MS,
   );
@@ -835,6 +852,7 @@ describe("indexer worker fixture", () => {
           process: expect.any(Number),
         }),
       );
+      reportScenario("branch-like-incremental", stats);
     },
     TEST_TIMEOUT_MS,
   );
@@ -884,6 +902,22 @@ describe("indexer worker fixture", () => {
         totalFilesInIndex: fileCount,
         errors: [],
       });
+      expect(stats.metrics!.operations).toMatchObject({
+        "qdrant.deletePoints": 3,
+        "qdrant.upsertPoints": 3,
+        "qdrant.setPointVisibility": 6,
+        "cache.writeVector": 6,
+        "cache.writeStructural": 6,
+      });
+      expect(stats.metrics!.cacheWriteBytes).toBeLessThan(400_000);
+      expect(stats.metrics!.cacheWriteBytesByKind).toMatchObject({
+        vector: expect.any(Number),
+        structural: expect.any(Number),
+      });
+      expect(stats.metrics!.cacheWriteBytesByKind.vector).toBeLessThan(220_000);
+      expect(stats.metrics!.cacheWriteBytesByKind.structural).toBeLessThan(
+        190_000,
+      );
       expect(stats.metrics!.maxActiveReads).toBeLessThanOrEqual(10);
       expect(stats.metrics!.maxRetainedContentBytes).toBeLessThanOrEqual(
         largestBatchBytes,
@@ -898,6 +932,7 @@ describe("indexer worker fixture", () => {
           process: expect.any(Number),
         }),
       );
+      reportScenario("large-incremental-change-set", stats);
     },
     TEST_TIMEOUT_MS,
   );
@@ -1410,6 +1445,53 @@ describe("indexer worker fixture", () => {
       expect(visibilityCalls.every((call) => call.pointCount <= 100)).toBe(
         true,
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "stops later changed-file batches while failed replacement ownership remains journaled",
+    async () => {
+      const fixture = await createFixture();
+      const { root, cachePath } = createWorkspace();
+      const files = Array.from({ length: 51 }, (_, index) =>
+        writeSource(root, `changed/file-${index}.sql`, sourceContent(index)),
+      );
+      await fixture.complete(
+        startMessage({ root, cachePath, files, qdrantPath: "success" }),
+      );
+      files.forEach((file, index) =>
+        fs.writeFileSync(file, sourceContent(index + files.length), "utf8"),
+      );
+
+      const stats = await fixture.complete({
+        type: "incrementalUpdate",
+        added: files,
+        removed: [],
+        workspaceRoot: root,
+        collectionName: "fixture",
+        qdrantUrl: "http://fixture-qdrant.invalid/partial-failure",
+        embeddingBearerToken: "success",
+        cachePath,
+        granularity: "standard",
+      });
+
+      expect(stats.filesIndexed).toBe(0);
+      expect(stats.metrics!.operations["qdrant.upsertPoints"]).toBe(1);
+      const loaded = loadFileIndexJournal(getFileIndexJournalPath(cachePath));
+      expect(loaded.status).toBe("valid");
+      if (loaded.status !== "valid") throw new Error("Expected valid journal");
+      expect(loaded.journal.operations).toHaveLength(50);
+      expect(
+        loaded.journal.operations.some(
+          (operation) => operation.file === "changed/file-50.sql",
+        ),
+      ).toBe(false);
+      expect(
+        loaded.journal.operations.every(
+          (operation) => operation.oldPointIds.length > 0,
+        ),
+      ).toBe(true);
     },
     TEST_TIMEOUT_MS,
   );
