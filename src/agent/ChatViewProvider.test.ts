@@ -1216,6 +1216,60 @@ describe("ChatViewProvider session state sync", () => {
     ).toBe(true);
   });
 
+  it("emits background-only transcript events for background sessions", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: () => ({ background: true }),
+      getForegroundSession: () => undefined,
+    };
+
+    const handleAgentEvent = (
+      provider as unknown as {
+        handleAgentEvent: (sessionId: string, event: unknown) => void;
+      }
+    ).handleAgentEvent;
+    handleAgentEvent.call(provider, "bg-1", {
+      type: "warning",
+      message: "Provider stream first event timed out after 90000ms",
+    });
+    handleAgentEvent.call(provider, "bg-1", {
+      type: "todo_update",
+      todos: [
+        {
+          id: "inspect",
+          content: "Inspect changes",
+          activeForm: "Inspecting changes",
+          status: "in_progress",
+        },
+      ],
+    });
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "agentBgWarning", sessionId: "bg-1" }),
+    );
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentBgTodoUpdate",
+        sessionId: "bg-1",
+      }),
+    );
+    expect(
+      mockPostMessage.mock.calls.some(
+        ([message]) =>
+          message.type === "agentWarning" || message.type === "agentTodoUpdate",
+      ),
+    ).toBe(false);
+  });
+
   it("replays queued webview messages after postMessage delivery fails", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 

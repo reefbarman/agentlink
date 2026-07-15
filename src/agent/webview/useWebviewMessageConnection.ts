@@ -46,6 +46,14 @@ const BACKGROUND_EVENT_TYPES = new Set<ExtensionMessage["type"]>([
   "agentBgToolComplete",
   "agentBgApiRequest",
   "agentBgError",
+  "agentBgTodoUpdate",
+  "agentBgWarning",
+  "agentBgStatusUpdate",
+  "agentBgFinalMarker",
+  "agentBgCondenseStart",
+  "agentBgCondense",
+  "agentBgCondenseError",
+  "agentBgInterjection",
   "agentBgDone",
 ]);
 

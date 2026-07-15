@@ -1,56 +1,49 @@
 import { EmptyState, PaneHeader } from "../../../shared/ui/Panes";
 
-import type { ChatMessage } from "../types";
-import { TranscriptMessageList } from "./TranscriptMessageList";
-import { useAutoScroll } from "./useAutoScroll";
-import { useEffect } from "preact/hooks";
+import type { ChatMessage, TodoItem } from "../types";
+import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
+import { ChatView } from "./ChatView";
+import { StreamingStatusBar } from "./StreamingStatusBar";
+import { TodoPanel } from "./TodoPanel";
 
 interface TranscriptViewProps {
   task: string;
+  sessionId?: string;
   messages: ChatMessage[];
   streaming?: boolean;
+  statusOverride?: string | null;
+  todos?: TodoItem[];
+  onOpenFile?: (path: string, line?: number) => void;
+  onOpenSpecialBlockPanel?: (block: {
+    kind: "mermaid" | "vega" | "vega-lite";
+    source: string;
+  }) => void;
+  onRetry?: () => void;
+  onSignIn?: () => void;
+  onSignInAnotherAccount?: () => void;
+  bgSessions?: BgSessionInfoProps[];
+  onStopBackground?: (sessionId: string) => void;
+  onOpenTranscript?: (sessionId: string) => void;
   onClose: () => void;
 }
 
 export function TranscriptView({
   task,
+  sessionId,
   messages,
   streaming = false,
+  statusOverride,
+  todos = [],
+  onOpenFile,
+  onOpenSpecialBlockPanel,
+  onRetry,
+  onSignIn,
+  onSignInAnotherAccount,
+  bgSessions,
+  onStopBackground,
+  onOpenTranscript,
   onClose,
 }: TranscriptViewProps) {
-  const {
-    containerRef,
-    contentRef,
-    shouldAutoScrollRef,
-    scrollToBottomAfterLayout,
-    handleScroll,
-  } = useAutoScroll({ contentPresent: messages.length > 0 });
-
-  const lastMsg = messages[messages.length - 1];
-  const lastBlock = lastMsg?.blocks[lastMsg.blocks.length - 1];
-  const scrollKey = lastMsg
-    ? `${messages.length}:${lastMsg.blocks.length}:${
-        lastBlock?.type === "text"
-          ? lastBlock.text.length
-          : lastBlock?.type === "tool_call"
-            ? `${lastBlock.inputJson.length}:${lastBlock.result.length}`
-            : lastBlock?.type === "thinking"
-              ? lastBlock.text.length
-              : 0
-      }`
-    : "empty";
-
-  useEffect(() => {
-    shouldAutoScrollRef.current = true;
-    return scrollToBottomAfterLayout();
-  }, [scrollToBottomAfterLayout, shouldAutoScrollRef]);
-
-  useEffect(() => {
-    if (shouldAutoScrollRef.current) {
-      return scrollToBottomAfterLayout();
-    }
-  }, [scrollKey, streaming, scrollToBottomAfterLayout, shouldAutoScrollRef]);
-
   return (
     <div class="transcript-overlay">
       <PaneHeader
@@ -66,21 +59,35 @@ export function TranscriptView({
           </button>
         }
       />
-      <div
-        class="transcript-messages"
-        ref={containerRef}
-        onScroll={handleScroll}
-      >
+      <div class="transcript-messages">
         {messages.length === 0 ? (
           <EmptyState className="transcript-empty">
             No messages recorded.
           </EmptyState>
         ) : (
-          <div class="chat-message-list" ref={contentRef}>
-            <TranscriptMessageList messages={messages} streaming={streaming} />
-          </div>
+          <ChatView
+            messages={messages}
+            streaming={streaming}
+            sessionId={sessionId ?? null}
+            onOpenFile={onOpenFile}
+            onOpenSpecialBlockPanel={onOpenSpecialBlockPanel}
+            onRetry={onRetry}
+            onSignIn={onSignIn}
+            onSignInAnotherAccount={onSignInAnotherAccount}
+            bgSessions={bgSessions}
+            onStopBackground={onStopBackground}
+            onOpenTranscript={onOpenTranscript}
+            streamingMetricsScope={sessionId ?? "background-transcript"}
+          />
         )}
       </div>
+      {todos.length > 0 && <TodoPanel todos={todos} />}
+      {streaming && (
+        <StreamingStatusBar
+          messages={messages}
+          statusOverride={statusOverride ?? null}
+        />
+      )}
     </div>
   );
 }

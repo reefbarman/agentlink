@@ -48,7 +48,7 @@ import {
   getFinalMessageContinueAction,
   type FinalMessageMarker,
 } from "../shared/finalStatus.js";
-import type { TodoItem } from "./todoTool.js";
+import { getLatestTodoState, type TodoItem } from "./todoTool.js";
 import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
 import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
 import { dispatchToolCall, getAgentTools } from "./toolAdapter.js";
@@ -635,6 +635,52 @@ export type ExtensionToWebview =
       code?: string;
       actions?: AgentErrorActions;
     }
+  | { type: "agentBgTodoUpdate"; sessionId: string; todos: TodoItem[] }
+  | {
+      type: "agentBgWarning";
+      sessionId: string;
+      message: string;
+      retryDelayMs?: number;
+      retryAt?: number;
+      retryAttempt?: number;
+      retryMaxAttempts?: number;
+    }
+  | { type: "agentBgStatusUpdate"; sessionId: string; message: string }
+  | {
+      type: "agentBgFinalMarker";
+      sessionId: string;
+      marker: FinalMessageMarker | null;
+    }
+  | {
+      type: "agentBgCondenseStart";
+      sessionId: string;
+      isAutomatic: boolean;
+    }
+  | {
+      type: "agentBgCondense";
+      sessionId: string;
+      prevInputTokens: number;
+      newInputTokens: number;
+      durationMs: number;
+      validationWarnings?: string[];
+    }
+  | {
+      type: "agentBgCondenseError";
+      sessionId: string;
+      error: string;
+      retryable?: boolean;
+      code?: string;
+      actions?: AgentErrorActions;
+    }
+  | {
+      type: "agentBgInterjection";
+      sessionId: string;
+      text: string;
+      displayText?: string;
+      isSlashCommand?: boolean;
+      slashCommandLabel?: string;
+      displayMedia?: DisplayMedia;
+    }
   | {
       type: "agentBgDone";
       sessionId: string;
@@ -696,6 +742,7 @@ export type ExtensionToWebview =
       sessionId: string;
       task: string;
       messages: unknown[];
+      todos: TodoItem[];
     }
   | { type: "agentBtwLoading"; requestId: string; question: string }
   | {
@@ -4650,6 +4697,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               sessionId,
               task: session.title ?? "Background Agent",
               messages: stripMediaForTransport(session.getAllMessages()),
+              todos: getLatestTodoState(session.getAllMessages()),
             });
           } else {
             vscode.window.showWarningMessage(
@@ -5212,6 +5260,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       extMsg.type === "agentBgToolComplete" ||
       extMsg.type === "agentBgApiRequest" ||
       extMsg.type === "agentBgError" ||
+      extMsg.type === "agentBgTodoUpdate" ||
+      extMsg.type === "agentBgWarning" ||
+      extMsg.type === "agentBgStatusUpdate" ||
+      extMsg.type === "agentBgFinalMarker" ||
+      extMsg.type === "agentBgCondenseStart" ||
+      extMsg.type === "agentBgCondense" ||
+      extMsg.type === "agentBgCondenseError" ||
+      extMsg.type === "agentBgInterjection" ||
       extMsg.type === "agentBgDone";
 
     if (
@@ -5746,7 +5802,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "todo_update":
         this.postMessage({
-          type: "agentTodoUpdate",
+          type: isBackground ? "agentBgTodoUpdate" : "agentTodoUpdate",
           sessionId,
           todos: event.todos,
         } as ExtensionToWebview);
@@ -5754,7 +5810,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "final_marker":
         this.postMessage({
-          type: "agentFinalMarker",
+          type: isBackground ? "agentBgFinalMarker" : "agentFinalMarker",
           sessionId,
           marker: event.marker,
         } as ExtensionToWebview);
@@ -5916,7 +5972,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "condense_start":
         this.condenseStartTimes.set(sessionId, Date.now());
         this.postMessage({
-          type: "agentCondenseStart",
+          type: isBackground ? "agentBgCondenseStart" : "agentCondenseStart",
           sessionId,
           isAutomatic: event.isAutomatic,
         });
@@ -5931,7 +5987,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           : 0;
         this.condenseStartTimes.delete(sessionId);
         this.postMessage({
-          type: "agentCondense",
+          type: isBackground ? "agentBgCondense" : "agentCondense",
           sessionId,
           prevInputTokens: event.prevInputTokens,
           newInputTokens: event.newInputTokens,
@@ -5951,7 +6007,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.log(`[agent] warning: ${event.message}`);
         if (event.visible !== false) {
           this.postMessage({
-            type: "agentWarning",
+            type: isBackground ? "agentBgWarning" : "agentWarning",
             sessionId,
             message: event.message,
             retryDelayMs: event.retryDelayMs,
@@ -5965,7 +6021,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "status_update":
         this.log(`[agent] status_update: ${event.message}`);
         this.postMessage({
-          type: "agentStatusUpdate",
+          type: isBackground ? "agentBgStatusUpdate" : "agentStatusUpdate",
           sessionId,
           message: event.message,
         });
@@ -5976,7 +6032,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           `[agent] condense_error: ${event.error} (retryable=${event.retryable ?? false}, code=${event.code ?? "none"})`,
         );
         this.postMessage({
-          type: "agentCondenseError",
+          type: isBackground ? "agentBgCondenseError" : "agentCondenseError",
           sessionId,
           error: event.error,
           retryable: event.retryable,
@@ -5988,7 +6044,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "user_interjection":
         this.log(`[agent] user_interjection queueId=${event.queueId}`);
         this.postMessage({
-          type: "agentInterjection",
+          type: isBackground ? "agentBgInterjection" : "agentInterjection",
           sessionId,
           text: event.text,
           queueId: event.queueId,

@@ -571,6 +571,56 @@ export type ExtensionMessage =
         condense?: boolean;
       };
     }
+  | { type: "agentBgTodoUpdate"; sessionId: string; todos: TodoItem[] }
+  | {
+      type: "agentBgWarning";
+      sessionId: string;
+      message: string;
+      retryDelayMs?: number;
+      retryAt?: number;
+      retryAttempt?: number;
+      retryMaxAttempts?: number;
+    }
+  | { type: "agentBgStatusUpdate"; sessionId: string; message: string }
+  | {
+      type: "agentBgFinalMarker";
+      sessionId: string;
+      marker: import("../../shared/finalStatus.js").FinalMessageMarker | null;
+    }
+  | {
+      type: "agentBgCondenseStart";
+      sessionId: string;
+      isAutomatic: boolean;
+    }
+  | {
+      type: "agentBgCondense";
+      sessionId: string;
+      prevInputTokens: number;
+      newInputTokens: number;
+      durationMs: number;
+      validationWarnings?: string[];
+    }
+  | {
+      type: "agentBgCondenseError";
+      sessionId: string;
+      error: string;
+      retryable?: boolean;
+      code?: string;
+      actions?: {
+        signIn?: boolean;
+        signInAnotherAccount?: boolean;
+        condense?: boolean;
+      };
+    }
+  | {
+      type: "agentBgInterjection";
+      sessionId: string;
+      text: string;
+      displayText?: string;
+      isSlashCommand?: boolean;
+      slashCommandLabel?: string;
+      displayMedia?: ChatMessage["displayMedia"];
+    }
   | {
       type: "agentBgDone";
       sessionId: string;
@@ -628,6 +678,7 @@ export type ShowBgTranscriptMessage = {
   task: string;
   /** Raw AgentMessage[] from the backend session */
   messages: unknown[];
+  todos: TodoItem[];
 };
 
 export interface ChatState {

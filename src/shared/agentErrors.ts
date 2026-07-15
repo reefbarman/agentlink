@@ -34,8 +34,13 @@ export function isAgentRetryableErrorMessage(msg: string): boolean {
     lower.includes("529") ||
     lower.includes("connection error") ||
     lower.includes("econnrefused") ||
+    lower.includes("econnreset") ||
+    lower.includes("eaddrnotavail") ||
+    lower.includes("eai_again") ||
     lower.includes("enotfound") ||
+    lower.includes("epipe") ||
     lower.includes("etimedout") ||
+    lower.includes("und_err_connect_timeout") ||
     lower.includes("timed out") ||
     lower.includes("fetch failed") ||
     lower.includes("other side closed") ||

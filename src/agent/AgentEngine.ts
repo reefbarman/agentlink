@@ -31,6 +31,7 @@ import {
   todoTool,
   handleTodoWrite,
   completeTodos,
+  getLatestTodoState,
   type TodoItem,
   type TodoToolInput,
 } from "./todoTool.js";
@@ -399,34 +400,6 @@ function buildFinalStatusSkippedResult(call: ToolUseBlock): ToolCallResult {
     },
     durationMs: 0,
   };
-}
-
-function getLatestTodoState(messages: MessageParam[]): TodoItem[] {
-  let todos: TodoItem[] = [];
-  for (const message of messages) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) {
-      continue;
-    }
-    for (const block of message.content) {
-      if (block.type !== "tool_use") {
-        continue;
-      }
-      const input =
-        typeof block.input === "object" && block.input !== null
-          ? (block.input as Record<string, unknown>)
-          : null;
-      if (block.name === TODO_TOOL_NAME && Array.isArray(input?.todos)) {
-        todos = input.todos as TodoItem[];
-      } else if (
-        block.name === "set_task_status" &&
-        input?.status === "completed" &&
-        input.completeTodos === true
-      ) {
-        todos = completeTodos(todos);
-      }
-    }
-  }
-  return todos;
 }
 
 // Per-tool character limits for tool results kept in conversation history.

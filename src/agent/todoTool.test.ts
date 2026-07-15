@@ -1,4 +1,9 @@
-import { completeTodos, handleTodoWrite, todoTool } from "./todoTool.js";
+import {
+  completeTodos,
+  getLatestTodoState,
+  handleTodoWrite,
+  todoTool,
+} from "./todoTool.js";
 import { describe, expect, it } from "vitest";
 
 import type { TodoItem } from "./todoTool.js";
@@ -117,5 +122,44 @@ describe("completeTodos", () => {
     ]);
     expect(todos[0].status).toBe("in_progress");
     expect(todos[0].children?.[0]?.status).toBe("pending");
+  });
+});
+
+describe("getLatestTodoState", () => {
+  it("rebuilds the latest list and applies final completion", () => {
+    const todos = [
+      makeItem({ id: "1", content: "Inspect", status: "completed" }),
+      makeItem({ id: "2", content: "Report", status: "in_progress" }),
+    ];
+
+    expect(
+      getLatestTodoState([
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "todo-1",
+              name: "todo_write",
+              input: { todos },
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "done-1",
+              name: "set_task_status",
+              input: { status: "completed", completeTodos: true },
+            },
+          ],
+        },
+      ]),
+    ).toEqual([
+      expect.objectContaining({ id: "1", status: "completed" }),
+      expect.objectContaining({ id: "2", status: "completed" }),
+    ]);
   });
 });

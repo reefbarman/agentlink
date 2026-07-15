@@ -5603,22 +5603,6 @@ body.approval-resizing {
   flex-shrink: 0;
 }
 
-.transcript-header-icon {
-  color: var(--vscode-foreground);
-  opacity: 0.6;
-  flex-shrink: 0;
-}
-
-.transcript-header-title {
-  flex: 1;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--vscode-foreground);
-}
-
 .transcript-close {
   flex-shrink: 0;
   margin-left: auto;
@@ -5626,8 +5610,14 @@ body.approval-resizing {
 
 .transcript-messages {
   flex: 1;
-  overflow-y: auto;
-  padding: 8px 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.transcript-messages > .chat-messages {
+  min-height: 0;
 }
 
 .transcript-empty {

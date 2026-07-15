@@ -11,6 +11,7 @@ import {
 
 import type { ChatMessage } from "../types";
 import { ChatView } from "./ChatView";
+import { TranscriptView } from "./TranscriptView";
 import { h } from "preact";
 
 const resizeObserverInstances: Array<{ observe: ReturnType<typeof vi.fn> }> =
@@ -81,6 +82,33 @@ describe("ChatView message windowing", () => {
     expect(transcript.getByText("Message 1")).toBeTruthy();
     expect(transcript.queryByText(/hidden/)).toBeNull();
     expect(screen.getByTitle("Message 1")).toBeTruthy();
+  });
+
+  it("uses the foreground chat surface for background transcripts with todos", () => {
+    const { container } = render(
+      h(TranscriptView, {
+        task: "Review implementation",
+        sessionId: "background-1",
+        messages: makeMessages(1),
+        streaming: true,
+        todos: [
+          {
+            id: "review",
+            content: "Review implementation",
+            activeForm: "Reviewing implementation",
+            status: "in_progress",
+          },
+        ],
+        onClose: vi.fn(),
+      }),
+    );
+
+    expect(
+      container.querySelector(".transcript-messages > .chat-messages"),
+    ).toBeTruthy();
+    expect(screen.getByText("Tasks 0/1")).toBeTruthy();
+    expect(screen.getAllByText("Reviewing implementation")).toHaveLength(2);
+    expect(screen.getByText("Waiting for response…")).toBeTruthy();
   });
 
   it("cancels pending bottom scrolling before revealing earlier history", () => {

@@ -6,7 +6,12 @@ import type {
   ApprovalRequest,
   DecisionMessage,
 } from "../../approvals/webview/types";
-import type { ChatMessage, ReasoningEffort, SessionSummary } from "./types";
+import type {
+  ChatMessage,
+  ReasoningEffort,
+  SessionSummary,
+  TodoItem,
+} from "./types";
 import type {
   McpConfigSnapshot,
   McpManagerScope,
@@ -17,6 +22,7 @@ import {
   reducer,
   shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
+  type AppAction,
 } from "../../shared/chatProjection.js";
 import {
   getFinalMessageContinueAction,
@@ -64,6 +70,42 @@ import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 
 const DEFAULT_MAX_TOKENS = 200_000;
 const AUTO_CONTINUE_MAX_TURNS = 10;
+
+interface OpenTranscriptState {
+  sessionId: string;
+  task: string;
+  messages: ChatMessage[];
+  streaming: boolean;
+  todos: TodoItem[];
+  statusOverride: string | null;
+}
+
+function reduceOpenTranscript(
+  current: OpenTranscriptState | null,
+  sessionId: string,
+  action: AppAction,
+  overrides?: Partial<OpenTranscriptState>,
+): OpenTranscriptState | null {
+  if (current?.sessionId !== sessionId) return current;
+  const next = reducer(
+    {
+      ...initialState,
+      messages: current.messages,
+      streaming: current.streaming,
+      todos: current.todos,
+      statusOverride: current.statusOverride,
+    },
+    action,
+  );
+  return {
+    ...current,
+    messages: next.messages,
+    streaming: next.streaming,
+    todos: next.todos,
+    statusOverride: next.statusOverride,
+    ...overrides,
+  };
+}
 
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
 type SendImage = { name: string; mimeType: string; base64: string };
@@ -237,12 +279,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [bgSessions, setBgSessions] = useState<BgSessionInfoProps[]>([]);
   const bgSessionsRef = useRef<BgSessionInfoProps[]>([]);
   bgSessionsRef.current = bgSessions;
-  const [transcriptView, setTranscriptView] = useState<{
-    sessionId: string;
-    task: string;
-    messages: ChatMessage[];
-    streaming: boolean;
-  } | null>(null);
+  const [transcriptView, setTranscriptView] =
+    useState<OpenTranscriptState | null>(null);
   const [btwState, setBtwState] = useState<BtwState | null>(null);
 
   useEffect(() => {
@@ -853,204 +891,190 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         // chat so rendering stays identical and live.
         case "agentBgThinkingStart":
           setTranscriptView((prev) =>
-            prev?.sessionId === msg.sessionId
-              ? {
-                  ...prev,
-                  messages: reducer(
-                    {
-                      ...initialState,
-                      messages: prev.messages,
-                      streaming: true,
-                    },
-                    { type: "THINKING_START", thinkingId: msg.thinkingId },
-                  ).messages,
-                  streaming: true,
-                }
-              : prev,
+            reduceOpenTranscript(
+              prev,
+              msg.sessionId,
+              { type: "THINKING_START", thinkingId: msg.thinkingId },
+              { streaming: true },
+            ),
           );
           break;
         case "agentBgThinkingDelta":
           setTranscriptView((prev) =>
-            prev?.sessionId === msg.sessionId
-              ? {
-                  ...prev,
-                  messages: reducer(
-                    {
-                      ...initialState,
-                      messages: prev.messages,
-                      streaming: prev.streaming,
-                    },
-                    {
-                      type: "THINKING_DELTA",
-                      thinkingId: msg.thinkingId,
-                      text: msg.text,
-                    },
-                  ).messages,
-                }
-              : prev,
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "THINKING_DELTA",
+              thinkingId: msg.thinkingId,
+              text: msg.text,
+            }),
           );
           break;
         case "agentBgThinkingEnd":
           setTranscriptView((prev) =>
-            prev?.sessionId === msg.sessionId
-              ? {
-                  ...prev,
-                  messages: reducer(
-                    {
-                      ...initialState,
-                      messages: prev.messages,
-                      streaming: prev.streaming,
-                    },
-                    { type: "THINKING_END", thinkingId: msg.thinkingId },
-                  ).messages,
-                }
-              : prev,
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "THINKING_END",
+              thinkingId: msg.thinkingId,
+            }),
           );
           break;
         case "agentBgTextDelta":
           setTranscriptView((prev) =>
-            prev?.sessionId === msg.sessionId
-              ? {
-                  ...prev,
-                  messages: reducer(
-                    {
-                      ...initialState,
-                      messages: prev.messages,
-                      streaming: true,
-                    },
-                    { type: "TEXT_DELTA", text: msg.text },
-                  ).messages,
-                  streaming: true,
-                }
-              : prev,
+            reduceOpenTranscript(
+              prev,
+              msg.sessionId,
+              { type: "TEXT_DELTA", text: msg.text },
+              { streaming: true },
+            ),
           );
           break;
         case "agentBgToolStart":
           setTranscriptView((prev) =>
-            prev?.sessionId === msg.sessionId
-              ? {
-                  ...prev,
-                  messages: reducer(
-                    {
-                      ...initialState,
-                      messages: prev.messages,
-                      streaming: true,
-                    },
-                    {
-                      type: "TOOL_START",
-                      toolCallId: msg.toolCallId,
-                      toolName: msg.toolName,
-                    },
-                  ).messages,
-                  streaming: true,
-                }
-              : prev,
+            reduceOpenTranscript(
+              prev,
+              msg.sessionId,
+              {
+                type: "TOOL_START",
+                toolCallId: msg.toolCallId,
+                toolName: msg.toolName,
+              },
+              { streaming: true },
+            ),
           );
           break;
         case "agentBgToolInputDelta":
           setTranscriptView((prev) =>
-            prev?.sessionId === msg.sessionId
-              ? {
-                  ...prev,
-                  messages: reducer(
-                    {
-                      ...initialState,
-                      messages: prev.messages,
-                      streaming: prev.streaming,
-                    },
-                    {
-                      type: "TOOL_INPUT_DELTA",
-                      toolCallId: msg.toolCallId,
-                      partialJson: msg.partialJson,
-                    },
-                  ).messages,
-                }
-              : prev,
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "TOOL_INPUT_DELTA",
+              toolCallId: msg.toolCallId,
+              partialJson: msg.partialJson,
+            }),
           );
           break;
         case "agentBgToolComplete":
           setTranscriptView((prev) =>
-            prev?.sessionId === msg.sessionId
-              ? {
-                  ...prev,
-                  messages: reducer(
-                    {
-                      ...initialState,
-                      messages: prev.messages,
-                      streaming: prev.streaming,
-                    },
-                    {
-                      type: "TOOL_COMPLETE",
-                      toolCallId: msg.toolCallId,
-                      toolName: msg.toolName,
-                      result: msg.result,
-                      resultImages: msg.resultImages,
-                      durationMs: msg.durationMs,
-                      input: msg.input,
-                    },
-                  ).messages,
-                }
-              : prev,
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "TOOL_COMPLETE",
+              toolCallId: msg.toolCallId,
+              toolName: msg.toolName,
+              result: msg.result,
+              resultImages: msg.resultImages,
+              durationMs: msg.durationMs,
+              input: msg.input,
+            }),
           );
           break;
         case "agentBgApiRequest":
           setTranscriptView((prev) =>
-            prev?.sessionId === msg.sessionId
-              ? {
-                  ...prev,
-                  messages: reducer(
-                    {
-                      ...initialState,
-                      messages: prev.messages,
-                      streaming: prev.streaming,
-                    },
-                    {
-                      type: "API_REQUEST",
-                      requestId: msg.requestId,
-                      model: msg.model,
-                      inputTokens: msg.inputTokens,
-                      uncachedInputTokens: msg.uncachedInputTokens,
-                      outputTokens: msg.outputTokens,
-                      cacheReadTokens: msg.cacheReadTokens,
-                      cacheCreationTokens: msg.cacheCreationTokens,
-                      durationMs: msg.durationMs,
-                      timeToFirstToken: msg.timeToFirstToken,
-                      usedPreviousResponseId: msg.usedPreviousResponseId,
-                      previousResponseIdFallback:
-                        msg.previousResponseIdFallback,
-                      promptCacheKey: msg.promptCacheKey,
-                      promptCacheRetention: msg.promptCacheRetention,
-                      storeResponseState: msg.storeResponseState,
-                      providerResponseId: msg.providerResponseId,
-                      contextBreakdown: msg.contextBreakdown,
-                    },
-                  ).messages,
-                }
-              : prev,
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "API_REQUEST",
+              requestId: msg.requestId,
+              model: msg.model,
+              inputTokens: msg.inputTokens,
+              uncachedInputTokens: msg.uncachedInputTokens,
+              outputTokens: msg.outputTokens,
+              cacheReadTokens: msg.cacheReadTokens,
+              cacheCreationTokens: msg.cacheCreationTokens,
+              durationMs: msg.durationMs,
+              timeToFirstToken: msg.timeToFirstToken,
+              usedPreviousResponseId: msg.usedPreviousResponseId,
+              previousResponseIdFallback: msg.previousResponseIdFallback,
+              promptCacheKey: msg.promptCacheKey,
+              promptCacheRetention: msg.promptCacheRetention,
+              storeResponseState: msg.storeResponseState,
+              providerResponseId: msg.providerResponseId,
+              contextBreakdown: msg.contextBreakdown,
+            }),
           );
           break;
         case "agentBgError":
           setTranscriptView((prev) =>
-            prev?.sessionId === msg.sessionId
-              ? {
-                  ...prev,
-                  messages: reducer(
-                    {
-                      ...initialState,
-                      messages: prev.messages,
-                      streaming: prev.streaming,
-                    },
-                    {
-                      type: "ERROR",
-                      error: msg.error,
-                      retryable: msg.retryable,
-                      code: msg.code,
-                      actions: msg.actions,
-                    },
-                  ).messages,
-                  streaming: false,
-                }
-              : prev,
+            reduceOpenTranscript(
+              prev,
+              msg.sessionId,
+              {
+                type: "ERROR",
+                error: msg.error,
+                retryable: msg.retryable,
+                code: msg.code,
+                actions: msg.actions,
+              },
+              { streaming: false },
+            ),
+          );
+          break;
+        case "agentBgTodoUpdate":
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "TODO_UPDATE",
+              todos: msg.todos,
+            }),
+          );
+          break;
+        case "agentBgWarning":
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "ADD_WARNING",
+              message: msg.message,
+              retryDelayMs: msg.retryDelayMs,
+              retryAt: msg.retryAt,
+              retryAttempt: msg.retryAttempt,
+              retryMaxAttempts: msg.retryMaxAttempts,
+            }),
+          );
+          break;
+        case "agentBgStatusUpdate":
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "SET_STATUS_OVERRIDE",
+              message: msg.message,
+            }),
+          );
+          break;
+        case "agentBgFinalMarker":
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "SET_FINAL_MARKER",
+              marker: msg.marker,
+            }),
+          );
+          break;
+        case "agentBgCondenseStart":
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "CONDENSE_START",
+            }),
+          );
+          break;
+        case "agentBgCondense":
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "ADD_CONDENSE",
+              prevInputTokens: msg.prevInputTokens,
+              newInputTokens: msg.newInputTokens,
+              durationMs: msg.durationMs,
+              validationWarnings: msg.validationWarnings,
+            }),
+          );
+          break;
+        case "agentBgCondenseError":
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "ADD_CONDENSE_ERROR",
+              errorMessage: msg.error,
+              retryable: msg.retryable,
+              code: msg.code,
+              actions: msg.actions,
+            }),
+          );
+          break;
+        case "agentBgInterjection":
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(prev, msg.sessionId, {
+              type: "ADD_INTERJECTION",
+              text: msg.displayText ?? msg.text,
+              isSlashCommand: msg.isSlashCommand,
+              slashCommandLabel: msg.slashCommandLabel,
+              displayMedia: msg.displayMedia,
+            }),
           );
           break;
         case "agentBgDone": {
@@ -1077,16 +1101,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 ? "cancelled"
                 : "completed";
           setTranscriptView((prev) => {
-            if (prev?.sessionId !== bgSessionId) return prev;
-            const next = reducer(
-              {
-                ...initialState,
-                messages: prev.messages,
-                streaming: prev.streaming,
-              },
+            return reduceOpenTranscript(
+              prev,
+              bgSessionId,
               { type: "DONE" },
+              { streaming: false, statusOverride: null },
             );
-            return { ...prev, messages: next.messages, streaming: false };
           });
           dispatch({
             type: "BG_AGENT_DONE",
@@ -1170,6 +1190,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             sessionId,
             task: msg.task as string,
             messages: converted,
+            todos: msg.todos ?? [],
+            statusOverride: null,
             streaming:
               bgInfo?.status === "streaming" ||
               bgInfo?.status === "tool_executing",
@@ -2200,8 +2222,19 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         {transcriptView && (
           <TranscriptView
             task={transcriptView.task}
+            sessionId={transcriptView.sessionId}
             messages={transcriptView.messages}
             streaming={transcriptView.streaming}
+            statusOverride={transcriptView.statusOverride}
+            todos={transcriptView.todos}
+            onOpenFile={handleOpenFile}
+            onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}
+            onRetry={() => handleRetryBackground(transcriptView.sessionId)}
+            onSignIn={handleErrorSignIn}
+            onSignInAnotherAccount={handleErrorSignInAnotherAccount}
+            bgSessions={bgSessions}
+            onStopBackground={handleStopBackground}
+            onOpenTranscript={handleOpenBgTranscript}
             onClose={() => setTranscriptView(null)}
           />
         )}

@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "./providers/types.js";
+import type { MessageParam, ToolDefinition } from "./providers/types.js";
 
 /**
  * Agent-internal todo tracking tool.
@@ -124,6 +124,38 @@ export function completeTodos(todos: TodoItem[]): TodoItem[] {
       ? { children: completeTodos(todo.children) }
       : {}),
   }));
+}
+
+/**
+ * Rebuild the latest todo state from persisted provider messages.
+ *
+ * Keeping this projection next to the todo tool lets foreground restores,
+ * background transcript snapshots, and the engine all use the same rules.
+ */
+export function getLatestTodoState(messages: MessageParam[]): TodoItem[] {
+  let todos: TodoItem[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (block.type !== "tool_use") continue;
+      const input =
+        typeof block.input === "object" && block.input !== null
+          ? (block.input as Record<string, unknown>)
+          : null;
+      if (block.name === TODO_TOOL_NAME && Array.isArray(input?.todos)) {
+        todos = input.todos as TodoItem[];
+      } else if (
+        block.name === "set_task_status" &&
+        input?.status === "completed" &&
+        input.completeTodos === true
+      ) {
+        todos = completeTodos(todos);
+      }
+    }
+  }
+  return todos;
 }
 
 function countTodos(items: TodoItem[]): {

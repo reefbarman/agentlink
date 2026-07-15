@@ -188,6 +188,32 @@ describe("useWebviewMessageConnection", () => {
     });
   });
 
+  it("routes background transcript events independently of the foreground session", () => {
+    const onMessage = vi.fn();
+    render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "foreground-1" }}
+        streamingRef={{ current: true }}
+        dispatchDelta={vi.fn()}
+        onMessage={onMessage}
+      />,
+    );
+
+    sendMessage({
+      type: "agentBgTodoUpdate",
+      sessionId: "background-1",
+      todos: [],
+    });
+    sendMessage({
+      type: "agentBgWarning",
+      sessionId: "background-1",
+      message: "Provider stream first event timed out — retrying",
+    });
+
+    expect(onMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects stale deltas after done marks the stream inactive", () => {
     const postMessage = vi.fn();
     const streamingRef = { current: true };

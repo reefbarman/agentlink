@@ -27,6 +27,15 @@ describe("agentErrors", () => {
     expect(isAgentRetryableErrorMessage("fetch failed: ETIMEDOUT")).toBe(true);
     expect(
       isAgentRetryableErrorMessage(
+        "fetch failed: connect EADDRNOTAVAIL 203.0.113.1:443",
+      ),
+    ).toBe(true);
+    expect(isAgentRetryableErrorMessage("read ECONNRESET")).toBe(true);
+    expect(isAgentRetryableErrorMessage("getaddrinfo EAI_AGAIN api.test")).toBe(
+      true,
+    );
+    expect(
+      isAgentRetryableErrorMessage(
         "Connection error.: fetch failed: Client network socket disconnected before secure TLS connection was established",
       ),
     ).toBe(true);

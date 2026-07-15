@@ -3337,6 +3337,7 @@ export class AgentSessionManager {
     // a background agent via the kill_background_agent tool if needed.
     const runNativeBackground = async () => {
       let lastPersistedActiveAt = session.lastActiveAt;
+      let terminalEngineError: string | undefined;
       const persistIfHistoryChanged = () => {
         if (session.lastActiveAt !== lastPersistedActiveAt) {
           this.saveSession(session.id);
@@ -3381,6 +3382,9 @@ export class AgentSessionManager {
               this.bgStatusDetail.set(session.id, detail);
             }
           }
+          if (event.type === "error") {
+            terminalEngineError = event.error;
+          }
 
           // Track tool calls and token usage for observability
           const meta = this.bgMeta.get(session.id);
@@ -3413,7 +3417,12 @@ export class AgentSessionManager {
 
           this.recordAndEmitEvent(session.id, event);
         }
-        if (session.status === "streaming") session.status = "idle";
+        if (terminalEngineError) {
+          session.status = "error";
+          this.setBgError(session.id, terminalEngineError);
+        } else if (session.status === "streaming") {
+          session.status = "idle";
+        }
       } catch (err: unknown) {
         const error = err instanceof Error ? err.message : String(err);
         session.status = "error";

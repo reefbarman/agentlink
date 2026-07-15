@@ -667,6 +667,35 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("preserves terminal engine errors as background failures", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        yield {
+          type: "error",
+          error: "Provider stream first event timed out after 90000ms",
+          retryable: true,
+        };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "provider timeout",
+      message: "run",
+    });
+    const info = await waitFor(
+      () =>
+        mgr.getBgSessionInfos().find((item) => item.id === spawned.sessionId),
+      (item) => item?.status === "error",
+    );
+
+    expect(info).toMatchObject({
+      status: "error",
+      errorMessage: "Provider stream first event timed out after 90000ms",
+    });
+  });
+
   it("hard-stops past the wrap-up grace overage and persists an explicit terminal reason", async () => {
     mocks.runBehavior.mockReturnValue(
       (async function* () {
