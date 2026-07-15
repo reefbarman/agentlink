@@ -5,7 +5,7 @@ import type {
 } from "../shared/types.js";
 
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
-import type { MessageParam } from "./providers/types.js";
+import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 import type { TodoItem } from "./todoTool.js";
 
 // --- Agent Message (conversation history with condense metadata) ---
@@ -143,6 +143,7 @@ export type AgentEvent =
       type: "api_request";
       requestId: string;
       model: string;
+      reasoningEffort: ReasoningEffort;
       inputTokens: number;
       uncachedInputTokens: number;
       outputTokens: number;

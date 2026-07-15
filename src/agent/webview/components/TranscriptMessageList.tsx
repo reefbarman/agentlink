@@ -1,4 +1,4 @@
-import type { ChatMessage, ContentBlock } from "../types";
+import type { ChatMessage, ContentBlock, ReasoningEffort } from "../types";
 
 import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import { CheckpointRow } from "./CheckpointRow";
@@ -67,6 +67,10 @@ interface TranscriptRow {
   modelChange?: {
     previousModel: string;
     model: string;
+  };
+  reasoningChange?: {
+    previousReasoningEffort: ReasoningEffort;
+    reasoningEffort: ReasoningEffort;
   };
 }
 
@@ -273,6 +277,7 @@ function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
 function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
   const rows: TranscriptRow[] = [];
   let previousModel: string | undefined;
+  let previousReasoningEffort: ReasoningEffort | undefined;
 
   for (const message of messages) {
     if (message.role === "warning") {
@@ -299,14 +304,30 @@ function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
     const messageRows = splitTopLevelChatBlocks(message);
     const model =
       message.role === "assistant" ? message.apiRequest?.model : null;
-    if (model) {
-      if (previousModel && previousModel !== model && messageRows.length > 0) {
+    const reasoningEffort =
+      message.role === "assistant"
+        ? message.apiRequest?.reasoningEffort
+        : undefined;
+    if (model || reasoningEffort) {
+      const modelChange =
+        model && previousModel && previousModel !== model
+          ? { previousModel, model }
+          : undefined;
+      const reasoningChange =
+        reasoningEffort &&
+        previousReasoningEffort &&
+        previousReasoningEffort !== reasoningEffort
+          ? { previousReasoningEffort, reasoningEffort }
+          : undefined;
+      if ((modelChange || reasoningChange) && messageRows.length > 0) {
         messageRows[0] = {
           ...messageRows[0],
-          modelChange: { previousModel, model },
+          modelChange,
+          reasoningChange,
         };
       }
-      previousModel = model;
+      if (model) previousModel = model;
+      if (reasoningEffort) previousReasoningEffort = reasoningEffort;
     }
     rows.push(...messageRows);
   }
@@ -497,10 +518,10 @@ function renderTranscriptRow({
 
   return (
     <Fragment>
-      {row.modelChange && (
+      {(row.modelChange || row.reasoningChange) && (
         <ModelChangeDivider
-          previousModel={row.modelChange.previousModel}
-          model={row.modelChange.model}
+          modelChange={row.modelChange}
+          reasoningChange={row.reasoningChange}
         />
       )}
       {metrics && metricsSurface ? (
@@ -650,6 +671,7 @@ function createRowRevision(params: {
     message: messageRevision(row.message),
     warningMessages: row.warningMessages?.map(messageRevision),
     modelChange: row.modelChange,
+    reasoningChange: row.reasoningChange,
     active: params.active,
     isLatest:
       row.message.role === "warning" || row.message.error

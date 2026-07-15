@@ -1676,6 +1676,7 @@ describe("AgentEngine", () => {
       expect(apiRequest.uncachedInputTokens).toBe(50);
       expect(apiRequest.cacheReadTokens).toBe(9000);
       expect(apiRequest.cacheCreationTokens).toBe(1000);
+      expect(apiRequest.reasoningEffort).toBe("none");
       expect(session.lastInputTokens).toBe(10_050);
       expect(session.totalInputTokens).toBe(50);
       expect(session.totalCacheReadTokens).toBe(9000);

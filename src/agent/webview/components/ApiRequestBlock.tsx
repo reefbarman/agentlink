@@ -1,9 +1,11 @@
 import type { RequestContextBreakdown } from "../../../shared/types.js";
+import type { ReasoningEffort } from "../types.js";
 import { useState } from "preact/hooks";
 
 interface ApiRequestBlockProps {
   requestId: string;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   inputTokens: number;
   uncachedInputTokens?: number;
   cacheReadTokens?: number;
@@ -16,6 +18,7 @@ interface ApiRequestBlockProps {
 
 export function ApiRequestBlock({
   model,
+  reasoningEffort,
   inputTokens,
   uncachedInputTokens,
   cacheReadTokens = 0,
@@ -28,7 +31,10 @@ export function ApiRequestBlock({
   const [expanded, setExpanded] = useState(false);
 
   const totalTokens = inputTokens + outputTokens;
-  const summary = `${model} · ${totalTokens.toLocaleString()} tokens · ${(durationMs / 1000).toFixed(1)}s`;
+  const thinkingSummary = reasoningEffort
+    ? ` · Thinking: ${reasoningEffort}`
+    : "";
+  const summary = `${model}${thinkingSummary} · ${totalTokens.toLocaleString()} tokens · ${(durationMs / 1000).toFixed(1)}s`;
 
   return (
     <div class="api-request-block">
@@ -44,6 +50,12 @@ export function ApiRequestBlock({
               <td class="api-key">Model</td>
               <td class="api-value">{model}</td>
             </tr>
+            {reasoningEffort && (
+              <tr>
+                <td class="api-key">Thinking level</td>
+                <td class="api-value">{reasoningEffort}</td>
+              </tr>
+            )}
             <tr>
               <td class="api-key">Input tokens</td>
               <td class="api-value">{inputTokens.toLocaleString()}</td>

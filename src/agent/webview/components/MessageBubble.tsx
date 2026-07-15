@@ -499,6 +499,7 @@ export function MessageBubble({
         <ApiRequestBlock
           requestId={message.apiRequest.requestId}
           model={message.apiRequest.model}
+          reasoningEffort={message.apiRequest.reasoningEffort}
           inputTokens={message.apiRequest.inputTokens}
           uncachedInputTokens={message.apiRequest.uncachedInputTokens}
           cacheReadTokens={message.apiRequest.cacheReadTokens}

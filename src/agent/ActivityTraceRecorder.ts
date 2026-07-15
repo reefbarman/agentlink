@@ -239,6 +239,7 @@ export class ActivityTraceRecorder {
           payload: {
             requestId: event.requestId,
             model: event.model,
+            reasoningEffort: event.reasoningEffort,
             inputTokens: event.inputTokens,
             uncachedInputTokens: event.uncachedInputTokens,
             outputTokens: event.outputTokens,

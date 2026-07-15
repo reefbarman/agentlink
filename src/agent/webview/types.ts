@@ -180,6 +180,7 @@ export type ExtensionMessage =
       sessionId: string;
       requestId: string;
       model: string;
+      reasoningEffort: ReasoningEffort;
       inputTokens: number;
       uncachedInputTokens: number;
       outputTokens: number;
@@ -542,6 +543,7 @@ export type ExtensionMessage =
       sessionId: string;
       requestId: string;
       model: string;
+      reasoningEffort: ReasoningEffort;
       inputTokens: number;
       uncachedInputTokens: number;
       outputTokens: number;
@@ -868,6 +870,7 @@ export interface ChatMessage {
   apiRequest?: {
     requestId: string;
     model: string;
+    reasoningEffort?: ReasoningEffort;
     inputTokens: number;
     uncachedInputTokens?: number;
     cacheReadTokens?: number;

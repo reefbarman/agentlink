@@ -47,6 +47,7 @@ describe("ActivityTraceRecorder", () => {
         type: "api_request",
         requestId: "req-1",
         model: "model-a",
+        reasoningEffort: "high",
         inputTokens: 100,
         uncachedInputTokens: 80,
         outputTokens: 20,
@@ -66,6 +67,7 @@ describe("ActivityTraceRecorder", () => {
       kind: "tool_result",
       summary: "Completed tool read_file",
     });
+    expect(events[1]?.payload).toMatchObject({ reasoningEffort: "high" });
 
     const summary = recorder.loadSummary("session-1");
     expect(summary).toMatchObject({
@@ -104,6 +106,7 @@ describe("ActivityTraceRecorder", () => {
         type: "api_request",
         requestId: "req-1",
         model: "model-a",
+        reasoningEffort: "low",
         inputTokens: 10,
         uncachedInputTokens: 10,
         outputTokens: 5,

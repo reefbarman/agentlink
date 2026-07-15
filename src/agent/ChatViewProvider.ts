@@ -292,6 +292,7 @@ export type ExtensionToWebview =
       sessionId: string;
       requestId: string;
       model: string;
+      reasoningEffort: import("./providers/types.js").ReasoningEffort;
       inputTokens: number;
       uncachedInputTokens: number;
       outputTokens: number;
@@ -613,6 +614,7 @@ export type ExtensionToWebview =
       sessionId: string;
       requestId: string;
       model: string;
+      reasoningEffort: import("./providers/types.js").ReasoningEffort;
       inputTokens: number;
       uncachedInputTokens: number;
       outputTokens: number;
@@ -5400,6 +5402,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           type: "API_REQUEST",
           requestId: extMsg.requestId,
           model: extMsg.model,
+          reasoningEffort: extMsg.reasoningEffort,
           inputTokens: extMsg.inputTokens,
           uncachedInputTokens: extMsg.uncachedInputTokens,
           outputTokens: extMsg.outputTokens,
@@ -5925,7 +5928,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "api_request":
         this.log(
-          `[agent] api_request model=${event.model} in=${event.inputTokens} uncachedIn=${event.uncachedInputTokens} out=${event.outputTokens} ` +
+          `[agent] api_request model=${event.model} reasoning=${event.reasoningEffort} in=${event.inputTokens} uncachedIn=${event.uncachedInputTokens} out=${event.outputTokens} ` +
             `cacheRead=${event.cacheReadTokens} cacheCreate=${event.cacheCreationTokens} ` +
             `duration=${event.durationMs}ms ttft=${event.timeToFirstToken}ms ` +
             `prevResp=${event.usedPreviousResponseId ? "yes" : "no"} ` +
@@ -5937,6 +5940,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           sessionId,
           requestId: event.requestId,
           model: event.model,
+          reasoningEffort: event.reasoningEffort,
           inputTokens: event.inputTokens,
           uncachedInputTokens: event.uncachedInputTokens,
           outputTokens: event.outputTokens,

@@ -375,6 +375,7 @@ export type AppAction =
       type: "API_REQUEST";
       requestId: string;
       model: string;
+      reasoningEffort: ReasoningEffort;
       inputTokens: number;
       uncachedInputTokens: number;
       outputTokens: number;
@@ -1636,6 +1637,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
       last.apiRequest = {
         requestId: action.requestId,
         model: action.model,
+        reasoningEffort: action.reasoningEffort,
         inputTokens: action.inputTokens,
         uncachedInputTokens: action.uncachedInputTokens,
         cacheReadTokens: action.cacheReadTokens,

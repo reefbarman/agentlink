@@ -13,6 +13,7 @@ describe("ApiRequestBlock", () => {
       <ApiRequestBlock
         requestId="req-1"
         model="test-model"
+        reasoningEffort="high"
         inputTokens={1_000}
         uncachedInputTokens={100}
         cacheReadTokens={800}
@@ -65,6 +66,9 @@ describe("ApiRequestBlock", () => {
 
     fireEvent.click(screen.getByRole("button"));
 
+    expect(screen.getByText(/Thinking: high/)).toBeTruthy();
+    expect(screen.getByText("Thinking level")).toBeTruthy();
+    expect(screen.getByText("high")).toBeTruthy();
     expect(screen.getByText("Prompt estimate")).toBeTruthy();
     expect(screen.getByText("1,000 tokens · 4,000 chars")).toBeTruthy();
     expect(screen.getByText(/base: 500 tokens/)).toBeTruthy();

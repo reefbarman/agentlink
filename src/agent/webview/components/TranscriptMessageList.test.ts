@@ -3,15 +3,19 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ChatMessage } from "../types";
+import type { ChatMessage, ReasoningEffort } from "../types";
 import { StreamingBaselineRecorder } from "../../../shared/streamingBaselineMetrics";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { h } from "preact";
 
-function apiRequest(model: string): NonNullable<ChatMessage["apiRequest"]> {
+function apiRequest(
+  model: string,
+  reasoningEffort?: ReasoningEffort,
+): NonNullable<ChatMessage["apiRequest"]> {
   return {
     requestId: `request-${model}`,
     model,
+    reasoningEffort,
     inputTokens: 100,
     outputTokens: 20,
     durationMs: 500,
@@ -43,7 +47,7 @@ describe("TranscriptMessageList model change rendering", () => {
         content: "",
         timestamp: 3,
         blocks: [{ type: "text", text: "Second response" }],
-        apiRequest: apiRequest("gpt-5.4"),
+        apiRequest: apiRequest("gpt-5.4", "high"),
       },
     ];
 
@@ -73,7 +77,7 @@ describe("TranscriptMessageList model change rendering", () => {
         content: "",
         timestamp: 1,
         blocks: [{ type: "text", text: "First response" }],
-        apiRequest: apiRequest("gpt-5.4"),
+        apiRequest: apiRequest("gpt-5.4", "high"),
       },
       {
         id: "a2",
@@ -81,7 +85,7 @@ describe("TranscriptMessageList model change rendering", () => {
         content: "",
         timestamp: 2,
         blocks: [{ type: "text", text: "Second response" }],
-        apiRequest: apiRequest("gpt-5.4"),
+        apiRequest: apiRequest("gpt-5.4", "high"),
       },
     ];
 
@@ -90,6 +94,76 @@ describe("TranscriptMessageList model change rendering", () => {
     );
 
     expect(container.querySelector(".model-change-divider")).toBeNull();
+  });
+
+  it("shows the same divider when the thinking level changes", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("gpt-5.4", "high"),
+      },
+      {
+        id: "u1",
+        role: "user",
+        content: "Use less thinking",
+        timestamp: 2,
+        blocks: [],
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4", "low"),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const divider = container.querySelector(".model-change-divider");
+    expect(divider?.textContent).toContain("Thinking level changed to");
+    expect(divider?.textContent).toContain("Low");
+    expect(divider?.textContent).not.toContain("Model changed to");
+    expect(divider?.getAttribute("aria-label")).toBe(
+      "Thinking level changed from High to Low",
+    );
+  });
+
+  it("combines model and thinking changes into one divider", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("claude-sonnet-4-6", "high"),
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4", "medium"),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const dividers = container.querySelectorAll(".model-change-divider");
+    expect(dividers).toHaveLength(1);
+    expect(dividers[0]?.textContent).toContain("Model changed to");
+    expect(dividers[0]?.textContent).toContain("Thinking level changed to");
   });
 
   it("renders one divider before a split response instead of each segment", () => {

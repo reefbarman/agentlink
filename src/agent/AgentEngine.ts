@@ -1352,6 +1352,7 @@ export class AgentEngine {
           type: "api_request",
           requestId,
           model: session.model,
+          reasoningEffort,
           inputTokens: totalInputTokens,
           uncachedInputTokens: inputTokens,
           outputTokens,
