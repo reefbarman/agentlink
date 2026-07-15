@@ -1113,8 +1113,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             sessionId: bgSessionId,
             task: bgTask,
             status: bgStatus,
-            resultText:
-              (msg.resultText as string | undefined) ?? bgInfo?.resultText,
+            resultText: msg.resultText as string | undefined,
             summary: msg.resultSummary as string | undefined,
           });
           break;

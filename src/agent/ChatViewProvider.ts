@@ -5664,7 +5664,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           sessionId: extMsg.sessionId,
           task: bgTask,
           status: bgStatus,
-          resultText: extMsg.resultText ?? bgInfo?.resultText,
+          resultText: extMsg.resultText,
           summary: extMsg.resultSummary,
         });
         break;
@@ -6080,9 +6080,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           totalCacheCreationTokens: event.totalCacheCreationTokens,
           ...(isBackground && {
             resultText:
-              this.sessionManager
-                ?.getSession(sessionId)
-                ?.getLastAssistantText() ?? undefined,
+              this.sessionManager?.getBackgroundResult(sessionId).resultText,
             resultSummary:
               bgInfo?.resultSummary ??
               this.sessionManager?.getBackgroundResultSummary(sessionId),

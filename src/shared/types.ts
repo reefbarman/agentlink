@@ -270,14 +270,10 @@ export interface BgSessionInfo {
   structuredResult?: import("../agent/FleetWorkflows.js").FleetResultEnvelope;
   /** Accumulated streaming text from the bg agent (last ~500 chars for preview). */
   streamingText?: string;
-  /** Final result text when agent is done. */
-  resultText?: string;
   /** Error message if the agent errored. */
   errorMessage?: string;
   /** Timestamp when the agent finished (for auto-dismiss timing). */
   completedAt?: number;
-  /** Full transcript of the bg agent conversation (all assistant text blocks). */
-  fullTranscript?: string;
   /** Concise summary for collapsed completion/result rendering. */
   resultSummary?: string;
   /** Model-summary metadata for strip/debug surfaces. */

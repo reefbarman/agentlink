@@ -4876,6 +4876,27 @@ export class AgentSessionManager {
     }
   }
 
+  /**
+   * Resolve the user-facing result for a background session. Prefers the
+   * structured set_task_status result (final marker) over trailing assistant
+   * prose — the final assistant message is often a bare tool call with no
+   * text. Safe to call from the `done` event handler, which fires before
+   * bgFinalResults is populated: the marker is already on the session then.
+   */
+  getBackgroundResult(sessionId: string): {
+    resultText?: string;
+    summary?: string;
+  } {
+    const session = this.sessions.get(sessionId);
+    const marker = session?.getLastFinalMarker?.();
+    const resultText =
+      this.bgFinalResults.get(sessionId) ??
+      (marker?.result ? formatFleetResultEnvelope(marker.result) : undefined) ??
+      session?.fleetMetadata?.finalResult ??
+      session?.getLastAssistantText();
+    return { resultText, summary: marker?.summary };
+  }
+
   getBackgroundResultSummary(sessionId: string): string | undefined {
     const summary = this.bgSummary.get(sessionId)?.shortStatus?.trim();
     if (summary) return summary;
@@ -4887,10 +4908,13 @@ export class AgentSessionManager {
     if (isCancelled) return "Cancelled";
     if (session.status === "error") return "Error";
 
-    return summarizeTextForPreview(session.getLastAssistantText(), {
-      maxLength: 220,
-      minSentenceLength: 20,
-    });
+    return summarizeTextForPreview(
+      this.getBackgroundResult(sessionId).resultText,
+      {
+        maxLength: 220,
+        minSentenceLength: 20,
+      },
+    );
   }
 
   private async resumeParentAfterBackgroundCompletion(
@@ -5063,10 +5087,8 @@ export class AgentSessionManager {
           policyAuditCount: s.fleetMetadata?.policyAudit?.length ?? 0,
           structuredResult: s.fleetMetadata?.structuredResult,
           streamingText,
-          resultText,
           errorMessage,
           completedAt: this.bgCompletedAt.get(s.id),
-          fullTranscript: isDone ? s.getFullAssistantTranscript() : undefined,
           resultSummary: summary.shortStatus,
           summaryMeta: {
             inFlight: summary.inFlight,

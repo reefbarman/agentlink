@@ -102,11 +102,9 @@ export interface BgSessionInfoProps {
   policyAuditCount?: number;
   structuredResult?: import("../../FleetWorkflows.js").FleetResultEnvelope;
   streamingText?: string;
-  resultText?: string;
   resultSummary?: string;
   errorMessage?: string;
   completedAt?: number;
-  fullTranscript?: string;
   summaryMeta?: {
     inFlight: boolean;
     generatedAt?: number;

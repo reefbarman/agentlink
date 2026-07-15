@@ -487,10 +487,8 @@ export type ExtensionMessage =
         routingReason?: string;
         fallbackUsed?: boolean;
         streamingText?: string;
-        resultText?: string;
         errorMessage?: string;
         completedAt?: number;
-        fullTranscript?: string;
         summaryMeta?: {
           inFlight: boolean;
           generatedAt?: number;

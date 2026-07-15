@@ -956,6 +956,37 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("prefers the structured set_task_status result when the final turn has no prose", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground({
+      task: "structured result",
+      message: "work",
+    });
+    await waitFor(
+      () =>
+        (mgr as any).sessions.get(spawned.sessionId).fleetMetadata.lifecycle,
+      (lifecycle) => lifecycle === "completed",
+    );
+
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    session.getLastAssistantText.mockReturnValue(undefined);
+    session.getLastFinalMarker.mockReturnValue({
+      status: "completed",
+      summary: "one-line summary",
+      result: { type: "text", text: "full structured report" },
+      source: "tool",
+    });
+    // Exercise the done-event window, which fires before bgFinalResults is set.
+    (mgr as any).bgFinalResults.delete(spawned.sessionId);
+
+    expect(mgr.getBackgroundResult(spawned.sessionId)).toEqual({
+      resultText: "full structured report",
+      summary: "one-line summary",
+    });
+  });
+
   it("wraps background questions with context, session id, and task attribution", async () => {
     const onQuestion = vi.fn().mockResolvedValue({ answers: {}, notes: {} });
     const mgr = new AgentSessionManager(config, "/tmp");

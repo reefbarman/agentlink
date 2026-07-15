@@ -1270,6 +1270,54 @@ describe("ChatViewProvider session state sync", () => {
     ).toBe(false);
   });
 
+  it("posts the resolved background result on agentBgDone", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    const getBackgroundResult = vi.fn(() => ({
+      resultText: "full structured report",
+      summary: "one-line summary",
+    }));
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: () => ({ background: true }),
+      getForegroundSession: () => undefined,
+      getBgSessionInfos: () => [],
+      getBackgroundResult,
+      getBackgroundResultSummary: () => "Reviewed the plan",
+      listPersistedSessions: () => [],
+    };
+
+    const handleAgentEvent = (
+      provider as unknown as {
+        handleAgentEvent: (sessionId: string, event: unknown) => void;
+      }
+    ).handleAgentEvent;
+    handleAgentEvent.call(provider, "bg-1", {
+      type: "done",
+      totalInputTokens: 1,
+      totalOutputTokens: 2,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+
+    expect(getBackgroundResult).toHaveBeenCalledWith("bg-1");
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentBgDone",
+        sessionId: "bg-1",
+        resultText: "full structured report",
+        resultSummary: "Reviewed the plan",
+      }),
+    );
+  });
+
   it("replays queued webview messages after postMessage delivery fails", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
 
