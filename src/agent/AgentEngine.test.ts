@@ -2271,19 +2271,19 @@ describe("AgentEngine", () => {
 
         expect(attempts).toBe(3);
         expect(warnings).toHaveLength(2);
-        expect(warnings[0]?.message).toContain("retrying request in 0.2s");
-        expect(warnings[1]?.message).toContain("retrying request in 0.4s");
+        expect(warnings[0]?.message).toContain("retrying request in 0.5s");
+        expect(warnings[1]?.message).toContain("retrying request in 1s");
         expect(warnings[0]).toMatchObject({
           type: "warning",
-          retryDelayMs: 200,
+          retryDelayMs: 500,
           retryAttempt: 1,
-          retryMaxAttempts: 4,
+          retryMaxAttempts: 8,
         });
         expect(warnings[1]).toMatchObject({
           type: "warning",
-          retryDelayMs: 400,
+          retryDelayMs: 1000,
           retryAttempt: 2,
-          retryMaxAttempts: 4,
+          retryMaxAttempts: 8,
         });
         expect((warnings[0] as { retryAt?: number }).retryAt).toBeTypeOf(
           "number",
@@ -2293,6 +2293,60 @@ describe("AgentEngine", () => {
         );
         // Should recover successfully
         expect(events.find((e) => e.type === "error")).toBeUndefined();
+      } finally {
+        randomSpy.mockRestore();
+        timerSpy.mockRestore();
+      }
+    });
+
+    it("retries Cloudflare 520 HTML errors as server failures, not auth", async () => {
+      // The SVG path digits ("10.4013") in Cloudflare's error page previously
+      // matched the "401" auth classifier, skipping retries and showing a
+      // sign-in prompt for what is a transient provider-side 5xx.
+      const cloudflareHtml =
+        '520 <html><head></head><body><svg viewBox="0 0 41 41">' +
+        '<path d="M8.19885 10.4013C8.19491 10.5228 8.19491 10.6071Z" /></svg>' +
+        '<div class="cf-error-details"><h1>Web server is returning an unknown error</h1>' +
+        "<ul><li>Ray ID: a1b6948b6bd432a1</li></ul></div></body></html>";
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts === 1) {
+          yield* [];
+          throw Object.assign(
+            new Error(`Codex API error 520: ${cloudflareHtml}`),
+            { status: 520 },
+          );
+        }
+        yield* makeProviderStream({ text: "Recovered after 520" });
+      };
+
+      const timerSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+      const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(engine.run(session));
+        const warnings = events.filter((e) => e.type === "warning");
+
+        expect(attempts).toBe(2);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]?.message).toContain("retrying request");
+        expect(warnings[0]?.message).toContain(
+          "Web server is returning an unknown error",
+        );
+        expect(warnings[0]?.message).not.toContain("<html");
+        expect(events.find((e) => e.type === "error")).toBeUndefined();
+        expect(session.getLastAssistantText()).toBe("Recovered after 520");
       } finally {
         randomSpy.mockRestore();
         timerSpy.mockRestore();
@@ -2331,7 +2385,7 @@ describe("AgentEngine", () => {
           type: "warning",
           retryDelayMs: 1250,
           retryAttempt: 1,
-          retryMaxAttempts: 4,
+          retryMaxAttempts: 8,
         });
         expect(session.getLastAssistantText()).toBe(
           "Recovered after rate limit",

@@ -13,7 +13,8 @@ import {
   getAgentErrorCode,
   getAgentRetryDecision,
   hasAgentRetryableErrorFlag,
-  isAgentAuthErrorMessage,
+  isAgentAuthError,
+  type AgentRetryCategory,
 } from "../shared/agentErrors.js";
 import type {
   AgentToolRuntime,
@@ -60,8 +61,18 @@ import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_REQUEST_RETRIES = 4;
+// Provider-side transient failures (5xx/429/529) get a much larger budget:
+// they resolve on their own, and exhausting retries fails background tasks
+// outright, so waiting out ~60s of provider outage is the cheaper outcome.
+const MAX_TRANSIENT_REQUEST_RETRIES = 8;
 const MAX_STREAM_RETRIES = 5;
 const MAX_RETRY_DELAY_MS = 8_000;
+const MAX_TRANSIENT_RETRY_DELAY_MS = 16_000;
+const TRANSIENT_RETRY_CATEGORIES: ReadonlySet<AgentRetryCategory> = new Set([
+  "rate_limit",
+  "overloaded",
+  "server",
+]);
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
 const DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS = 300_000;
 const DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS = 300_000;
@@ -122,14 +133,15 @@ class ProviderStreamActivityMonitor {
 const buildErrorMessage = buildAgentErrorMessage;
 
 function calculateProviderRetryDelayMs(
-  category: ReturnType<typeof getAgentRetryDecision>["category"],
+  category: AgentRetryCategory,
   attempt: number,
   retryAfterMs?: number,
 ): number {
   if (retryAfterMs !== undefined) return Math.ceil(retryAfterMs);
-  const baseMs =
-    category === "rate_limit" || category === "overloaded" ? 500 : 200;
-  const exponential = Math.min(baseMs * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+  const transient = TRANSIENT_RETRY_CATEGORIES.has(category);
+  const baseMs = transient ? 500 : 200;
+  const capMs = transient ? MAX_TRANSIENT_RETRY_DELAY_MS : MAX_RETRY_DELAY_MS;
+  const exponential = Math.min(baseMs * 2 ** (attempt - 1), capMs);
   const jitter = 0.9 + Math.random() * 0.2;
   return Math.max(1, Math.floor(exponential * jitter));
 }
@@ -185,7 +197,7 @@ class AuthenticationError extends Error {
   }
 }
 
-const isAuthError = isAgentAuthErrorMessage;
+const isAuthError = isAgentAuthError;
 
 /**
  * Safety buffer percentage subtracted from the context window when computing
@@ -1242,7 +1254,7 @@ export class AgentEngine {
           }
 
           // Auth errors: try refreshing credentials before failing.
-          if (isAuthError(streamErrMsg)) {
+          if (isAuthError(streamErr)) {
             const anthropicProvider =
               provider instanceof AnthropicProvider ? provider : null;
             if (
@@ -1281,7 +1293,9 @@ export class AgentEngine {
             : requestRetryCount;
           const maxRetries = isStreamFailure
             ? MAX_STREAM_RETRIES
-            : MAX_REQUEST_RETRIES;
+            : TRANSIENT_RETRY_CATEGORIES.has(retry.category)
+              ? MAX_TRANSIENT_REQUEST_RETRIES
+              : MAX_REQUEST_RETRIES;
           if (retry.retryable && currentRetryCount < maxRetries) {
             const retryAttempt = currentRetryCount + 1;
             if (isStreamFailure) {
@@ -1835,8 +1849,7 @@ export class AgentEngine {
       // Auth and exhausted transient errors are marked retryable so the UI can
       // always offer a sensible retry path.
       const errorMessage = buildErrorMessage(err);
-      const isAuth =
-        err instanceof AuthenticationError || isAuthError(errorMessage);
+      const isAuth = err instanceof AuthenticationError || isAuthError(err);
       const retryable =
         isAuth ||
         getAgentRetryDecision(err).retryable ||

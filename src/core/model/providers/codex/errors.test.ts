@@ -57,6 +57,21 @@ describe("Codex error classification", () => {
     expect(isCodexAuthError(new Error("other error"))).toBe(false);
   });
 
+  it("does not classify 5xx errors or body digit runs as auth errors", () => {
+    expect(
+      isCodexAuthError({
+        status: 520,
+        message: '520 <html><path d="M8.19885 10.4013Z" />unauthorized</html>',
+      }),
+    ).toBe(false);
+    expect(isCodexAuthError(new Error("coordinate 10.4013 in body"))).toBe(
+      false,
+    );
+    expect(
+      isCodexAuthError(new Error("Codex API error 401: Unauthorized")),
+    ).toBe(true);
+  });
+
   it("builds auth-required error details", () => {
     expect(buildCodexAuthRequiredError()).toMatchObject({
       code: "auth_required",
@@ -119,6 +134,23 @@ describe("Codex error classification", () => {
 
     expect(buildCodexApiErrorDetails({}).message).toBe(
       "Codex API error unknown: Unknown OpenAI error",
+    );
+  });
+
+  it("summarizes HTML error bodies in Codex API error details", () => {
+    const details = buildCodexApiErrorDetails({
+      status: 520,
+      message:
+        "520 <html><body><h1>Web server is returning an unknown error</h1>" +
+        "<ul><li>Ray ID: a1b6948b6bd432a1</li></ul></body></html>",
+    });
+
+    expect(details.message).toBe(
+      "Codex API error 520: 520 Web server is returning an unknown error; " +
+        "Ray ID: a1b6948b6bd432a1",
+    );
+    expect(details.rawMessage).toBe(
+      "520 Web server is returning an unknown error; Ray ID: a1b6948b6bd432a1",
     );
   });
 

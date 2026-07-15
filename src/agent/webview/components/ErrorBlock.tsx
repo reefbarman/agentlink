@@ -21,7 +21,9 @@ function isAuthError(msg: string): boolean {
     lower.includes("authentication_error") ||
     lower.includes("invalid x-api-key") ||
     lower.includes("invalid api key") ||
-    (lower.includes("401") && !lower.includes("tool"))
+    // Word boundaries so digit runs inside provider error bodies (e.g. SVG
+    // path data in a Cloudflare HTML page) don't match as a 401 status.
+    (/\b401\b/.test(lower) && !lower.includes("tool"))
   );
 }
 

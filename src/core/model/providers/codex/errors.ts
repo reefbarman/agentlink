@@ -1,3 +1,5 @@
+import { summarizeHtmlErrorText } from "../../../../shared/agentErrors.js";
+
 export interface CodexErrorActions {
   signIn?: boolean;
   signInAnotherAccount?: boolean;
@@ -151,6 +153,11 @@ export function isCodexAuthError(error: unknown): boolean {
     if (status === 401) {
       return true;
     }
+    // A structured server-side status is authoritative: 5xx bodies (e.g.
+    // Cloudflare HTML pages) must not be message-sniffed into auth errors.
+    if (typeof status === "number" && status >= 500) {
+      return false;
+    }
   }
 
   const msg =
@@ -159,7 +166,7 @@ export function isCodexAuthError(error: unknown): boolean {
       : error instanceof Error
         ? error.message
         : String(error);
-  return /unauthorized|invalid token|401|authentication/i.test(msg);
+  return /unauthorized|invalid token|\b401\b|authentication/i.test(msg);
 }
 
 export function buildCodexAuthRequiredError(): CodexErrorDetails {
@@ -178,7 +185,9 @@ export function buildCodexApiErrorDetails(params: {
   rawCode?: string;
   body?: unknown;
 }): CodexErrorDetails {
-  const message = params.message || "Unknown OpenAI error";
+  const message = summarizeHtmlErrorText(
+    params.message || "Unknown OpenAI error",
+  );
   return {
     message: `Codex API error ${params.status ?? "unknown"}: ${message}`,
     status: params.status,

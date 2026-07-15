@@ -33,10 +33,48 @@ export function buildAgentErrorMessage(err: unknown): string {
   let e: unknown = err;
   while (e instanceof Error && !seen.has(e)) {
     seen.add(e);
-    if (e.message) parts.push(e.message);
+    if (e.message) parts.push(summarizeHtmlErrorText(e.message));
     e = (e as { cause?: unknown }).cause;
   }
   return [...new Set(parts)].join(": ");
+}
+
+/**
+ * Collapse an HTML error document embedded in an error message (e.g. a
+ * Cloudflare 5xx page returned instead of JSON) down to its human-readable
+ * summary. Raw HTML bodies are unreadable in the UI and their markup digits
+ * confuse substring-based error classifiers.
+ */
+export function summarizeHtmlErrorText(text: string): string {
+  const htmlStart = text.search(/<!doctype html|<html[\s>]/i);
+  if (htmlStart === -1) return text;
+
+  const prefix = text.slice(0, htmlStart).trim();
+  const html = text.slice(htmlStart);
+  const parts: string[] = [];
+  const heading = extractTagText(html, "h1") ?? extractTagText(html, "title");
+  if (heading) parts.push(heading);
+  for (const match of html.matchAll(/<li[^>]*>([^<]*)<\/li>/gi)) {
+    const item = match[1].replace(/\s+/g, " ").trim();
+    if (/ray id|error reference|cloudflare location/i.test(item)) {
+      parts.push(item);
+    }
+  }
+  const summary =
+    parts.length > 0 ? parts.join("; ") : "[HTML error page body omitted]";
+  return prefix ? `${prefix} ${summary}` : summary;
+}
+
+function extractTagText(html: string, tag: string): string | undefined {
+  const match = html.match(
+    new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"),
+  );
+  if (!match) return undefined;
+  const text = match[1]
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || undefined;
 }
 
 /** Returns true for transient errors that are safe to retry. */
@@ -204,8 +242,25 @@ export function isAgentAuthErrorMessage(msg: string): boolean {
     msg.includes("authentication_error") ||
     msg.includes("invalid x-api-key") ||
     msg.includes("invalid api key") ||
-    (msg.includes("401") && !msg.includes("tool"))
+    // Word boundaries so digit runs inside error bodies (SVG path data in a
+    // Cloudflare HTML page contains sequences like "10.4013") don't match.
+    (/\b401\b/.test(msg) && !msg.includes("tool"))
   );
+}
+
+/**
+ * Auth classification that trusts a structured status over message sniffing.
+ * A server-side failure (5xx) must never be presented as a sign-in problem
+ * even when its body text happens to contain auth-looking fragments.
+ */
+export function isAgentAuthError(err: unknown): boolean {
+  const status = firstNumberProperty(getErrorChain(err), [
+    "status",
+    "statusCode",
+  ]);
+  if (status === 401) return true;
+  if (status !== undefined && status >= 500) return false;
+  return isAgentAuthErrorMessage(buildAgentErrorMessage(err));
 }
 
 export function getAgentErrorCode(err: unknown): string | undefined {

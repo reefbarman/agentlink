@@ -76,6 +76,22 @@ describe("ErrorBlock", () => {
     expect(onSignInAnotherAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("treats Cloudflare HTML 5xx errors as request failures, not sign-in", () => {
+    render(
+      <ErrorBlock
+        error={
+          'Codex API error 520: 520 <svg><path d="M8.19885 10.4013Z" /></svg> ' +
+          "Web server is returning an unknown error"
+        }
+        retryable
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Request failed")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^sign in$/i })).toBeNull();
+  });
+
   it("shows condense action for context-window exceeded errors", () => {
     const onCondense = vi.fn();
 
