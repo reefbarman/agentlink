@@ -1187,6 +1187,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.uiEventHub;
   }
 
+  onDidChangeBrowserProjectedForeground(
+    listener: () => void,
+  ): vscode.Disposable {
+    return this.projectedForegroundStore.onDidChange(listener);
+  }
+
   getBrowserGatewayThemeSnapshot(): BrowserGatewayThemeSnapshot {
     if (this.view && this.webviewReady && this.browserGatewayThemeSnapshot) {
       return this.browserGatewayThemeSnapshot;

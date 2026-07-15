@@ -501,6 +501,9 @@ export function activate(context: vscode.ExtensionContext): void {
     () => chatViewProvider.getBrowserProjectedForegroundState(),
     () => chatViewProvider.getBrowserMcpStatusInfos(),
   );
+  browserGatewayService.subscribeToProjectedForegroundChanges((listener) =>
+    chatViewProvider.onDidChangeBrowserProjectedForeground(listener),
+  );
   context.subscriptions.push(browserGatewayService);
   // Keep the browser model list in parity after a dynamic capability refresh.
   chatViewProvider.setBrowserModelsChangedNotifier(() => {

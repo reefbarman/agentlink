@@ -7,12 +7,15 @@ import {
 } from "../shared/chatProjection.js";
 
 type LoadSessionAction = Extract<AppAction, { type: "LOAD_SESSION" }>;
+type ProjectedForegroundStoreListener = () => void;
 
 export class ProjectedForegroundStore {
-  private currentState: AppState = { ...initialState };
+  private readonly emptyState: AppState = { ...initialState };
+  private currentState: AppState = this.emptyState;
   private currentSessionId: string | null = null;
   private loadingSessionId: string | null = null;
   private streaming = false;
+  private readonly listeners = new Set<ProjectedForegroundStoreListener>();
 
   get state(): AppState {
     return this.currentState;
@@ -26,43 +29,97 @@ export class ProjectedForegroundStore {
     return this.streaming;
   }
 
+  onDidChange(listener: ProjectedForegroundStoreListener): { dispose(): void } {
+    this.listeners.add(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+      },
+    };
+  }
+
   replaceState(state: AppState): void {
+    if (this.currentState === state) return;
     this.currentState = state;
+    this.emitChange();
   }
 
   setSessionId(sessionId: string | null): void {
+    if (this.currentSessionId === sessionId) return;
     this.currentSessionId = sessionId;
+    this.emitChange();
   }
 
   apply(action: AppAction): void {
-    this.currentState = reducer(this.currentState, action);
-    this.streaming = this.currentState.streaming;
+    const nextState = reducer(this.currentState, action);
+    if (nextState === this.currentState) return;
+    this.currentState = nextState;
+    this.streaming = nextState.streaming;
+    this.emitChange();
   }
 
   setStreaming(streaming: boolean): void {
+    if (this.streaming === streaming) return;
     this.streaming = streaming;
+    this.emitChange();
   }
 
   reset(): void {
-    this.currentState = { ...initialState };
+    const changed =
+      this.currentState !== this.emptyState ||
+      this.currentSessionId !== null ||
+      this.loadingSessionId !== null ||
+      this.streaming;
+    if (!changed) return;
+
+    this.currentState = this.emptyState;
     this.currentSessionId = null;
     this.loadingSessionId = null;
     this.streaming = false;
+    this.emitChange();
   }
 
   hydrate(loadAction: LoadSessionAction, estimatedTotalUsed: number): void {
-    this.reset();
+    const before = this.currentState;
+    const beforeSessionId = this.currentSessionId;
+    const beforeLoadingSessionId = this.loadingSessionId;
+    const beforeStreaming = this.streaming;
+
+    this.currentState = this.emptyState;
     this.currentSessionId = loadAction.sessionId;
-    this.apply(loadAction);
-    this.apply({ type: "TOKEN_ESTIMATE", estimatedTotalUsed });
+    this.loadingSessionId = null;
+    this.streaming = false;
+    this.currentState = reducer(this.currentState, loadAction);
+    this.streaming = this.currentState.streaming;
+    this.currentState = reducer(this.currentState, {
+      type: "TOKEN_ESTIMATE",
+      estimatedTotalUsed,
+    });
+
+    if (
+      this.currentState !== before ||
+      this.currentSessionId !== beforeSessionId ||
+      this.loadingSessionId !== beforeLoadingSessionId ||
+      this.streaming !== beforeStreaming
+    ) {
+      this.emitChange();
+    }
   }
 
   beginSessionLoad(
     sessionId: string,
     hasMoreBefore: boolean | undefined,
   ): void {
-    this.loadingSessionId = hasMoreBefore === true ? sessionId : null;
+    const nextLoadingSessionId = hasMoreBefore === true ? sessionId : null;
+    if (
+      this.loadingSessionId === nextLoadingSessionId &&
+      this.currentSessionId === sessionId
+    ) {
+      return;
+    }
+    this.loadingSessionId = nextLoadingSessionId;
     this.currentSessionId = sessionId;
+    this.emitChange();
   }
 
   acceptSessionChunk(
@@ -82,5 +139,11 @@ export class ProjectedForegroundStore {
       this.loadingSessionId = null;
     }
     return true;
+  }
+
+  private emitChange(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 }

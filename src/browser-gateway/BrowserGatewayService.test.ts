@@ -79,6 +79,46 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+function projectedForeground(overrides: Record<string, unknown> = {}) {
+  return {
+    sessionId: "session-1",
+    mode: "code",
+    model: "claude-sonnet-4-6",
+    streaming: false,
+    statusOverride: null,
+    projectedMessages: [
+      {
+        id: "chat-1",
+        role: "assistant",
+        content: "hello",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "hello" }],
+      },
+    ],
+    lastInputTokens: 10,
+    lastOutputTokens: 20,
+    lastCacheReadTokens: 3,
+    estimatedTotalUsed: 33,
+    thinkingEnabled: true,
+    reasoningEffort: "high",
+    messageQueue: [],
+    questionRequest: null,
+    detectedQuestion: null,
+    todos: [],
+    debugInfo: null,
+    systemPrompt: null,
+    loadedInstructions: null,
+    restoringSession: false,
+    revertRecoveryNotice: null,
+    ...overrides,
+  };
+}
+
+const disabledPollTimers = {
+  setInterval: vi.fn(() => ({ kind: "disabled-poll" }) as never),
+  clearInterval: vi.fn(),
+};
+
 const themeSnapshotStub = {
   cssVariables: {
     "--vscode-editor-background": "#1e1e1e",
@@ -668,6 +708,320 @@ describe("BrowserGatewayService", () => {
 
     service.dispose();
     hub.dispose();
+  });
+
+  it("publishes projected foreground changes through explicit invalidation with the recurring poll disabled", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const sessionManager = makeSessionManagerStub();
+      let projected = projectedForeground();
+      let foregroundListener: (() => void) | undefined;
+      const service = new BrowserGatewayService(
+        hub,
+        sessionManager as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projected as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setHasActiveClientsProbe(() => true);
+      service.subscribeToProjectedForegroundChanges((listener) => {
+        foregroundListener = listener;
+        return { dispose: vi.fn() } as never;
+      });
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      projected = projectedForeground({ model: "gpt-5.6" });
+      foregroundListener?.();
+      vi.advanceTimersByTime(149);
+      expect(onDidChange).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+      expect(
+        onDidChange.mock.calls[0][0].snapshot.session.foreground,
+      ).toMatchObject({
+        model: "gpt-5.6",
+      });
+
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a fixed coalescing window that does not starve under continuous foreground invalidation", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const sessionManager = makeSessionManagerStub();
+      let projected = projectedForeground({
+        projectedMessages: [
+          {
+            id: "chat-1",
+            role: "assistant",
+            content: "first",
+            timestamp: 1,
+            blocks: [{ type: "text", text: "first" }],
+          },
+        ],
+      });
+      const service = new BrowserGatewayService(
+        hub,
+        sessionManager as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projected as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setHasActiveClientsProbe(() => true);
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      service.invalidateBrowserSnapshot();
+      vi.advanceTimersByTime(149);
+      projected = projectedForeground({
+        projectedMessages: [
+          {
+            id: "chat-1",
+            role: "assistant",
+            content: "latest",
+            timestamp: 1,
+            blocks: [{ type: "text", text: "latest" }],
+          },
+        ],
+      });
+      service.invalidateBrowserSnapshot();
+      expect(onDidChange).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+      expect(
+        onDidChange.mock.calls[0][0].snapshot.session.foreground
+          .projectedMessages[0].content,
+      ).toBe("latest");
+
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets immediate foreground invalidation cancel pending stale publication", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const sessionManager = makeSessionManagerStub();
+      let projected = projectedForeground({ model: "pending-model" });
+      const service = new BrowserGatewayService(
+        hub,
+        sessionManager as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projected as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setHasActiveClientsProbe(() => true);
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      service.invalidateBrowserSnapshot();
+      projected = projectedForeground({ model: "immediate-model" });
+      service.invalidateBrowserSnapshot({ immediate: true });
+
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+      expect(
+        onDidChange.mock.calls[0][0].snapshot.session.foreground,
+      ).toMatchObject({
+        model: "immediate-model",
+      });
+
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suppresses unchanged foreground invalidations and disposes the subscription", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const sessionManager = makeSessionManagerStub();
+      const projected = projectedForeground();
+      const foregroundSubscriptionDispose = vi.fn();
+      let foregroundListener: (() => void) | undefined;
+      const service = new BrowserGatewayService(
+        hub,
+        sessionManager as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projected as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setHasActiveClientsProbe(() => true);
+      service.createSnapshotPublication();
+      service.subscribeToProjectedForegroundChanges((listener) => {
+        foregroundListener = listener;
+        return { dispose: foregroundSubscriptionDispose } as never;
+      });
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      foregroundListener?.();
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).not.toHaveBeenCalled();
+
+      service.invalidateBrowserSnapshot();
+      service.dispose();
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).not.toHaveBeenCalled();
+      expect(foregroundSubscriptionDispose).toHaveBeenCalledTimes(1);
+
+      subscription.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not cancel an already pending foreground publication when a later invalidation has no connected clients", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      let projected = projectedForeground({ model: "connected-model" });
+      let hasClients = true;
+      const service = new BrowserGatewayService(
+        hub,
+        makeSessionManagerStub() as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projected as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setHasActiveClientsProbe(() => hasClients);
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      service.invalidateBrowserSnapshot();
+      vi.advanceTimersByTime(75);
+      projected = projectedForeground({ model: "later-model" });
+      hasClients = false;
+      service.invalidateBrowserSnapshot();
+      hasClients = true;
+      vi.advanceTimersByTime(75);
+
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+      expect(
+        onDidChange.mock.calls[0][0].snapshot.session.foreground,
+      ).toMatchObject({
+        model: "later-model",
+      });
+
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips explicit foreground invalidation when no browser client is connected", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const service = new BrowserGatewayService(
+        hub,
+        makeSessionManagerStub() as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projectedForeground() as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      service.setHasActiveClientsProbe(() => false);
+      service.invalidateBrowserSnapshot();
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).not.toHaveBeenCalled();
+
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("skips the poll snapshot build when no browser client is connected", () => {

@@ -40,6 +40,21 @@ import {
 } from "./DiffSnapshotHub.js";
 
 const REPOSITORY_INFO_CACHE_MS = 1_000;
+const DEFAULT_FOREGROUND_PUBLICATION_COALESCE_MS = 150;
+
+interface BrowserGatewayServiceTimerOptions {
+  foregroundCoalesceMs?: number;
+  setTimeout?: (
+    callback: () => void,
+    timeoutMs: number,
+  ) => ReturnType<typeof setTimeout>;
+  clearTimeout?: (timer: ReturnType<typeof setTimeout>) => void;
+  setInterval?: (
+    callback: () => void,
+    intervalMs: number,
+  ) => ReturnType<typeof setInterval>;
+  clearInterval?: (timer: ReturnType<typeof setInterval>) => void;
+}
 
 export interface QuestionProgressState {
   id: string;
@@ -239,6 +254,10 @@ export class BrowserGatewayService implements vscode.Disposable {
   private readonly onDidChangeEmitter =
     new vscode.EventEmitter<BrowserGatewaySnapshotPublication>();
   private pollTimer: ReturnType<typeof setInterval> | undefined;
+  private foregroundInvalidationTimer:
+    | ReturnType<typeof setTimeout>
+    | undefined;
+  private foregroundInvalidationGeneration = 0;
   private lastSerializedSnapshot = "";
   private snapshotRevision = 0;
   // Optional probe, set by the gateway server, reporting whether any browser
@@ -298,6 +317,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       "vscode-gateway",
       __DEV_BUILD__,
     ),
+    private readonly timers: BrowserGatewayServiceTimerOptions = {},
   ) {
     const snapshot = uiEventHub.getSnapshot();
     if (snapshot) {
@@ -313,16 +333,50 @@ export class BrowserGatewayService implements vscode.Disposable {
       }),
     );
 
-    // Session and background transcript/state changes are not yet published
-    // through a dedicated browser event bus, so poll the current snapshot and
-    // emit only when the serialized browser-facing state changes.
-    this.pollTimer = setInterval(() => {
+    // Session and background transcript/state changes are not yet fully
+    // published through dedicated browser event producers. A4 migrates those
+    // producers incrementally; keep this safety poll until the field matrix is
+    // complete and tested with the recurring poll disabled.
+    this.pollTimer = this.scheduleInterval(() => {
       this.emitSnapshotIfChanged();
     }, 150);
   }
 
   getCurrentThemeSnapshot(): BrowserGatewayThemeSnapshot {
     return this.getThemeSnapshot();
+  }
+
+  subscribeToProjectedForegroundChanges(
+    onDidChangeProjectedForeground: (listener: () => void) => {
+      dispose(): void;
+    },
+  ): void {
+    this.disposables.push(
+      onDidChangeProjectedForeground(() => {
+        this.invalidateBrowserSnapshot();
+      }),
+    );
+  }
+
+  invalidateBrowserSnapshot(options: { immediate?: boolean } = {}): void {
+    if (this.hasActiveClientsProbe && !this.hasActiveClientsProbe()) {
+      return;
+    }
+
+    if (options.immediate) {
+      this.cancelPendingForegroundInvalidation();
+      this.emitSnapshotIfChanged();
+      return;
+    }
+
+    if (this.foregroundInvalidationTimer) return;
+
+    const generation = ++this.foregroundInvalidationGeneration;
+    this.foregroundInvalidationTimer = this.scheduleTimeout(() => {
+      if (generation !== this.foregroundInvalidationGeneration) return;
+      this.foregroundInvalidationTimer = undefined;
+      this.emitSnapshotIfChanged();
+    }, this.timers.foregroundCoalesceMs ?? DEFAULT_FOREGROUND_PUBLICATION_COALESCE_MS);
   }
 
   getUiState(): BrowserGatewayUiState {
@@ -585,8 +639,9 @@ export class BrowserGatewayService implements vscode.Disposable {
       disposable.dispose();
     }
     this.disposables.length = 0;
+    this.cancelPendingForegroundInvalidation();
     if (this.pollTimer) {
-      clearInterval(this.pollTimer);
+      this.cancelInterval(this.pollTimer);
       this.pollTimer = undefined;
     }
     this.approval = undefined;
@@ -724,6 +779,35 @@ export class BrowserGatewayService implements vscode.Disposable {
 
   private emitSnapshot(): void {
     this.onDidChangeEmitter.fire(this.createSnapshotPublication());
+  }
+
+  private cancelPendingForegroundInvalidation(): void {
+    this.foregroundInvalidationGeneration += 1;
+    if (!this.foregroundInvalidationTimer) return;
+    this.cancelTimeout(this.foregroundInvalidationTimer);
+    this.foregroundInvalidationTimer = undefined;
+  }
+
+  private scheduleTimeout(
+    callback: () => void,
+    timeoutMs: number,
+  ): ReturnType<typeof setTimeout> {
+    return (this.timers.setTimeout ?? setTimeout)(callback, timeoutMs);
+  }
+
+  private cancelTimeout(timer: ReturnType<typeof setTimeout>): void {
+    (this.timers.clearTimeout ?? clearTimeout)(timer);
+  }
+
+  private scheduleInterval(
+    callback: () => void,
+    intervalMs: number,
+  ): ReturnType<typeof setInterval> {
+    return (this.timers.setInterval ?? setInterval)(callback, intervalMs);
+  }
+
+  private cancelInterval(timer: ReturnType<typeof setInterval>): void {
+    (this.timers.clearInterval ?? clearInterval)(timer);
   }
 
   private emitSnapshotIfChanged(): void {
