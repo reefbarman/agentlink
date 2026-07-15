@@ -168,6 +168,12 @@ export interface CoreModelProviderHints {
   };
 }
 
+export interface CoreModelTransportActivity {
+  kind: "headers" | "body" | "provider_event";
+  at: number;
+  bytes?: number;
+}
+
 export interface CoreModelRequestBase {
   model: string;
   systemPrompt: string;
@@ -179,6 +185,12 @@ export interface CoreModelRequestBase {
   state?: CoreModelStateOptions;
   providerHints?: CoreModelProviderHints;
   signal?: AbortSignal;
+  /**
+   * Provider/transport liveness hook. This is deliberately below the semantic
+   * stream-event layer so metadata, heartbeats, and body chunks keep long
+   * model requests alive even when no user-visible output is produced.
+   */
+  onTransportActivity?: (activity: CoreModelTransportActivity) => void;
 }
 
 export interface CoreModelStreamRequest extends CoreModelRequestBase {

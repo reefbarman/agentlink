@@ -54,6 +54,44 @@ describe("installAgentLinkHttpDispatcher integration", () => {
     }
   });
 
+  it("bounds concurrent sockets per origin", async () => {
+    vi.resetModules();
+    const { agentLinkFetch } = await import("./httpDispatcher.js");
+    let active = 0;
+    let peakActive = 0;
+    const server = createServer((_req, res) => {
+      active++;
+      peakActive = Math.max(peakActive, active);
+      setTimeout(() => {
+        active--;
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("ok");
+      }, 20);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback server address");
+      }
+      const url = `http://127.0.0.1:${address.port}/bounded`;
+      const responses = await Promise.all(
+        Array.from({ length: 12 }, () => agentLinkFetch(url)),
+      );
+      await Promise.all(responses.map((response) => response.text()));
+
+      expect(peakActive).toBeGreaterThan(1);
+      expect(peakActive).toBeLessThanOrEqual(6);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("uses undici APIs available from the installed major version", () => {
     expect(typeof RealUndiciAgent).toBe("function");
   });

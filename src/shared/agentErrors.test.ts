@@ -1,5 +1,6 @@
 import {
   buildAgentErrorMessage,
+  getAgentRetryDecision,
   getAgentErrorActions,
   getAgentErrorCode,
   hasAgentRetryableErrorFlag,
@@ -52,5 +53,32 @@ describe("agentErrors", () => {
     expect(hasAgentRetryableErrorFlag(error)).toBe(true);
     expect(getAgentErrorCode(error)).toBe("context_window_exceeded");
     expect(getAgentErrorActions(error)).toEqual({ condense: true });
+  });
+
+  it("uses structured status and Retry-After metadata", () => {
+    const error = Object.assign(new Error("rate limited"), {
+      status: 429,
+      headers: new Headers({ "retry-after-ms": "1250" }),
+    });
+
+    expect(getAgentRetryDecision(error)).toEqual({
+      retryable: true,
+      category: "rate_limit",
+      retryAfterMs: 1250,
+      status: 429,
+    });
+  });
+
+  it("honors an explicit x-should-retry false response", () => {
+    const error = Object.assign(new Error("server error 503"), {
+      status: 503,
+      headers: { "x-should-retry": "false" },
+    });
+
+    expect(getAgentRetryDecision(error)).toEqual({
+      retryable: false,
+      category: "unknown",
+      status: 503,
+    });
   });
 });

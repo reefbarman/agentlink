@@ -11,9 +11,9 @@ import {
   buildAgentErrorMessage,
   getAgentErrorActions,
   getAgentErrorCode,
+  getAgentRetryDecision,
   hasAgentRetryableErrorFlag,
   isAgentAuthErrorMessage,
-  isAgentRetryableErrorMessage,
 } from "../shared/agentErrors.js";
 import type {
   AgentToolRuntime,
@@ -50,53 +50,89 @@ import type {
   ReasoningEffort,
 } from "./providers/types.js";
 import { toSupportedImageMediaType } from "./providers/types.js";
-import { toCoreModelDocumentMediaType } from "../core/modelRuntime.js";
+import {
+  toCoreModelDocumentMediaType,
+  type CoreModelTransportActivity,
+} from "../core/modelRuntime.js";
 import { sleep } from "../util/sleep.js";
 import { truncateMiddle } from "../util/truncateMiddle.js";
+import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
-const MAX_API_RETRIES = 3;
-// Background agents often run unattended for much longer than a foreground
-// turn. Give them enough consecutive recovery attempts to ride out a provider
-// outage without letting a permanently unavailable provider occupy a fleet
-// slot forever.
-const MAX_BACKGROUND_API_RETRIES = 12;
-const MAX_BACKGROUND_NETWORK_RETRY_DELAY_MS = 30_000;
+const MAX_REQUEST_RETRIES = 4;
+const MAX_STREAM_RETRIES = 5;
+const MAX_RETRY_DELAY_MS = 8_000;
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
-const DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS = 90_000;
-const DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS = 120_000;
+const DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS = 300_000;
+const DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS = 300_000;
 
 class ProviderStreamTimeoutError extends Error {
-  constructor(kind: "first event" | "inactivity", timeoutMs: number) {
+  constructor(kind: "connection" | "inactivity", timeoutMs: number) {
     super(`Provider stream ${kind} timed out after ${timeoutMs}ms`);
     this.name = "ProviderStreamTimeoutError";
   }
 }
 
-async function nextProviderEventWithTimeout<T>(
-  iterator: AsyncIterator<T>,
-  timeoutMs: number,
-  kind: "first event" | "inactivity",
-  requestController: AbortController,
-): Promise<IteratorResult<T>> {
-  let timer: ReturnType<typeof setNodeTimeout> | undefined;
-  try {
-    return await Promise.race([
-      iterator.next(),
-      new Promise<never>((_, reject) => {
-        timer = setNodeTimeout(() => {
-          requestController.abort();
-          reject(new ProviderStreamTimeoutError(kind, timeoutMs));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearNodeTimeout(timer);
+class ProviderStreamActivityMonitor {
+  private timer: ReturnType<typeof setNodeTimeout> | undefined;
+  private readonly timeoutPromise: Promise<never>;
+  private rejectTimeout: (error: Error) => void = () => undefined;
+  private disposed = false;
+  hasTransportActivity = false;
+  lastActivityAt: number | undefined;
+
+  constructor(
+    connectionTimeoutMs: number,
+    private readonly inactivityTimeoutMs: number,
+    private readonly requestController: AbortController,
+  ) {
+    this.timeoutPromise = new Promise<never>((_, reject) => {
+      this.rejectTimeout = reject;
+    });
+    this.arm("connection", connectionTimeoutMs);
+  }
+
+  readonly recordActivity = (activity: CoreModelTransportActivity): void => {
+    if (this.disposed) return;
+    this.hasTransportActivity = true;
+    this.lastActivityAt = activity.at;
+    this.arm("inactivity", this.inactivityTimeoutMs);
+  };
+
+  async next<T>(iterator: AsyncIterator<T>): Promise<IteratorResult<T>> {
+    return Promise.race([iterator.next(), this.timeoutPromise]);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.timer) clearNodeTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  private arm(kind: "connection" | "inactivity", timeoutMs: number): void {
+    if (this.timer) clearNodeTimeout(this.timer);
+    this.timer = setNodeTimeout(() => {
+      const error = new ProviderStreamTimeoutError(kind, timeoutMs);
+      this.rejectTimeout(error);
+      this.requestController.abort();
+    }, timeoutMs);
   }
 }
 
 const buildErrorMessage = buildAgentErrorMessage;
-const isRetryableError = isAgentRetryableErrorMessage;
+
+function calculateProviderRetryDelayMs(
+  category: ReturnType<typeof getAgentRetryDecision>["category"],
+  attempt: number,
+  retryAfterMs?: number,
+): number {
+  if (retryAfterMs !== undefined) return Math.ceil(retryAfterMs);
+  const baseMs =
+    category === "rate_limit" || category === "overloaded" ? 500 : 200;
+  const exponential = Math.min(baseMs * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+  const jitter = 0.9 + Math.random() * 0.2;
+  return Math.max(1, Math.floor(exponential * jitter));
+}
 
 function extractAgentDisplayArgs(
   toolName: string,
@@ -536,9 +572,9 @@ export class AgentEngine {
       toolProfile?: string;
       maxApiTurns?: number;
       maxToolCalls?: number;
-      /** Test/diagnostic override. Production uses the bounded defaults above. */
+      /** Time to first raw transport activity (normally response headers). */
       providerFirstEventTimeoutMs?: number;
-      /** Test/diagnostic override. Production uses the bounded defaults above. */
+      /** Maximum silence between raw response body chunks/provider events. */
       providerInactivityTimeoutMs?: number;
     },
   ): AsyncGenerator<AgentEvent> {
@@ -569,10 +605,9 @@ export class AgentEngine {
     let currentTodos: TodoItem[] = getLatestTodoState(session.getAllMessages());
 
     try {
-      let retryCount = 0;
-      const maxApiRetries = opts?.isBackground
-        ? MAX_BACKGROUND_API_RETRIES
-        : MAX_API_RETRIES;
+      let requestRetryCount = 0;
+      let streamRetryCount = 0;
+      let visibleTextFromRetriedStream = "";
       let emptyResponseRetryCount = 0;
       let pendingEmptyResponseNudge = false;
       let emptyResponseCondenseAttempted = false;
@@ -773,6 +808,10 @@ export class AgentEngine {
         let promptCacheKey: string | undefined;
         let promptCacheRetention: "in_memory" | "24h" | undefined;
         let storeResponseState = false;
+        let transportMonitor: ProviderStreamActivityMonitor | undefined;
+        const retryTextPrefix = visibleTextFromRetriedStream;
+        let retryTextOffset = 0;
+        let retryTextDiverged = false;
 
         try {
           // Build a copy of messages for the API call, injecting any attached
@@ -953,6 +992,13 @@ export class AgentEngine {
           const requestController = new AbortController();
           const abortRequest = () => requestController.abort();
           signal.addEventListener("abort", abortRequest, { once: true });
+          transportMonitor = new ProviderStreamActivityMonitor(
+            opts?.providerFirstEventTimeoutMs ??
+              DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS,
+            opts?.providerInactivityTimeoutMs ??
+              DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS,
+            requestController,
+          );
           const streamGen = provider.stream({
             model: session.model,
             systemPrompt: session.systemPrompt,
@@ -967,24 +1013,23 @@ export class AgentEngine {
             cache: currentCache,
             state: currentState,
             signal: requestController.signal,
+            onTransportActivity: transportMonitor.recordActivity,
           });
           const streamIterator = streamGen[Symbol.asyncIterator]();
 
           try {
             while (true) {
-              const next = await nextProviderEventWithTimeout(
-                streamIterator,
-                firstTokenReceived
-                  ? (opts?.providerInactivityTimeoutMs ??
-                      DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS)
-                  : (opts?.providerFirstEventTimeoutMs ??
-                      DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS),
-                firstTokenReceived ? "inactivity" : "first event",
-                requestController,
-              );
+              const next = await transportMonitor.next(streamIterator);
               if (next.done) break;
               const event = next.value;
               if (signal.aborted) break;
+
+              // Custom/test providers may not use agentLinkFetch. Treat their
+              // raw provider event as liveness before interpreting it.
+              transportMonitor.recordActivity({
+                kind: "provider_event",
+                at: Date.now(),
+              });
 
               if (!firstTokenReceived) {
                 firstTokenReceived = true;
@@ -1020,7 +1065,35 @@ export class AgentEngine {
                   yield { type: "thinking_end", thinkingId: event.thinkingId };
                   break;
                 case "text_delta":
-                  yield { type: "text_delta", text: event.text };
+                  {
+                    let visibleText = event.text;
+                    if (
+                      !retryTextDiverged &&
+                      retryTextOffset < retryTextPrefix.length
+                    ) {
+                      const remainingPrefix =
+                        retryTextPrefix.slice(retryTextOffset);
+                      let matchingLength = 0;
+                      const limit = Math.min(
+                        visibleText.length,
+                        remainingPrefix.length,
+                      );
+                      while (
+                        matchingLength < limit &&
+                        visibleText[matchingLength] ===
+                          remainingPrefix[matchingLength]
+                      ) {
+                        matchingLength++;
+                      }
+                      retryTextOffset += matchingLength;
+                      visibleText = visibleText.slice(matchingLength);
+                      if (visibleText.length > 0) retryTextDiverged = true;
+                    }
+                    if (visibleText.length > 0) {
+                      visibleTextFromRetriedStream += visibleText;
+                      yield { type: "text_delta", text: visibleText };
+                    }
+                  }
                   break;
                 case "tool_start":
                   session.currentTool = event.toolName;
@@ -1056,10 +1129,23 @@ export class AgentEngine {
             }
           } finally {
             signal.removeEventListener("abort", abortRequest);
+            transportMonitor.dispose();
+            try {
+              void streamIterator.return?.(undefined).catch(() => undefined);
+            } catch {
+              // Best-effort cancellation prevents abandoned streaming bodies
+              // from occupying sockets after timeout/retry.
+            }
           }
         } catch (streamErr: unknown) {
           if (signal.aborted) break;
           const streamErrMsg = buildErrorMessage(streamErr);
+          if (streamErr instanceof ProviderStreamTimeoutError) {
+            const http = getAgentLinkHttpDiagnostics();
+            this.log?.(
+              `[provider-timeout] ${streamErr.message} transportEstablished=${transportMonitor?.hasTransportActivity ?? false} lastActivityAt=${transportMonitor?.lastActivityAt ?? "none"} activeHttp=${http.activeRequests} peakHttp=${http.peakActiveRequests} bodyChunks=${http.bodyChunks} transportErrors=${http.transportErrors}`,
+            );
+          }
 
           // Broken tool_use/tool_result pairing (e.g. from an aborted run or
           // a bad history transform) causes a 400. Repair once and retry;
@@ -1181,29 +1267,41 @@ export class AgentEngine {
             throw new AuthenticationError(streamErrMsg);
           }
 
-          // Transient network / rate-limit errors: auto-retry with backoff.
-          if (isRetryableError(streamErrMsg) && retryCount < maxApiRetries) {
-            retryCount++;
-            const isRateLimit =
-              streamErrMsg.includes("rate_limit") ||
-              streamErrMsg.includes("overloaded") ||
-              streamErrMsg.includes("503");
-            const delayMs = isRateLimit
-              ? Math.min(retryCount * 15_000, 60_000)
-              : Math.min(
-                  Math.floor(250 * 2 ** (retryCount - 1) + Math.random() * 250),
-                  opts?.isBackground
-                    ? MAX_BACKGROUND_NETWORK_RETRY_DELAY_MS
-                    : 4_000,
-                );
+          // Keep request establishment retries separate from reconnecting an
+          // already-live stream. This mirrors the official harnesses and
+          // prevents one failure class from consuming the other's budget.
+          const retry = getAgentRetryDecision(streamErr);
+          const isStreamFailure =
+            firstTokenReceived ||
+            (Boolean(transportMonitor?.hasTransportActivity) &&
+              retry.status === undefined);
+          const retryLayer = isStreamFailure ? "stream" : "request";
+          const currentRetryCount = isStreamFailure
+            ? streamRetryCount
+            : requestRetryCount;
+          const maxRetries = isStreamFailure
+            ? MAX_STREAM_RETRIES
+            : MAX_REQUEST_RETRIES;
+          if (retry.retryable && currentRetryCount < maxRetries) {
+            const retryAttempt = currentRetryCount + 1;
+            if (isStreamFailure) {
+              streamRetryCount = retryAttempt;
+            } else {
+              requestRetryCount = retryAttempt;
+            }
+            const delayMs = calculateProviderRetryDelayMs(
+              retry.category,
+              retryAttempt,
+              retry.retryAfterMs,
+            );
             const retryAt = Date.now() + delayMs;
             yield {
               type: "warning",
-              message: `${streamErrMsg} — retrying in ${delayMs / 1000}s (attempt ${retryCount}/${maxApiRetries})`,
+              message: `${streamErrMsg} — retrying ${retryLayer} in ${delayMs / 1000}s (attempt ${retryAttempt}/${maxRetries})`,
               retryDelayMs: delayMs,
               retryAt,
-              retryAttempt: retryCount,
-              retryMaxAttempts: maxApiRetries,
+              retryAttempt,
+              retryMaxAttempts: maxRetries,
             };
             await sleep(delayMs);
             if (signal.aborted) break;
@@ -1213,8 +1311,10 @@ export class AgentEngine {
           throw streamErr;
         }
 
-        // Successful API response — reset transient retry counter.
-        retryCount = 0;
+        // Successful API response resets both independently budgeted layers.
+        requestRetryCount = 0;
+        streamRetryCount = 0;
+        visibleTextFromRetriedStream = "";
         apiTurnCount++;
 
         if (signal.aborted) break;
@@ -1739,7 +1839,7 @@ export class AgentEngine {
         err instanceof AuthenticationError || isAuthError(errorMessage);
       const retryable =
         isAuth ||
-        isRetryableError(errorMessage) ||
+        getAgentRetryDecision(err).retryable ||
         hasAgentRetryableErrorFlag(err);
       const code = getAgentErrorCode(err);
       const actions = getAgentErrorActions(err);

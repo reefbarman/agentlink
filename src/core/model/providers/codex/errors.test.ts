@@ -85,6 +85,7 @@ describe("Codex error classification", () => {
       Object.assign(new Error("model overloaded"), {
         status: 503,
         code: "server_overloaded",
+        headers: { "retry-after-ms": "750" },
         body: { error: { message: "model overloaded" } },
       }),
     );
@@ -95,6 +96,7 @@ describe("Codex error classification", () => {
       status: 503,
       rawMessage: "model overloaded",
       rawCode: "server_overloaded",
+      headers: { "retry-after-ms": "750" },
       body: { error: { message: "model overloaded" } },
     });
   });

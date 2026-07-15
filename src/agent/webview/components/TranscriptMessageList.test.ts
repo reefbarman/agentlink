@@ -230,6 +230,67 @@ describe("TranscriptMessageList background result rendering", () => {
   });
 });
 
+describe("TranscriptMessageList retry error rendering", () => {
+  it("groups adjacent retries into one compact recovery notice", () => {
+    const messages: ChatMessage[] = [1, 2, 3].map((attempt) => ({
+      id: `warning-${attempt}`,
+      role: "warning",
+      content: "",
+      timestamp: attempt,
+      blocks: [],
+      warningMessage: `Connection error EADDRNOTAVAIL — retrying request (attempt ${attempt}/4)`,
+      warningRetry: {
+        retryAttempt: attempt,
+        retryMaxAttempts: 4,
+      },
+    }));
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: true }),
+    );
+
+    expect(container.querySelectorAll(".error-notice")).toHaveLength(1);
+    expect(screen.getByText("Connection interrupted")).toBeTruthy();
+    expect(
+      screen.getByText(/retrying automatically · attempt 3 of 4/i),
+    ).toBeTruthy();
+    expect(screen.getByText("Technical details (3)")).toBeTruthy();
+    expect(screen.getByText(/no action is needed/i)).toBeTruthy();
+    cleanup();
+  });
+
+  it("keeps retry notices separate when transcript content occurs between them", () => {
+    const warning = (id: string, timestamp: number): ChatMessage => ({
+      id,
+      role: "warning",
+      content: "",
+      timestamp,
+      blocks: [],
+      warningMessage: "Request timed out — retrying request",
+    });
+    const messages: ChatMessage[] = [
+      warning("warning-1", 1),
+      {
+        id: "assistant-progress",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [{ type: "text", text: "Recovered and continued." }],
+      },
+      warning("warning-2", 3),
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: true }),
+    );
+
+    expect(container.querySelectorAll(".error-notice")).toHaveLength(2);
+    expect(screen.getByText("Request resumed")).toBeTruthy();
+    expect(screen.getByText("Response timed out")).toBeTruthy();
+    cleanup();
+  });
+});
+
 describe("TranscriptMessageList streaming baseline metrics", () => {
   it("distinguishes unchanged history from the active message", () => {
     const history: ChatMessage = {

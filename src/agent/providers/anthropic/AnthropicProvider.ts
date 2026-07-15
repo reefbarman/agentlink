@@ -8,6 +8,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "crypto";
+import { withAgentLinkHttpActivity } from "../../../util/httpDispatcher.js";
 import {
   createAnthropicClient,
   hasAnthropicApiKey,
@@ -272,12 +273,18 @@ export class AnthropicProvider implements ModelProvider {
     let cacheReadTokens = 0;
     let cacheCreationTokens = 0;
 
-    const stream = client.messages.stream(requestParams, {
-      signal,
-      maxRetries: 0,
-    });
+    const stream = withAgentLinkHttpActivity(request.onTransportActivity, () =>
+      client.messages.stream(requestParams, {
+        signal,
+        maxRetries: 0,
+      }),
+    );
 
     for await (const event of stream) {
+      request.onTransportActivity?.({
+        kind: "provider_event",
+        at: Date.now(),
+      });
       switch (event.type) {
         case "content_block_start": {
           const block = event.content_block;

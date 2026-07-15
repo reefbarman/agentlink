@@ -28,6 +28,8 @@ describe("ErrorBlock", () => {
     expect(
       screen.getByText(/all signed-in codex accounts have hit usage limits/i),
     ).toBeTruthy();
+    expect(screen.getByText("Usage limit reached")).toBeTruthy();
+    expect(screen.getByText("Technical details")).toBeTruthy();
 
     fireEvent.click(
       screen.getByRole("button", { name: /sign in another account/i }),

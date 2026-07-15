@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("undici", () => ({
   Agent: mocks.Agent,
   EnvHttpProxyAgent: mocks.EnvHttpProxyAgent,
+  Response: globalThis.Response,
   fetch: mocks.fetch,
   interceptors: { dns: mocks.dns },
   setGlobalDispatcher: mocks.setGlobalDispatcher,
@@ -73,7 +74,10 @@ describe("installAgentLinkHttpDispatcher", () => {
 
     expect(mocks.Agent).toHaveBeenCalledWith({
       keepAliveTimeout: 60_000,
-      headersTimeout: 30_000,
+      headersTimeout: 300_000,
+      bodyTimeout: 300_000,
+      connections: 6,
+      allowH2: true,
     });
     expect(mocks.EnvHttpProxyAgent).not.toHaveBeenCalled();
     expect(mocks.dns).toHaveBeenCalledTimes(1);
@@ -91,7 +95,10 @@ describe("installAgentLinkHttpDispatcher", () => {
     expect(mocks.Agent).not.toHaveBeenCalled();
     expect(mocks.EnvHttpProxyAgent).toHaveBeenCalledWith({
       keepAliveTimeout: 60_000,
-      headersTimeout: 30_000,
+      headersTimeout: 300_000,
+      bodyTimeout: 300_000,
+      connections: 6,
+      allowH2: true,
     });
     expect(mocks.dns).not.toHaveBeenCalled();
     expect(mocks.setGlobalDispatcher).toHaveBeenCalledWith(
@@ -148,7 +155,50 @@ describe("installAgentLinkHttpDispatcher", () => {
     expect(mocks.Agent).not.toHaveBeenCalled();
     expect(mocks.EnvHttpProxyAgent).toHaveBeenCalledWith({
       keepAliveTimeout: 60_000,
-      headersTimeout: 30_000,
+      headersTimeout: 300_000,
+      bodyTimeout: 300_000,
+      connections: 6,
+      allowH2: true,
+    });
+  });
+
+  it("reports headers and raw body chunks as transport activity", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("hello"));
+        controller.enqueue(new TextEncoder().encode(" world"));
+        controller.close();
+      },
+    });
+    (mocks.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      new Response(body),
+    );
+    const {
+      agentLinkFetch,
+      getAgentLinkHttpDiagnostics,
+      withAgentLinkHttpActivity,
+    } = await import("./httpDispatcher.js");
+    const activities: Array<{ kind: string; bytes?: number }> = [];
+
+    const response = await withAgentLinkHttpActivity(
+      (activity) => activities.push(activity),
+      () => agentLinkFetch("https://example.com/stream"),
+    );
+
+    expect(await response.text()).toBe("hello world");
+    expect(activities.map((activity) => activity.kind)).toEqual([
+      "headers",
+      "body",
+      "body",
+    ]);
+    expect(activities.slice(1).map((activity) => activity.bytes)).toEqual([
+      5, 6,
+    ]);
+    expect(getAgentLinkHttpDiagnostics()).toMatchObject({
+      activeRequests: 0,
+      headerResponses: 1,
+      bodyChunks: 2,
+      bodyBytes: 11,
     });
   });
 

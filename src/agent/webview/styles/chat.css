@@ -1004,56 +1004,143 @@ body {
   line-height: 1.4;
 }
 
-/* ── Error Block ── */
+/* ── Error Notice ── */
 
-.error-block {
+.error-notice {
   display: flex;
-  gap: 8px;
+  gap: 9px;
   align-items: flex-start;
-  padding: 8px 10px;
-  margin: 4px 0;
-  border-radius: 4px;
-  background: var(
-    --vscode-inputValidation-errorBackground,
-    rgba(255, 0, 0, 0.1)
+  padding: 7px 9px;
+  margin: 5px 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.error-notice-recovering {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #cca700) 7%,
+    transparent
   );
-  border: 1px solid
-    var(--vscode-inputValidation-errorBorder, rgba(255, 0, 0, 0.3));
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #cca700) 24%,
+    transparent
+  );
 }
 
-.error-icon {
+.error-notice-recovered {
+  color: var(--vscode-testing-iconPassed, #73c991);
+  background: color-mix(
+    in srgb,
+    var(--vscode-testing-iconPassed, #73c991) 6%,
+    transparent
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-testing-iconPassed, #73c991) 18%,
+    transparent
+  );
+}
+
+.error-notice-error {
   color: var(--vscode-errorForeground);
-  flex-shrink: 0;
+  background: color-mix(in srgb, var(--vscode-errorForeground) 7%, transparent);
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 24%,
+    transparent
+  );
 }
 
-.error-body {
+.error-notice-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  font-size: 13px;
+}
+
+.error-notice-icon-spinning {
+  animation: spin 1.2s linear infinite;
+}
+
+.error-notice-content {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
   flex: 1;
 }
 
-.error-message {
-  font-size: 12px;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+.error-notice-summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
 }
 
-.error-hint {
+.error-notice-title {
+  color: var(--vscode-foreground);
   font-size: 11px;
-  opacity: 0.7;
-  font-style: italic;
+  font-weight: 600;
+}
+
+.error-notice-status,
+.error-notice-hint {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
 
-.error-actions {
+.error-notice-details {
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+}
+
+.error-notice-details > summary {
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.75;
+}
+
+.error-notice-details > summary:hover {
+  opacity: 1;
+}
+
+.error-notice-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.error-notice-detail-list pre {
+  max-height: 120px;
+  overflow: auto;
+  padding: 5px 6px;
+  border-radius: 3px;
+  color: var(--vscode-editor-foreground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editor-background) 75%,
+    transparent
+  );
+  font-family: var(--vscode-editor-font-family);
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error-notice-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: 3px;
 }
 
 .error-retry-btn {

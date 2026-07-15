@@ -10,7 +10,7 @@ import type { ModelInfo } from "./providers/types.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
-const ANTHROPIC_BACKGROUND_DEFAULT_MODEL = "claude-fable-5";
+const ANTHROPIC_BACKGROUND_DEFAULT_MODEL = "claude-opus-4-8";
 
 interface TaskRouteRule {
   preferredMode?: string;
@@ -290,9 +290,9 @@ export async function resolveBackgroundRoute(
         if (codexDefault) picked = codexDefault;
       }
 
-      // Prefer Fable 5 for Anthropic background agents once Anthropic advertises
-      // it through the dynamic model catalog. If it is not listed yet, keep the
-      // scored fallback instead of routing to an unavailable model ID.
+      // Prefer Opus 4.8 for non-cheap Anthropic background work. If it is not
+      // available to the account, keep the scored fallback instead of routing
+      // to an unavailable model ID.
       const anthropicDefault = candidates.find(
         (m) => m.id === ANTHROPIC_BACKGROUND_DEFAULT_MODEL,
       );

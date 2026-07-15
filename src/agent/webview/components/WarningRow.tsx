@@ -1,27 +1,56 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 
 import type { ChatMessage } from "../types";
+import { ErrorNotice } from "./ErrorNotice";
 
 interface WarningRowProps {
-  message: ChatMessage;
+  messages: ChatMessage[];
+  resolved?: boolean;
   onRetry?: () => void;
 }
 
-function formatCountdownLabel(message: ChatMessage, nowMs: number): string {
+function formatRetryStatus(message: ChatMessage, nowMs: number): string {
   const retryAt = message.warningRetry?.retryAt;
   if (!retryAt) {
-    return "API error (auto-repaired)";
+    return "Retrying automatically";
   }
 
   const remainingSeconds = Math.max(0, Math.ceil((retryAt - nowMs) / 1000));
   if (remainingSeconds === 0) {
-    return "API error (auto-repaired) — retrying now…";
+    return "Retrying now";
   }
 
-  return `API error (auto-repaired) — retrying in ${remainingSeconds}s`;
+  return `Retrying in ${remainingSeconds}s`;
 }
 
-export function WarningRow({ message, onRetry }: WarningRowProps) {
+function getWarningTitle(message: string, resolved: boolean): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("rate_limit") || lower.includes("429")) {
+    return resolved ? "Rate limit cleared" : "Rate limit reached";
+  }
+  if (lower.includes("overloaded") || lower.includes("529")) {
+    return resolved ? "Provider recovered" : "Provider is busy";
+  }
+  if (lower.includes("timed out") || lower.includes("timeout")) {
+    return resolved ? "Request resumed" : "Response timed out";
+  }
+  if (
+    lower.includes("connection") ||
+    lower.includes("eaddrnotavail") ||
+    lower.includes("econn") ||
+    lower.includes("fetch failed")
+  ) {
+    return resolved ? "Connection restored" : "Connection interrupted";
+  }
+  return resolved ? "Request resumed" : "Request interrupted";
+}
+
+export function WarningRow({
+  messages,
+  resolved = false,
+  onRetry,
+}: WarningRowProps) {
+  const message = messages[messages.length - 1];
   const retryAt = message.warningRetry?.retryAt;
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -40,24 +69,40 @@ export function WarningRow({ message, onRetry }: WarningRowProps) {
     return () => clearInterval(timer);
   }, [retryAt]);
 
-  const summaryLabel = useMemo(
-    () => formatCountdownLabel(message, nowMs),
+  const status = useMemo(
+    () => formatRetryStatus(message, nowMs),
     [message, nowMs],
   );
+  const attempt = message.warningRetry?.retryAttempt;
+  const maxAttempts = message.warningRetry?.retryMaxAttempts;
+  const attemptLabel =
+    attempt !== undefined
+      ? `Attempt ${attempt}${maxAttempts !== undefined ? ` of ${maxAttempts}` : ""}`
+      : messages.length > 1
+        ? `${messages.length} retries`
+        : undefined;
+  const retryStatus = `${status}${attemptLabel ? ` · ${attemptLabel}` : ""}`;
+  const resolvedStatus = `${messages.length} automatic ${messages.length === 1 ? "retry" : "retries"}`;
 
   return (
-    <div class="condense-row condense-row-error">
-      <i class="codicon codicon-warning" />
-      <details class="warning-row-details">
-        <summary class="condense-row-label">{summaryLabel}</summary>
-        <pre class="warning-row-body">{message.warningMessage}</pre>
-      </details>
-      {message.error && onRetry && (
-        <button class="error-retry-btn" onClick={onRetry}>
-          <i class="codicon codicon-refresh" />
-          Retry
-        </button>
-      )}
-    </div>
+    <ErrorNotice
+      tone={resolved ? "recovered" : "recovering"}
+      title={getWarningTitle(message.warningMessage ?? "", resolved)}
+      status={resolved ? resolvedStatus : retryStatus}
+      hint={
+        resolved
+          ? "The agent continued successfully."
+          : "The agent is still running; no action is needed."
+      }
+      details={messages.map((warning) => warning.warningMessage ?? "")}
+      actions={
+        message.error && onRetry ? (
+          <button type="button" class="error-retry-btn" onClick={onRetry}>
+            <i class="codicon codicon-refresh" />
+            Retry now
+          </button>
+        ) : undefined
+      }
+    />
   );
 }

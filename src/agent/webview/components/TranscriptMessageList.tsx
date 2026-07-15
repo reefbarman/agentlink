@@ -60,6 +60,7 @@ interface TranscriptRow {
   message: ChatMessage;
   sourceMessage: ChatMessage;
   bgAgentResultOnly: boolean;
+  warningMessages?: ChatMessage[];
 }
 
 type BgAgentResultContentBlock = Extract<
@@ -244,6 +245,37 @@ function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
   return rows;
 }
 
+function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
+  const rows: TranscriptRow[] = [];
+
+  for (const message of messages) {
+    if (message.role === "warning") {
+      const previous = rows[rows.length - 1];
+      if (previous?.warningMessages) {
+        rows[rows.length - 1] = {
+          ...previous,
+          message,
+          sourceMessage: message,
+          warningMessages: [...previous.warningMessages, message],
+        };
+      } else {
+        rows.push({
+          key: `warning-group:${message.id}`,
+          message,
+          sourceMessage: message,
+          bgAgentResultOnly: false,
+          warningMessages: [message],
+        });
+      }
+      continue;
+    }
+
+    rows.push(...splitTopLevelChatBlocks(message));
+  }
+
+  return rows;
+}
+
 export function TranscriptMessageList({
   messages,
   streaming,
@@ -271,10 +303,7 @@ export function TranscriptMessageList({
   streamingMetricsSurface,
   streamingMetricsScope = sessionId ?? "transcript",
 }: TranscriptMessageListProps) {
-  const rows = useMemo(
-    () => messages.flatMap(splitTopLevelChatBlocks),
-    [messages],
-  );
+  const rows = useMemo(() => buildTranscriptRows(messages), [messages]);
   const lastMessage = messages[messages.length - 1];
   let streamingRowKey: string | null = null;
   if (streaming && lastMessage?.role === "assistant") {
@@ -294,12 +323,14 @@ export function TranscriptMessageList({
     msg: ChatMessage,
     sourceMessage: ChatMessage,
     bgAgentResultOnly: boolean,
+    warningMessages?: ChatMessage[],
   ) =>
     msg.role === "condense" ? (
       <CondenseRow message={msg} />
     ) : msg.role === "warning" ? (
       <WarningRow
-        message={msg}
+        messages={warningMessages ?? [msg]}
+        resolved={sourceMessage !== lastMessage && !lastMessage?.error}
         onRetry={
           sourceMessage === lastMessage && msg.error ? onRetry : undefined
         }
@@ -360,24 +391,38 @@ export function TranscriptMessageList({
 
   return (
     <>
-      {rows.map(({ key, message: msg, sourceMessage, bgAgentResultOnly }) => {
-        const content = renderRow(key, msg, sourceMessage, bgAgentResultOnly);
-        return streamingMetrics && streamingMetricsSurface ? (
-          <TranscriptMetricRow
-            key={key}
-            active={streamingRowKey === key}
-            messageId={key}
-            metrics={streamingMetrics}
-            scope={streamingMetricsScope}
-            sourceMessage={sourceMessage}
-            surface={streamingMetricsSurface}
-          >
-            {content}
-          </TranscriptMetricRow>
-        ) : (
-          <Fragment key={key}>{content}</Fragment>
-        );
-      })}
+      {rows.map(
+        ({
+          key,
+          message: msg,
+          sourceMessage,
+          bgAgentResultOnly,
+          warningMessages,
+        }) => {
+          const content = renderRow(
+            key,
+            msg,
+            sourceMessage,
+            bgAgentResultOnly,
+            warningMessages,
+          );
+          return streamingMetrics && streamingMetricsSurface ? (
+            <TranscriptMetricRow
+              key={key}
+              active={streamingRowKey === key}
+              messageId={key}
+              metrics={streamingMetrics}
+              scope={streamingMetricsScope}
+              sourceMessage={sourceMessage}
+              surface={streamingMetricsSurface}
+            >
+              {content}
+            </TranscriptMetricRow>
+          ) : (
+            <Fragment key={key}>{content}</Fragment>
+          );
+        },
+      )}
     </>
   );
 }

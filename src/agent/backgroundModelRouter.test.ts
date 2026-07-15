@@ -170,7 +170,7 @@ describe("resolveBackgroundRoute", () => {
     expect(route.resolvedModel).toBe("gpt-5.6-luna");
   });
 
-  it("defaults opposite-provider anthropic reviews to fable when available", async () => {
+  it("defaults opposite-provider anthropic reviews to opus when fable is also available", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
     const fable = makeModel("claude-fable-5", "anthropic");
@@ -193,12 +193,12 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-fable-5");
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=balanced");
   });
 
-  it("defaults explicit anthropic provider routing to fable when available", async () => {
+  it("defaults explicit anthropic provider routing to opus when fable is also available", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
     const fable = makeModel("claude-fable-5", "anthropic");
@@ -220,19 +220,19 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-fable-5");
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=balanced");
   });
 
-  it("falls back to scored anthropic model when fable is unavailable", async () => {
+  it("falls back to a scored anthropic model when opus is unavailable", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
-    const opus = makeModel("claude-opus-4-8", "anthropic");
+    const fable = makeModel("claude-fable-5", "anthropic");
     const codexModel = makeModel("gpt-5-mini", "codex", {
       supportsThinking: false,
     });
     const registry = makeRegistry([
-      makeProvider("anthropic", [sonnet, opus], true),
+      makeProvider("anthropic", [sonnet, fable], true),
       makeProvider("codex", [codexModel], true),
     ]);
 
@@ -247,12 +247,12 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-opus-4-8");
+    expect(route.resolvedModel).toBe("claude-sonnet-4-6");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=balanced");
   });
 
-  it("defaults complex opposite-provider anthropic reviews to fable when available", async () => {
+  it("defaults complex opposite-provider anthropic reviews to opus when fable is also available", async () => {
     const sonnet = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
     const fable = makeModel("claude-fable-5", "anthropic");
@@ -276,7 +276,7 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-fable-5");
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=deep_reasoning");
   });

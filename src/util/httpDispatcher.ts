@@ -1,6 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   Agent,
   EnvHttpProxyAgent,
+  Response as UndiciResponse,
   fetch as undiciFetch,
   interceptors,
   setGlobalDispatcher,
@@ -8,7 +10,40 @@ import {
 } from "undici";
 
 const KEEP_ALIVE_TIMEOUT_MS = 60_000;
-const HEADERS_TIMEOUT_MS = 30_000;
+const HEADERS_TIMEOUT_MS = 300_000;
+const BODY_TIMEOUT_MS = 300_000;
+const CONNECTIONS_PER_ORIGIN = 6;
+
+export interface AgentLinkHttpActivity {
+  kind: "headers" | "body";
+  at: number;
+  bytes?: number;
+}
+
+export type AgentLinkHttpActivityListener = (
+  activity: AgentLinkHttpActivity,
+) => void;
+
+export interface AgentLinkHttpDiagnostics {
+  totalRequests: number;
+  activeRequests: number;
+  peakActiveRequests: number;
+  headerResponses: number;
+  bodyChunks: number;
+  bodyBytes: number;
+  transportErrors: number;
+}
+
+const activityContext = new AsyncLocalStorage<AgentLinkHttpActivityListener>();
+const diagnostics: AgentLinkHttpDiagnostics = {
+  totalRequests: 0,
+  activeRequests: 0,
+  peakActiveRequests: 0,
+  headerResponses: 0,
+  bodyChunks: 0,
+  bodyBytes: 0,
+  transportErrors: 0,
+};
 
 let installed = false;
 const dispatchers = new Map<boolean, Dispatcher>();
@@ -34,12 +69,96 @@ export function getAgentLinkHttpDispatcher(
   const options = {
     keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS,
     headersTimeout: HEADERS_TIMEOUT_MS,
+    bodyTimeout: BODY_TIMEOUT_MS,
+    connections: CONNECTIONS_PER_ORIGIN,
+    allowH2: true,
   };
   const dispatcher = useProxy
     ? new EnvHttpProxyAgent(options)
     : new Agent(options).compose(interceptors.dns());
   dispatchers.set(useProxy, dispatcher);
   return dispatcher;
+}
+
+export function withAgentLinkHttpActivity<T>(
+  listener: AgentLinkHttpActivityListener | undefined,
+  operation: () => T,
+): T {
+  return listener ? activityContext.run(listener, operation) : operation();
+}
+
+export function getAgentLinkHttpDiagnostics(): AgentLinkHttpDiagnostics {
+  return { ...diagnostics };
+}
+
+function reportActivity(
+  listener: AgentLinkHttpActivityListener | undefined,
+  activity: AgentLinkHttpActivity,
+): void {
+  try {
+    listener?.(activity);
+  } catch {
+    // Diagnostics must never be able to fail the provider request.
+  }
+}
+
+function observeResponseBody(
+  response: globalThis.Response,
+  listener: AgentLinkHttpActivityListener | undefined,
+  finalize: () => void,
+): globalThis.Response {
+  diagnostics.headerResponses++;
+  reportActivity(listener, { kind: "headers", at: Date.now() });
+
+  if (!listener) {
+    finalize();
+    return response;
+  }
+
+  if (!response.body) {
+    finalize();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const observedBody = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const result = await reader.read();
+        if (result.done) {
+          finalize();
+          controller.close();
+          return;
+        }
+        const bytes = result.value?.byteLength ?? 0;
+        diagnostics.bodyChunks++;
+        diagnostics.bodyBytes += bytes;
+        reportActivity(listener, { kind: "body", at: Date.now(), bytes });
+        controller.enqueue(result.value);
+      } catch (error) {
+        finalize();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      finalize();
+      await reader.cancel(reason);
+    },
+  });
+
+  const observed = new UndiciResponse(observedBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: Object.fromEntries(response.headers.entries()),
+  });
+  for (const property of ["url", "redirected", "type"] as const) {
+    Object.defineProperty(observed, property, {
+      configurable: true,
+      enumerable: true,
+      value: response[property],
+    });
+  }
+  return observed as unknown as globalThis.Response;
 }
 
 export function installAgentLinkHttpDispatcher(
@@ -50,12 +169,33 @@ export function installAgentLinkHttpDispatcher(
   setGlobalDispatcher(getAgentLinkHttpDispatcher(env));
 }
 
-export const agentLinkFetch: typeof globalThis.fetch = (input, init) => {
-  return undiciFetch(
-    input as Parameters<typeof undiciFetch>[0],
-    {
-      ...init,
-      dispatcher: getAgentLinkHttpDispatcher(),
-    } as Parameters<typeof undiciFetch>[1],
-  ) as unknown as ReturnType<typeof globalThis.fetch>;
+export const agentLinkFetch: typeof globalThis.fetch = async (input, init) => {
+  const listener = activityContext.getStore();
+  diagnostics.totalRequests++;
+  diagnostics.activeRequests++;
+  diagnostics.peakActiveRequests = Math.max(
+    diagnostics.peakActiveRequests,
+    diagnostics.activeRequests,
+  );
+  let finalized = false;
+  const finalize = () => {
+    if (finalized) return;
+    finalized = true;
+    diagnostics.activeRequests = Math.max(0, diagnostics.activeRequests - 1);
+  };
+
+  try {
+    const response = (await undiciFetch(
+      input as Parameters<typeof undiciFetch>[0],
+      {
+        ...init,
+        dispatcher: getAgentLinkHttpDispatcher(),
+      } as Parameters<typeof undiciFetch>[1],
+    )) as unknown as globalThis.Response;
+    return observeResponseBody(response, listener, finalize);
+  } catch (error) {
+    diagnostics.transportErrors++;
+    finalize();
+    throw error;
+  }
 };

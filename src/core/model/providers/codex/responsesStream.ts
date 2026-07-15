@@ -1,4 +1,6 @@
 import type { CoreModelStreamEvent } from "../../../modelRuntime.js";
+import type { CoreModelTransportActivity } from "../../../modelRuntime.js";
+import { withAgentLinkHttpActivity } from "../../../../util/httpDispatcher.js";
 import {
   parseCodexResponseStreamEvents,
   type CodexStreamParserOptions,
@@ -33,22 +35,28 @@ export async function* executeCodexResponsesStream(args: {
   client: CodexResponsesClient;
   body: CodexRequestBody;
   signal?: AbortSignal;
+  onTransportActivity?: (activity: CoreModelTransportActivity) => void;
   /** Mutable parser state for this stream attempt. Do not reuse across retries. */
   parserState?: CodexStreamParserState;
   parserOptions?: CodexStreamParserOptions;
 }): AsyncGenerator<CoreModelStreamEvent> {
   let stream: unknown;
   try {
-    stream = await args.client.responses.create(args.body, {
-      signal: args.signal,
-    });
+    stream = await withAgentLinkHttpActivity(args.onTransportActivity, () =>
+      args.client.responses.create(args.body, {
+        signal: args.signal,
+      }),
+    );
   } catch (err) {
     if (isCodexAuthError(err)) throw new CodexResponsesAuthError(err);
     throw err;
   }
 
   const iterator = parseCodexResponseStreamEvents(
-    stream as AsyncIterable<Record<string, unknown>>,
+    observeProviderEvents(
+      stream as AsyncIterable<Record<string, unknown>>,
+      args.onTransportActivity,
+    ),
     args.parserState,
     args.parserOptions,
   )[Symbol.asyncIterator]();
@@ -68,6 +76,16 @@ export async function* executeCodexResponsesStream(args: {
     } catch {
       // Best-effort cleanup only; preserve the original stream outcome.
     }
+  }
+}
+
+async function* observeProviderEvents(
+  events: AsyncIterable<Record<string, unknown>>,
+  onTransportActivity?: (activity: CoreModelTransportActivity) => void,
+): AsyncGenerator<Record<string, unknown>> {
+  for await (const event of events) {
+    onTransportActivity?.({ kind: "provider_event", at: Date.now() });
+    yield event;
   }
 }
 

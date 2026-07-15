@@ -11,6 +11,7 @@
 
 import * as crypto from "crypto";
 import { randomUUID } from "crypto";
+import { withAgentLinkHttpActivity } from "../../../util/httpDispatcher.js";
 
 import OpenAI from "openai";
 import type {
@@ -232,6 +233,7 @@ export class CodexProvider implements ModelProvider {
       cache,
       state,
       signal,
+      onTransportActivity,
     } = request;
 
     const codexInput = translateCodexMessages(messages);
@@ -293,6 +295,7 @@ export class CodexProvider implements ModelProvider {
           effectiveModel,
           signal,
           streamState,
+          onTransportActivity,
         );
         yield* result;
         return;
@@ -534,9 +537,14 @@ export class CodexProvider implements ModelProvider {
   private async *processResponseStreamEvents(
     events: AsyncIterable<Record<string, unknown>>,
     state?: { outputStarted: boolean },
+    onTransportActivity?: StreamRequest["onTransportActivity"],
   ): AsyncGenerator<ProviderStreamEvent> {
     try {
-      yield* parseCodexResponseStreamEvents(events, state, {
+      const observedEvents = this.observeProviderEvents(
+        events,
+        onTransportActivity,
+      );
+      yield* parseCodexResponseStreamEvents(observedEvents, state, {
         createThinkingId: randomUUID,
       });
     } catch (error) {
@@ -551,23 +559,37 @@ export class CodexProvider implements ModelProvider {
     }
   }
 
+  private async *observeProviderEvents(
+    events: AsyncIterable<Record<string, unknown>>,
+    onTransportActivity?: StreamRequest["onTransportActivity"],
+  ): AsyncGenerator<Record<string, unknown>> {
+    for await (const event of events) {
+      onTransportActivity?.({ kind: "provider_event", at: Date.now() });
+      yield event;
+    }
+  }
+
   private async executeStream(
     requestBody: CodexRequestBody,
     auth: OpenAiCodexResolvedAuth,
     _model: string,
     signal?: AbortSignal,
     streamState?: { outputStarted: boolean },
+    onTransportActivity?: StreamRequest["onTransportActivity"],
   ): Promise<AsyncGenerator<ProviderStreamEvent>> {
     try {
       const client = this.getClient(auth);
-      const stream = await client.responses.create(requestBody, {
-        signal,
-        maxRetries: 0,
-      });
+      const stream = await withAgentLinkHttpActivity(onTransportActivity, () =>
+        client.responses.create(requestBody, {
+          signal,
+          maxRetries: 0,
+        }),
+      );
 
       return this.processResponseStreamEvents(
         stream as AsyncIterable<Record<string, unknown>>,
         streamState,
+        onTransportActivity,
       );
     } catch (error) {
       throw toCodexRequestError(error);

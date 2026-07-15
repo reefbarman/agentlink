@@ -2227,8 +2227,8 @@ describe("AgentEngine", () => {
         const warnings = events.filter((e) => e.type === "warning");
         const errorEvent = events.find((e) => e.type === "error");
 
-        expect(attempts).toBe(4);
-        expect(warnings).toHaveLength(3);
+        expect(attempts).toBe(5);
+        expect(warnings).toHaveLength(4);
         expect(errorEvent).toBeDefined();
         expect(errorEvent).toMatchObject({
           type: "error",
@@ -2259,6 +2259,7 @@ describe("AgentEngine", () => {
           if (typeof fn === "function") fn();
           return 0 as unknown as ReturnType<typeof setTimeout>;
         });
+      const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
 
       try {
         const session = await makeSession();
@@ -2270,20 +2271,19 @@ describe("AgentEngine", () => {
 
         expect(attempts).toBe(3);
         expect(warnings).toHaveLength(2);
-        // 503 errors use the longer rate-limit backoff (15s per attempt)
-        expect(warnings[0]?.message).toContain("retrying in 15s");
-        expect(warnings[1]?.message).toContain("retrying in 30s");
+        expect(warnings[0]?.message).toContain("retrying request in 0.2s");
+        expect(warnings[1]?.message).toContain("retrying request in 0.4s");
         expect(warnings[0]).toMatchObject({
           type: "warning",
-          retryDelayMs: 15_000,
+          retryDelayMs: 200,
           retryAttempt: 1,
-          retryMaxAttempts: 3,
+          retryMaxAttempts: 4,
         });
         expect(warnings[1]).toMatchObject({
           type: "warning",
-          retryDelayMs: 30_000,
+          retryDelayMs: 400,
           retryAttempt: 2,
-          retryMaxAttempts: 3,
+          retryMaxAttempts: 4,
         });
         expect((warnings[0] as { retryAt?: number }).retryAt).toBeTypeOf(
           "number",
@@ -2294,11 +2294,100 @@ describe("AgentEngine", () => {
         // Should recover successfully
         expect(events.find((e) => e.type === "error")).toBeUndefined();
       } finally {
+        randomSpy.mockRestore();
         timerSpy.mockRestore();
       }
     });
 
-    it("gives background agents an extended retry budget for transient TLS failures", async () => {
+    it("honors Retry-After metadata for request retries", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts === 1) {
+          throw Object.assign(new Error("rate limited"), {
+            status: 429,
+            headers: new Headers({ "retry-after-ms": "1250" }),
+          });
+        }
+        yield* makeProviderStream({ text: "Recovered after rate limit" });
+      };
+      const timerSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(engine.run(session));
+        const warning = events.find((event) => event.type === "warning");
+
+        expect(warning).toMatchObject({
+          type: "warning",
+          retryDelayMs: 1250,
+          retryAttempt: 1,
+          retryMaxAttempts: 4,
+        });
+        expect(session.getLastAssistantText()).toBe(
+          "Recovered after rate limit",
+        );
+      } finally {
+        timerSpy.mockRestore();
+      }
+    });
+
+    it("uses the stream reconnect budget and suppresses replayed text", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts === 1) {
+          yield { type: "text_delta", text: "Recovered " };
+          throw new Error("Connection error: stream terminated");
+        }
+        yield* makeProviderStream({ text: "Recovered response" });
+      };
+      const timerSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(engine.run(session));
+        const visibleText = events
+          .filter((event) => event.type === "text_delta")
+          .map((event) => event.text)
+          .join("");
+        const warning = events.find((event) => event.type === "warning");
+
+        expect(attempts).toBe(2);
+        expect(visibleText).toBe("Recovered response");
+        expect(warning).toMatchObject({
+          type: "warning",
+          retryAttempt: 1,
+          retryMaxAttempts: 5,
+        });
+        expect((warning as { message: string }).message).toContain(
+          "retrying stream",
+        );
+        expect(session.getLastAssistantText()).toBe("Recovered response");
+      } finally {
+        timerSpy.mockRestore();
+      }
+    });
+
+    it("uses the shared request retry policy for background agents", async () => {
       let attempts = 0;
       const provider = makeMockProvider();
       provider.stream = async function* () {
@@ -2334,7 +2423,7 @@ describe("AgentEngine", () => {
         expect(warnings.at(-1)).toMatchObject({
           type: "warning",
           retryAttempt: 4,
-          retryMaxAttempts: 12,
+          retryMaxAttempts: 4,
         });
         expect(events.find((event) => event.type === "error")).toBeUndefined();
         expect(session.getLastAssistantText()).toBe(
@@ -2546,7 +2635,7 @@ describe("AgentEngine", () => {
       );
     });
 
-    it("bounds provider streams that never produce a first event", async () => {
+    it("bounds provider streams that never establish transport activity", async () => {
       let attempts = 0;
       const requestSignals: AbortSignal[] = [];
       const provider = makeMockProvider();
@@ -2573,8 +2662,8 @@ describe("AgentEngine", () => {
         );
         const error = events.find((event) => event.type === "error");
 
-        expect(attempts).toBe(4);
-        expect(requestSignals).toHaveLength(4);
+        expect(attempts).toBe(5);
+        expect(requestSignals).toHaveLength(5);
         expect(requestSignals.every((signal) => signal.aborted)).toBe(true);
         expect(error).toEqual(
           expect.objectContaining({
@@ -2583,11 +2672,44 @@ describe("AgentEngine", () => {
           }),
         );
         expect((error as { error?: string }).error).toContain(
-          "first event timed out",
+          "connection timed out",
         );
       } finally {
         backoffSpy.mockRestore();
       }
+    });
+
+    it("keeps a semantically quiet stream alive while transport activity continues", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        const heartbeat = setInterval(() => {
+          request.onTransportActivity?.({
+            kind: "body",
+            at: Date.now(),
+            bytes: 1,
+          });
+        }, 2);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          yield* makeProviderStream({ text: "Alive after heartbeats" });
+        } finally {
+          clearInterval(heartbeat);
+        }
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("hello");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(
+        engine.run(session, {
+          providerFirstEventTimeoutMs: 5,
+          providerInactivityTimeoutMs: 5,
+        }),
+      );
+
+      expect(events.find((event) => event.type === "error")).toBeUndefined();
+      expect(session.getLastAssistantText()).toBe("Alive after heartbeats");
     });
 
     it("surfaces a retryable error after consecutive empty responses", async () => {

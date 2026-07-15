@@ -6,6 +6,7 @@ export interface CodexErrorActions {
 
 export interface CodexErrorShape {
   status?: number;
+  headers?: unknown;
   message?: string;
   rawMessage?: string;
   rawCode?: string;
@@ -22,6 +23,7 @@ export interface CodexErrorDetails extends CodexErrorShape {
 
 export class CodexRequestError extends Error implements CodexErrorDetails {
   readonly status?: number;
+  readonly headers?: unknown;
   readonly rawMessage?: string;
   readonly rawCode?: string;
   readonly body?: unknown;
@@ -34,6 +36,7 @@ export class CodexRequestError extends Error implements CodexErrorDetails {
     super(details.message);
     this.name = "CodexRequestError";
     this.status = details.status;
+    this.headers = details.headers;
     this.rawMessage = details.rawMessage;
     this.rawCode = details.rawCode;
     this.body = details.body;
@@ -70,8 +73,8 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
       shaped.rawCode ||
       shaped.body
     ) {
-      return createCodexRequestError(
-        buildCodexApiErrorDetails({
+      return createCodexRequestError({
+        ...buildCodexApiErrorDetails({
           status: shaped.status,
           message: shaped.message || "Unknown OpenAI error",
           rawCode:
@@ -82,7 +85,8 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
                 : undefined,
           body: shaped.body,
         }),
-      );
+        headers: shaped.headers,
+      });
     }
     return shaped;
   }
@@ -101,8 +105,8 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
       shaped.error
     ) {
       const body = shaped.body ?? shaped.error;
-      return createCodexRequestError(
-        buildCodexApiErrorDetails({
+      return createCodexRequestError({
+        ...buildCodexApiErrorDetails({
           status: shaped.status,
           message:
             shaped.message || shaped.rawMessage || "Unknown OpenAI error",
@@ -114,7 +118,8 @@ export function toCodexRequestError(error: unknown): Error & CodexErrorShape {
                 : undefined,
           body,
         }),
-      );
+        headers: shaped.headers,
+      });
     }
   }
 
