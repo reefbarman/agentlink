@@ -2298,6 +2298,53 @@ describe("AgentEngine", () => {
       }
     });
 
+    it("gives background agents an extended retry budget for transient TLS failures", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts <= 4) {
+          yield* [];
+          throw new Error(
+            "Connection error.: fetch failed: Client network socket disconnected before secure TLS connection was established",
+          );
+        }
+        yield* makeProviderStream({ text: "Recovered after TLS disconnect" });
+      };
+
+      const timerSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("hello");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(
+          engine.run(session, { isBackground: true }),
+        );
+        const warnings = events.filter((event) => event.type === "warning");
+
+        expect(attempts).toBe(5);
+        expect(warnings).toHaveLength(4);
+        expect(warnings.at(-1)).toMatchObject({
+          type: "warning",
+          retryAttempt: 4,
+          retryMaxAttempts: 12,
+        });
+        expect(events.find((event) => event.type === "error")).toBeUndefined();
+        expect(session.getLastAssistantText()).toBe(
+          "Recovered after TLS disconnect",
+        );
+      } finally {
+        timerSpy.mockRestore();
+      }
+    });
+
     it("retries Anthropic invalid thinking signature errors once", async () => {
       let attempts = 0;
       const provider = makeMockProvider();

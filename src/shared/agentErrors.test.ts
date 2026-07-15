@@ -25,6 +25,11 @@ describe("agentErrors", () => {
       false,
     );
     expect(isAgentRetryableErrorMessage("fetch failed: ETIMEDOUT")).toBe(true);
+    expect(
+      isAgentRetryableErrorMessage(
+        "Connection error.: fetch failed: Client network socket disconnected before secure TLS connection was established",
+      ),
+    ).toBe(true);
     expect(isAgentRetryableErrorMessage("validation failed")).toBe(false);
   });
 

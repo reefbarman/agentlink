@@ -55,6 +55,12 @@ import { truncateMiddle } from "../util/truncateMiddle.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 const MAX_API_RETRIES = 3;
+// Background agents often run unattended for much longer than a foreground
+// turn. Give them enough consecutive recovery attempts to ride out a provider
+// outage without letting a permanently unavailable provider occupy a fleet
+// slot forever.
+const MAX_BACKGROUND_API_RETRIES = 12;
+const MAX_BACKGROUND_NETWORK_RETRY_DELAY_MS = 30_000;
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
 const DEFAULT_PROVIDER_FIRST_EVENT_TIMEOUT_MS = 90_000;
 const DEFAULT_PROVIDER_INACTIVITY_TIMEOUT_MS = 120_000;
@@ -591,6 +597,9 @@ export class AgentEngine {
 
     try {
       let retryCount = 0;
+      const maxApiRetries = opts?.isBackground
+        ? MAX_BACKGROUND_API_RETRIES
+        : MAX_API_RETRIES;
       let emptyResponseRetryCount = 0;
       let pendingEmptyResponseNudge = false;
       let emptyResponseCondenseAttempted = false;
@@ -1200,7 +1209,7 @@ export class AgentEngine {
           }
 
           // Transient network / rate-limit errors: auto-retry with backoff.
-          if (isRetryableError(streamErrMsg) && retryCount < MAX_API_RETRIES) {
+          if (isRetryableError(streamErrMsg) && retryCount < maxApiRetries) {
             retryCount++;
             const isRateLimit =
               streamErrMsg.includes("rate_limit") ||
@@ -1210,16 +1219,18 @@ export class AgentEngine {
               ? Math.min(retryCount * 15_000, 60_000)
               : Math.min(
                   Math.floor(250 * 2 ** (retryCount - 1) + Math.random() * 250),
-                  4_000,
+                  opts?.isBackground
+                    ? MAX_BACKGROUND_NETWORK_RETRY_DELAY_MS
+                    : 4_000,
                 );
             const retryAt = Date.now() + delayMs;
             yield {
               type: "warning",
-              message: `${streamErrMsg} — retrying in ${delayMs / 1000}s (attempt ${retryCount}/${MAX_API_RETRIES})`,
+              message: `${streamErrMsg} — retrying in ${delayMs / 1000}s (attempt ${retryCount}/${maxApiRetries})`,
               retryDelayMs: delayMs,
               retryAt,
               retryAttempt: retryCount,
-              retryMaxAttempts: MAX_API_RETRIES,
+              retryMaxAttempts: maxApiRetries,
             };
             await sleep(delayMs);
             if (signal.aborted) break;
