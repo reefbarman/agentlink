@@ -8,6 +8,128 @@ import { StreamingBaselineRecorder } from "../../../shared/streamingBaselineMetr
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { h } from "preact";
 
+function apiRequest(model: string): NonNullable<ChatMessage["apiRequest"]> {
+  return {
+    requestId: `request-${model}`,
+    model,
+    inputTokens: 100,
+    outputTokens: 20,
+    durationMs: 500,
+    timeToFirstToken: 100,
+  };
+}
+
+describe("TranscriptMessageList model change rendering", () => {
+  it("shows a divider before the first response from a different model", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("claude-sonnet-4-6"),
+      },
+      {
+        id: "u1",
+        role: "user",
+        content: "Use another model",
+        timestamp: 2,
+        blocks: [],
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4"),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const divider = container.querySelector(".model-change-divider");
+    const secondResponse = screen.getByText("Second response");
+    expect(divider).toBeTruthy();
+    expect(divider?.textContent).toContain("Model changed to");
+    expect(divider?.textContent).toContain("gpt-5.4");
+    expect(divider?.getAttribute("aria-label")).toBe(
+      "Model changed from claude-sonnet-4-6 to gpt-5.4",
+    );
+    expect(
+      (divider?.compareDocumentPosition(secondResponse) ?? 0) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("does not show a divider for the initial model or repeated model usage", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("gpt-5.4"),
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [{ type: "text", text: "Second response" }],
+        apiRequest: apiRequest("gpt-5.4"),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    expect(container.querySelector(".model-change-divider")).toBeNull();
+  });
+
+  it("renders one divider before a split response instead of each segment", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [{ type: "text", text: "First response" }],
+        apiRequest: apiRequest("claude-sonnet-4-6"),
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        blocks: [
+          { type: "text", text: "Checking" },
+          {
+            type: "bg_agent_result",
+            sessionId: "bg-1",
+            task: "Review",
+            status: "completed",
+            resultText: "Done",
+          },
+          { type: "text", text: "Finished" },
+        ],
+        apiRequest: apiRequest("gpt-5.4"),
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    expect(container.querySelectorAll(".model-change-divider")).toHaveLength(1);
+  });
+});
+
 describe("TranscriptMessageList final marker rendering", () => {
   it("renders final marker styling for historical and latest assistant messages", () => {
     const messages: ChatMessage[] = [

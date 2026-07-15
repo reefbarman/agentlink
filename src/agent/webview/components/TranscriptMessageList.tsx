@@ -6,6 +6,7 @@ import { CondenseRow } from "./CondenseRow";
 import type { DetectedQuestion } from "../questionDetection";
 import { Fragment, type ComponentChildren } from "preact";
 import { MessageBubble } from "./MessageBubble";
+import { ModelChangeDivider } from "./ModelChangeDivider";
 import { WarningRow } from "./WarningRow";
 import { useLayoutEffect, useMemo, useRef } from "preact/hooks";
 import type {
@@ -61,6 +62,10 @@ interface TranscriptRow {
   sourceMessage: ChatMessage;
   bgAgentResultOnly: boolean;
   warningMessages?: ChatMessage[];
+  modelChange?: {
+    previousModel: string;
+    model: string;
+  };
 }
 
 type BgAgentResultContentBlock = Extract<
@@ -247,6 +252,7 @@ function splitTopLevelChatBlocks(message: ChatMessage): TranscriptRow[] {
 
 function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
   const rows: TranscriptRow[] = [];
+  let previousModel: string | undefined;
 
   for (const message of messages) {
     if (message.role === "warning") {
@@ -270,7 +276,19 @@ function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
       continue;
     }
 
-    rows.push(...splitTopLevelChatBlocks(message));
+    const messageRows = splitTopLevelChatBlocks(message);
+    const model =
+      message.role === "assistant" ? message.apiRequest?.model : null;
+    if (model) {
+      if (previousModel && previousModel !== model && messageRows.length > 0) {
+        messageRows[0] = {
+          ...messageRows[0],
+          modelChange: { previousModel, model },
+        };
+      }
+      previousModel = model;
+    }
+    rows.push(...messageRows);
   }
 
   return rows;
@@ -398,6 +416,7 @@ export function TranscriptMessageList({
           sourceMessage,
           bgAgentResultOnly,
           warningMessages,
+          modelChange,
         }) => {
           const content = renderRow(
             key,
@@ -406,20 +425,29 @@ export function TranscriptMessageList({
             bgAgentResultOnly,
             warningMessages,
           );
-          return streamingMetrics && streamingMetricsSurface ? (
-            <TranscriptMetricRow
-              key={key}
-              active={streamingRowKey === key}
-              messageId={key}
-              metrics={streamingMetrics}
-              scope={streamingMetricsScope}
-              sourceMessage={sourceMessage}
-              surface={streamingMetricsSurface}
-            >
-              {content}
-            </TranscriptMetricRow>
-          ) : (
-            <Fragment key={key}>{content}</Fragment>
+          return (
+            <Fragment key={key}>
+              {modelChange && (
+                <ModelChangeDivider
+                  previousModel={modelChange.previousModel}
+                  model={modelChange.model}
+                />
+              )}
+              {streamingMetrics && streamingMetricsSurface ? (
+                <TranscriptMetricRow
+                  active={streamingRowKey === key}
+                  messageId={key}
+                  metrics={streamingMetrics}
+                  scope={streamingMetricsScope}
+                  sourceMessage={sourceMessage}
+                  surface={streamingMetricsSurface}
+                >
+                  {content}
+                </TranscriptMetricRow>
+              ) : (
+                content
+              )}
+            </Fragment>
           );
         },
       )}

@@ -2637,6 +2637,49 @@ body {
   font-size: 12px;
 }
 
+/* ── Model Change Divider ── */
+
+.model-change-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 4px 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.model-change-divider-line {
+  flex: 1;
+  min-width: 12px;
+  border-top: 1px solid
+    color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+}
+
+.model-change-divider-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--vscode-foreground) 5%, transparent);
+  white-space: nowrap;
+}
+
+.model-change-divider-badge .codicon {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.model-change-divider-model {
+  overflow: hidden;
+  color: var(--vscode-foreground);
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
 /* ── Context Bar ── */
 
 .context-bar {
