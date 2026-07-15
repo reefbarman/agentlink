@@ -23,6 +23,12 @@ import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { validateCommand } from "../util/pipeValidator.js";
 import { validateInteractiveCommand } from "../util/interactiveValidator.js";
 import { validateProtectedWriteCommand } from "../util/protectedWriteValidator.js";
+import {
+  scanShellLexBoundaries,
+  scanShellLexTokens,
+  scanShellLexWords,
+  type ShellLexFinalState,
+} from "../util/shellLex.js";
 import { Semaphore } from "../util/Semaphore.js";
 import {
   INLINE_FILE_TOKEN_RE,
@@ -161,6 +167,18 @@ export async function handleExecuteCommand(
     }
 
     try {
+      // Reject malformed shell syntax before masterBypass or force=true can skip
+      // the normal command approval path.
+      const malformedCommandReason =
+        validateMalformedShellCommand(commandToRun);
+      if (malformedCommandReason) {
+        return malformedCommandResult(commandToRun, malformedCommandReason, {
+          ...(commandToRun !== params.command && {
+            commandTemplate: params.command,
+          }),
+        });
+      }
+
       // Reject protected instruction/memory writes before masterBypass or force=true
       // can skip the normal command approval path.
       const protectedWriteViolation = validateProtectedWriteCommand(
@@ -451,6 +469,50 @@ function rejectedCommandResult(command: string, reason: string): ToolResult {
   };
 }
 
+function isMalformedShellState(state: ShellLexFinalState): boolean {
+  return state.quote !== null || state.danglingEscape;
+}
+
+function validateMalformedShellCommand(command: string): string | null {
+  const finalStates = [
+    scanShellLexBoundaries(command).finalState,
+    scanShellLexWords(command).finalState,
+    scanShellLexTokens(command, {
+      escapeInSingleQuotes: true,
+      operators: [">>", ">", "<"],
+    }).finalState,
+  ];
+
+  if (!finalStates.some(isMalformedShellState)) return null;
+
+  return "Command has malformed shell syntax: close any open quotes and remove dangling trailing escapes before running.";
+}
+
+function malformedCommandResult(
+  command: string,
+  reason: string,
+  extra: { commandTemplate?: string; originalCommand?: string } = {},
+): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: "rejected",
+          command,
+          ...(extra.commandTemplate && {
+            command_template: extra.commandTemplate,
+          }),
+          ...(extra.originalCommand && {
+            original_command: extra.originalCommand,
+          }),
+          reason,
+        }),
+      },
+    ],
+  };
+}
+
 /**
  * Approve sub-commands by showing a single dialog with the full command.
  *
@@ -585,6 +647,13 @@ function validateCommandBeforeExecution(
   cwd: string,
   originalCommand?: string,
 ): ToolResult | null {
+  const malformedCommandReason = validateMalformedShellCommand(command);
+  if (malformedCommandReason) {
+    return malformedCommandResult(command, malformedCommandReason, {
+      ...(originalCommand && { originalCommand }),
+    });
+  }
+
   const protectedWriteViolation = validateProtectedWriteCommand(command, cwd);
   if (protectedWriteViolation) {
     return {

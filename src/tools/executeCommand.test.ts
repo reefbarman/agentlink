@@ -359,6 +359,124 @@ describe("handleExecuteCommand", () => {
     );
   });
 
+  it("rejects malformed shell commands before masterBypass and force handling", async () => {
+    const enqueueCommandApproval = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const command = `echo "unterminated && rm -rf tmp`;
+    const result = await handleExecuteCommand(
+      {
+        command,
+        force: true,
+        force_reason: "malformed shell should not be force-bypassable",
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true, enqueueCommandApproval } as never,
+      "session-malformed",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(validateCommand).not.toHaveBeenCalled();
+    expect(validateInteractiveCommand).not.toHaveBeenCalled();
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      command,
+      reason: expect.stringContaining("malformed shell syntax"),
+    });
+  });
+
+  it("rejects malformed materialized inline-file commands and cleans up", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      {
+        command: `cat "$AL_FILE(body)`,
+        files: [{ name: "body", content: "hello" }],
+      },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-malformed-inline",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(validateCommand).not.toHaveBeenCalled();
+    expect(validateInteractiveCommand).not.toHaveBeenCalled();
+    expect(executeCommand).not.toHaveBeenCalled();
+
+    const payload = textPayload(result);
+    expect(payload).toMatchObject({
+      status: "rejected",
+      command_template: `cat "$AL_FILE(body)`,
+      reason: expect.stringContaining("malformed shell syntax"),
+    });
+    expect(payload.command).toMatch(/^cat "'\/.*\/body'$/);
+    const tempPath = (payload.command as string).match(/'([^']+\/body)'/)?.[1];
+    expect(tempPath).toBeTruthy();
+    expect(fs.existsSync(tempPath!)).toBe(false);
+  });
+
+  it("rejects single-quote dangling escapes before command execution", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const command = "echo 'trailing\\";
+    const result = await handleExecuteCommand(
+      { command },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-malformed-single-quote",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(validateCommand).not.toHaveBeenCalled();
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      command,
+      reason: expect.stringContaining("malformed shell syntax"),
+    });
+  });
+
+  it("does not reject opaque but well-formed shell syntax as malformed", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const command = "npm test & echo done";
+    const result = await handleExecuteCommand(
+      { command },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-opaque-shell",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(executeCommand.mock.calls[0][0]).toMatchObject({ command });
+    expect(textPayload(result).command).toBeUndefined();
+  });
+
+  it("does not reject closed quotes and escaped operators as malformed", async () => {
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const command = String.raw`echo "a && b" && echo left \; right`;
+    const result = await handleExecuteCommand(
+      { command },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-valid-quoted-escapes",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(executeCommand.mock.calls[0][0]).toMatchObject({ command });
+    expect(textPayload(result).command).toBeUndefined();
+  });
+
   it("rejects protected memory writes before masterBypass and force handling", async () => {
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
@@ -620,6 +738,44 @@ describe("handleExecuteCommand", () => {
     );
 
     expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed commands introduced by approval command edits", async () => {
+    getConfiguration.mockReturnValueOnce({
+      get: vi.fn((key: string, fallback?: unknown) => {
+        if (key === "masterBypass") return false;
+        return fallback;
+      }),
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "echo ok" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval: () => ({
+          promise: Promise.resolve({
+            decision: "accept",
+            editedCommand: `echo "unterminated`,
+          }),
+        }),
+      } as never,
+      "session-edited-malformed",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      command: `echo "unterminated`,
+      original_command: "echo ok",
+      reason: expect.stringContaining("malformed shell syntax"),
+    });
   });
 
   it("rejects protected memory writes introduced by approval command edits", async () => {
