@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bgTranscriptStreamingOverride,
   initialState,
   reducer,
   shouldAcceptSessionChunk,
@@ -2401,5 +2402,63 @@ describe("webview App reducer background agent launch blocks", () => {
     state = reducer(state, { type: "NEW_SESSION" });
     expect(state.detectedQuestion).toBeNull();
     expect(state.dismissedDetectedQuestionIds).toEqual([]);
+  });
+});
+
+describe("background transcript streaming override", () => {
+  it("keeps the transcript spinner on for mid-run stream events", () => {
+    for (const msgType of [
+      "agentBgThinkingStart",
+      "agentBgThinkingDelta",
+      "agentBgTextDelta",
+      "agentBgToolStart",
+      "agentBgToolInputDelta",
+      "agentBgToolComplete",
+    ]) {
+      expect(bgTranscriptStreamingOverride(msgType)).toEqual({
+        streaming: true,
+      });
+    }
+  });
+
+  it("turns the spinner on when an interjection is consumed mid-run", () => {
+    // A consumed interjection (e.g. a fleet budget message) proves the engine
+    // is starting another API turn, and no further events arrive until its
+    // first token — without this the transcript looks stalled for that gap.
+    expect(bgTranscriptStreamingOverride("agentBgInterjection")).toEqual({
+      streaming: true,
+    });
+  });
+
+  it("turns the spinner off on terminal error events", () => {
+    expect(bgTranscriptStreamingOverride("agentBgError")).toEqual({
+      streaming: false,
+    });
+  });
+
+  it("leaves the streaming flag untouched for non-liveness events", () => {
+    expect(bgTranscriptStreamingOverride("agentBgWarning")).toBeUndefined();
+    expect(
+      bgTranscriptStreamingOverride("agentBgStatusUpdate"),
+    ).toBeUndefined();
+    expect(bgTranscriptStreamingOverride("agentBgTodoUpdate")).toBeUndefined();
+  });
+
+  it("ADD_INTERJECTION appends the bubble and placeholder without ending the stream", () => {
+    const state = reducer(
+      { ...initialState, streaming: true },
+      {
+        type: "ADD_INTERJECTION",
+        text: "[fleet budget] About 85% of the elapsed time budget for this task is used.",
+      },
+    );
+
+    expect(state.streaming).toBe(true);
+    expect(state.messages.at(-2)).toMatchObject({
+      role: "user",
+      content:
+        "[fleet budget] About 85% of the elapsed time budget for this task is used.",
+    });
+    expect(state.messages.at(-1)).toMatchObject({ role: "assistant" });
   });
 });

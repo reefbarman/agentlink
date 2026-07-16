@@ -109,6 +109,33 @@ function reduceOpenTranscript(
   };
 }
 
+/**
+ * Streaming-flag override applied when projecting a background stream event
+ * into an open transcript. Any mid-run event proves the agent is still live,
+ * so it turns the transcript spinner on — including interjections, which are
+ * consumed right before the engine starts another API turn whose first token
+ * may be a long time away. Terminal events turn it off; anything else leaves
+ * the flag untouched.
+ */
+export function bgTranscriptStreamingOverride(
+  msgType: string,
+): { streaming: boolean } | undefined {
+  switch (msgType) {
+    case "agentBgThinkingStart":
+    case "agentBgThinkingDelta":
+    case "agentBgTextDelta":
+    case "agentBgToolStart":
+    case "agentBgToolInputDelta":
+    case "agentBgToolComplete":
+    case "agentBgInterjection":
+      return { streaming: true };
+    case "agentBgError":
+      return { streaming: false };
+    default:
+      return undefined;
+  }
+}
+
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
 type SendImage = { name: string; mimeType: string; base64: string };
 type SendDocument = { name: string; mimeType: string; base64?: string };
@@ -914,17 +941,22 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               prev,
               msg.sessionId,
               { type: "THINKING_START", thinkingId: msg.thinkingId },
-              { streaming: true },
+              bgTranscriptStreamingOverride(msg.type),
             ),
           );
           break;
         case "agentBgThinkingDelta":
           setTranscriptView((prev) =>
-            reduceOpenTranscript(prev, msg.sessionId, {
-              type: "THINKING_DELTA",
-              thinkingId: msg.thinkingId,
-              text: msg.text,
-            }),
+            reduceOpenTranscript(
+              prev,
+              msg.sessionId,
+              {
+                type: "THINKING_DELTA",
+                thinkingId: msg.thinkingId,
+                text: msg.text,
+              },
+              bgTranscriptStreamingOverride(msg.type),
+            ),
           );
           break;
         case "agentBgThinkingEnd":
@@ -941,7 +973,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
               prev,
               msg.sessionId,
               { type: "TEXT_DELTA", text: msg.text },
-              { streaming: true },
+              bgTranscriptStreamingOverride(msg.type),
             ),
           );
           break;
@@ -955,30 +987,40 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 toolCallId: msg.toolCallId,
                 toolName: msg.toolName,
               },
-              { streaming: true },
+              bgTranscriptStreamingOverride(msg.type),
             ),
           );
           break;
         case "agentBgToolInputDelta":
           setTranscriptView((prev) =>
-            reduceOpenTranscript(prev, msg.sessionId, {
-              type: "TOOL_INPUT_DELTA",
-              toolCallId: msg.toolCallId,
-              partialJson: msg.partialJson,
-            }),
+            reduceOpenTranscript(
+              prev,
+              msg.sessionId,
+              {
+                type: "TOOL_INPUT_DELTA",
+                toolCallId: msg.toolCallId,
+                partialJson: msg.partialJson,
+              },
+              bgTranscriptStreamingOverride(msg.type),
+            ),
           );
           break;
         case "agentBgToolComplete":
           setTranscriptView((prev) =>
-            reduceOpenTranscript(prev, msg.sessionId, {
-              type: "TOOL_COMPLETE",
-              toolCallId: msg.toolCallId,
-              toolName: msg.toolName,
-              result: msg.result,
-              resultImages: msg.resultImages,
-              durationMs: msg.durationMs,
-              input: msg.input,
-            }),
+            reduceOpenTranscript(
+              prev,
+              msg.sessionId,
+              {
+                type: "TOOL_COMPLETE",
+                toolCallId: msg.toolCallId,
+                toolName: msg.toolName,
+                result: msg.result,
+                resultImages: msg.resultImages,
+                durationMs: msg.durationMs,
+                input: msg.input,
+              },
+              bgTranscriptStreamingOverride(msg.type),
+            ),
           );
           break;
         case "agentBgApiRequest":
@@ -1017,7 +1059,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
                 code: msg.code,
                 actions: msg.actions,
               },
-              { streaming: false },
+              bgTranscriptStreamingOverride(msg.type),
             ),
           );
           break;
@@ -1088,13 +1130,18 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           break;
         case "agentBgInterjection":
           setTranscriptView((prev) =>
-            reduceOpenTranscript(prev, msg.sessionId, {
-              type: "ADD_INTERJECTION",
-              text: msg.displayText ?? msg.text,
-              isSlashCommand: msg.isSlashCommand,
-              slashCommandLabel: msg.slashCommandLabel,
-              displayMedia: msg.displayMedia,
-            }),
+            reduceOpenTranscript(
+              prev,
+              msg.sessionId,
+              {
+                type: "ADD_INTERJECTION",
+                text: msg.displayText ?? msg.text,
+                isSlashCommand: msg.isSlashCommand,
+                slashCommandLabel: msg.slashCommandLabel,
+                displayMedia: msg.displayMedia,
+              },
+              bgTranscriptStreamingOverride(msg.type),
+            ),
           );
           break;
         case "agentBgDone": {
