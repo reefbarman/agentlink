@@ -40,6 +40,7 @@ export type InlineCommandFileErrorCode =
   | "invalid_name"
   | "invalid_ext"
   | "duplicate_name"
+  | "duplicate_filename"
   | "unknown_reference"
   | "unreferenced_file"
   | "unresolved_token"
@@ -70,7 +71,8 @@ export function materializeInlineCommandFiles(
     const pathByName = new Map<string, string>();
 
     for (const file of files) {
-      const filename = `${file.name}${file.ext ? `.${file.ext}` : ""}`;
+      const ext = normalizedExtension(file.name, file.ext);
+      const filename = `${file.name}${ext ? `.${ext}` : ""}`;
       const filePath = path.join(dir, filename);
       const bytes = Buffer.byteLength(file.content, "utf-8");
       const sha256 = crypto
@@ -84,7 +86,7 @@ export function materializeInlineCommandFiles(
       previews.push({
         name: file.name,
         path: filePath,
-        ext: file.ext,
+        ext,
         bytes,
         sha256,
         truncated: shouldTruncatePreview(file.content, file.mode === "755"),
@@ -135,6 +137,7 @@ export function validateInlineCommandFiles(
   }
 
   const names = new Set<string>();
+  const filenames = new Set<string>();
   let totalBytes = 0;
   for (const file of files) {
     if (!NAME_RE.test(file.name) || file.name.includes("..")) {
@@ -157,6 +160,17 @@ export function validateInlineCommandFiles(
         `Invalid inline command file extension '${file.ext}'. Use /^[A-Za-z0-9]{1,16}$/.`,
       );
     }
+
+    const ext = normalizedExtension(file.name, file.ext);
+    const filename = `${file.name}${ext ? `.${ext}` : ""}`;
+    const filenameKey = filename.toLowerCase();
+    if (filenames.has(filenameKey)) {
+      throw new InlineCommandFileError(
+        "duplicate_filename",
+        `Inline command files resolve to the same temp filename '${filename}'. Use distinct names or extensions.`,
+      );
+    }
+    filenames.add(filenameKey);
 
     totalBytes += Buffer.byteLength(file.content, "utf-8");
   }
@@ -214,6 +228,15 @@ export function assertNoInvalidInlineFileTokens(command: string): void {
 
 export function quotePosixShellArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function normalizedExtension(
+  name: string,
+  ext: string | undefined,
+): string | undefined {
+  if (!ext || name.toLowerCase().endsWith(`.${ext.toLowerCase()}`))
+    return undefined;
+  return ext;
 }
 
 function buildPreview(content: string, executable: boolean): string {

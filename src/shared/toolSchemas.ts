@@ -517,7 +517,7 @@ export const executeCommandSchema = {
           .regex(/^[A-Za-z0-9]{1,16}$/)
           .optional()
           .describe(
-            "Optional extension hint for the temp filename (e.g. 'md', 'py'). No leading dot or separators.",
+            "Optional extension hint for the temp filename (e.g. 'md', 'py'). No leading dot or separators. Omit when name already includes the extension.",
           ),
         mode: z
           .enum(["644", "755"])

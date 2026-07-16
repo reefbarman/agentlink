@@ -65,6 +65,37 @@ describe("commandInlineFiles", () => {
     run?.cleanup();
   });
 
+  it("does not duplicate an extension already present in the name", () => {
+    const run = materializeInlineCommandFiles(
+      "cat $AL_FILE(NOTES.MD) $AL_FILE(archive.md)",
+      [
+        { name: "NOTES.MD", content: "notes", ext: "md" },
+        { name: "archive.md", content: "archive", ext: "txt" },
+      ],
+    );
+
+    expect(run?.command).toMatch(/\/NOTES\.MD'/);
+    expect(run?.command).not.toContain("NOTES.MD.md");
+    expect(run?.previews[0]).toMatchObject({
+      name: "NOTES.MD",
+      ext: undefined,
+    });
+    expect(run?.command).toMatch(/\/archive\.md\.txt'/);
+    expect(run?.previews[1]).toMatchObject({ name: "archive.md", ext: "txt" });
+    run?.cleanup();
+  });
+
+  it("rejects files that resolve to the same temp filename", () => {
+    expectInlineError(
+      () =>
+        validateInlineCommandFiles("cat $AL_FILE(notes) $AL_FILE(notes.md)", [
+          { name: "notes", content: "one", ext: "md" },
+          { name: "notes.md", content: "two", ext: "md" },
+        ]),
+      "duplicate_filename",
+    );
+  });
+
   it("returns undefined for missing or empty files", () => {
     expect(materializeInlineCommandFiles("echo ok", undefined)).toBeUndefined();
     expect(materializeInlineCommandFiles("echo ok", [])).toBeUndefined();
