@@ -2931,6 +2931,17 @@ export class AgentSessionManager {
   // Background agents
   // ---------------------------------------------------------------------------
 
+  private inheritBackgroundApprovalState(
+    parentSessionId: string,
+    childSessionId: string,
+  ): void {
+    this.commandApprovalPolicies.set(
+      childSessionId,
+      this.toolCtx?.getCommandApprovalPolicy?.(parentSessionId) ?? "safe",
+    );
+    this.toolCtx?.inheritSessionWriteState?.(parentSessionId, childSessionId);
+  }
+
   private activeBackgroundCount(): number {
     return Array.from(this.sessions.values()).filter(
       (session) =>
@@ -3125,10 +3136,7 @@ export class AgentSessionManager {
       session.createAbortController();
       this.sessions.set(session.id, session);
       if (parentSessionId) {
-        this.commandApprovalPolicies.set(
-          session.id,
-          this.toolCtx.getCommandApprovalPolicy?.(parentSessionId) ?? "safe",
-        );
+        this.inheritBackgroundApprovalState(parentSessionId, session.id);
         this.bgParents.set(session.id, { sessionId: parentSessionId, task });
       }
       this.bgMeta.set(session.id, {
@@ -3383,10 +3391,7 @@ export class AgentSessionManager {
     session.status = "queued";
     this.sessions.set(session.id, session);
     if (parentSessionId) {
-      this.commandApprovalPolicies.set(
-        session.id,
-        this.toolCtx.getCommandApprovalPolicy?.(parentSessionId) ?? "safe",
-      );
+      this.inheritBackgroundApprovalState(parentSessionId, session.id);
       this.bgParents.set(session.id, {
         sessionId: parentSessionId,
         task,
@@ -4652,6 +4657,8 @@ export class AgentSessionManager {
     session.status = "streaming";
     this.sessions.set(session.id, session);
     if (parent) {
+      // The launched agent runs in another VS Code process, so this window's
+      // session write trust must not cross that process boundary implicitly.
       this.commandApprovalPolicies.set(
         session.id,
         this.toolCtx?.getCommandApprovalPolicy?.(parent.id) ?? "safe",
@@ -5100,6 +5107,14 @@ export class AgentSessionManager {
     }
   }
 
+  getBackgroundParentSessionId(sessionId: string): string | undefined {
+    const session = this.sessions.get(sessionId);
+    return (
+      session?.fleetMetadata?.parentSessionId ??
+      this.bgParents.get(sessionId)?.sessionId
+    );
+  }
+
   /**
    * Return status info for all background sessions (for the UI strip).
    */
@@ -5179,7 +5194,7 @@ export class AgentSessionManager {
           taskClass: meta?.taskClass,
           routingReason: meta?.routingReason,
           fallbackUsed: meta?.fallbackUsed,
-          parentSessionId: s.fleetMetadata?.parentSessionId,
+          parentSessionId: this.getBackgroundParentSessionId(s.id),
           rootSessionId: s.fleetMetadata?.rootSessionId,
           goalId: s.fleetMetadata?.goalId,
           workflowId: s.fleetMetadata?.workflowId,

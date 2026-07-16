@@ -1221,6 +1221,15 @@ export function shouldAcceptSessionChunk(
   return chunkSessionId === targetSessionId;
 }
 
+export function shouldProjectBackgroundCompletion(
+  parentSessionId: string | null | undefined,
+  transcriptSessionId: string | null,
+): boolean {
+  return (
+    parentSessionId === undefined || parentSessionId === transcriptSessionId
+  );
+}
+
 export function shouldDropSessionScopedEvent(
   eventType: string,
   eventSessionId: string | undefined,

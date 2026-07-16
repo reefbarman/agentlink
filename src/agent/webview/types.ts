@@ -625,6 +625,7 @@ export type ExtensionMessage =
   | {
       type: "agentBgDone";
       sessionId: string;
+      parentSessionId?: string | null;
       totalInputTokens: number;
       totalOutputTokens: number;
       totalCacheReadTokens: number;

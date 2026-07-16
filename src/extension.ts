@@ -982,6 +982,8 @@ export function activate(context: vscode.ExtensionContext): void {
         sessionId,
         chatViewProvider.getConfiguredCommandApprovalPolicy(),
       ),
+    inheritSessionWriteState: (parentSessionId, childSessionId) =>
+      approvalManager.inheritSessionWriteState(parentSessionId, childSessionId),
     commandApprovalReviewer,
     isSessionActive: (sessionId) => {
       const session = agentSessionManager.getSession(sessionId);

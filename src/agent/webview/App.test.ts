@@ -4,6 +4,7 @@ import {
   reducer,
   shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
+  shouldProjectBackgroundCompletion,
 } from "./App";
 
 describe("webview App reducer background agent launch blocks", () => {
@@ -914,6 +915,31 @@ describe("webview App reducer background agent launch blocks", () => {
         false,
       ),
     ).toBe(true);
+  });
+
+  it("projects background completions only into their immediate parent transcript", () => {
+    expect(shouldProjectBackgroundCompletion("foreground", "foreground")).toBe(
+      true,
+    );
+    expect(
+      shouldProjectBackgroundCompletion("background-parent", "foreground"),
+    ).toBe(false);
+    expect(
+      shouldProjectBackgroundCompletion(
+        "background-parent",
+        "background-parent",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not project detached or unresolved current background completions", () => {
+    expect(shouldProjectBackgroundCompletion(null, "foreground")).toBe(false);
+  });
+
+  it("keeps legacy background completions visible when parent metadata is absent", () => {
+    expect(shouldProjectBackgroundCompletion(undefined, "foreground")).toBe(
+      true,
+    );
   });
 
   it("accepts backfill chunks for the session currently being restored", () => {

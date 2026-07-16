@@ -927,6 +927,62 @@ describe("ApprovalManager session approval persistence", () => {
     disposeManagers({ approvalManager, configStore });
   });
 
+  it("snapshots session write trust into a child without copying command rules", async () => {
+    const memento = new MockMemento();
+    const { approvalManager, configStore } = await createManagers(memento);
+
+    approvalManager.setAgentWriteApproval("parent", "session");
+    approvalManager.setWriteApproval("parent", "session");
+    approvalManager.addWriteRule(
+      "parent",
+      { pattern: "src/inherited", mode: "prefix" },
+      "session",
+    );
+    approvalManager.addPathRule(
+      "parent",
+      { pattern: "/outside/inherited", mode: "prefix" },
+      "session",
+    );
+    approvalManager.addCommandRule(
+      "parent",
+      { pattern: "npm test", mode: "prefix" },
+      "session",
+    );
+    approvalManager.addWriteRule(
+      "child",
+      { pattern: "src/existing", mode: "prefix" },
+      "session",
+    );
+
+    approvalManager.inheritSessionWriteState("parent", "child");
+
+    expect(approvalManager.getAgentWriteApprovalState("child")).toBe("session");
+    expect(approvalManager.getWriteApprovalState("child")).toBe("prompt");
+    expect(approvalManager.getWriteRules("child").session).toEqual([
+      { pattern: "src/existing", mode: "prefix" },
+      { pattern: "src/inherited", mode: "prefix" },
+    ]);
+    expect(approvalManager.getPathRules("child").session).toEqual([
+      { pattern: "/outside/inherited", mode: "prefix" },
+    ]);
+    expect(approvalManager.getCommandRules("child").session).toEqual([]);
+    expect(approvalManager.getWriteRules("parent").session).toEqual([
+      { pattern: "src/inherited", mode: "prefix" },
+    ]);
+
+    approvalManager.addWriteRule(
+      "parent",
+      { pattern: "src/later", mode: "prefix" },
+      "session",
+    );
+    expect(approvalManager.getWriteRules("child").session).not.toContainEqual({
+      pattern: "src/later",
+      mode: "prefix",
+    });
+
+    disposeManagers({ approvalManager, configStore });
+  });
+
   it("merges placeholder approval state into an existing real session", async () => {
     const memento = new MockMemento();
 

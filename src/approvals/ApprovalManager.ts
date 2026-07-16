@@ -361,6 +361,35 @@ export class ApprovalManager {
     this._onDidChange.fire();
   }
 
+  /**
+   * Snapshot session-scoped agent write trust into a child session without
+   * moving or broadening unrelated approval state.
+   */
+  inheritSessionWriteState(
+    parentSessionId: string,
+    childSessionId: string,
+  ): void {
+    if (parentSessionId === childSessionId) return;
+
+    const parent = this.sessions.get(parentSessionId);
+    if (!parent) return;
+
+    const child = this.sessions.get(childSessionId) ?? this.newSession();
+    child.agentWriteApproved ||= parent.agentWriteApproved;
+    child.pathRules = deduplicateRules([
+      ...(child.pathRules ?? []),
+      ...(parent.pathRules ?? []),
+    ]);
+    child.writeRules = deduplicateRules([
+      ...(child.writeRules ?? []),
+      ...(parent.writeRules ?? []),
+    ]);
+    child.lastActivity = Date.now();
+    this.sessions.set(childSessionId, child);
+    this.persistSessions();
+    this._onDidChange.fire();
+  }
+
   /** Reset session-level agent write approval for a single session (e.g. on mode switch). */
   resetSessionAgentWriteApproval(sessionId: string): void {
     const session = this.sessions.get(sessionId);

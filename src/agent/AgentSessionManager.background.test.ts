@@ -178,14 +178,16 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("snapshots the parent command approval policy for a background child", async () => {
+  it("snapshots the parent approval state for a background child", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const parent = await mgr.createSession("code");
+    const inheritSessionWriteState = vi.fn();
     mgr.setCommandApprovalPolicy(parent.id, "approve-for-me");
     mgr.setToolContext({
       ...toolCtx,
       getCommandApprovalPolicy: (sessionId) =>
         mgr.getCommandApprovalPolicy(sessionId),
+      inheritSessionWriteState,
     });
 
     const child = await mgr.spawnBackground(
@@ -194,6 +196,10 @@ describe("AgentSessionManager background agents", () => {
     );
     expect(mgr.getCommandApprovalPolicy(child.sessionId)).toBe(
       "approve-for-me",
+    );
+    expect(inheritSessionWriteState).toHaveBeenCalledWith(
+      parent.id,
+      child.sessionId,
     );
 
     mgr.setCommandApprovalPolicy(parent.id, "safe");
@@ -390,13 +396,18 @@ describe("AgentSessionManager background agents", () => {
       { maxConcurrent: 3 },
       { host: { config: configHost, acpBackgroundRunner } },
     );
-    mgr.setToolContext(toolCtx);
+    const parent = await mgr.createSession("code");
+    const inheritSessionWriteState = vi.fn();
+    mgr.setToolContext({ ...toolCtx, inheritSessionWriteState });
 
-    const spawned = await mgr.spawnBackground({
-      task: "external review",
-      message: "review this",
-      provider: "acp:claude",
-    });
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "external review",
+        message: "review this",
+        provider: "acp:claude",
+      },
+      parent.id,
+    );
     const result = await mgr.waitForBackground(spawned.sessionId);
 
     expect(result).toBe("ACP result");
@@ -417,6 +428,10 @@ describe("AgentSessionManager background agents", () => {
     expect(session.totalCacheReadTokens).toBe(5);
     expect(session.totalCacheCreationTokens).toBe(2);
     expect(session.lastInputTokens).toBe(37);
+    expect(inheritSessionWriteState).toHaveBeenCalledWith(
+      parent.id,
+      spawned.sessionId,
+    );
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
@@ -954,7 +969,13 @@ describe("AgentSessionManager background agents", () => {
       parent.sessionId,
     );
 
+    const childSession = (mgr as any).sessions.get(child.sessionId);
+    childSession.fleetMetadata.parentSessionId = undefined;
+
     const infos = mgr.getBgSessionInfos();
+    expect(mgr.getBackgroundParentSessionId(child.sessionId)).toBe(
+      parent.sessionId,
+    );
     expect(infos.map((info) => info.id)).toEqual([
       parent.sessionId,
       child.sessionId,

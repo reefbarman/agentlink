@@ -104,6 +104,7 @@ import {
   agentMessagesToChatMessages,
   reducer,
   shouldDropSessionScopedEvent,
+  shouldProjectBackgroundCompletion,
   type AppState,
   type LoadedInstructionDebugInfo,
 } from "../shared/chatProjection.js";
@@ -691,6 +692,7 @@ export type ExtensionToWebview =
   | {
       type: "agentBgDone";
       sessionId: string;
+      parentSessionId?: string | null;
       totalInputTokens: number;
       totalOutputTokens: number;
       totalCacheReadTokens: number;
@@ -5729,6 +5731,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
 
       case "agentBgDone": {
+        if (
+          !shouldProjectBackgroundCompletion(
+            extMsg.parentSessionId,
+            this.projectedForegroundStore.sessionId,
+          )
+        ) {
+          break;
+        }
         let bgTask = "Background Agent";
         for (const message of this.projectedForegroundState.messages) {
           for (const block of message.blocks) {
@@ -6163,9 +6173,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               ?.getBgSessionInfos()
               .find((s) => s.id === sessionId)
           : undefined;
+        const parentSessionId = isBackground
+          ? this.sessionManager?.getBackgroundParentSessionId(sessionId)
+          : undefined;
         this.postMessage({
           type: isBackground ? "agentBgDone" : "agentDone",
           sessionId,
+          ...(isBackground && {
+            parentSessionId: parentSessionId ?? null,
+          }),
           totalInputTokens: event.totalInputTokens,
           totalOutputTokens: event.totalOutputTokens,
           totalCacheReadTokens: event.totalCacheReadTokens,

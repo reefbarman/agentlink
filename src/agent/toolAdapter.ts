@@ -1479,6 +1479,11 @@ export interface ToolDispatchContext {
   sessionId: string;
   /** Resolves the active session command policy at dispatch time. */
   getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
+  /** Snapshots session-scoped write trust from a spawning session into its child. */
+  inheritSessionWriteState?: (
+    parentSessionId: string,
+    childSessionId: string,
+  ) => void;
   commandApprovalReviewer?: CommandApprovalReviewer;
   isSessionActive?: (sessionId: string) => boolean;
   getCommandReviewObjective?: (sessionId: string) => string | undefined;

@@ -22,6 +22,7 @@ import {
   reducer,
   shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
+  shouldProjectBackgroundCompletion,
   type AppAction,
 } from "../../shared/chatProjection.js";
 import {
@@ -177,6 +178,7 @@ export {
   reducer,
   shouldAcceptSessionChunk,
   shouldDropSessionScopedEvent,
+  shouldProjectBackgroundCompletion,
 };
 
 export interface Injection {
@@ -1098,42 +1100,52 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         case "agentBgDone": {
           // Insert a completion notification at the current chat position
           const bgSessionId = msg.sessionId;
-          // Find the task name from existing bg_agent blocks in messages
-          let bgTask = "Background Agent";
-          for (const m of fullStateRef.current.messages) {
-            for (const b of m.blocks) {
-              if (b.type === "bg_agent" && b.sessionId === bgSessionId) {
-                bgTask = b.task;
-                break;
-              }
-            }
-          }
-          // Determine status from bgSessions state
+          // Determine status and task from bgSessions state, falling back to the
+          // foreground launch block for legacy events without fleet metadata.
           const bgInfo = bgSessionsRef.current.find(
             (s) => s.id === bgSessionId,
           );
+          let bgTask = bgInfo?.task ?? "Background Agent";
+          if (!bgInfo?.task) {
+            for (const m of fullStateRef.current.messages) {
+              for (const b of m.blocks) {
+                if (b.type === "bg_agent" && b.sessionId === bgSessionId) {
+                  bgTask = b.task;
+                  break;
+                }
+              }
+            }
+          }
           const bgStatus: "completed" | "error" | "cancelled" =
             bgInfo?.status === "error"
               ? "error"
               : bgInfo?.status === "cancelled"
                 ? "cancelled"
                 : "completed";
-          setTranscriptView((prev) => {
-            return reduceOpenTranscript(
-              prev,
-              bgSessionId,
-              { type: "DONE" },
-              { streaming: false, statusOverride: null },
-            );
-          });
-          dispatch({
+          const completionAction: AppAction = {
             type: "BG_AGENT_DONE",
             sessionId: bgSessionId,
             task: bgTask,
             status: bgStatus,
             resultText: msg.resultText as string | undefined,
             summary: msg.resultSummary as string | undefined,
-          });
+          };
+          setTranscriptView((prev) =>
+            reduceOpenTranscript(
+              prev,
+              bgSessionId,
+              { type: "DONE" },
+              { streaming: false, statusOverride: null },
+            ),
+          );
+          if (
+            shouldProjectBackgroundCompletion(
+              msg.parentSessionId,
+              fullStateRef.current.chatState.sessionId,
+            )
+          ) {
+            dispatch(completionAction);
+          }
           break;
         }
 

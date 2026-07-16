@@ -337,6 +337,68 @@ describe("ChatViewProvider session state sync", () => {
     mockGetConfiguration.mockClear();
   });
 
+  it("keeps nested background results out of the browser foreground transcript", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const foreground = {
+      id: "foreground-1",
+      title: "Foreground",
+      mode: "code",
+      model: "gpt-5.6-sol",
+      status: "idle",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      getAllMessages: () => [],
+    };
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => foreground),
+      getConfig: vi.fn(() => ({})),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+    } as never);
+
+    const projectExtensionMessage = (
+      provider as unknown as {
+        projectExtensionMessage: (message: Record<string, unknown>) => void;
+      }
+    ).projectExtensionMessage.bind(provider);
+    projectExtensionMessage({
+      type: "stateUpdate",
+      state: {
+        sessionId: foreground.id,
+        mode: foreground.mode,
+        model: foreground.model,
+        streaming: false,
+      },
+    });
+    projectExtensionMessage({
+      type: "agentBgDone",
+      sessionId: "nested-child",
+      parentSessionId: "background-parent",
+      totalInputTokens: 1,
+      totalOutputTokens: 1,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+      resultText: "nested result",
+    });
+
+    expect(
+      provider
+        .getBrowserProjectedForegroundState()
+        ?.projectedMessages.some((message) =>
+          message.blocks.some(
+            (block) =>
+              block.type === "bg_agent_result" &&
+              block.sessionId === "nested-child",
+          ),
+        ),
+    ).toBe(false);
+  });
+
   it("keeps browser reasoning snapshots in sync with the live session", async () => {
     const { ChatViewProvider } = await import("./ChatViewProvider.js");
     const provider = new ChatViewProvider(
@@ -1353,7 +1415,8 @@ describe("ChatViewProvider session state sync", () => {
     (provider as unknown as { sessionManager: unknown }).sessionManager = {
       getSession: () => ({ background: true }),
       getForegroundSession: () => undefined,
-      getBgSessionInfos: () => [],
+      getBgSessionInfos: () => [{ id: "bg-1" }],
+      getBackgroundParentSessionId: () => "foreground-1",
       getBackgroundResult,
       getBackgroundResultSummary: () => "Reviewed the plan",
       listPersistedSessions: () => [],
@@ -1377,8 +1440,52 @@ describe("ChatViewProvider session state sync", () => {
       expect.objectContaining({
         type: "agentBgDone",
         sessionId: "bg-1",
+        parentSessionId: "foreground-1",
         resultText: "full structured report",
         resultSummary: "Reviewed the plan",
+      }),
+    );
+  });
+
+  it("fails closed when a background completion has no current parent metadata", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getSession: () => ({ background: true }),
+      getForegroundSession: () => undefined,
+      getBgSessionInfos: () => [],
+      getBackgroundParentSessionId: () => undefined,
+      getBackgroundResult: () => ({ resultText: "nested result" }),
+      getBackgroundResultSummary: () => undefined,
+      listPersistedSessions: () => [],
+    };
+
+    const handleAgentEvent = (
+      provider as unknown as {
+        handleAgentEvent: (sessionId: string, event: unknown) => void;
+      }
+    ).handleAgentEvent;
+    handleAgentEvent.call(provider, "bg-unresolved", {
+      type: "done",
+      totalInputTokens: 1,
+      totalOutputTokens: 2,
+      totalCacheReadTokens: 0,
+      totalCacheCreationTokens: 0,
+    });
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentBgDone",
+        sessionId: "bg-unresolved",
+        parentSessionId: null,
       }),
     );
   });
