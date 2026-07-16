@@ -12,6 +12,8 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "get_module_neighbors",
     "list_files",
     "open_file",
+    "search_session_history",
+    "read_session_excerpt",
   ],
   edit: [
     "write_file",

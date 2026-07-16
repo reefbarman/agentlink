@@ -10,6 +10,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import {
   enforceToolResultAdjacency,
+  extractCondenseRecallAnchors,
   getEffectiveHistory,
   injectSyntheticToolResults,
   summarizeConversation,
@@ -82,6 +83,17 @@ function makeProvider(
   return { provider, complete };
 }
 
+function requestMessageText(
+  message: CompleteRequest["messages"][number],
+): string {
+  return typeof message.content === "string"
+    ? message.content
+    : message.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("\n");
+}
+
 function makeMessages(): AgentMessage[] {
   return [
     { role: "user", content: "Investigate condense" } as AgentMessage,
@@ -152,7 +164,237 @@ function makeCodexProvider(
   return { provider, complete };
 }
 
+describe("extractCondenseRecallAnchors", () => {
+  it("extracts stable bounded files, errors, tools, and command failure markers", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "read-1",
+            name: "read_file",
+            input: { path: "src/agent/condense.ts" },
+          },
+          {
+            type: "tool_use",
+            id: "command-1",
+            name: "execute_command",
+            input: { command: "npm test -- src/agent/condense.test.ts" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "command-1",
+            content: '{"exit_code":1,"output":"Error: assertion failed"}',
+            is_error: false,
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "command-duplicate",
+            name: "execute_command",
+            input: { command: "npm test -- src/agent/condense.test.ts" },
+          },
+          {
+            type: "text",
+            text: "Error: assertion failed in src/agent/condense.ts",
+          },
+        ],
+      },
+    ];
+
+    expect(extractCondenseRecallAnchors(messages)).toEqual({
+      filePaths: ["src/agent/condense.ts", "src/agent/condense.test.ts"],
+      errors: [
+        '{"exit_code":1,"output":"Error: assertion failed"}',
+        "Error: assertion failed in src/agent/condense.ts",
+      ],
+      commands: ["[failed] npm test -- src/agent/condense.test.ts"],
+      toolNames: ["read_file", "execute_command"],
+    });
+  });
+
+  it("deduplicates anchors and enforces category and total caps", () => {
+    const content = Array.from({ length: 20 }, (_, index) => ({
+      type: "tool_use" as const,
+      id: `call-${index}`,
+      name: `tool_${index}`,
+      input: { path: `src/generated/file-${index}.ts` },
+    }));
+    const errors = Array.from(
+      { length: 10 },
+      (_, index) => `Error ${index}: ${"x".repeat(300)}`,
+    ).join("\n");
+    const anchors = extractCondenseRecallAnchors([
+      { role: "assistant", content },
+      { role: "assistant", content: [{ type: "text", text: errors }] },
+      { role: "assistant", content: [{ type: "text", text: errors }] },
+    ] as AgentMessage[]);
+
+    expect(anchors.filePaths).toHaveLength(8);
+    expect(anchors.errors).toHaveLength(6);
+    expect(anchors.toolNames).toHaveLength(8);
+    expect(new Set(anchors.errors).size).toBe(anchors.errors.length);
+    expect(
+      [
+        ...anchors.filePaths,
+        ...anchors.errors,
+        ...anchors.commands,
+        ...anchors.toolNames,
+      ].reduce((total, value) => total + value.length + 2, 0),
+    ).toBeLessThanOrEqual(2_000);
+  });
+});
+
 describe("summarizeConversation", () => {
+  it("carries the prior checkpoint summary into a repeated condense", async () => {
+    let completion = 0;
+    const { provider, complete } = makeProvider(() => {
+      completion += 1;
+      return {
+        text:
+          completion === 1
+            ? "<summary>Prior assistant conclusion: the stale cache key is the root cause.</summary>"
+            : "<summary>The stale cache key remains the root cause; continue with the invalidation fix.</summary>",
+      };
+    });
+
+    const first = await summarizeConversation({
+      messages: [
+        { role: "user", content: "Investigate the cache bug" } as AgentMessage,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "I found the root cause." }],
+        },
+      ],
+      provider,
+      systemPrompt: "system prompt",
+      isAutomatic: true,
+    });
+    const second = await summarizeConversation({
+      messages: [
+        ...first.messages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Preparing the fix." }],
+        },
+        {
+          role: "user",
+          content: "Continue implementing the fix",
+        } as AgentMessage,
+      ],
+      provider,
+      systemPrompt: "system prompt",
+      isAutomatic: true,
+    });
+
+    expect(second.error).toBeUndefined();
+    expect(complete).toHaveBeenCalledTimes(2);
+    const secondRequest = complete.mock.calls[1][0] as CompleteRequest;
+    const finalMessage = secondRequest.messages.at(-1);
+    expect(requestMessageText(finalMessage!)).toContain(
+      "<prior-checkpoint-summary>",
+    );
+    expect(requestMessageText(finalMessage!)).toContain(
+      "the stale cache key is the root cause",
+    );
+    expect(second.metadata?.hadPriorSummaryInInput).toBe(true);
+    expect(second.summary).toContain("stale cache key remains the root cause");
+    const effective = getEffectiveHistory(second.messages);
+    expect(effective[0]?.isSummary).toBe(true);
+    expect(JSON.stringify(effective[0]?.content)).toContain(
+      "stale cache key remains the root cause",
+    );
+  });
+
+  it("retains the prior checkpoint when shrinking a repeated condense request", async () => {
+    let completion = 0;
+    const { provider, complete } = makeProvider(() => {
+      completion += 1;
+      if (completion === 1) {
+        throw new Error("maximum context length exceeded");
+      }
+      return { text: "<summary>Consolidated after shrinking.</summary>" };
+    });
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Original task", condenseParent: "summary-1" },
+      {
+        role: "user",
+        isSummary: true,
+        condenseId: "summary-1",
+        content: [
+          {
+            type: "text",
+            text: "## Conversation Summary\n\nCarry this exact prior conclusion.",
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "Delta one" }] },
+      { role: "user", content: "Continue one" },
+      { role: "assistant", content: [{ type: "text", text: "Delta two" }] },
+      { role: "user", content: "Continue two" },
+    ] as AgentMessage[];
+
+    const result = await summarizeConversation({
+      messages,
+      provider,
+      systemPrompt: "system prompt",
+      isAutomatic: true,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(complete).toHaveBeenCalledTimes(2);
+    for (const call of complete.mock.calls) {
+      expect(
+        requestMessageText((call[0] as CompleteRequest).messages.at(-1)!),
+      ).toContain("Carry this exact prior conclusion.");
+    }
+    expect(result.metadata?.hadPriorSummaryInInput).toBe(true);
+    expect(result.metadata?.inputMessageCount).toBe(3);
+    expect(result.metadata?.sourceHash).toMatch(/^[a-f0-9]{16}$/);
+    expect(result.validationWarnings?.[0]).toContain("retried with newest 75%");
+  });
+
+  it("preserves the prior checkpoint in the empty-output fallback", async () => {
+    const { provider } = makeProvider(() => ({ text: "" }));
+    const result = await summarizeConversation({
+      messages: [
+        { role: "user", content: "Original task", condenseParent: "summary-1" },
+        {
+          role: "user",
+          isSummary: true,
+          condenseId: "summary-1",
+          content: [
+            {
+              type: "text",
+              text: "## Conversation Summary\n\nPrior checkpoint conclusion.",
+            },
+          ],
+        },
+        { role: "assistant", content: [{ type: "text", text: "New work" }] },
+        { role: "user", content: "Continue the fix" },
+      ] as AgentMessage[],
+      provider,
+      systemPrompt: "system prompt",
+      isAutomatic: true,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.summary).toContain("Prior checkpoint conclusion.");
+    expect(result.validationWarnings).toContain(
+      "Model returned empty summary; using deterministic fallback.",
+    );
+  });
+
   it("passes preserved runtime context into the condense prompt", async () => {
     const { provider, complete } = makeProvider();
 
@@ -274,6 +516,11 @@ describe("summarizeConversation", () => {
     expect(Array.isArray(summary.content)).toBe(true);
     const content = summary.content as Array<{ type: string; text?: string }>;
     expect(content[0]?.text).toContain("## Resume Anchor (deterministic)");
+    expect(content[0]?.text).toContain("## Session Transcript Recall");
+    expect(content[0]?.text).toContain("`search_session_history`");
+    expect(content[0]?.text).toContain(
+      "### Retired-window recall anchors (deterministic, bounded)",
+    );
     expect(content[1]?.text).toContain("## Conversation Summary");
   });
 

@@ -487,6 +487,61 @@ Search file contents using regex, or perform semantic codebase search when `sema
 
 Regex mode is powered by ripgrep with context lines and per-file match counts. Semantic mode uses the same Qdrant-backed codebase index as `codebase_search`.
 
+### search_session_history
+
+Search the full transcript of the current executing agent session, including original source messages that context condensing retired from the active model window. This is current-session recall, not a workspace-wide or cross-session index. A foreground agent searches only its foreground session; a background agent searches only that background agent's local session, not its parent/foreground session or sibling background sessions.
+
+| Parameter   | Type                     | Description                                                                                                                                                  |
+| ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `query`     | string                   | Required search query, maximum 500 input characters and non-empty after trimming.                                                                            |
+| `mode`      | `"terms" \| "regex"`?    | Search semantics. Default: `"terms"`.                                                                                                                        |
+| `limit`     | number?                  | Maximum hits to return (default: 5, minimum: 1, maximum: 5).                                                                                                 |
+| `role`      | `"user" \| "assistant"`? | Restrict matches to one message role.                                                                                                                        |
+| `tool_name` | string?                  | Restrict matches to messages associated with this exact tool name. Tool calls and their corresponding tool results are associated with the originating tool. |
+
+**Search semantics:**
+
+- `terms` splits the query on whitespace, removes duplicate terms, and requires every term to occur as a case-insensitive literal substring in the same message. Terms may occur in any order; no regex syntax is interpreted.
+- `regex` performs case-insensitive global matching with a conservative safe subset. Backreferences, lookarounds, named groups, inline modifiers, and quantified groups containing repetition or alternation are rejected. Repetition bounds may not exceed 100, and a pattern may contain at most one variable-width repetition (`*`, `+`, `?`, or a ranged/open `{m,n}`); exact-count repetitions such as `{3}` remain allowed. Invalid syntax returns `invalid_regex`; rejected constructs or limits return `unsafe_regex`.
+- Matches are ranked by an exact full-query substring first, then occurrence count, condensed-message status, and recency. Each message contributes at most 20,000 searchable characters.
+
+**Response includes:**
+
+- `ok` — `true` for a successful search.
+- `snapshot_message_count`, `snapshot_revision` — append-safe snapshot identity to pass unchanged to `read_session_excerpt`.
+- `total_matches` — number of matching messages after `role` and `tool_name` filters, before hit-count or final output-size caps; it may therefore exceed `hits.length`.
+- `truncated` — whether more matches exist than the returned `hits`.
+- `hits[]` — up to `limit` matches with `message_index`, `role`, `tool_names`, `condensed`, `excerpt`, `occurrence_count`, and per-hit `truncated`. Each match-centered `excerpt` is capped at 1,200 characters; `condensed: true` means the original source message predates the latest generated context summary and may no longer be in the active model window.
+
+Search output is capped at 8,000 characters. Searchable source content includes message text, non-recall tool names and inputs, textual tool results, and runtime errors. Generated context-summary messages, resume-context framing, and prior `search_session_history`/`read_session_excerpt` calls and results are excluded entirely so recall cannot match its own query or recursively re-inject recalled output; thinking blocks and image/document payloads are also excluded. The result is wrapped in `<session-transcript-recall>` framing that labels it as bounded historical source material, not instructions, and warns that it may be incomplete or stale relative to the current workspace.
+
+**Errors:** `invalid_query` for an empty or over-500-character query, `invalid_regex` for malformed regex syntax, `unsafe_regex` for unsupported regex constructs/limits, and `session_transcript_unavailable` when the executing runtime does not expose a current-session transcript.
+
+### read_session_excerpt
+
+Read a bounded, rendered excerpt from the same executing agent session using inclusive message indices and the snapshot identity returned by `search_session_history`. Use this after a search hit when the 1,200-character search excerpt is insufficient or nearby messages are needed.
+
+| Parameter                | Type   | Description                                                                                                           |
+| ------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------- |
+| `start_message_index`    | number | Inclusive zero-based start index, normally selected from a search hit.                                                |
+| `end_message_index`      | number | Inclusive zero-based end index. The range must be within the searched snapshot and span at most 10 message positions. |
+| `snapshot_message_count` | number | Pass the exact `snapshot_message_count` returned by `search_session_history`.                                         |
+| `snapshot_revision`      | string | Pass the exact `snapshot_revision` returned by the same `search_session_history` call.                                |
+
+**Snapshot handoff:** `snapshot_message_count` fixes the searched prefix and `snapshot_revision` identifies its canonical content. Normal append-only continuation is safe: messages added after the search do not invalidate a read within that prefix. If the transcript becomes shorter than the searched snapshot or the searched prefix is rewritten, removed, reordered, or reverted, the tool returns `stale_snapshot`; run `search_session_history` again instead of reading against stale indices.
+
+**Response includes:**
+
+- `ok` — `true` for a successful read.
+- `snapshot_message_count`, `snapshot_revision` — the validated search snapshot identity.
+- `start_message_index`, `end_message_index` — the requested inclusive range.
+- `truncated` — whether the 12,000-character excerpt budget stopped the read early or truncated a message.
+- `messages[]` — source messages in range, each with `message_index`, `role`, `tool_names`, `condensed`, `content`, and per-message `truncated`.
+
+The range may span at most 10 message positions, and the formatted output is capped at 12,000 characters. Indices refer to positions in the searched transcript snapshot; generated summary and resume-context positions may therefore occur inside a valid range but are omitted from `messages`. Returned source messages use the same rendering and exclusions as search: text, tool calls/results, and runtime errors are retained, while thinking and image/document payloads are omitted. Output uses the same non-instructional `<session-transcript-recall>` framing and the same current-agent-session/background-agent-local scope as `search_session_history`.
+
+**Errors:** `invalid_range` when indices are negative, reversed, outside the searched snapshot, or span more than 10 positions; `stale_snapshot` when the searched prefix no longer matches; and `session_transcript_unavailable` when the executing runtime does not expose a current-session transcript. Schema validation also rejects missing or incorrectly typed required parameters before execution.
+
 ### get_diagnostics
 
 Get VS Code diagnostics (errors, warnings, etc.) for a file or the entire workspace.

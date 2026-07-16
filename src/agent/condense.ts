@@ -42,6 +42,7 @@ import {
   buildDeterministicFallbackSummary,
   extractCondenseResumeAnchor,
   renderDeterministicSections,
+  type CondenseRecallAnchors,
 } from "./condensePrompt.js";
 
 export { renderDeterministicSections } from "./condensePrompt.js";
@@ -590,6 +591,146 @@ function extractCanonicalUserMessages(messages: AgentMessage[]): string[] {
     .filter((t) => t.length > 0);
 }
 
+export function extractCondenseRecallAnchors(
+  messages: AgentMessage[],
+): CondenseRecallAnchors {
+  const filePaths: string[] = [];
+  const errors: string[] = [];
+  const toolNames: string[] = [];
+  const commandCalls = new Map<string, { command: string; failed: boolean }>();
+  const commandsInOrder: string[] = [];
+  const seen = {
+    filePaths: new Set<string>(),
+    errors: new Set<string>(),
+    toolNames: new Set<string>(),
+  };
+
+  const addUnique = (
+    target: string[],
+    seenValues: Set<string>,
+    value: string,
+    limit: number,
+  ) => {
+    const normalized = value.replace(/\s+/g, " ").trim().slice(0, 240);
+    if (!normalized || seenValues.has(normalized) || target.length >= limit)
+      return;
+    seenValues.add(normalized);
+    target.push(normalized);
+  };
+  const inspectText = (text: string) => {
+    const bounded = text.slice(0, MAX_TOOL_RESULT_TEXT_CHARS);
+    for (const match of bounded.matchAll(
+      /(?:^|[\s'"`(])((?:\.{0,2}\/|\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9_-]+)/g,
+    )) {
+      addUnique(filePaths, seen.filePaths, match[1], 8);
+    }
+    for (const line of bounded.split("\n")) {
+      if (
+        /\b(error|failed|failure|exception|non-zero|exit(?:ed)? (?:with )?code [1-9]\d*)\b/i.test(
+          line,
+        )
+      ) {
+        addUnique(errors, seen.errors, line, 6);
+      }
+    }
+  };
+
+  for (const message of messages) {
+    if (message.runtimeError) inspectText(message.runtimeError.message);
+    if (typeof message.content === "string") {
+      inspectText(message.content);
+      continue;
+    }
+    for (const block of message.content) {
+      if (block.type === "text") {
+        inspectText(block.text);
+        continue;
+      }
+      if (block.type === "tool_use") {
+        addUnique(toolNames, seen.toolNames, block.name, 8);
+        inspectText(JSON.stringify(block.input));
+        if (block.name === "execute_command") {
+          const command =
+            typeof block.input.command === "string"
+              ? block.input.command.trim()
+              : "";
+          if (command) {
+            commandCalls.set(block.id, { command, failed: false });
+            commandsInOrder.push(block.id);
+            inspectText(command);
+          }
+        }
+        continue;
+      }
+      if (block.type !== "tool_result") continue;
+      const resultText = toolResultContentText(block.content);
+      inspectText(resultText);
+      const commandCall = commandCalls.get(block.tool_use_id);
+      if (
+        commandCall &&
+        (block.is_error ||
+          /(?:\b(?:non-zero|exit(?:ed)? (?:with )?code [1-9]\d*)\b|"exit_code"\s*:\s*[1-9]\d*)/i.test(
+            resultText,
+          ))
+      ) {
+        commandCall.failed = true;
+      }
+    }
+  }
+
+  const commandStatus = new Map<string, boolean>();
+  for (const id of commandsInOrder) {
+    const entry = commandCalls.get(id);
+    if (!entry) continue;
+    commandStatus.set(
+      entry.command,
+      (commandStatus.get(entry.command) ?? false) || entry.failed,
+    );
+  }
+  const commands = [...commandStatus]
+    .slice(0, 6)
+    .map(([command, failed]) =>
+      `${failed ? "[failed] " : ""}${command}`.slice(0, 240),
+    );
+
+  const anchors: CondenseRecallAnchors = {
+    filePaths,
+    errors,
+    commands,
+    toolNames,
+  };
+  let remaining = 2_000;
+  for (const values of [
+    anchors.filePaths,
+    anchors.errors,
+    anchors.commands,
+    anchors.toolNames,
+  ]) {
+    for (let index = 0; index < values.length; index += 1) {
+      const value = values[index];
+      if (value.length + 2 <= remaining) {
+        remaining -= value.length + 2;
+        continue;
+      }
+      values.splice(index);
+      break;
+    }
+  }
+  return anchors;
+}
+
+function toolResultContentText(content: ToolResultBlock["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .flatMap((block) => {
+      if (block.type === "text") return [block.text];
+      if (block.type === "tool_result")
+        return [toolResultContentText(block.content)];
+      return [];
+    })
+    .join("\n");
+}
+
 function extractPendingTasksHeuristic(messages: AgentMessage[]): string[] {
   const userTexts = extractCanonicalUserMessages(messages);
   const candidates: string[] = [];
@@ -606,14 +747,41 @@ function extractPendingTasksHeuristic(messages: AgentMessage[]): string[] {
   return [...new Set(candidates)].slice(-6);
 }
 
-function sourceWindowHash(messages: AgentMessage[]): string {
-  const basis = messages
-    .map(
+function sourceWindowHash(
+  messages: AgentMessage[],
+  priorSummary?: string,
+): string {
+  const basis = [
+    priorSummary ? `prior-summary:${priorSummary}` : "prior-summary:none",
+    ...messages.map(
       (m) =>
         `${m.role}:${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`,
-    )
-    .join("\n---\n");
+    ),
+  ].join("\n---\n");
   return createHash("sha256").update(basis).digest("hex").slice(0, 16);
+}
+
+const MAX_PRIOR_SUMMARY_CHARS = 20_000;
+
+function extractPriorConversationSummary(
+  messages: AgentMessage[],
+): string | undefined {
+  const priorSummary = [...messages]
+    .reverse()
+    .find((message) => message.isSummary);
+  if (!priorSummary) return undefined;
+
+  const text =
+    typeof priorSummary.content === "string"
+      ? priorSummary.content
+      : priorSummary.content
+          .filter((block): block is TextBlock => block.type === "text")
+          .map((block) => block.text)
+          .find((blockText) => blockText.startsWith("## Conversation Summary"));
+  if (!text) return undefined;
+
+  const summary = text.replace(/^## Conversation Summary\s*/i, "").trim();
+  return summary ? truncateMiddle(summary, MAX_PRIOR_SUMMARY_CHARS) : undefined;
 }
 
 function extractSummaryText(raw: string): string {
@@ -793,23 +961,29 @@ export async function summarizeConversation(
     );
   }
 
-  const hadPriorSummaryInInput = toSummarize.some((m) => m.isSummary);
+  const priorSummary = extractPriorConversationSummary(messages);
+  const hadPriorSummaryInInput = Boolean(priorSummary);
   const canonicalUserMessages = extractCanonicalUserMessages(toSummarize);
   const pendingTasks = extractPendingTasksHeuristic(toSummarize);
   const resumeAnchor = extractCondenseResumeAnchor({
     userMessages: canonicalUserMessages,
     pendingTasks,
   });
+  const recallAnchors = extractCondenseRecallAnchors(toSummarize);
   const deterministicSections = renderDeterministicSections({
     userMessages: canonicalUserMessages,
     pendingTasks,
     resumeAnchor,
+    recallAnchors,
     preservedContext,
   });
 
+  const priorSummarySection = priorSummary
+    ? `\n\n<prior-checkpoint-summary>\nThis is the previous checkpoint summary. Treat it as source material to preserve and consolidate with the new transcript delta; do not merely append or quote it.\n\n${priorSummary}\n</prior-checkpoint-summary>`
+    : "";
   const finalMsg: MessageParam = {
     role: "user",
-    content: `${CONDENSE_INSTRUCTIONS}\n\n${deterministicSections}`,
+    content: `${CONDENSE_INSTRUCTIONS}${priorSummarySection}\n\n${deterministicSections}`,
   };
 
   const buildRequestMessages = (
@@ -981,6 +1155,7 @@ export async function summarizeConversation(
       userMessages: canonicalUserMessages,
       pendingTasks,
       resumeAnchor,
+      priorSummary,
     });
     validationWarnings.push(
       "Model returned empty summary; using deterministic fallback.",
@@ -1045,10 +1220,10 @@ export async function summarizeConversation(
     newInputTokens,
     validationWarnings,
     metadata: {
-      inputMessageCount: toSummarize.length,
+      inputMessageCount: condenseSourceMessages.length,
       sourceUserMessageCount: canonicalUserMessages.length,
       hadPriorSummaryInInput,
-      sourceHash: sourceWindowHash(toSummarize),
+      sourceHash: sourceWindowHash(condenseSourceMessages, priorSummary),
       providerId: provider.id,
       condenseModel: provider.condenseModel,
       modelCandidates,

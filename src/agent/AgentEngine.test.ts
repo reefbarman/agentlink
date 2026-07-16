@@ -1,7 +1,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import type { AgentConfig, AgentEvent } from "./types.js";
+import type { AgentConfig, AgentEvent, AgentMessage } from "./types.js";
 import type {
   CompleteRequest,
   CompleteResult,
@@ -14,7 +14,11 @@ import type {
 } from "./providers/types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AgentEngine, truncateToolText } from "./AgentEngine.js";
+import {
+  AgentEngine,
+  buildSessionTranscriptSnapshot,
+  truncateToolText,
+} from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
@@ -209,6 +213,53 @@ async function collectEvents(
   }
   return events;
 }
+
+describe("buildSessionTranscriptSnapshot", () => {
+  it("clones raw messages and derives source kinds and condensed flags consistently", () => {
+    const sourceContent = [
+      { type: "text" as const, text: "original evidence" },
+    ];
+    const messages: AgentMessage[] = [
+      { role: "user", content: "task", condenseParent: "summary-1" },
+      {
+        role: "assistant",
+        content: sourceContent,
+        condenseParent: "summary-1",
+      },
+      {
+        role: "user",
+        content: "summary",
+        isSummary: true,
+        condenseId: "summary-1",
+      },
+      { role: "user", content: "resume", isResumeContext: true },
+      { role: "assistant", content: [{ type: "text", text: "current" }] },
+    ];
+
+    const snapshot = buildSessionTranscriptSnapshot(messages);
+    sourceContent[0]!.text = "mutated after projection";
+    messages[0]!.content = "mutated task";
+
+    expect(snapshot.messages.map((message) => message.sourceKind)).toEqual([
+      "source",
+      "source",
+      "summary",
+      "resume",
+      "source",
+    ]);
+    expect(snapshot.messages.map((message) => message.condensed)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(snapshot.messages[0]?.content).toBe("task");
+    expect(snapshot.messages[1]?.content).toEqual([
+      { type: "text", text: "original evidence" },
+    ]);
+  });
+});
 
 describe("truncateToolText", () => {
   it("returns pass-through text without scheduling a temp-file write", () => {

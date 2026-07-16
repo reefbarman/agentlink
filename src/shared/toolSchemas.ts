@@ -253,6 +253,63 @@ export const searchFilesSchema = {
     ),
 };
 
+export const searchSessionHistorySchema = {
+  query: z
+    .string()
+    .min(1)
+    .max(500)
+    .describe(
+      "Literal terms or a safe-subset regular expression to search for.",
+    ),
+  mode: z
+    .enum(["terms", "regex"])
+    .optional()
+    .describe(
+      'Search mode. "terms" (default) requires all case-insensitive literal terms in one message; "regex" accepts a conservative linear-time subset.',
+    ),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(5)
+    .optional()
+    .describe("Maximum hits to return (default 5, maximum 5)."),
+  role: z
+    .enum(["user", "assistant"])
+    .optional()
+    .describe("Optionally restrict matches to one message role."),
+  tool_name: z
+    .string()
+    .optional()
+    .describe(
+      "Optionally restrict matches to messages associated with this tool name.",
+    ),
+};
+
+export const readSessionExcerptSchema = {
+  start_message_index: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe("Inclusive zero-based start message index from a search hit."),
+  end_message_index: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      "Inclusive zero-based end message index; maximum span is 10 messages.",
+    ),
+  snapshot_message_count: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe("Snapshot message count returned by search_session_history."),
+  snapshot_revision: z
+    .string()
+    .min(1)
+    .describe("Snapshot revision returned by search_session_history."),
+};
+
 export const getDiagnosticsSchema = {
   path: z
     .string()

@@ -88,6 +88,22 @@ const toolCapabilities = [
     "never",
     true,
   ),
+  metadata(
+    "search_session_history",
+    "session",
+    ["session.transcript.read", "search.text"],
+    "read",
+    "never",
+    true,
+  ),
+  metadata(
+    "read_session_excerpt",
+    "session",
+    ["session.transcript.read"],
+    "read",
+    "never",
+    true,
+  ),
 
   // Edit/write/review
   metadata(

@@ -62,6 +62,16 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
     description:
       "Search file contents using regex, or perform semantic codebase search. Default: fast ripgrep regex search with context lines. When semantic=true, uses vector similarity search against the codebase index \u2014 'regex' is interpreted as a natural language query in this mode.",
   },
+  search_session_history: {
+    label: "Search current session history",
+    description:
+      "Search the full transcript of the current agent session, including original messages retired by context condensing. Uses case-insensitive literal AND terms by default or an explicit conservative safe-subset regex mode. Returns bounded, non-instructional historical excerpts plus an append-safe snapshot identity for read_session_excerpt.",
+  },
+  read_session_excerpt: {
+    label: "Read current session excerpt",
+    description:
+      "Read a bounded exact excerpt from the current agent session using message indices and the snapshot identity returned by search_session_history. Allows normal append-only continuation but rejects stale ranges after transcript rewrite or revert. Excludes generated summaries, thinking, and media payloads.",
+  },
   write_file: {
     label: "Create/overwrite with diff review",
     description:

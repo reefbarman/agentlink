@@ -1,5 +1,6 @@
 import type { CoreModelContentBlock } from "../modelRuntime.js";
 import type { FinalMessageMarker } from "../../shared/finalStatus.js";
+import type { SessionTranscriptSnapshot } from "../sessionTranscriptRecall.js";
 import type { ToolResult } from "../../shared/types.js";
 
 export type McpToolDisclosureMode = "inline" | "deferred" | "auto";
@@ -83,6 +84,7 @@ export interface AgentToolExecutionContext {
     | "verification";
   onCompleteTodos?: () => unknown[];
   getSessionImages?: () => SessionImageReference[];
+  getSessionTranscript?: () => SessionTranscriptSnapshot;
   pendingQuestionRecovery?: PendingQuestionRecoveryContext;
 }
 

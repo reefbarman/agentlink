@@ -6,7 +6,7 @@ import {
   setTimeout as setNodeTimeout,
 } from "timers";
 import type { AgentSession } from "./AgentSession.js";
-import type { AgentEvent } from "./types.js";
+import type { AgentEvent, AgentMessage } from "./types.js";
 import {
   buildAgentErrorMessage,
   getAgentErrorActions,
@@ -56,10 +56,51 @@ import {
   type CoreModelTransportActivity,
 } from "../core/modelRuntime.js";
 import { sleep } from "../util/sleep.js";
+import type {
+  SessionTranscriptMessage,
+  SessionTranscriptSnapshot,
+} from "../core/sessionTranscriptRecall.js";
 import { truncateMiddle } from "../util/truncateMiddle.js";
 import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
+export function buildSessionTranscriptSnapshot(
+  messages: readonly AgentMessage[],
+): SessionTranscriptSnapshot {
+  let latestSummaryIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.isSummary) {
+      latestSummaryIndex = index;
+      break;
+    }
+  }
+
+  const projected: SessionTranscriptMessage[] = messages.map(
+    (message, sourceIndex) => ({
+      sourceIndex,
+      role: message.role,
+      sourceKind: message.isSummary
+        ? "summary"
+        : message.isResumeContext
+          ? "resume"
+          : "source",
+      condensed: latestSummaryIndex >= 0 && sourceIndex < latestSummaryIndex,
+      content:
+        typeof message.content === "string"
+          ? message.content
+          : structuredClone(message.content),
+      runtimeError: message.runtimeError
+        ? {
+            message: message.runtimeError.message,
+            retryable: message.runtimeError.retryable,
+            code: message.runtimeError.code,
+          }
+        : undefined,
+    }),
+  );
+  return { messages: projected };
+}
+
 const MAX_REQUEST_RETRIES = 4;
 // Provider-side transient failures (5xx/429/529) get a much larger budget:
 // they resolve on their own, and exhausting retries fails background tasks
@@ -1592,6 +1633,8 @@ export class AgentEngine {
             pendingCompletedTodoUpdate = currentTodos;
             return currentTodos;
           },
+          getSessionTranscript: () =>
+            buildSessionTranscriptSnapshot(session.getAllMessages()),
           getSessionImages: () => {
             const images: SessionImageReference[] = [];
             for (const [messageIndex, message] of session

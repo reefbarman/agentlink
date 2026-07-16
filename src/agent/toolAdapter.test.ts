@@ -177,6 +177,16 @@ const mockCtx: ToolDispatchContext = {
   terminalProvider: {} as any,
 };
 
+function parseRecallPayload(result: ToolResult): Record<string, any> {
+  const text =
+    result.content.find((entry) => entry.type === "text")?.text ?? "";
+  const match = text.match(
+    /<session-transcript-recall>\n[^\n]+\n([\s\S]*?)\n<\/session-transcript-recall>/,
+  );
+  if (!match?.[1]) throw new Error(`Missing recall payload: ${text}`);
+  return JSON.parse(match[1]) as Record<string, any>;
+}
+
 const ddgMcpTools: ToolDefinition[] = [
   {
     name: "ddg-search__search",
@@ -207,6 +217,8 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "load_skill",
   "list_files",
   "search_files",
+  "search_session_history",
+  "read_session_excerpt",
   "codebase_search",
   "get_diagnostics",
   "get_hover",
@@ -256,6 +268,8 @@ describe("READ_ONLY_TOOLS", () => {
     expect(READ_ONLY_TOOLS.has("get_symbols")).toBe(true);
     expect(READ_ONLY_TOOLS.has("go_to_definition")).toBe(true);
     expect(READ_ONLY_TOOLS.has("codebase_search")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("search_session_history")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("read_session_excerpt")).toBe(true);
   });
 
   it("does not include write or terminal meta tools", () => {
@@ -363,6 +377,8 @@ describe("getAgentTools", () => {
     expect(names).toContain("apply_diff");
     expect(names).toContain("execute_command");
     expect(names).toContain("get_diagnostics");
+    expect(names).toContain("search_session_history");
+    expect(names).toContain("read_session_excerpt");
     expect(names).toContain("set_task_status");
   });
 
@@ -450,6 +466,8 @@ describe("getAgentTools", () => {
     expect(names).toContain("get_symbols");
     expect(names).toContain("get_references");
     expect(names).toContain("execute_command");
+    expect(names).toContain("search_session_history");
+    expect(names).toContain("read_session_excerpt");
     const executeCommand = reviewTools.find(
       (tool) => tool.name === "execute_command",
     );
@@ -499,6 +517,8 @@ describe("getAgentTools", () => {
     expect(names).toContain("ddg-search__search");
     expect(names).toContain("ddg-search__fetch_content");
     expect(names).toContain("execute_command");
+    expect(names).toContain("search_session_history");
+    expect(names).toContain("read_session_excerpt");
 
     const executeCommand = tools.find(
       (tool) => tool.name === "execute_command",
@@ -577,6 +597,8 @@ describe("getAgentTools", () => {
     expect(names).toContain("get_module_neighbors");
     expect(names).toContain("codebase_search");
     expect(names).toContain("get_call_hierarchy");
+    expect(names).toContain("search_session_history");
+    expect(names).toContain("read_session_excerpt");
 
     expect(names).not.toContain("write_file");
     expect(names).not.toContain("apply_diff");
@@ -1053,6 +1075,119 @@ describe("spawn_background_agent tool", () => {
 });
 
 describe("dispatchToolCall", () => {
+  it("searches and hydrates the current session transcript with append-safe snapshots", async () => {
+    const messages = [
+      {
+        sourceIndex: 0,
+        role: "user" as const,
+        sourceKind: "source" as const,
+        condensed: true,
+        content: "Investigate the stale cache key",
+      },
+      {
+        sourceIndex: 1,
+        role: "assistant" as const,
+        sourceKind: "source" as const,
+        condensed: true,
+        content: "The stale cache key is the root cause.",
+      },
+    ];
+    const getSessionTranscript = () => ({
+      messages: structuredClone(messages),
+    });
+    const search = await dispatchToolCall(
+      "search_session_history",
+      { query: "stale cache", limit: 5 },
+      { ...mockCtx, getSessionTranscript },
+    );
+    const searchPayload = parseRecallPayload(search);
+
+    expect(searchPayload).toMatchObject({ ok: true, total_matches: 2 });
+    expect(searchPayload.hits[0]).toMatchObject({
+      message_index: 1,
+      condensed: true,
+    });
+    expect(searchPayload.snapshot_message_count).toBe(2);
+    expect(searchPayload.snapshot_revision).toMatch(/^[a-f0-9]{64}$/);
+
+    messages.push({
+      sourceIndex: 2,
+      role: "user",
+      sourceKind: "source",
+      condensed: false,
+      content: "Append-only continuation",
+    });
+    const excerpt = await dispatchToolCall(
+      "read_session_excerpt",
+      {
+        start_message_index: 0,
+        end_message_index: 1,
+        snapshot_message_count: searchPayload.snapshot_message_count,
+        snapshot_revision: searchPayload.snapshot_revision,
+      },
+      { ...mockCtx, getSessionTranscript },
+    );
+    const excerptPayload = parseRecallPayload(excerpt);
+    expect(excerptPayload.ok).toBe(true);
+    expect(excerptPayload.messages).toHaveLength(2);
+    expect(excerptPayload.messages[1].content).toContain("root cause");
+
+    messages[0]!.content = "Rewritten task";
+    const stale = await dispatchToolCall(
+      "read_session_excerpt",
+      {
+        start_message_index: 0,
+        end_message_index: 1,
+        snapshot_message_count: searchPayload.snapshot_message_count,
+        snapshot_revision: searchPayload.snapshot_revision,
+      },
+      { ...mockCtx, getSessionTranscript },
+    );
+    expect(parseRecallPayload(stale)).toMatchObject({
+      ok: false,
+      error: { code: "stale_snapshot" },
+    });
+  });
+
+  it("returns explicit unavailable behavior without a session transcript provider", async () => {
+    const result = await dispatchToolCall(
+      "search_session_history",
+      { query: "anything" },
+      mockCtx,
+    );
+    const text = result.content.find((entry) => entry.type === "text")?.text;
+    expect(JSON.parse(text ?? "{}")).toMatchObject({
+      ok: false,
+      error: { code: "session_transcript_unavailable" },
+    });
+  });
+
+  it("forwards the execution-scoped transcript getter through the tool runtime", async () => {
+    const runtime = createAgentToolRuntime(mockCtx);
+    const getSessionTranscript = vi.fn(() => ({
+      messages: [
+        {
+          sourceIndex: 0,
+          role: "user" as const,
+          sourceKind: "source" as const,
+          condensed: false,
+          content: "execution scoped evidence",
+        },
+      ],
+    }));
+    const result = await runtime.executeTool({
+      name: "search_session_history",
+      input: { query: "scoped evidence" },
+      context: {
+        sessionId: "runtime-session",
+        getSessionTranscript,
+      },
+    });
+
+    expect(getSessionTranscript).toHaveBeenCalledTimes(1);
+    expect(parseRecallPayload(result).total_matches).toBe(1);
+  });
+
   it("returns an error result for unknown tool names", async () => {
     const result = await dispatchToolCall("not_a_real_tool", {}, mockCtx);
     expect(result.content).toHaveLength(1);

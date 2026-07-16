@@ -119,6 +119,10 @@ import { handleProposeMemory } from "../tools/proposeMemory.js";
 import { handleReadFile } from "../tools/readFile.js";
 import { handleRenameSymbol } from "../tools/renameSymbol.js";
 import { handleSearchFiles } from "../tools/searchFiles.js";
+import {
+  handleReadSessionExcerpt,
+  handleSearchSessionHistory,
+} from "../tools/sessionTranscriptRecall.js";
 import { handleSendFeedback } from "../tools/sendFeedback.js";
 import { handleShowNotification } from "../tools/showNotification.js";
 
@@ -214,6 +218,8 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   load_skill: schemas.loadSkillSchema,
   list_files: schemas.listFilesSchema,
   search_files: schemas.searchFilesSchema,
+  search_session_history: schemas.searchSessionHistorySchema,
+  read_session_excerpt: schemas.readSessionExcerptSchema,
   get_diagnostics: schemas.getDiagnosticsSchema,
   write_file: schemas.writeFileSchema,
   generate_image: schemas.generateImageSchema,
@@ -926,6 +932,8 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "go_to_implementation",
     "get_type_hierarchy",
     "execute_command",
+    "search_session_history",
+    "read_session_excerpt",
   ]),
   "readonly-research": new Set([
     "read_file",
@@ -946,6 +954,8 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "get_type_hierarchy",
     "get_inlay_hints",
     "execute_command",
+    "search_session_history",
+    "read_session_excerpt",
   ]),
   btw: new Set([
     "read_file",
@@ -965,6 +975,8 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "get_call_hierarchy",
     "get_type_hierarchy",
     "get_inlay_hints",
+    "search_session_history",
+    "read_session_excerpt",
   ]),
 };
 
@@ -1533,6 +1545,8 @@ export interface ToolDispatchContext {
   onFileRead?: (filePath: string) => void;
   /** Returns recent user-attached images available to this session's model context. */
   getSessionImages?: () => SessionImageReference[];
+  /** Returns an immutable projection of the executing session's full transcript. */
+  getSessionTranscript?: AgentToolExecutionRequest["context"]["getSessionTranscript"];
   /** Returns the set of skills explicitly advertised to the current session. */
   getAdvertisedSkills?: () => Array<{ name: string; skillPath: string }>;
   /** Returns the set of deferred rules explicitly advertised to the current session. */
@@ -1702,6 +1716,7 @@ export function createAgentToolRuntime(
             | ToolDispatchContext["onCompleteTodos"]
             | undefined,
           getSessionImages: request.context.getSessionImages,
+          getSessionTranscript: request.context.getSessionTranscript,
         });
         ctx.toolUsageTelemetry?.record({
           toolName: request.name,
@@ -2249,6 +2264,10 @@ export async function dispatchToolCall(
           ),
         },
       );
+    case "search_session_history":
+      return handleSearchSessionHistory(params, ctx.getSessionTranscript);
+    case "read_session_excerpt":
+      return handleReadSessionExcerpt(params, ctx.getSessionTranscript);
 
     // --- File writing ---
     case "write_file":
