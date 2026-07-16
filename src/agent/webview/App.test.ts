@@ -2182,6 +2182,10 @@ describe("webview App reducer background agent launch blocks", () => {
     });
 
     const last = state.messages[state.messages.length - 1];
+    expect(
+      state.messages.filter((message) => message.role === "condense"),
+    ).toHaveLength(0);
+    expect(state.messages).toHaveLength(1);
     expect(last?.role).toBe("assistant");
     expect(last?.error).toEqual({
       message:

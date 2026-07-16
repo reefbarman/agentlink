@@ -1010,6 +1010,9 @@ body {
   display: flex;
   gap: 10px;
   align-items: flex-start;
+  min-width: 0;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
   padding: 10px 12px;
   margin: 8px 12px;
   border: 1px solid transparent;
@@ -1096,6 +1099,8 @@ body {
 }
 
 .error-notice-details {
+  min-width: 0;
+  max-width: 100%;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
 }
@@ -1115,11 +1120,16 @@ body {
 .error-notice-detail-list {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
   gap: 6px;
   margin-top: 6px;
 }
 
 .error-notice-detail-list pre {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   max-height: 160px;
   overflow: auto;
   margin: 0;
@@ -1136,6 +1146,7 @@ body {
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .error-notice-actions {
@@ -2626,15 +2637,6 @@ body {
 .condense-row-condensing .condense-row-badge {
   opacity: 0.75;
   font-style: italic;
-}
-
-.condense-row-error {
-  gap: 6px;
-  color: var(--vscode-errorForeground);
-}
-
-.condense-row-error .codicon {
-  font-size: 12px;
 }
 
 /* ── Model Change Divider ── */

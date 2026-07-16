@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { ChatMessage } from "../types";
+import { ErrorNotice } from "./ErrorNotice";
 
 interface CondenseRowProps {
   message: ChatMessage;
@@ -50,11 +51,12 @@ export function CondenseRow({ message }: CondenseRowProps) {
 
   if (isError) {
     return (
-      <div class="condense-row condense-row-error">
-        <i class="codicon codicon-warning" />
-        <span class="condense-row-label">Context condensing failed</span>
-        <span class="condense-row-detail">{info!.errorMessage}</span>
-      </div>
+      <ErrorNotice
+        tone="error"
+        title="Context condensing failed"
+        hint="The existing conversation context is unchanged."
+        details={[info!.errorMessage!]}
+      />
     );
   }
 

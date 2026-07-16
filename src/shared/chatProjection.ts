@@ -2252,42 +2252,49 @@ export function reducer(state: AppState, action: AppAction): AppState {
       const filtered = state.messages.filter(
         (m) => !(m.role === "condense" && m.condenseInfo?.condensing),
       );
-      const withCondenseRow = [
-        ...filtered,
-        {
-          id: randomId(),
-          role: "condense" as const,
-          content: "",
-          timestamp: Date.now(),
-          blocks: [],
-          condenseInfo: {
-            prevInputTokens: 0,
-            newInputTokens: 0,
-            errorMessage: action.errorMessage,
-          },
-        },
-      ];
 
       if (!action.retryable && !action.code && !action.actions) {
         return {
           ...state,
-          messages: withCondenseRow,
+          messages: [
+            ...filtered,
+            {
+              id: randomId(),
+              role: "condense" as const,
+              content: "",
+              timestamp: Date.now(),
+              blocks: [],
+              condenseInfo: {
+                prevInputTokens: 0,
+                newInputTokens: 0,
+                errorMessage: action.errorMessage,
+              },
+            },
+          ],
           statusOverride: null,
         };
       }
 
-      const all = ensureAssistant(withCondenseRow);
-      const { msgs, last } = cloneLast(all);
-      last.error = {
-        message: action.errorMessage,
-        retryable: action.retryable ?? false,
-        code: action.code,
-        actions: action.actions,
-      };
-
+      // Structured failures render through the standard assistant ErrorBlock.
+      // Do not also retain a legacy condense error row for the same event.
       return {
         ...state,
-        messages: msgs,
+        messages: [
+          ...filtered,
+          {
+            id: randomId(),
+            role: "assistant" as const,
+            content: "",
+            timestamp: Date.now(),
+            blocks: [],
+            error: {
+              message: action.errorMessage,
+              retryable: action.retryable ?? false,
+              code: action.code,
+              actions: action.actions,
+            },
+          },
+        ],
         statusOverride: null,
       };
     }

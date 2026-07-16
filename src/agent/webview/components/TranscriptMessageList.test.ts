@@ -427,6 +427,34 @@ describe("TranscriptMessageList background result rendering", () => {
 });
 
 describe("TranscriptMessageList retry error rendering", () => {
+  it("renders condense failures through the bounded standard error notice", () => {
+    const requestId = "req_" + "a".repeat(240);
+    const messages: ChatMessage[] = [
+      {
+        id: "condense-error",
+        role: "condense",
+        content: "",
+        timestamp: 1,
+        blocks: [],
+        condenseInfo: {
+          prevInputTokens: 0,
+          newInputTokens: 0,
+          errorMessage: `Condensing API call failed: 529 {"type":"error","request_id":"${requestId}"}`,
+        },
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    expect(container.querySelectorAll(".error-notice")).toHaveLength(1);
+    expect(container.querySelector(".condense-row-error")).toBeNull();
+    expect(screen.getByText("Context condensing failed")).toBeTruthy();
+    expect(screen.getByText("Technical details")).toBeTruthy();
+    cleanup();
+  });
+
   it("groups adjacent retries into one compact recovery notice", () => {
     const messages: ChatMessage[] = [1, 2, 3].map((attempt) => ({
       id: `warning-${attempt}`,
