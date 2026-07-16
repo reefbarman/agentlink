@@ -527,7 +527,10 @@ describe("handleExecuteCommand", () => {
       } as never,
       "session-tier-safe",
       undefined,
-      { terminalProvider },
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "safe",
+      },
     );
 
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
@@ -689,7 +692,10 @@ describe("handleExecuteCommand", () => {
       } as never,
       "session-tier-sensitive",
       undefined,
-      { terminalProvider },
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "sensitive",
+      },
     );
 
     expect(enqueueCommandApproval).not.toHaveBeenCalled();
@@ -707,6 +713,237 @@ describe("handleExecuteCommand", () => {
       tier: "sensitive",
       threshold: "sensitive",
     });
+  });
+
+  it("uses the reviewer for eligible sensitive commands under approve-for-me", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn();
+    const review = vi.fn(async () => ({
+      decision: "approve" as const,
+      reason: "Bounded workspace directory creation",
+      model: "review-model",
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "mkdir generated", reason: "Create generated output folder" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval,
+      } as never,
+      "session-review",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+        getUserObjective: () => "Generate project output",
+      },
+    );
+
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-review",
+        command: "mkdir generated",
+        reason: "Create generated output folder",
+        userObjective: "Generate project output",
+      }),
+    );
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      approval: {
+        by: "model_reviewer",
+        model: "review-model",
+        tier: "sensitive",
+        reason: "Bounded workspace directory creation",
+      },
+    });
+    expect(textPayload(result).auto_approved).toBeUndefined();
+  });
+
+  it("falls through to the human card when the reviewer asks the user", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "accept" }),
+    }));
+    const review = vi.fn(async () => ({
+      decision: "ask_user" as const,
+      reason: "Intent is ambiguous",
+      model: "review-model",
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "mkdir generated" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-escalate",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
+    expect(textPayload(result).approval).toEqual({ by: "human" });
+  });
+
+  it("does not execute when a pending human approval resolves after cancellation", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    let resolveApproval!: (response: { decision: "accept" }) => void;
+    const approvalPromise = new Promise<{ decision: "accept" }>((resolve) => {
+      resolveApproval = resolve;
+    });
+    const enqueueCommandApproval = vi.fn(() => ({ promise: approvalPromise }));
+    const controller = new AbortController();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const execution = handleExecuteCommand(
+      { command: "mkdir generated" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-cancelled",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: {
+          review: async () => ({
+            decision: "ask_user",
+            reason: "Needs human confirmation",
+            model: "review-model",
+          }),
+        },
+        isSessionActive: () => true,
+        toolAbortSignal: controller.signal,
+      },
+    );
+
+    await vi.waitFor(() => {
+      expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
+    });
+    controller.abort();
+    resolveApproval({ decision: "accept" });
+
+    await expect(execution.then(textPayload)).resolves.toEqual({
+      status: "cancelled",
+      command: "mkdir generated",
+      reason: "Command approval was cancelled before execution",
+    });
+    expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not review unknown or environment-bearing commands", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "accept" }),
+    }));
+    const review = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const providers = {
+      terminalProvider,
+      getCommandApprovalPolicy: () => "approve-for-me" as const,
+      commandApprovalReviewer: { review },
+      isSessionActive: () => true,
+    };
+
+    await handleExecuteCommand(
+      { command: "unknown-tool run" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-unknown",
+      undefined,
+      providers,
+    );
+    await handleExecuteCommand(
+      { command: "mkdir generated", env: { CI: "1" } },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-env",
+      undefined,
+      providers,
+    );
+
+    expect(review).not.toHaveBeenCalled();
+    expect(enqueueCommandApproval).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not auto-execute when policy changes during review", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    let policy: "approve-for-me" | "safe" = "approve-for-me";
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "accept" }),
+    }));
+    const review = vi.fn(async () => {
+      policy = "safe";
+      return {
+        decision: "approve" as const,
+        reason: "Would otherwise approve",
+        model: "review-model",
+      };
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "mkdir generated" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-policy-change",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => policy,
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
+    expect(textPayload(result).approval).toEqual({ by: "human" });
   });
 
   it("still prompts dangerous commands at the sensitive threshold", async () => {

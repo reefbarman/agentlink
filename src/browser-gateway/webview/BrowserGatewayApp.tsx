@@ -66,6 +66,10 @@ import {
   toHttpSelectionRequest,
   type WriteApprovalSelection,
 } from "../../shared/selectionCommands";
+import {
+  isCommandApprovalPolicy,
+  type CommandApprovalPolicy,
+} from "../../approvals/commandApprovalPolicy";
 import { getDevelopmentStreamingBaselineMetrics } from "../../shared/streamingBaselineMetrics";
 
 import { EmptyState, PaneCard, PaneHeader } from "../../shared/ui/Panes";
@@ -364,6 +368,11 @@ type GatewaySnapshot = {
       };
       condenseThreshold?: number;
       agentWriteApproval: "prompt" | "session" | "project" | "global";
+      commandApprovalPolicy: CommandApprovalPolicy;
+      configuredCommandApprovalPolicy: Exclude<
+        CommandApprovalPolicy,
+        "approve-for-me"
+      >;
     } | null;
   };
   background: BgSessionInfo[];
@@ -2828,6 +2837,30 @@ export function BrowserGatewayApp({
     })();
   };
 
+  const handleSetCommandApprovalPolicy = (
+    policy: CommandApprovalPolicy,
+  ): void => {
+    void (async () => {
+      try {
+        const selectionRequest = toHttpSelectionRequest({
+          type: "commandApprovalPolicy",
+          policy,
+        });
+        const response = await fetch(buildApiPath(selectionRequest.path), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify(selectionRequest.body),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      } catch (error) {
+        console.error("Failed to update command approval policy", error);
+      }
+    })();
+  };
+
   const handleSetWriteApproval = (nextMode: WriteApprovalSelection): void => {
     if (!nextMode) return;
     void (async () => {
@@ -3843,6 +3876,13 @@ export function BrowserGatewayApp({
         const writeApprovalMode = String(data.mode ?? "").trim();
         if (isWriteApprovalSelection(writeApprovalMode)) {
           handleSetWriteApproval(writeApprovalMode);
+        }
+        return;
+      }
+
+      if (command === "agentSetCommandApprovalPolicy") {
+        if (isCommandApprovalPolicy(data.policy)) {
+          handleSetCommandApprovalPolicy(data.policy);
         }
         return;
       }
@@ -5008,6 +5048,22 @@ export function BrowserGatewayApp({
                     }
                     onSetAgentWriteApproval={
                       isAskAgentSelected ? undefined : handleSetWriteApproval
+                    }
+                    commandApprovalPolicy={
+                      isAskAgentSelected
+                        ? undefined
+                        : (foreground?.commandApprovalPolicy ?? "safe")
+                    }
+                    configuredCommandApprovalPolicy={
+                      isAskAgentSelected
+                        ? undefined
+                        : (foreground?.configuredCommandApprovalPolicy ??
+                          "safe")
+                    }
+                    onSetCommandApprovalPolicy={
+                      isAskAgentSelected
+                        ? undefined
+                        : handleSetCommandApprovalPolicy
                     }
                     autoContinueEnabled={
                       isAskAgentSelected ? false : autoContinueEnabled

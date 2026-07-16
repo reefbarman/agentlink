@@ -348,6 +348,8 @@ describe("BrowserGatewayService", () => {
         },
         condenseThreshold: 0.8,
         agentWriteApproval: "prompt",
+        commandApprovalPolicy: "safe",
+        configuredCommandApprovalPolicy: "safe",
       },
     });
     diffSnapshotHub.upsert({

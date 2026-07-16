@@ -396,6 +396,7 @@ export class CodexProvider implements ModelProvider {
       reasoningMode,
       cache,
       state,
+      signal,
     } = request;
 
     const codexInput = translateCodexMessages(messages);
@@ -440,7 +441,7 @@ export class CodexProvider implements ModelProvider {
 
       try {
         const result = await collectCoreModelCompleteResult(
-          await this.executeStream(requestBody, auth, effectiveModel),
+          await this.executeStream(requestBody, auth, effectiveModel, signal),
         );
         text = result.text;
         return result;

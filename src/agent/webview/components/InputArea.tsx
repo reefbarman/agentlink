@@ -38,6 +38,7 @@ import {
   withSlashCommandDisplayName,
 } from "./useSlashCommandPopup";
 
+import type { CommandApprovalPolicy } from "../../../approvals/commandApprovalPolicy";
 import { ComposerBox } from "../../../shared/ui/ComposerBox";
 import { EmojiPopup } from "./EmojiPopup";
 import { FilePicker } from "./FilePicker";
@@ -172,6 +173,12 @@ interface InputAreaProps {
   onSignIn?: (provider: string) => void;
   agentWriteApproval?: WriteApprovalSelection;
   onSetAgentWriteApproval?: (mode: WriteApprovalSelection) => void;
+  commandApprovalPolicy?: CommandApprovalPolicy;
+  configuredCommandApprovalPolicy?: Exclude<
+    CommandApprovalPolicy,
+    "approve-for-me"
+  >;
+  onSetCommandApprovalPolicy?: (policy: CommandApprovalPolicy) => void;
   autoContinueEnabled?: boolean;
   onToggleAutoContinue?: (enabled: boolean) => void;
   autoContinueStatus?: string;
@@ -211,6 +218,9 @@ export function InputArea({
   onSignIn,
   agentWriteApproval = "prompt",
   onSetAgentWriteApproval,
+  commandApprovalPolicy = "safe",
+  configuredCommandApprovalPolicy = "safe",
+  onSetCommandApprovalPolicy,
   autoContinueEnabled = false,
   onToggleAutoContinue,
   autoContinueStatus,
@@ -1148,6 +1158,33 @@ export function InputArea({
             current={agentWriteApproval}
             onSelect={onSetAgentWriteApproval}
           />
+        )}
+        {onSetCommandApprovalPolicy && (
+          <ToolbarControlButton
+            active={commandApprovalPolicy === "approve-for-me"}
+            aria-pressed={commandApprovalPolicy === "approve-for-me"}
+            className="approve-for-me-toggle"
+            onClick={() =>
+              onSetCommandApprovalPolicy(
+                commandApprovalPolicy === "approve-for-me"
+                  ? configuredCommandApprovalPolicy
+                  : "approve-for-me",
+              )
+            }
+            title={
+              commandApprovalPolicy === "approve-for-me"
+                ? "Approve for Me is on. A separate one-shot reviewer may approve eligible workspace-local commands. Dangerous, unknown, ambiguous, external, inline-file, environment-bearing, and forced commands still ask you. Uses model quota."
+                : "Let a separate one-shot reviewer approve eligible workspace-local commands. Dangerous or ambiguous commands still ask you. Uses model quota and applies only to this session."
+            }
+            type="button"
+          >
+            <i class="codicon codicon-shield" />
+            <span>
+              {commandApprovalPolicy === "approve-for-me"
+                ? "Approve for Me On"
+                : "Approve for Me"}
+            </span>
+          </ToolbarControlButton>
         )}
         {onToggleAutoContinue && (
           <ToolbarControlButton

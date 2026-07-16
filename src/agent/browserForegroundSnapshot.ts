@@ -1,5 +1,6 @@
 import type { AppState } from "../shared/chatProjection.js";
 import type { ChatMessage } from "./webview/types.js";
+import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 
 export interface BrowserForegroundSnapshot {
   sessionId: string;
@@ -25,6 +26,11 @@ export interface BrowserForegroundSnapshot {
   restoringSession: AppState["restoringSession"];
   contextBudget?: AppState["chatState"]["contextBudget"];
   condenseThreshold?: AppState["chatState"]["condenseThreshold"];
+  commandApprovalPolicy?: CommandApprovalPolicy;
+  configuredCommandApprovalPolicy?: Exclude<
+    CommandApprovalPolicy,
+    "approve-for-me"
+  >;
   revertRecoveryNotice: AppState["revertRecoveryNotice"];
 }
 
@@ -89,6 +95,9 @@ export function createBrowserForegroundSnapshot(
       ? { ...state.chatState.contextBudget }
       : undefined,
     condenseThreshold: state.chatState.condenseThreshold,
+    commandApprovalPolicy: state.chatState.commandApprovalPolicy,
+    configuredCommandApprovalPolicy:
+      state.chatState.configuredCommandApprovalPolicy,
     revertRecoveryNotice: state.revertRecoveryNotice
       ? { ...state.revertRecoveryNotice }
       : null,

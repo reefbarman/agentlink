@@ -32,6 +32,20 @@ const vectors: Array<{
     vscode: { command: "agentSetWriteApproval", mode: "project" },
     http: { path: "/api/write-approval", body: { mode: "project" } },
   },
+  {
+    command: {
+      type: "commandApprovalPolicy",
+      policy: "approve-for-me",
+    },
+    vscode: {
+      command: "agentSetCommandApprovalPolicy",
+      policy: "approve-for-me",
+    },
+    http: {
+      path: "/api/command-approval-policy",
+      body: { policy: "approve-for-me" },
+    },
+  },
 ];
 
 describe("selection command adapters", () => {

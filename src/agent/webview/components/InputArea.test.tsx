@@ -177,6 +177,48 @@ describe("InputArea slash popup", () => {
     expect(container.querySelector(".emoji-popup")).toBeNull();
   });
 
+  it("renders and toggles Approve for Me from the toolbar", () => {
+    const onSetCommandApprovalPolicy = vi.fn();
+    const { getByRole, rerender } = renderInputArea([], {
+      commandApprovalPolicy: "safe",
+      configuredCommandApprovalPolicy: "sensitive",
+      onSetCommandApprovalPolicy,
+    });
+
+    const button = getByRole("button", { name: "Approve for Me" });
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(button.classList.contains("approve-for-me-toggle")).toBe(true);
+    expect(button.title).toContain("one-shot reviewer");
+    expect(button.title).toContain("model quota");
+
+    fireEvent.click(button);
+    expect(onSetCommandApprovalPolicy).toHaveBeenCalledWith("approve-for-me");
+
+    rerender(
+      <InputArea
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        streaming={false}
+        reasoningEffort="none"
+        onSetReasoningEffort={vi.fn()}
+        onExportTranscript={vi.fn()}
+        hasMessages={false}
+        vscodeApi={{ postMessage: vi.fn() }}
+        injection={null}
+        onInjectionConsumed={vi.fn()}
+        commandApprovalPolicy="approve-for-me"
+        configuredCommandApprovalPolicy="sensitive"
+        onSetCommandApprovalPolicy={onSetCommandApprovalPolicy}
+      />,
+    );
+
+    const activeButton = getByRole("button", { name: "Approve for Me On" });
+    expect(activeButton.getAttribute("aria-pressed")).toBe("true");
+    expect(activeButton.classList.contains("active")).toBe(true);
+    fireEvent.click(activeButton);
+    expect(onSetCommandApprovalPolicy).toHaveBeenLastCalledWith("sensitive");
+  });
+
   it("renders and toggles Auto Continue from the toolbar", () => {
     const onToggleAutoContinue = vi.fn();
     const { getByRole } = renderInputArea([], {

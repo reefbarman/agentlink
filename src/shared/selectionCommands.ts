@@ -1,3 +1,4 @@
+import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 import type { CoreReasoningEffort } from "../core/modelCatalog.js";
 
 export type WriteApprovalSelection =
@@ -21,13 +22,15 @@ export type SelectionCommand =
   | { type: "mode"; mode: string }
   | { type: "model"; model: string }
   | { type: "reasoningEffort"; effort: CoreReasoningEffort }
-  | { type: "writeApproval"; mode: WriteApprovalSelection };
+  | { type: "writeApproval"; mode: WriteApprovalSelection }
+  | { type: "commandApprovalPolicy"; policy: CommandApprovalPolicy };
 
 export type VsCodeSelectionMessage =
   | { command: "agentSwitchMode"; mode: string }
   | { command: "agentSetModel"; model: string }
   | { command: "agentSetReasoningEffort"; effort: CoreReasoningEffort }
-  | { command: "agentSetWriteApproval"; mode: WriteApprovalSelection };
+  | { command: "agentSetWriteApproval"; mode: WriteApprovalSelection }
+  | { command: "agentSetCommandApprovalPolicy"; policy: CommandApprovalPolicy };
 
 export type HttpSelectionRequest =
   | { path: "/api/mode"; body: { mode: string } }
@@ -36,6 +39,10 @@ export type HttpSelectionRequest =
   | {
       path: "/api/write-approval";
       body: { mode: WriteApprovalSelection };
+    }
+  | {
+      path: "/api/command-approval-policy";
+      body: { policy: CommandApprovalPolicy };
     };
 
 export function toVsCodeSelectionMessage(
@@ -53,6 +60,11 @@ export function toVsCodeSelectionMessage(
       };
     case "writeApproval":
       return { command: "agentSetWriteApproval", mode: command.mode };
+    case "commandApprovalPolicy":
+      return {
+        command: "agentSetCommandApprovalPolicy",
+        policy: command.policy,
+      };
   }
 }
 
@@ -68,5 +80,10 @@ export function toHttpSelectionRequest(
       return { path: "/api/thinking", body: { effort: command.effort } };
     case "writeApproval":
       return { path: "/api/write-approval", body: { mode: command.mode } };
+    case "commandApprovalPolicy":
+      return {
+        path: "/api/command-approval-policy",
+        body: { policy: command.policy },
+      };
   }
 }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import type { AgentMessage } from "./types.js";
 
 type Listener<T> = (value: T) => void;
@@ -1690,6 +1691,8 @@ describe("ChatViewProvider session state sync", () => {
         reasoningEffort: "none",
         thinkingEnabled: false,
         agentWriteApproval: undefined,
+        commandApprovalPolicy: "safe",
+        configuredCommandApprovalPolicy: "safe",
         revertRecoveryNotice: null,
       },
     });

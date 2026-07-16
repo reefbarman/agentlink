@@ -108,6 +108,11 @@ import {
   type LoadedInstructionDebugInfo,
 } from "../shared/chatProjection.js";
 import { stripMemoryCandidateReminders } from "../shared/memoryCandidates.js";
+import {
+  commandApprovalPolicyFromLegacyTier,
+  isCommandApprovalPolicy,
+  type CommandApprovalPolicy,
+} from "../approvals/commandApprovalPolicy.js";
 
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
 type RawDisplayImage = { name: string; mimeType: string; base64: string };
@@ -801,6 +806,11 @@ export interface ChatState {
     hardBudget: number;
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
+  commandApprovalPolicy?: CommandApprovalPolicy;
+  configuredCommandApprovalPolicy?: Exclude<
+    CommandApprovalPolicy,
+    "approve-for-me"
+  >;
   revertRecoveryNotice?: RevertRecoveryNotice | null;
 }
 
@@ -1198,6 +1208,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return this.browserGatewayThemeSnapshot;
     }
     return this.getFallbackThemeSnapshot();
+  }
+
+  getConfiguredCommandApprovalPolicy(): Exclude<
+    CommandApprovalPolicy,
+    "approve-for-me"
+  > {
+    const tier = vscode.workspace
+      .getConfiguration("agentlink")
+      .get<"off" | "safe" | "sensitive">("commandAutoApproveTier", "safe");
+    return commandApprovalPolicyFromLegacyTier(tier);
+  }
+
+  getBrowserCommandApprovalPolicy(): CommandApprovalPolicy {
+    const fgSessionId =
+      this.sessionManager?.getForegroundSession()?.id ?? "agent";
+    const configured = this.getConfiguredCommandApprovalPolicy();
+    return (
+      this.sessionManager?.getCommandApprovalPolicy?.(
+        fgSessionId,
+        configured,
+      ) ?? configured
+    );
   }
 
   getBrowserAgentWriteApprovalState():
@@ -2491,6 +2523,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
             fg.id,
           ),
+          commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+          configuredCommandApprovalPolicy:
+            this.getConfiguredCommandApprovalPolicy(),
         },
       });
     }
@@ -2550,6 +2585,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     this.sendInitialState();
     this.log(`Model changed to: ${model} (saved for mode: ${fgMode})`);
+    return { ok: true };
+  }
+
+  public submitBrowserSetCommandApprovalPolicy(policy: unknown): {
+    ok: boolean;
+  } {
+    if (!isCommandApprovalPolicy(policy) || !this.sessionManager) {
+      return { ok: false };
+    }
+
+    const sessionId = this.sessionManager.getForegroundSession()?.id ?? "agent";
+    this.sessionManager.setCommandApprovalPolicy(sessionId, policy);
+    this.sendInitialState();
+    this.log(`Command approval policy changed to: ${policy}`);
     return { ok: true };
   }
 
@@ -3231,6 +3280,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
             fg.id,
           ),
+          commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+          configuredCommandApprovalPolicy:
+            this.getConfiguredCommandApprovalPolicy(),
         },
       });
     }
@@ -3984,6 +4036,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               ),
               agentWriteApproval:
                 this.approvalManager?.getAgentWriteApprovalState(fg.id),
+              commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+              configuredCommandApprovalPolicy:
+                this.getConfiguredCommandApprovalPolicy(),
             },
           });
         }
@@ -4131,6 +4186,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 ),
                 agentWriteApproval:
                   this.approvalManager?.getAgentWriteApprovalState(fg.id),
+                commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+                configuredCommandApprovalPolicy:
+                  this.getConfiguredCommandApprovalPolicy(),
               },
             });
           }
@@ -4265,6 +4323,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.log(
           `Auto-condense threshold set to ${Math.round(thresholds[currentModel] * 100)}% for ${currentModel}`,
         );
+        break;
+      }
+
+      case "agentSetCommandApprovalPolicy": {
+        this.submitBrowserSetCommandApprovalPolicy(msg.policy);
         break;
       }
 
@@ -6944,6 +7007,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       agentWriteApproval: this.approvalManager?.getAgentWriteApprovalState(
         fg?.id ?? "agent",
       ),
+      commandApprovalPolicy: this.getBrowserCommandApprovalPolicy(),
+      configuredCommandApprovalPolicy:
+        this.getConfiguredCommandApprovalPolicy(),
       revertRecoveryNotice: fg
         ? this.formatRevertRecoveryNoticeForSession(fg.id)
         : null,

@@ -207,6 +207,31 @@ describe("AnthropicProvider capabilities", () => {
     ]);
   });
 
+  it("forwards cancellation to complete calls", async () => {
+    const create = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    const testProvider = new AnthropicProvider();
+    (testProvider as unknown as { client: unknown }).client = {
+      messages: { create },
+    };
+    const controller = new AbortController();
+
+    await testProvider.complete({
+      model: "claude-opus-4-8",
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 64,
+      reasoningEffort: "none",
+      signal: controller.signal,
+    });
+
+    expect(create).toHaveBeenCalledWith(expect.any(Object), {
+      signal: controller.signal,
+    });
+  });
+
   it("omits deterministic temperature for adaptive-thinking complete calls", async () => {
     const create = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "ok" }],

@@ -8,6 +8,7 @@ import type {
   McpManagerView,
 } from "../../shared/mcpManagerTypes.js";
 
+import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
 
@@ -700,6 +701,11 @@ export interface ChatState {
     hardBudget: number;
   };
   agentWriteApproval?: "prompt" | "session" | "project" | "global";
+  commandApprovalPolicy?: CommandApprovalPolicy;
+  configuredCommandApprovalPolicy?: Exclude<
+    CommandApprovalPolicy,
+    "approve-for-me"
+  >;
   revertRecoveryNotice?: RevertRecoveryNotice | null;
 }
 

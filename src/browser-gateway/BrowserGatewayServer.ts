@@ -26,6 +26,7 @@ import type {
 } from "./BrowserGatewayService.js";
 import type { ChatViewProvider } from "../agent/ChatViewProvider.js";
 import type { DecisionMessage } from "../approvals/webview/types.js";
+import { isCommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 import { writeBrowserGatewayThemeCache } from "./browserGatewayThemeCache.js";
 import {
@@ -443,6 +444,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
         rawExact("/api/write-approval"),
         ({ req, res }) => this.handleWriteApprovalAction(req, res),
         json("write approval action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/command-approval-policy"),
+        ({ req, res }) => this.handleCommandApprovalPolicyAction(req, res),
+        json("command approval policy action failed"),
       ),
       route(
         "POST",
@@ -1282,6 +1289,30 @@ export class BrowserGatewayServer implements vscode.Disposable {
       body.mode,
     );
     this.writeJson(res, result.ok ? 200 : 400, result);
+  }
+
+  private async handleCommandApprovalPolicyAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as { policy?: unknown };
+    if (!isCommandApprovalPolicy(body?.policy)) {
+      this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+    const result = this.chatViewProvider.submitBrowserSetCommandApprovalPolicy(
+      body.policy,
+    );
+    this.writeJson(
+      res,
+      result.ok ? 200 : 400,
+      result.ok ? result : { error: "invalid_request" },
+    );
   }
 
   private async handleThinkingAction(

@@ -66,6 +66,7 @@ import {
   toVsCodeSelectionMessage,
   type WriteApprovalSelection,
 } from "../../shared/selectionCommands";
+import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy";
 import { useWebviewMessageConnection } from "./useWebviewMessageConnection";
 
 const DEFAULT_MAX_TOKENS = 200_000;
@@ -1736,6 +1737,15 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
+  const handleSetCommandApprovalPolicy = useCallback(
+    (policy: CommandApprovalPolicy) => {
+      vscodeApi.postMessage(
+        toVsCodeSelectionMessage({ type: "commandApprovalPolicy", policy }),
+      );
+    },
+    [vscodeApi],
+  );
+
   const handleExecuteBuiltinCommand = useCallback(
     (name: string, args: string) => {
       switch (name) {
@@ -2622,6 +2632,13 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onSwitchMode={handleSwitchMode}
           agentWriteApproval={state.chatState.agentWriteApproval ?? "prompt"}
           onSetAgentWriteApproval={handleSetAgentWriteApproval}
+          commandApprovalPolicy={
+            state.chatState.commandApprovalPolicy ?? "safe"
+          }
+          configuredCommandApprovalPolicy={
+            state.chatState.configuredCommandApprovalPolicy ?? "safe"
+          }
+          onSetCommandApprovalPolicy={handleSetCommandApprovalPolicy}
           autoContinueEnabled={autoContinueEnabled}
           onToggleAutoContinue={handleToggleAutoContinue}
           autoContinueStatus={autoContinueStatus}

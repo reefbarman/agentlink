@@ -401,6 +401,14 @@ function getCommandApprovalBadge(
               title: "Auto-approved by command safety tier",
             }
           : null;
+      case "model_reviewer": {
+        const model = typeof record.model === "string" ? record.model : "model";
+        const reason = typeof record.reason === "string" ? record.reason : "";
+        return {
+          text: "approved · reviewer",
+          title: `Approved by one-shot reviewer (${model})${reason ? `: ${reason}` : ""}`,
+        };
+      }
       case "human":
         return { text: "approved · human", title: "Approved manually" };
       case "human_edited":

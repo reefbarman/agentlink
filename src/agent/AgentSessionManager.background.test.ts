@@ -177,6 +177,31 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("snapshots the parent command approval policy for a background child", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const parent = await mgr.createSession("code");
+    mgr.setCommandApprovalPolicy(parent.id, "approve-for-me");
+    mgr.setToolContext({
+      ...toolCtx,
+      getCommandApprovalPolicy: (sessionId) =>
+        mgr.getCommandApprovalPolicy(sessionId),
+    });
+
+    const child = await mgr.spawnBackground(
+      { task: "inherit policy", message: "inspect" },
+      parent.id,
+    );
+    expect(mgr.getCommandApprovalPolicy(child.sessionId)).toBe(
+      "approve-for-me",
+    );
+
+    mgr.setCommandApprovalPolicy(parent.id, "safe");
+    expect(mgr.getCommandApprovalPolicy(parent.id)).toBe("safe");
+    expect(mgr.getCommandApprovalPolicy(child.sessionId)).toBe(
+      "approve-for-me",
+    );
+  });
+
   it("queues spawn when the concurrent limit is reached", async () => {
     const mgr = new AgentSessionManager(
       config,

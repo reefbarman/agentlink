@@ -15,6 +15,7 @@ import { SidebarProvider } from "./sidebar/SidebarProvider.js";
 import { ApprovalManager } from "./approvals/ApprovalManager.js";
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
+import { createCommandApprovalReviewer } from "./approvals/commandApprovalReview.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
 import { normalizeBackgroundMaxConcurrent } from "./agent/background/backgroundConcurrency.js";
@@ -959,6 +960,15 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   context.subscriptions.push(fleetAutomationLifecycle);
 
+  const commandApprovalReviewer = createCommandApprovalReviewer({
+    resolveContext: (sessionId) => {
+      const session = agentSessionManager.getSession(sessionId);
+      if (!session || session.isAborted) return undefined;
+      const provider = providerRegistry.tryResolveProvider(session.model);
+      return provider ? { provider, sessionModel: session.model } : undefined;
+    },
+  });
+
   // Wire up tool dispatch context (mcpHub provided by ChatViewProvider after initialize)
   agentSessionManager.setToolContext({
     approvalManager,
@@ -967,6 +977,29 @@ export function activate(context: vscode.ExtensionContext): void {
     extensionUri: context.extensionUri,
     globalStorageUri: context.globalStorageUri,
     mcpHub: chatViewProvider.getMcpHub(),
+    getCommandApprovalPolicy: (sessionId) =>
+      agentSessionManager.getCommandApprovalPolicy(
+        sessionId,
+        chatViewProvider.getConfiguredCommandApprovalPolicy(),
+      ),
+    commandApprovalReviewer,
+    isSessionActive: (sessionId) => {
+      const session = agentSessionManager.getSession(sessionId);
+      return Boolean(session && !session.isAborted);
+    },
+    getCommandReviewObjective: (sessionId) => {
+      const messages = agentSessionManager
+        .getSession(sessionId)
+        ?.getAllMessages();
+      if (!messages) return undefined;
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
+        if (message?.role === "user" && typeof message.content === "string") {
+          return message.content;
+        }
+      }
+      return undefined;
+    },
     onModeSwitch: (sessionId, mode, reason, silent) =>
       chatViewProvider.handleModeSwitch(mode, reason, silent, sessionId),
     onApprovalRequest: (request, sessionId) =>

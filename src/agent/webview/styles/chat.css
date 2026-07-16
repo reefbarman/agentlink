@@ -2794,6 +2794,7 @@ body {
   flex-shrink: 0;
 }
 
+.approve-for-me-toggle.active,
 .auto-continue-toggle.active {
   opacity: 1;
   color: var(--vscode-button-foreground);
@@ -2810,6 +2811,7 @@ body {
   );
 }
 
+.approve-for-me-toggle.active .codicon,
 .auto-continue-toggle.active .codicon {
   color: var(--vscode-button-foreground);
 }

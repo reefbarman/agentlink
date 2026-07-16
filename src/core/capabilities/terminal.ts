@@ -25,6 +25,12 @@ export interface TerminalCommandResult {
         tier: "safe" | "sensitive" | "dangerous";
         threshold: "safe" | "sensitive";
       }
+    | {
+        by: "model_reviewer";
+        model: string;
+        tier: "sensitive";
+        reason: string;
+      }
     | { by: "human" }
     | { by: "human_edited" };
   auto_approved?: {

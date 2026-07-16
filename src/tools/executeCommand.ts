@@ -1,4 +1,3 @@
-import * as vscode from "vscode";
 import * as path from "path";
 import * as os from "os";
 
@@ -15,9 +14,13 @@ import {
 } from "../approvals/commandSplitter.js";
 import {
   classifyCommand,
-  isTierAtOrBelow,
   type CommandTier,
 } from "../approvals/commandTierClassifier.js";
+import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import {
+  getCommandReviewEligibility,
+  type CommandApprovalReviewer,
+} from "../approvals/commandApprovalReview.js";
 import type { SubCommandEntry } from "../approvals/webview/types.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { validateCommand } from "../util/pipeValidator.js";
@@ -47,6 +50,12 @@ type CommandApprovalAudit =
   | { by: "explicit_rule" }
   | { by: "recent_approval" }
   | { by: "tier"; tier: CommandTier; threshold: "safe" | "sensitive" }
+  | {
+      by: "model_reviewer";
+      model: string;
+      tier: "sensitive";
+      reason: string;
+    }
   | { by: "human" }
   | { by: "human_edited" };
 
@@ -54,6 +63,11 @@ import { type ToolResult } from "../shared/types.js";
 
 export interface ExecuteCommandProviders {
   terminalProvider?: TerminalProvider;
+  getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
+  commandApprovalReviewer?: CommandApprovalReviewer;
+  isSessionActive?: (sessionId: string) => boolean;
+  toolAbortSignal?: AbortSignal;
+  getUserObjective?: (sessionId: string) => string | undefined;
 }
 
 function unavailableExecuteCommandResult(command: string): ToolResult {
@@ -281,8 +295,17 @@ export async function handleExecuteCommand(
               displayCommand: commandToRun,
               inlineFiles,
               requireHumanApproval: inlineFiles !== undefined,
+              hasEnvOverrides: Boolean(
+                params.env && Object.keys(params.env).length > 0,
+              ),
+              forceRequested: Boolean(params.force || params.force_reason),
+              providers,
             },
           );
+
+          if (approvalResult.cancelled) {
+            return cancelledCommandResult(params.command);
+          }
 
           if (!approvalResult.approved) {
             return {
@@ -332,6 +355,10 @@ export async function handleExecuteCommand(
         } finally {
           releaseGate();
         }
+      }
+
+      if (isCommandApprovalCancelled(sessionId, providers)) {
+        return cancelledCommandResult(commandToRun);
       }
 
       const result = await providers.terminalProvider.executeCommand({
@@ -458,6 +485,21 @@ export async function handleExecuteCommand(
   }
 }
 
+function cancelledCommandResult(command: string): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          status: "cancelled",
+          command,
+          reason: "Command approval was cancelled before execution",
+        }),
+      },
+    ],
+  };
+}
+
 function rejectedCommandResult(command: string, reason: string): ToolResult {
   return {
     content: [
@@ -534,6 +576,9 @@ async function approveSubCommands(
     displayCommand?: string;
     inlineFiles?: InlineCommandFilePreview[];
     requireHumanApproval?: boolean;
+    hasEnvOverrides?: boolean;
+    forceRequested?: boolean;
+    providers?: ExecuteCommandProviders;
   },
 ): Promise<{
   approved: boolean;
@@ -542,6 +587,7 @@ async function approveSubCommands(
   followUp?: string;
   approval?: CommandApprovalAudit;
   autoApprovedByTier?: { tier: CommandTier; threshold: "safe" | "sensitive" };
+  cancelled?: boolean;
 }> {
   // Expand wrappers: ["cd /foo", "sudo npm install"] → ["cd /foo", "sudo", "npm install"]
   const expanded = expandSubCommands(subCommands);
@@ -561,21 +607,79 @@ async function approveSubCommands(
     return { approved: true, approval: { by: "recent_approval" } };
   }
 
-  const threshold = vscode.workspace
-    .getConfiguration("agentlink")
-    .get<"off" | "safe" | "sensitive">("commandAutoApproveTier", "off");
   const tierInfo = classifyCommand(fullCommand, { cwd, workspaceRoots });
-  if (
+  const policy =
+    options?.providers?.getCommandApprovalPolicy?.(sessionId) ?? "manual";
+  const threshold = policy === "sensitive" ? "sensitive" : "safe";
+  const deterministicallyApproved =
     !options?.requireHumanApproval &&
-    threshold !== "off" &&
-    isTierAtOrBelow(tierInfo.tier, threshold)
-  ) {
+    ((tierInfo.tier === "safe" && policy !== "manual") ||
+      (tierInfo.tier === "sensitive" && policy === "sensitive"));
+  if (deterministicallyApproved) {
     return {
       approved: true,
       approval: { by: "tier", tier: tierInfo.tier, threshold },
       autoApprovedByTier: { tier: tierInfo.tier, threshold },
     };
   }
+
+  const reviewProviders = options?.providers;
+  const hasInlineFiles = Boolean(options?.inlineFiles);
+  const hasEnvOverrides = Boolean(options?.hasEnvOverrides);
+  const forceRequested = Boolean(options?.forceRequested);
+  if (
+    !options?.requireHumanApproval &&
+    policy === "approve-for-me" &&
+    reviewProviders?.commandApprovalReviewer
+  ) {
+    const eligibility = getCommandReviewEligibility({
+      classified: tierInfo,
+      cwd,
+      workspaceRoots,
+      hasInlineFiles,
+      hasEnvOverrides,
+      forceRequested,
+    });
+    if (eligibility.eligible) {
+      const reviewedCommand = fullCommand;
+      const review = await reviewProviders.commandApprovalReviewer.review({
+        sessionId,
+        command: reviewedCommand,
+        cwd,
+        workspaceRoots,
+        reason,
+        userObjective: reviewProviders.getUserObjective?.(sessionId),
+        classified: tierInfo,
+        signal: reviewProviders.toolAbortSignal,
+      });
+      const currentPolicy =
+        reviewProviders.getCommandApprovalPolicy?.(sessionId) ?? "safe";
+      const sessionActive =
+        reviewProviders.isSessionActive?.(sessionId) ??
+        !reviewProviders.toolAbortSignal?.aborted;
+      if (
+        review.decision === "approve" &&
+        currentPolicy === "approve-for-me" &&
+        sessionActive &&
+        !reviewProviders.toolAbortSignal?.aborted &&
+        reviewedCommand === fullCommand
+      ) {
+        return {
+          approved: true,
+          approval: {
+            by: "model_reviewer",
+            model: review.model,
+            tier: "sensitive",
+            reason: review.reason.slice(0, 500),
+          },
+        };
+      }
+    }
+  }
+  if (isCommandApprovalCancelled(sessionId, reviewProviders)) {
+    return { approved: false, cancelled: true };
+  }
+
   const tierByCommand = new Map(
     tierInfo.perSubCommand.map((entry) => [entry.command, entry.result]),
   );
@@ -604,6 +708,10 @@ async function approveSubCommands(
     { subCommands: entries, inlineFiles: options?.inlineFiles, reason, cwd },
   );
   const response = await promise;
+
+  if (isCommandApprovalCancelled(sessionId, reviewProviders)) {
+    return { approved: false, cancelled: true };
+  }
 
   if (response.decision === "reject") {
     return { approved: false, reason: response.rejectionReason };
@@ -640,6 +748,16 @@ async function approveSubCommands(
     approval: { by: "human" },
     followUp: response.followUp,
   };
+}
+
+function isCommandApprovalCancelled(
+  sessionId: string,
+  providers: ExecuteCommandProviders | undefined,
+): boolean {
+  return Boolean(
+    providers?.toolAbortSignal?.aborted ||
+    (providers?.isSessionActive && !providers.isSessionActive(sessionId)),
+  );
 }
 
 function validateCommandBeforeExecution(

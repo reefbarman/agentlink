@@ -87,6 +87,22 @@ describe("AgentSessionManager host injection", () => {
     });
   });
 
+  it("keeps command approval policy session-scoped and migrates a pre-session choice", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+
+    expect(mgr.getCommandApprovalPolicy("missing", "manual")).toBe("manual");
+    mgr.setCommandApprovalPolicy("agent", "approve-for-me");
+    const session = await mgr.createSession("code");
+
+    expect(mgr.getCommandApprovalPolicy(session.id)).toBe("approve-for-me");
+    expect(mgr.getCommandApprovalPolicy("agent")).toBe("safe");
+
+    mgr.setCommandApprovalPolicy(session.id, "sensitive");
+    expect(mgr.getCommandApprovalPolicy(session.id)).toBe("sensitive");
+    mgr.clearSessionCommandApprovalPolicy(session.id);
+    expect(mgr.getCommandApprovalPolicy(session.id, "manual")).toBe("manual");
+  });
+
   it("replaces empty foreground sessions instead of keeping them in memory", async () => {
     let nextSessionNumber = 1;
     const createEmptySession = async (opts: any) => ({

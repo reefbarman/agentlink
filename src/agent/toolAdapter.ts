@@ -38,6 +38,8 @@ import {
 import type { AgentMode } from "./modes.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
+import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import type { CommandApprovalReviewer } from "../approvals/commandApprovalReview.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { McpClientHub } from "./McpClientHub.js";
 import type { Question } from "./webview/types.js";
@@ -1475,6 +1477,11 @@ export interface ToolDispatchContext {
   approvalManager: ApprovalManager;
   approvalPanel: ApprovalPanelProvider;
   sessionId: string;
+  /** Resolves the active session command policy at dispatch time. */
+  getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
+  commandApprovalReviewer?: CommandApprovalReviewer;
+  isSessionActive?: (sessionId: string) => boolean;
+  getCommandReviewObjective?: (sessionId: string) => string | undefined;
   delegationPolicy?: {
     ownedPaths?: string[];
     forbiddenPaths?: string[];
@@ -2329,6 +2336,11 @@ export async function dispatchToolCall(
         {
           terminalProvider:
             ctx.terminalProvider ?? createVscodeTerminalProvider(),
+          getCommandApprovalPolicy: ctx.getCommandApprovalPolicy,
+          commandApprovalReviewer: ctx.commandApprovalReviewer,
+          isSessionActive: ctx.isSessionActive,
+          toolAbortSignal,
+          getUserObjective: ctx.getCommandReviewObjective,
         },
       );
     case "get_terminal_output":

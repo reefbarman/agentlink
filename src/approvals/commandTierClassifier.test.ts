@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { describe, expect, it } from "vitest";
 
@@ -70,6 +72,31 @@ describe("command tier classifier", () => {
     expect(tier("echo ok > $HOME/.bashrc")).toBe("dangerous");
   });
 
+  it("escalates workspace paths that physically escape through symlinks", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-tier-"));
+    const workspace = path.join(tempRoot, "workspace");
+    const outside = path.join(tempRoot, "outside");
+    fs.mkdirSync(workspace);
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(workspace, "linked-outside"), "dir");
+
+    try {
+      expect(
+        classify("touch linked-outside/generated.txt", {
+          cwd: workspace,
+          workspaceRoots: [workspace],
+        }).perSubCommand[0]?.result,
+      ).toEqual(
+        expect.objectContaining({
+          tier: "dangerous",
+          code: "external_path",
+        }),
+      );
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("detects attached redirections", () => {
     expect(tier("echo ok>/tmp/outside.txt")).toBe("dangerous");
     expect(tier("echo ok>>generated.txt")).toBe("sensitive");
@@ -130,7 +157,10 @@ describe("command tier classifier", () => {
     expect(classify(entry.command).perSubCommand).toEqual([
       {
         command: entry.command,
-        result: { tier: entry.tier, reason: entry.reason },
+        result: expect.objectContaining({
+          tier: entry.tier,
+          reason: entry.reason,
+        }),
       },
     ]);
   });
@@ -141,10 +171,12 @@ describe("command tier classifier", () => {
     ["echo `whoami`", "opaque shell syntax"],
     ["echo <(cat file)", "opaque shell syntax"],
   ])("preserves opaque-syntax reason for %s", (command, reason) => {
-    expect(classify(command).perSubCommand[0]?.result).toEqual({
-      tier: "dangerous",
-      reason,
-    });
+    expect(classify(command).perSubCommand[0]?.result).toEqual(
+      expect.objectContaining({
+        tier: "dangerous",
+        reason,
+      }),
+    );
   });
 
   it.each([`echo "unterminated`, "echo trailing\\"])(
@@ -153,11 +185,53 @@ describe("command tier classifier", () => {
       expect(classify(command).perSubCommand).toEqual([
         {
           command,
-          result: { tier: "safe", reason: "read-only command (echo)" },
+          result: expect.objectContaining({
+            tier: "safe",
+            reason: "read-only command (echo)",
+          }),
         },
       ]);
     },
   );
+
+  it.each([
+    ["rg needle src", "safe", "read_only", "rg"],
+    ["node --version", "safe", "version_check", "node"],
+    ["mkdir generated", "sensitive", "workspace_mutation", "mkdir"],
+    ["npm test", "sensitive", "project_toolchain", "npm"],
+    ["npm run custom", "sensitive", "unrecognized_operation", "npm"],
+    ["cargo publish", "sensitive", "network_or_external_effect", "cargo"],
+    ["git commit -m test", "sensitive", "git_mutation", "git"],
+    ["npm run deploy", "sensitive", "network_or_external_effect", "npm"],
+    [
+      "custom-tool --flag",
+      "sensitive",
+      "unrecognized_executable",
+      "custom-tool",
+    ],
+    ["git frobnicate", "sensitive", "unrecognized_operation", "git"],
+    ["echo ok > generated.txt", "sensitive", "workspace_redirection", "echo"],
+    ["rg token ~/.ssh", "dangerous", "secret_path", "rg"],
+    ["sudo git status", "dangerous", "privileged", "sudo"],
+    ["git push origin main", "dangerous", "network_or_external_effect", "git"],
+    ["echo $(whoami)", "dangerous", "opaque_shell", undefined],
+    ["python -c 1", "dangerous", "inline_interpreter", "python"],
+  ])(
+    "assigns stable classification metadata for %s",
+    (command, expectedTier, code, executable) => {
+      expect(classify(command).perSubCommand[0]?.result).toEqual(
+        expect.objectContaining({ tier: expectedTier, code, executable }),
+      );
+    },
+  );
+
+  it("preserves per-subcommand metadata for compound commands", () => {
+    expect(
+      classify("mkdir generated && custom-tool --flag").perSubCommand.map(
+        ({ result }) => result.code,
+      ),
+    ).toEqual(["workspace_mutation", "unrecognized_executable"]);
+  });
 
   it("honors threshold ordering", () => {
     expect(isTierAtOrBelow("safe", "safe")).toBe(true);

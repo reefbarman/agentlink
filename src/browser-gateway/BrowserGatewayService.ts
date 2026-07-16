@@ -33,6 +33,7 @@ import type {
 } from "../agent/AgentUiPublisher.js";
 
 import type { ApprovalRequest } from "../approvals/webview/types.js";
+import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 
 import {
   diffSnapshotHub,
@@ -134,6 +135,11 @@ export interface BrowserGatewaySessionState {
         revertRecoveryNotice: AppState["revertRecoveryNotice"];
         contextBudget?: ChatState["contextBudget"];
         condenseThreshold?: number;
+        commandApprovalPolicy?: CommandApprovalPolicy;
+        configuredCommandApprovalPolicy?: Exclude<
+          CommandApprovalPolicy,
+          "approve-for-me"
+        >;
       }
     | undefined;
 }
@@ -173,6 +179,11 @@ export interface BrowserGatewayWireSessionState {
     contextBudget?: ChatState["contextBudget"];
     condenseThreshold?: number;
     agentWriteApproval: "prompt" | "session" | "project" | "global";
+    commandApprovalPolicy: CommandApprovalPolicy;
+    configuredCommandApprovalPolicy: Exclude<
+      CommandApprovalPolicy,
+      "approve-for-me"
+    >;
   } | null;
 }
 
@@ -548,6 +559,10 @@ export class BrowserGatewayService implements vscode.Disposable {
             contextBudget: sessionState.foreground.contextBudget,
             condenseThreshold: sessionState.foreground.condenseThreshold,
             agentWriteApproval: this.getAgentWriteApprovalState(),
+            commandApprovalPolicy:
+              sessionState.foreground.commandApprovalPolicy ?? "safe",
+            configuredCommandApprovalPolicy:
+              sessionState.foreground.configuredCommandApprovalPolicy ?? "safe",
           }
         : null,
     };

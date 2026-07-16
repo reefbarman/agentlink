@@ -468,7 +468,9 @@ export class AnthropicProvider implements ModelProvider {
       params.output_config = { effort: requestedEffort };
     }
 
-    const response = await client.messages.create(requestParams);
+    const response = request.signal
+      ? await client.messages.create(requestParams, { signal: request.signal })
+      : await client.messages.create(requestParams);
 
     const text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")

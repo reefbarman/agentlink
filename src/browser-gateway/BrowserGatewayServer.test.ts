@@ -172,6 +172,7 @@ function makeChatViewProviderStub() {
     ]),
     submitBrowserSetModel: vi.fn(async (_model: string) => ({ ok: true })),
     submitBrowserSetWriteApproval: vi.fn(() => ({ ok: true })),
+    submitBrowserSetCommandApprovalPolicy: vi.fn(() => ({ ok: true })),
     submitBrowserSetThinkingEnabled: vi.fn(() => ({ ok: true })),
     submitBrowserNewSession: vi.fn(async () => ({ ok: true })),
     submitBrowserAttachFile: vi.fn(async () => ({
@@ -914,6 +915,8 @@ describe("BrowserGatewayServer", () => {
           },
           condenseThreshold: 0.8,
           agentWriteApproval: "prompt",
+          commandApprovalPolicy: "safe",
+          configuredCommandApprovalPolicy: "safe",
         },
       },
       background: [
@@ -1354,6 +1357,42 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserSetWriteApproval).toHaveBeenCalledWith(
       "session",
     );
+
+    const authorizedCommandApprovalPolicy = await fetch(
+      `${baseUrl}/api/command-approval-policy`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ policy: "approve-for-me" }),
+      },
+    );
+    expect(authorizedCommandApprovalPolicy.status).toBe(200);
+    expect(await authorizedCommandApprovalPolicy.json()).toEqual({ ok: true });
+    expect(
+      chatViewProvider.submitBrowserSetCommandApprovalPolicy,
+    ).toHaveBeenCalledWith("approve-for-me");
+
+    const invalidCommandApprovalPolicy = await fetch(
+      `${baseUrl}/api/command-approval-policy`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({ policy: "dangerous" }),
+      },
+    );
+    expect(invalidCommandApprovalPolicy.status).toBe(400);
+    expect(await invalidCommandApprovalPolicy.json()).toEqual({
+      error: "invalid_request",
+    });
+    expect(
+      chatViewProvider.submitBrowserSetCommandApprovalPolicy,
+    ).toHaveBeenCalledTimes(1);
 
     const authorizedThinking = await fetch(`${baseUrl}/api/thinking`, {
       method: "POST",

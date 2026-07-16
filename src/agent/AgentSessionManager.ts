@@ -85,6 +85,7 @@ import {
   withFleetResultInstruction,
 } from "./FleetWorkflows.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
+import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
@@ -199,6 +200,7 @@ export type PersistedSessionMutationResult =
 
 export class AgentSessionManager {
   private sessions = new Map<string, AgentSession>();
+  private commandApprovalPolicies = new Map<string, CommandApprovalPolicy>();
   private foregroundId: string | null = null;
   private engine: AgentEngine | null = null;
   private config: AgentConfig;
@@ -820,6 +822,11 @@ export class AgentSessionManager {
       mcpToolDisclosure: this.buildMcpToolDisclosure(),
     });
     this.sessions.set(session.id, session);
+    const pendingPolicy = this.commandApprovalPolicies.get("agent");
+    if (pendingPolicy) {
+      this.commandApprovalPolicies.set(session.id, pendingPolicy);
+      this.commandApprovalPolicies.delete("agent");
+    }
     this.foregroundId = session.id;
     this.onSessionsChanged?.();
     return session;
@@ -870,6 +877,27 @@ export class AgentSessionManager {
     return this.sessions.get(id);
   }
 
+  getCommandApprovalPolicy(
+    sessionId: string,
+    fallback: CommandApprovalPolicy = "safe",
+  ): CommandApprovalPolicy {
+    return this.commandApprovalPolicies.get(sessionId) ?? fallback;
+  }
+
+  setCommandApprovalPolicy(
+    sessionId: string,
+    policy: CommandApprovalPolicy,
+  ): void {
+    if (!this.sessions.has(sessionId) && sessionId !== "agent") return;
+    this.commandApprovalPolicies.set(sessionId, policy);
+    this.onSessionsChanged?.();
+  }
+
+  clearSessionCommandApprovalPolicy(sessionId: string): void {
+    if (!this.commandApprovalPolicies.delete(sessionId)) return;
+    this.onSessionsChanged?.();
+  }
+
   setForegroundReasoningEffort(effort: ReasoningEffort): boolean {
     const session = this.getForegroundSession();
     if (!session) return false;
@@ -912,6 +940,7 @@ export class AgentSessionManager {
     }
 
     this.sessions.delete(session.id);
+    this.commandApprovalPolicies.delete(session.id);
     this.sessionRevisions.delete(session.id);
     this.sessionSaveQueues.delete(session.id);
     if (this.foregroundId === session.id) {
@@ -2757,6 +2786,7 @@ export class AgentSessionManager {
 
     this.sessionRevisions.delete(sessionId);
     this.sessionSaveQueues.delete(sessionId);
+    this.commandApprovalPolicies.delete(sessionId);
     if (this.sessions.has(sessionId)) {
       this.sessions.delete(sessionId);
       if (this.foregroundId === sessionId) {
@@ -3095,6 +3125,10 @@ export class AgentSessionManager {
       session.createAbortController();
       this.sessions.set(session.id, session);
       if (parentSessionId) {
+        this.commandApprovalPolicies.set(
+          session.id,
+          this.toolCtx.getCommandApprovalPolicy?.(parentSessionId) ?? "safe",
+        );
         this.bgParents.set(session.id, { sessionId: parentSessionId, task });
       }
       this.bgMeta.set(session.id, {
@@ -3343,6 +3377,10 @@ export class AgentSessionManager {
     session.status = "queued";
     this.sessions.set(session.id, session);
     if (parentSessionId) {
+      this.commandApprovalPolicies.set(
+        session.id,
+        this.toolCtx.getCommandApprovalPolicy?.(parentSessionId) ?? "safe",
+      );
       this.bgParents.set(session.id, {
         sessionId: parentSessionId,
         task,
@@ -4606,6 +4644,12 @@ export class AgentSessionManager {
     session.addUserMessage(request.message);
     session.status = "streaming";
     this.sessions.set(session.id, session);
+    if (parent) {
+      this.commandApprovalPolicies.set(
+        session.id,
+        this.toolCtx?.getCommandApprovalPolicy?.(parent.id) ?? "safe",
+      );
+    }
     this.bgMeta.set(session.id, {
       resolvedMode: mode,
       resolvedModel: model,
