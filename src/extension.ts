@@ -55,6 +55,7 @@ import {
   queryCodexCliUsage,
 } from "./agent/providers/index.js";
 import { BrowserGatewayService } from "./browser-gateway/BrowserGatewayService.js";
+import { BrowserGatewayRepositoryObserver } from "./browser-gateway/BrowserGatewayRepositoryObserver.js";
 import { BrowserGatewayServer } from "./browser-gateway/BrowserGatewayServer.js";
 import { registerBrowserGatewayCommands } from "./browser-gateway/browserGatewayCommands.js";
 import { diffSnapshotHub } from "./browser-gateway/DiffSnapshotHub.js";
@@ -506,6 +507,16 @@ export function activate(context: vscode.ExtensionContext): void {
     () => chatViewProvider.getBrowserProjectedForegroundState(),
     () => chatViewProvider.getBrowserMcpStatusInfos(),
   );
+  const browserGatewayRepositoryObserver =
+    new BrowserGatewayRepositoryObserver();
+  browserGatewayService.setRepositoryInfoProvider(() =>
+    browserGatewayRepositoryObserver.getRepositoryInfo(),
+  );
+  browserGatewayService.subscribeToRepositoryChanges((listener) =>
+    browserGatewayRepositoryObserver.onDidChange(listener),
+  );
+  context.subscriptions.push(browserGatewayRepositoryObserver);
+  void browserGatewayRepositoryObserver.initialize();
   browserGatewayService.setCommandApprovalPolicyGetters(
     () => chatViewProvider.getBrowserCommandApprovalPolicy(),
     () => chatViewProvider.getConfiguredCommandApprovalPolicy(),

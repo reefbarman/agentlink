@@ -39,6 +39,9 @@ import {
   diffSnapshotHub,
   type DiffSnapshotPreview,
 } from "./DiffSnapshotHub.js";
+import type { BrowserGatewayRepositoryInfo } from "./BrowserGatewayRepositoryObserver.js";
+
+export type { BrowserGatewayRepositoryInfo } from "./BrowserGatewayRepositoryObserver.js";
 
 const REPOSITORY_INFO_CACHE_MS = 1_000;
 const DEFAULT_FOREGROUND_PUBLICATION_COALESCE_MS = 150;
@@ -92,11 +95,6 @@ export interface BrowserGatewayWireState {
   urlElicitation: McpUrlElicitationRequest | null;
   recentEvents: AgentUiEvent[];
   mcpStatusInfos: ReturnType<ChatViewProvider["getBrowserMcpStatusInfos"]>;
-}
-
-export interface BrowserGatewayRepositoryInfo {
-  branch?: string;
-  dirty?: boolean;
 }
 
 export interface BrowserGatewaySessionState {
@@ -209,57 +207,6 @@ export interface BrowserGatewaySnapshotPublication {
   readonly bytes: number;
 }
 
-function isSameOrNestedPath(pathValue: string, candidateRoot: string): boolean {
-  const normalizedPath = pathValue.replace(/\\/g, "/").replace(/\/+$/, "");
-  const normalizedRoot = candidateRoot.replace(/\\/g, "/").replace(/\/+$/, "");
-  return (
-    normalizedPath === normalizedRoot ||
-    normalizedPath.startsWith(`${normalizedRoot}/`)
-  );
-}
-
-function getBrowserGatewayRepositoryInfo(): BrowserGatewayRepositoryInfo | null {
-  try {
-    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!workspacePath) return null;
-
-    const gitExtension = vscode.extensions.getExtension("vscode.git")
-      ?.exports as
-      | { getAPI(version: 1): { repositories: unknown[] } }
-      | undefined;
-    const gitApi = gitExtension?.getAPI(1);
-    if (!gitApi) return null;
-
-    const repositories = gitApi.repositories as Array<{
-      rootUri?: { fsPath?: string };
-      state?: {
-        HEAD?: { name?: string; commit?: string };
-        workingTreeChanges?: unknown[];
-        indexChanges?: unknown[];
-        mergeChanges?: unknown[];
-      };
-    }>;
-    const repository =
-      repositories.find((candidate) => {
-        const rootPath = candidate.rootUri?.fsPath;
-        return rootPath ? isSameOrNestedPath(workspacePath, rootPath) : false;
-      }) ?? repositories[0];
-    const state = repository?.state;
-    if (!state) return null;
-
-    const branch = state.HEAD?.name || state.HEAD?.commit?.slice(0, 8);
-    const dirty = Boolean(
-      state.workingTreeChanges?.length ||
-      state.indexChanges?.length ||
-      state.mergeChanges?.length,
-    );
-
-    return { ...(branch && { branch }), dirty };
-  } catch {
-    return null;
-  }
-}
-
 export class BrowserGatewayService implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly onDidChangeEmitter =
@@ -293,6 +240,8 @@ export class BrowserGatewayService implements vscode.Disposable {
   private repositoryInfoCache:
     | { value: BrowserGatewayRepositoryInfo | null; expiresAt: number }
     | undefined;
+  private getRepositoryInfoProvider: () => BrowserGatewayRepositoryInfo | null =
+    () => null;
   private getCommandApprovalPolicy: () => CommandApprovalPolicy = () => "safe";
   private getConfiguredCommandApprovalPolicy: () => Exclude<
     CommandApprovalPolicy,
@@ -361,6 +310,24 @@ export class BrowserGatewayService implements vscode.Disposable {
 
   getCurrentThemeSnapshot(): BrowserGatewayThemeSnapshot {
     return this.getThemeSnapshot();
+  }
+
+  setRepositoryInfoProvider(
+    getRepositoryInfo: () => BrowserGatewayRepositoryInfo | null,
+  ): void {
+    this.getRepositoryInfoProvider = getRepositoryInfo;
+    this.repositoryInfoCache = undefined;
+  }
+
+  subscribeToRepositoryChanges(
+    onDidChangeRepository: (listener: () => void) => { dispose(): void },
+  ): void {
+    this.disposables.push(
+      onDidChangeRepository(() => {
+        this.repositoryInfoCache = undefined;
+        this.invalidateBrowserSnapshot();
+      }),
+    );
   }
 
   setCommandApprovalPolicyGetters(
@@ -773,7 +740,7 @@ export class BrowserGatewayService implements vscode.Disposable {
       return this.repositoryInfoCache.value;
     }
 
-    const value = getBrowserGatewayRepositoryInfo();
+    const value = this.getRepositoryInfoProvider();
     this.repositoryInfoCache = {
       value,
       expiresAt: now + REPOSITORY_INFO_CACHE_MS,

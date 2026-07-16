@@ -1002,6 +1002,116 @@ describe("BrowserGatewayService", () => {
     }
   });
 
+  it("publishes repository changes with the recurring poll disabled", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      let repository = { branch: "main", dirty: false };
+      let repositoryListener: (() => void) | undefined;
+      const repositorySubscriptionDispose = vi.fn();
+      const service = new BrowserGatewayService(
+        hub,
+        makeSessionManagerStub() as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projectedForeground() as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setRepositoryInfoProvider(() => repository);
+      service.setHasActiveClientsProbe(() => true);
+      service.subscribeToRepositoryChanges((listener) => {
+        repositoryListener = listener;
+        return { dispose: repositorySubscriptionDispose } as never;
+      });
+      const initial = service.createSnapshotPublication();
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      repository = { branch: "feature/a4e", dirty: true };
+      repositoryListener?.();
+      vi.advanceTimersByTime(150);
+
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+      expect(onDidChange.mock.calls[0][0].revision).toBeGreaterThan(
+        initial.revision,
+      );
+      expect(onDidChange.mock.calls[0][0].snapshot.session.repository).toEqual(
+        repository,
+      );
+
+      repositoryListener?.();
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+
+      subscription.dispose();
+      service.dispose();
+      expect(repositorySubscriptionDispose).toHaveBeenCalledTimes(1);
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears repository cache without clients for the next connect snapshot", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      let repository = { branch: "main", dirty: false };
+      let repositoryListener: (() => void) | undefined;
+      const service = new BrowserGatewayService(
+        hub,
+        makeSessionManagerStub() as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projectedForeground() as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setRepositoryInfoProvider(() => repository);
+      service.setHasActiveClientsProbe(() => false);
+      service.subscribeToRepositoryChanges((listener) => {
+        repositoryListener = listener;
+        return { dispose: vi.fn() } as never;
+      });
+      const initial = service.createSnapshotPublication();
+      const onDidChange = vi.fn();
+      service.onDidChange(onDidChange);
+
+      repository = { branch: "main", dirty: true };
+      repositoryListener?.();
+      vi.advanceTimersByTime(150);
+
+      expect(onDidChange).not.toHaveBeenCalled();
+      const connected = service.createSnapshotPublication();
+      expect(connected.revision).toBeGreaterThan(initial.revision);
+      expect(connected.snapshot.session.repository).toEqual(repository);
+
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes projected foreground changes through explicit invalidation with the recurring poll disabled", () => {
     vi.useFakeTimers();
     try {
@@ -1312,6 +1422,221 @@ describe("BrowserGatewayService", () => {
       service.dispose();
       hub.dispose();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes every mutable snapshot area with the recurring poll disabled", () => {
+    vi.useFakeTimers();
+    const diffId = "producer-matrix-diff";
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const sessionManager = makeSessionManagerStub();
+      let projected = projectedForeground();
+      let repository = { branch: "main", dirty: false };
+      let theme = themeSnapshotStub;
+      let mcpStatusInfos: unknown[] = [];
+      let sessionListener: (() => void) | undefined;
+      let foregroundListener: (() => void) | undefined;
+      let repositoryListener: (() => void) | undefined;
+      let surfaceListener: ((kind: "mcp" | "theme") => void) | undefined;
+      const service = new BrowserGatewayService(
+        hub,
+        sessionManager as never,
+        () => theme,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projected as never,
+        () => mcpStatusInfos as never,
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setRepositoryInfoProvider(() => repository);
+      service.setHasActiveClientsProbe(() => true);
+      service.subscribeToSessionChanges((listener) => {
+        sessionListener = listener;
+        return { dispose: vi.fn() } as never;
+      });
+      service.subscribeToProjectedForegroundChanges((listener) => {
+        foregroundListener = listener;
+        return { dispose: vi.fn() } as never;
+      });
+      service.subscribeToRepositoryChanges((listener) => {
+        repositoryListener = listener;
+        return { dispose: vi.fn() } as never;
+      });
+      service.subscribeToSurfaceChanges((listener) => {
+        surfaceListener = listener;
+        return { dispose: vi.fn() } as never;
+      });
+      service.createSnapshotPublication();
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+      const expectPublication = (
+        mutate: () => void,
+        assertSnapshot: (snapshot: any) => void,
+        options: { coalesced?: boolean; count?: number } = {},
+      ) => {
+        const previousCount = onDidChange.mock.calls.length;
+        mutate();
+        if (options.coalesced !== false) vi.advanceTimersByTime(150);
+        expect(onDidChange).toHaveBeenCalledTimes(
+          previousCount + (options.count ?? 1),
+        );
+        assertSnapshot(onDidChange.mock.calls.at(-1)?.[0].snapshot);
+      };
+
+      expectPublication(
+        () => {
+          projected = projectedForeground({
+            questionRequest: {
+              id: "matrix-question",
+              context: "Continue?",
+              questions: [],
+            },
+          });
+          hub.publishApproval({
+            kind: "write",
+            id: "matrix-approval",
+            filePath: "src/matrix.ts",
+            writeOperation: "modify",
+          });
+          hub.publishQuestionRequest("matrix-question", "Continue?", []);
+          hub.publishQuestionProgress({
+            id: "matrix-question",
+            step: 1,
+            answers: { continue: true },
+            notes: {},
+            origin: "test",
+          });
+          hub.publishUrlElicitationRequest({
+            id: "matrix-url",
+            serverName: "matrix",
+            message: "Authenticate",
+            url: "https://example.com/",
+            elicitationId: "elicitation-1",
+            origin: "https://example.com",
+            host: "example.com",
+            isLocalAddress: false,
+          });
+        },
+        (snapshot) => {
+          expect(snapshot.ui).toMatchObject({
+            approval: { id: "matrix-approval" },
+            questionProgress: { id: "matrix-question", step: 1 },
+            urlElicitation: { id: "matrix-url" },
+          });
+          expect(snapshot.ui.recentEvents).not.toHaveLength(0);
+        },
+        { coalesced: false, count: 4 },
+      );
+
+      expectPublication(
+        () => {
+          projected = projectedForeground({ model: "matrix-model" });
+          foregroundListener?.();
+        },
+        (snapshot) =>
+          expect(snapshot.session.foreground.model).toBe("matrix-model"),
+      );
+
+      expectPublication(
+        () => {
+          sessionManager.listPersistedSessions.mockReturnValue([
+            {
+              schemaVersion: 1,
+              id: "session-1",
+              mode: "code",
+              model: "matrix-model",
+              title: "Matrix Session",
+              messageCount: 2,
+              totalInputTokens: 10,
+              totalOutputTokens: 20,
+              createdAt: 1,
+              lastActiveAt: 3,
+            },
+          ]);
+          sessionListener?.();
+        },
+        (snapshot) =>
+          expect(snapshot.session.sessions[0].title).toBe("Matrix Session"),
+      );
+
+      expectPublication(
+        () => {
+          sessionManager.getBgSessionInfos.mockReturnValue([
+            {
+              id: "matrix-bg",
+              task: "Matrix background",
+              status: "streaming",
+              displayStatus: "Working",
+              displayStatusSource: "heuristic",
+            },
+          ] as never);
+          sessionListener?.();
+        },
+        (snapshot) => expect(snapshot.background[0].id).toBe("matrix-bg"),
+      );
+
+      expectPublication(
+        () => {
+          repository = { branch: "matrix-branch", dirty: true };
+          repositoryListener?.();
+        },
+        (snapshot) => expect(snapshot.session.repository).toEqual(repository),
+      );
+
+      expectPublication(
+        () => {
+          mcpStatusInfos = [{ id: "matrix-mcp" }];
+          surfaceListener?.("mcp");
+        },
+        (snapshot) =>
+          expect(snapshot.ui.mcpStatusInfos).toEqual(mcpStatusInfos),
+      );
+
+      expectPublication(
+        () => {
+          theme = { ...themeSnapshotStub, themeLabel: "Matrix Theme" };
+          surfaceListener?.("theme");
+        },
+        (snapshot) => expect(snapshot.theme.themeLabel).toBe("Matrix Theme"),
+      );
+
+      expectPublication(
+        () =>
+          diffSnapshotHub.upsert({
+            requestId: diffId,
+            filePath: "src/matrix.ts",
+            operation: "modify",
+            originalContent: "before",
+            proposedContent: "after",
+            outsideWorkspace: false,
+            createdAt: 1,
+          }),
+        (snapshot) => expect(snapshot.diffs[0].requestId).toBe(diffId),
+        { coalesced: false },
+      );
+
+      expectPublication(
+        () => service.bumpModelsVersion(),
+        (snapshot) => expect(snapshot.modelsVersion).toBe(1),
+        { coalesced: false },
+      );
+
+      expect(disabledPollTimers.setInterval).toHaveBeenCalledTimes(1);
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      diffSnapshotHub.remove(diffId);
       vi.useRealTimers();
     }
   });
