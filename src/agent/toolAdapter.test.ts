@@ -970,6 +970,12 @@ describe("spawn_background_agent tool", () => {
       taskClass: "readonly-research",
       toolCalls: 1,
       tokenUsage: 100,
+      apiTurns: 2,
+      phase: "waiting_for_provider",
+      elapsedMs: 12_000,
+      idleMs: 3_000,
+      canSteer: true,
+      canKill: true,
     });
 
     const result = await dispatchToolCall(
@@ -991,6 +997,12 @@ describe("spawn_background_agent tool", () => {
       taskClass: "readonly-research",
       toolCalls: 1,
       tokenUsage: 100,
+      apiTurns: 2,
+      phase: "waiting_for_provider",
+      elapsedMs: 12_000,
+      idleMs: 3_000,
+      canSteer: true,
+      canKill: true,
     });
   });
 

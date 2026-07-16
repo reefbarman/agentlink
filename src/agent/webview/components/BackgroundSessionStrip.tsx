@@ -58,6 +58,23 @@ export interface BgSessionInfoProps {
   terminalReason?: string;
   createdAt?: number;
   lastActiveAt?: number;
+  startedAt?: number;
+  lastProgressAt?: number;
+  elapsedMs?: number;
+  idleMs?: number;
+  phase?:
+    | "queued"
+    | "waiting_for_provider"
+    | "thinking"
+    | "responding"
+    | "executing_tool"
+    | "awaiting_approval"
+    | "retrying_provider"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  canSteer?: boolean;
+  canKill?: boolean;
   totalInputTokens?: number;
   totalOutputTokens?: number;
   toolCalls?: number;
@@ -222,7 +239,8 @@ export function BackgroundSessionStrip({
     setFilter("active");
   }, [openToActiveRequest]);
 
-  // Record start time the first time we see each active session
+  // Prefer the authoritative runtime start so reconnecting browser/webview
+  // clients do not reset the elapsed clock to zero.
   useEffect(() => {
     const active = sessions.filter((s) => ACTIVE_STATUSES.has(s.status));
     if (active.length === 0) return;
@@ -230,8 +248,11 @@ export function BackgroundSessionStrip({
       const next = new Map(prev);
       let changed = false;
       for (const s of active) {
-        if (!next.has(s.id)) {
-          next.set(s.id, Date.now());
+        const authoritativeStart = s.startedAt ?? s.createdAt;
+        if (!next.has(s.id) || authoritativeStart !== undefined) {
+          const start = authoritativeStart ?? Date.now();
+          if (next.get(s.id) === start) continue;
+          next.set(s.id, start);
           changed = true;
         }
       }
@@ -409,6 +430,13 @@ export function BackgroundSessionStrip({
                 s.resolvedProvider ? `provider: ${s.resolvedProvider}` : null,
                 s.resolvedModel ? `model: ${s.resolvedModel}` : null,
                 s.lifecycle ? `lifecycle: ${s.lifecycle}` : null,
+                s.phase ? `phase: ${s.phase}` : null,
+                s.elapsedMs !== undefined
+                  ? `elapsed: ${Math.round(s.elapsedMs / 1000)}s`
+                  : null,
+                s.idleMs !== undefined
+                  ? `quiet for: ${Math.round(s.idleMs / 1000)}s`
+                  : null,
                 s.goalId ? `goal: ${s.goalId}` : null,
                 s.workflowId ? `workflow: ${s.workflowId}` : null,
                 s.workspace ? `workspace: ${s.workspace}` : null,
@@ -482,7 +510,7 @@ export function BackgroundSessionStrip({
                   {formatElapsed(startedAt.get(s.id)!, now)}
                 </span>
               )}
-              {ACTIVE_STATUSES.has(s.status) && (
+              {(s.canKill ?? ACTIVE_STATUSES.has(s.status)) && (
                 <button
                   class="icon-button bg-session-stop"
                   onClick={() => onStop(s.id)}
@@ -491,18 +519,22 @@ export function BackgroundSessionStrip({
                   <i class="codicon codicon-close" />
                 </button>
               )}
-              {ACTIVE_STATUSES.has(s.status) && onSteer && (
-                <button
-                  class="icon-button bg-session-action"
-                  onClick={() => {
-                    const message = window.prompt("Steer this agent:");
-                    if (message?.trim()) onSteer(s.id, message.trim());
-                  }}
-                  title="Steer agent"
-                >
-                  <i class="codicon codicon-debug-step-over" />
-                </button>
-              )}
+              {(s.canSteer ??
+                (s.status === "streaming" ||
+                  s.status === "tool_executing" ||
+                  s.status === "awaiting_approval")) &&
+                onSteer && (
+                  <button
+                    class="icon-button bg-session-action"
+                    onClick={() => {
+                      const message = window.prompt("Steer this agent:");
+                      if (message?.trim()) onSteer(s.id, message.trim());
+                    }}
+                    title="Steer agent"
+                  >
+                    <i class="codicon codicon-debug-step-over" />
+                  </button>
+                )}
               {ACTIVE_STATUSES.has(s.status) && onPause && (
                 <button
                   class="icon-button bg-session-action"

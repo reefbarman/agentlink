@@ -13,6 +13,7 @@ import type {
   AgentToolExecutionRequest,
   AgentToolRuntime,
 } from "../core/tools/types.js";
+import type { BackgroundAgentStatusResult } from "../core/capabilities/background.js";
 import { PARALLEL_SAFE_TOOLS } from "../core/tools/toolCapabilities.js";
 import type {
   SpawnBackgroundRequest,
@@ -737,7 +738,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_status",
     description:
-      "Non-blocking check on a background agent's progress, including current tool/status and a running preview when available. Use this for coordinator-style progress checks while continuing other work; do not poll in a tight loop. If no push-style completion is available, call get_background_result only when you need the final output.",
+      "Non-blocking health and progress snapshot for a background agent. Returns its phase, total elapsedMs, idleMs since the last real progress event, budget usage, and canSteer/canKill controls as well as current output. Use it while continuing independent work; do not poll tightly or infer a hang from elapsed time alone because a provider request or long tool can be quiet. If progress has gone quiet and the partial result is sufficient, steer it to stop using tools and return now. If steering cannot be delivered at a safe boundary, the idle time keeps growing, and the result is no longer worth waiting for, kill it. Call get_background_result only when ready to block for integration.",
     input_schema: {
       type: "object",
       properties: {
@@ -767,7 +768,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "kill_background_agent",
     description:
-      "Stop a running background agent and return any partial output collected so far.",
+      "Immediately stop a background agent when get_background_status reports canKill and waiting is no longer worthwhile. Returns any partial output collected so far.",
     input_schema: {
       type: "object",
       properties: {
@@ -787,7 +788,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "steer_background_agent",
     description:
-      "Send a course-correction to a running authorized descendant. It is injected at the next safe tool boundary.",
+      'Send a course-correction to a running authorized descendant. To ask for an early result, say "Stop using tools and return your best findings now." The instruction is queued for the next safe tool boundary, so it cannot interrupt an in-flight provider request or tool; check idleMs later and kill if the instruction cannot be delivered promptly.',
     input_schema: {
       type: "object",
       properties: {
@@ -896,32 +897,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
 ];
 
 /** Return value of get_background_status — non-blocking snapshot. */
-export interface BgStatusResult {
-  status:
-    | "queued"
-    | "streaming"
-    | "tool_executing"
-    | "awaiting_approval"
-    | "idle"
-    | "cancelled"
-    | "error";
-  currentTool?: string;
-  /** UI-ready status label derived from heuristics (and later model enrichment). */
-  displayStatus?: string;
-  /** Running assistant output preview, useful for non-blocking coordination. */
-  streamingPreview?: string;
-  /** Concise running/completed summary when available. */
-  progressSummary?: string;
-  resolvedMode?: string;
-  resolvedModel?: string;
-  resolvedProvider?: string;
-  taskClass?: string;
-  toolCalls?: number;
-  tokenUsage?: number;
-  done: boolean;
-  /** Last assistant message text, only present when done=true. */
-  partialOutput?: string;
-}
+export type BgStatusResult = BackgroundAgentStatusResult;
 
 // --- Tool Profiles ---
 

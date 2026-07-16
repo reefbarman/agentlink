@@ -1,3 +1,5 @@
+import type { BackgroundAgentRuntimePhase } from "../core/capabilities/background.js";
+
 /**
  * Inline approval request — passed as a callback through the tool dispatch
  * pipeline so tools can request user approval via the chat webview instead
@@ -225,6 +227,15 @@ export interface BgSessionInfo {
   terminalReason?: string;
   createdAt?: number;
   lastActiveAt?: number;
+  /** Timestamp when execution left the fleet queue. */
+  startedAt?: number;
+  /** Timestamp of the latest provider, text, or tool progress event. */
+  lastProgressAt?: number;
+  elapsedMs?: number;
+  idleMs?: number;
+  phase?: BackgroundAgentRuntimePhase;
+  canSteer?: boolean;
+  canKill?: boolean;
   totalInputTokens?: number;
   totalOutputTokens?: number;
   toolCalls?: number;

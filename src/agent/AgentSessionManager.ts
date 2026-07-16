@@ -3,6 +3,10 @@ import * as crypto from "crypto";
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
 import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
 import type {
+  BackgroundAgentBudgetUsage,
+  BackgroundAgentRuntimePhase,
+} from "../core/capabilities/background.js";
+import type {
   PendingQuestionRecoveryState,
   PersistedFleetMetadata,
   PersistResult,
@@ -272,6 +276,8 @@ export class AgentSessionManager {
       tokenUsage: number;
       apiTurns: number;
       startedAt: number;
+      lastProgressAt: number;
+      phase: BackgroundAgentRuntimePhase;
     }
   >();
   private readonly bgSummaryScheduler = new BackgroundSummaryScheduler();
@@ -605,6 +611,8 @@ export class AgentSessionManager {
       return { outcome: { outcome: "cancelled" } };
     }
 
+    this.noteBackgroundProgress(args.sessionId, "awaiting_approval");
+
     const selected = await this.toolCtx?.onApprovalRequest?.(
       {
         kind: this.acpToolKindToApprovalKind(toolKind),
@@ -648,6 +656,7 @@ export class AgentSessionManager {
   }): void {
     const { session, update } = args;
     if (update.sessionUpdate === "agent_message_chunk") {
+      this.noteBackgroundProgress(session.id, "responding");
       const text = this.acpTextFromContentBlock(update.content);
       if (text) {
         args.assistantTextParts.push(text);
@@ -658,6 +667,7 @@ export class AgentSessionManager {
     }
 
     if (update.sessionUpdate === "tool_call") {
+      this.noteBackgroundProgress(session.id, "executing_tool");
       session.currentTool = update.title;
       session.status = "tool_executing";
       this.bgStatusDetail.set(session.id, update.title);
@@ -673,6 +683,12 @@ export class AgentSessionManager {
     }
 
     if (update.sessionUpdate === "tool_call_update") {
+      this.noteBackgroundProgress(
+        session.id,
+        update.status === "completed" || update.status === "failed"
+          ? "waiting_for_provider"
+          : "executing_tool",
+      );
       if (update.title) {
         session.currentTool = update.title;
         this.bgStatusDetail.set(session.id, update.title);
@@ -684,6 +700,7 @@ export class AgentSessionManager {
     }
 
     if (update.sessionUpdate === "usage_update") {
+      this.noteBackgroundProgress(session.id, "waiting_for_provider");
       // update.used is context-window occupancy ("tokens currently in
       // context"), not cumulative spend — it must not count against the
       // token budget, or an agent that loads a large diff would exhaust a
@@ -2837,6 +2854,13 @@ export class AgentSessionManager {
             fleet.completedAt && fleet.budgetUsage
               ? fleet.completedAt - fleet.budgetUsage.elapsedMs
               : session.createdAt,
+          lastProgressAt:
+            fleet.completedAt ?? session.lastActiveAt ?? session.createdAt,
+          phase: this.bgCancelled.has(session.id)
+            ? "cancelled"
+            : session.status === "error"
+              ? "failed"
+              : "completed",
         });
         if (fleet.completedAt) {
           this.bgCompletedAt.set(session.id, fleet.completedAt);
@@ -3108,7 +3132,12 @@ export class AgentSessionManager {
   ): void {
     const launch = async (): Promise<void> => {
       const meta = this.bgMeta.get(session.id);
-      if (meta) meta.startedAt = Date.now();
+      if (meta) {
+        const now = Date.now();
+        meta.startedAt = now;
+        meta.lastProgressAt = now;
+        meta.phase = "waiting_for_provider";
+      }
       const maxElapsedMs = session.fleetMetadata?.budget?.maxElapsedMs;
       if (maxElapsedMs !== undefined && maxElapsedMs > 0) {
         const timers = [
@@ -3271,6 +3300,8 @@ export class AgentSessionManager {
         tokenUsage: 0,
         apiTurns: 0,
         startedAt: Date.now(),
+        lastProgressAt: Date.now(),
+        phase: "queued",
       });
       session.fleetMetadata = this.createFleetMetadata(session, {
         task,
@@ -3319,6 +3350,7 @@ export class AgentSessionManager {
                 return;
               }
               if (event.type === "stop") {
+                this.noteBackgroundProgress(session.id, "waiting_for_provider");
                 promptResponse = event.response;
                 this.applyAcpPromptResponseUsage(session, event.response);
                 this.notifySessionChangeListeners();
@@ -3527,6 +3559,8 @@ export class AgentSessionManager {
       tokenUsage: 0,
       apiTurns: 0,
       startedAt: Date.now(),
+      lastProgressAt: Date.now(),
+      phase: "queued",
     });
     session.fleetMetadata = this.createFleetMetadata(session, {
       task,
@@ -3575,6 +3609,7 @@ export class AgentSessionManager {
       },
       onApprovalRequest: baseCtx.onApprovalRequest
         ? (req) => {
+            this.noteBackgroundProgress(session.id, "awaiting_approval");
             this.appendPolicyAudit(session, {
               decision: "approval_requested",
               operation: req.kind,
@@ -3590,6 +3625,7 @@ export class AgentSessionManager {
         : undefined,
       onQuestion: baseCtx.onQuestion
         ? (context, questions, bgSessionId) => {
+            this.noteBackgroundProgress(session.id, "awaiting_approval");
             this.appendFleetEvent(
               session,
               "question",
@@ -3639,6 +3675,7 @@ export class AgentSessionManager {
           maxToolCalls: getEngineHardLimit(engineBudget?.maxToolCalls),
           maxApiTurns: getEngineHardLimit(engineBudget?.maxApiTurns),
         })) {
+          this.noteBackgroundAgentEvent(session.id, event);
           if (event.type === "text_delta") {
             this.appendBgStreamingText(session.id, event.text);
           }
@@ -3654,6 +3691,7 @@ export class AgentSessionManager {
             if (detail) {
               this.bgStatusDetail.set(session.id, detail);
             }
+            session.currentTool = undefined;
           }
           if (event.type === "error") {
             terminalEngineError = event.error;
@@ -4104,6 +4142,110 @@ export class AgentSessionManager {
     };
   }
 
+  private noteBackgroundProgress(
+    sessionId: string,
+    phase?: BackgroundAgentRuntimePhase,
+  ): void {
+    const meta = this.bgMeta.get(sessionId);
+    if (!meta) return;
+    meta.lastProgressAt = Date.now();
+    if (phase) meta.phase = phase;
+  }
+
+  private noteBackgroundAgentEvent(sessionId: string, event: AgentEvent): void {
+    let phase: BackgroundAgentRuntimePhase | undefined;
+    switch (event.type) {
+      case "thinking_start":
+      case "thinking_delta":
+      case "condense_start":
+      case "condense":
+        phase = "thinking";
+        break;
+      case "text_delta":
+        phase = "responding";
+        break;
+      case "tool_start":
+      case "tool_input_delta":
+        phase = "executing_tool";
+        break;
+      case "warning":
+        phase = event.retryDelayMs ? "retrying_provider" : undefined;
+        break;
+      case "error":
+      case "condense_error":
+        phase = "failed";
+        break;
+      case "done":
+        phase = "completed";
+        break;
+      default:
+        phase = "waiting_for_provider";
+        break;
+    }
+    this.noteBackgroundProgress(sessionId, phase);
+  }
+
+  private getBackgroundRuntimeTelemetry(session: AgentSession): {
+    phase: BackgroundAgentRuntimePhase;
+    startedAt?: number;
+    lastProgressAt?: number;
+    elapsedMs: number;
+    idleMs?: number;
+    budgetUsage: BackgroundAgentBudgetUsage;
+    canSteer: boolean;
+    canKill: boolean;
+  } {
+    const meta = this.bgMeta.get(session.id);
+    const { status, done } = this.getProjectedBgStatus(session);
+    const now = Date.now();
+    const isQueued = status === "queued";
+    const startedAt = isQueued
+      ? undefined
+      : (meta?.startedAt ?? session.createdAt);
+    const lastProgressAt =
+      meta?.lastProgressAt ?? session.lastActiveAt ?? startedAt;
+    const completedAt =
+      session.fleetMetadata?.completedAt ?? this.bgCompletedAt.get(session.id);
+    const endAt = done ? (completedAt ?? lastProgressAt ?? now) : now;
+    const elapsedMs =
+      startedAt !== undefined ? Math.max(0, endAt - startedAt) : 0;
+    const canSteer =
+      status === "streaming" ||
+      status === "tool_executing" ||
+      status === "awaiting_approval";
+    const canKill = status === "queued" || canSteer;
+    const phase = this.bgCancelled.has(session.id)
+      ? "cancelled"
+      : status === "error"
+        ? "failed"
+        : done
+          ? "completed"
+          : isQueued
+            ? "queued"
+            : status === "awaiting_approval"
+              ? "awaiting_approval"
+              : status === "tool_executing"
+                ? "executing_tool"
+                : (meta?.phase ?? "waiting_for_provider");
+
+    return {
+      phase,
+      startedAt,
+      lastProgressAt,
+      elapsedMs,
+      idleMs:
+        !done && lastProgressAt ? Math.max(0, now - lastProgressAt) : undefined,
+      budgetUsage: {
+        tokens: meta?.tokenUsage ?? 0,
+        toolCalls: meta?.toolCalls ?? 0,
+        apiTurns: meta?.apiTurns ?? 0,
+        elapsedMs,
+      },
+      canSteer,
+      canKill,
+    };
+  }
+
   /**
    * Non-blocking status check for a background session.
    */
@@ -4115,6 +4257,9 @@ export class AgentSessionManager {
         done: true,
         partialOutput: "Session not found",
         displayStatus: "Error",
+        phase: "failed",
+        canSteer: false,
+        canKill: false,
       };
     }
     const { status, done } = this.getProjectedBgStatus(session);
@@ -4135,6 +4280,7 @@ export class AgentSessionManager {
     });
 
     const meta = this.bgMeta.get(sessionId);
+    const telemetry = this.getBackgroundRuntimeTelemetry(session);
     const progressSummary = summary.shortStatus?.trim() || picked.displayStatus;
 
     return {
@@ -4151,6 +4297,16 @@ export class AgentSessionManager {
       taskClass: meta?.taskClass,
       toolCalls: meta?.toolCalls,
       tokenUsage: meta?.tokenUsage,
+      apiTurns: meta?.apiTurns,
+      phase: telemetry.phase,
+      startedAt: telemetry.startedAt,
+      lastProgressAt: telemetry.lastProgressAt,
+      elapsedMs: telemetry.elapsedMs,
+      idleMs: telemetry.idleMs,
+      budget: session.fleetMetadata?.budget,
+      budgetUsage: telemetry.budgetUsage,
+      canSteer: telemetry.canSteer,
+      canKill: telemetry.canKill,
     };
   }
 
@@ -4180,6 +4336,9 @@ export class AgentSessionManager {
         done: true,
         partialOutput: "Background session is outside the caller's subtree",
         displayStatus: "Unauthorized",
+        phase: "failed",
+        canSteer: false,
+        canKill: false,
       };
     }
     return this.getBackgroundStatus(sessionId);
@@ -4476,6 +4635,15 @@ export class AgentSessionManager {
     const completedAt = Date.now();
     this.bgCompletedAt.set(sessionId, completedAt);
     const session = this.sessions.get(sessionId);
+    const meta = this.bgMeta.get(sessionId);
+    if (meta) {
+      meta.lastProgressAt = completedAt;
+      meta.phase = this.bgCancelled.has(sessionId)
+        ? "cancelled"
+        : session?.status === "error"
+          ? "failed"
+          : "completed";
+    }
     if (session?.fleetMetadata) {
       session.fleetMetadata.completedAt = completedAt;
     }
@@ -4809,6 +4977,8 @@ export class AgentSessionManager {
       tokenUsage: 0,
       apiTurns: 0,
       startedAt: Date.now(),
+      lastProgressAt: Date.now(),
+      phase: "waiting_for_provider",
     });
     session.fleetMetadata = this.createFleetMetadata(session, {
       task: request.task,
@@ -5271,6 +5441,7 @@ export class AgentSessionManager {
       .map((s): BgSessionInfo => {
         const { status, done: isDone } = this.getProjectedBgStatus(s);
         const meta = this.bgMeta.get(s.id);
+        const telemetry = this.getBackgroundRuntimeTelemetry(s);
         const streamingText = this.bgStreamingText.get(s.id);
         const resultText = isDone ? s.getLastAssistantText() : undefined;
         const errorMessage = this.bgErrors.get(s.id);
@@ -5364,6 +5535,13 @@ export class AgentSessionManager {
           terminalReason: s.fleetMetadata?.terminalReason,
           createdAt: s.createdAt,
           lastActiveAt: s.lastActiveAt,
+          startedAt: telemetry.startedAt,
+          lastProgressAt: telemetry.lastProgressAt,
+          elapsedMs: telemetry.elapsedMs,
+          idleMs: telemetry.idleMs,
+          phase: telemetry.phase,
+          canSteer: telemetry.canSteer,
+          canKill: telemetry.canKill,
           totalInputTokens: s.totalInputTokens,
           totalOutputTokens: s.totalOutputTokens,
           toolCalls: meta?.toolCalls,

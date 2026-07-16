@@ -7,7 +7,10 @@ import { h } from "preact";
 import { BackgroundSessionStrip } from "./BackgroundSessionStrip";
 
 describe("BackgroundSessionStrip defaults", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it("starts collapsed and shows active agents when expanded", () => {
     const { container } = render(
@@ -72,5 +75,26 @@ describe("BackgroundSessionStrip defaults", () => {
         .getByRole("button", { name: "active" })
         .classList.contains("active"),
     ).toBe(true);
+  });
+
+  it("uses the runtime start timestamp after the UI reconnects", () => {
+    vi.spyOn(Date, "now").mockReturnValue(70_000);
+    render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          {
+            id: "active",
+            task: "Long review",
+            status: "streaming",
+            startedAt: 10_000,
+          },
+        ],
+        onStop: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+
+    expect(screen.getByText("1:00")).toBeTruthy();
   });
 });

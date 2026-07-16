@@ -907,8 +907,12 @@ Returns JSON with:
 - `status`, `currentTool`, `displayStatus`, `done`
 - `streamingPreview` and `progressSummary` for running sessions when available
 - `resolvedMode`, `resolvedModel`, `resolvedProvider`, `taskClass`
-- `toolCalls`, `tokenUsage`
+- `phase`, `startedAt`, `lastProgressAt`, `elapsedMs`, `idleMs`
+- `toolCalls`, `tokenUsage`, `apiTurns`, `budget`, and `budgetUsage`
+- `canSteer` and `canKill`, so a coordinator knows which control is currently valid
 - `partialOutput` only when `done=true`
+
+`elapsedMs` is total runtime after leaving the queue; `idleMs` is the time since the latest provider, text, or tool progress event. A high elapsed time alone is not a hang. When progress has gone quiet and the partial result is already useful, steer the agent to stop using tools and return its best findings. Steering is delivered only at a safe boundary, so kill the agent if the instruction cannot be delivered and waiting is no longer worthwhile.
 
 ### get_background_result
 
@@ -926,6 +930,15 @@ Stop a running background agent and return any partial output collected so far.
 | ----------- | ------- | ---------------------------------------------- |
 | `sessionId` | string  | Background session id to stop                  |
 | `reason`    | string? | Optional reason recorded with the cancellation |
+
+### steer_background_agent
+
+Queue a course correction for delivery at the next safe tool boundary. This cannot interrupt an in-flight provider request or tool call.
+
+| Parameter   | Type   | Description                                                                     |
+| ----------- | ------ | ------------------------------------------------------------------------------- |
+| `sessionId` | string | Background session id to steer                                                  |
+| `message`   | string | Instruction, for example: `Stop using tools and return your best findings now.` |
 
 ### set_task_status
 
@@ -1049,7 +1062,7 @@ Fetch a specific prompt template from an MCP server.
 AgentLink includes static routing policy for background agents (`src/agent/backgroundModelRouting.config.json`) with explainable outcomes.
 
 - **Default behavior**: non-review tasks stay on the foreground model when policy says `useForegroundModelByDefault`.
-- **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and `get_background_result` only when ready to integrate.
+- **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and health telemetry while continuing foreground work. Judge quiet runs by `phase` and `idleMs`, not elapsed time alone; steer a useful run to return early or kill one that is no longer worth waiting for. Use `get_background_result` only when ready to block and integrate.
 - **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Use explicit owned/forbidden paths in the spawn message.
 - **Read-only lanes**: `readonly-research` routes to ask mode with the `readonly-research` tool profile for pure lookup/exploration. Both `readonly-research` and `review` profiles can run classifier-approved, non-mutating shell commands for workspace inspection.
 - **Review behavior**: review task classes (e.g. `review_code`, `review_plan`) prefer opposite-provider routing when available and use provider-specific model preferences for each tier. Balanced Anthropic reviews prefer Claude Opus 4.8 with a reduced 6,000-token thinking budget, then Sonnet 4.6 and Sonnet 5 as fallbacks; balanced Codex reviews prefer GPT-5.6 Sol. Deep Anthropic reviews use the same model order. Claude Fable 5 is foreground-only and is never routed to a background agent.

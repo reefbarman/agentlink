@@ -67,6 +67,25 @@ export interface SpawnBackgroundResult {
   fallbackUsed: boolean;
 }
 
+export type BackgroundAgentRuntimePhase =
+  | "queued"
+  | "waiting_for_provider"
+  | "thinking"
+  | "responding"
+  | "executing_tool"
+  | "awaiting_approval"
+  | "retrying_provider"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface BackgroundAgentBudgetUsage {
+  tokens: number;
+  toolCalls: number;
+  apiTurns: number;
+  elapsedMs: number;
+}
+
 export interface BackgroundAgentStatusResult {
   status:
     | "queued"
@@ -86,6 +105,21 @@ export interface BackgroundAgentStatusResult {
   taskClass?: string;
   toolCalls?: number;
   tokenUsage?: number;
+  apiTurns?: number;
+  /** Current execution phase, including provider waits and retries. */
+  phase?: BackgroundAgentRuntimePhase;
+  /** Timestamp when execution left the queue. */
+  startedAt?: number;
+  /** Timestamp of the most recent provider, text, or tool progress event. */
+  lastProgressAt?: number;
+  /** Total wall-clock runtime since execution left the queue. */
+  elapsedMs?: number;
+  /** Time since the most recent progress event; meaningful while running. */
+  idleMs?: number;
+  budget?: AgentBudget;
+  budgetUsage?: BackgroundAgentBudgetUsage;
+  canSteer?: boolean;
+  canKill?: boolean;
   done: boolean;
   partialOutput?: string;
 }

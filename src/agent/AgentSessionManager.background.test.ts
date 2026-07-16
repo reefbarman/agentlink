@@ -2514,11 +2514,18 @@ describe("AgentSessionManager background agents", () => {
       task: "research tests",
       message: "inspect tests",
       taskClass: "readonly-research",
+      budget: { maxToolCalls: 12, maxApiTurns: 6 },
     });
 
     await new Promise((r) => setTimeout(r, 0));
 
+    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+    meta.startedAt = 1_000;
+    meta.lastProgressAt = 7_000;
+    meta.phase = "waiting_for_provider";
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(10_000);
     const status = mgr.getBackgroundStatus(spawned.sessionId);
+    nowSpy.mockRestore();
     expect(status.done).toBe(false);
     expect(status.streamingPreview).toContain("likely test files");
     expect(status.progressSummary).toBeDefined();
@@ -2528,6 +2535,21 @@ describe("AgentSessionManager background agents", () => {
     expect(status.taskClass).toBe("readonly-research");
     expect(status.toolCalls).toBe(1);
     expect(status.tokenUsage).toBe(100);
+    expect(status.apiTurns).toBe(1);
+    expect(status.phase).toBe("waiting_for_provider");
+    expect(status.startedAt).toBe(1_000);
+    expect(status.lastProgressAt).toBe(7_000);
+    expect(status.elapsedMs).toBe(9_000);
+    expect(status.idleMs).toBe(3_000);
+    expect(status.budget).toEqual({ maxToolCalls: 12, maxApiTurns: 6 });
+    expect(status.budgetUsage).toEqual({
+      tokens: 100,
+      toolCalls: 1,
+      apiTurns: 1,
+      elapsedMs: 9_000,
+    });
+    expect(status.canSteer).toBe(true);
+    expect(status.canKill).toBe(true);
     expect(status.partialOutput).toBeUndefined();
     const session = (mgr as any).sessions.get(spawned.sessionId);
     expect(mocks.runArgs).toHaveBeenCalledWith(
@@ -2540,6 +2562,17 @@ describe("AgentSessionManager background agents", () => {
         commandExecutionPolicy: "read-only",
       }),
     );
+
+    const info = mgr
+      .getBgSessionInfos()
+      .find((candidate) => candidate.id === spawned.sessionId);
+    expect(info).toMatchObject({
+      phase: "waiting_for_provider",
+      startedAt: 1_000,
+      lastProgressAt: 7_000,
+      canSteer: true,
+      canKill: true,
+    });
 
     release?.();
   });
