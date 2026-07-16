@@ -9,6 +9,33 @@ export interface AgentBudget {
   scope?: "session" | "subtree" | "goal";
 }
 
+export type ReviewScope =
+  | {
+      kind: "working_tree";
+      /** Defaults to unstaged tracked changes plus untracked files. */
+      include?: Array<"staged" | "unstaged" | "untracked">;
+      /** Optional repository-relative path filter. */
+      paths?: string[];
+    }
+  | {
+      kind: "files";
+      /** Repository-relative files whose current contents should be captured. */
+      paths: string[];
+    }
+  | {
+      kind: "commit_range";
+      /** Git revision or range accepted by `git diff`, such as `abc123..HEAD`. */
+      range: string;
+      /** Optional repository-relative path filter. */
+      paths?: string[];
+    }
+  | {
+      kind: "diff";
+      /** Already captured diff content. */
+      content: string;
+      label?: string;
+    };
+
 export interface SpawnBackgroundRequest {
   task: string;
   message: string;
@@ -21,6 +48,8 @@ export interface SpawnBackgroundRequest {
   forbiddenPaths?: string[];
   permissionProfile?: "review-only" | "workspace-safe" | "interactive";
   worktree?: "shared" | "isolated";
+  /** Review target captured by the runtime when the background agent is spawned. */
+  reviewScope?: ReviewScope;
   expectedResult?: "text" | "review_findings" | "patch" | "verification";
   budget?: AgentBudget;
   goalId?: string;

@@ -729,6 +729,7 @@ describe("spawn_background_agent tool", () => {
     expect(props.ownedPaths).toBeDefined();
     expect(props.forbiddenPaths).toBeDefined();
     expect(props.permissionProfile).toBeDefined();
+    expect(props.reviewScope).toBeDefined();
     expect(props.budget).toBeDefined();
     expect(props.timeoutSeconds).toBeUndefined();
     expect(props.tokenBudget).toBeUndefined();
@@ -758,6 +759,11 @@ describe("spawn_background_agent tool", () => {
         ownedPaths: ["src/agent"],
         forbiddenPaths: ["src/server"],
         permissionProfile: "workspace-safe",
+        reviewScope: {
+          kind: "working_tree",
+          include: ["unstaged", "untracked"],
+          paths: ["src/agent"],
+        },
         expectedResult: "patch",
         budget: { maxTokens: 20_000, maxToolCalls: 50 },
       },
@@ -776,6 +782,11 @@ describe("spawn_background_agent tool", () => {
       forbiddenPaths: ["src/server"],
       permissionProfile: "workspace-safe",
       worktree: undefined,
+      reviewScope: {
+        kind: "working_tree",
+        include: ["unstaged", "untracked"],
+        paths: ["src/agent"],
+      },
       expectedResult: "patch",
       budget: {
         maxTokens: 20_000,
@@ -834,6 +845,7 @@ describe("spawn_background_agent tool", () => {
       forbiddenPaths: undefined,
       permissionProfile: undefined,
       worktree: undefined,
+      reviewScope: undefined,
       expectedResult: undefined,
       budget: undefined,
       goalId: undefined,

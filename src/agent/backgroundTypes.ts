@@ -1,4 +1,5 @@
 export type {
+  ReviewScope,
   SpawnBackgroundRequest,
   SpawnBackgroundResult,
 } from "../core/capabilities/background.js";

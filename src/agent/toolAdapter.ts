@@ -629,7 +629,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         message: {
           type: "string",
           description:
-            "Full instruction for the background agent. Be specific and self-contained. For writable work, include explicit owned files/directories, files to avoid, allowed commands/tests, and how to report conflicts. For review work, pin the review target by value — an explicit commit range (e.g. abc123..HEAD) or the diff content itself — never by reference like 'the current uncommitted diff': the workspace can change (e.g. a commit lands) between spawn and execution, silently emptying the review scope.",
+            "Full instruction for the background agent. Be specific and self-contained. For writable work, include explicit owned files/directories, files to avoid, allowed commands/tests, and how to report conflicts. For review work, use reviewScope to have the runtime capture the working tree, exact files, a commit range, or supplied diff at spawn time.",
         },
         mode: {
           type: "string",
@@ -669,6 +669,57 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           enum: ["review-only", "workspace-safe", "interactive"],
         },
         worktree: { type: "string", enum: ["shared", "isolated"] },
+        reviewScope: {
+          description:
+            "Structured review target captured into an immutable snapshot when the background agent is spawned. working_tree defaults to unstaged tracked changes plus untracked files; use paths to narrow it. files captures the current contents of exact files. commit_range resolves Git diff output immediately. diff accepts already captured content.",
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                kind: { type: "string", enum: ["working_tree"] },
+                include: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                    enum: ["staged", "unstaged", "untracked"],
+                  },
+                },
+                paths: { type: "array", items: { type: "string" } },
+              },
+              required: ["kind"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { type: "string", enum: ["files"] },
+                paths: { type: "array", items: { type: "string" } },
+              },
+              required: ["kind", "paths"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { type: "string", enum: ["commit_range"] },
+                range: { type: "string" },
+                paths: { type: "array", items: { type: "string" } },
+              },
+              required: ["kind", "range"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: { type: "string", enum: ["diff"] },
+                content: { type: "string" },
+                label: { type: "string" },
+              },
+              required: ["kind", "content"],
+              additionalProperties: false,
+            },
+          ],
+        },
         expectedResult: {
           type: "string",
           enum: ["text", "review_findings", "patch", "verification"],
@@ -2853,6 +2904,47 @@ export async function dispatchToolCall(
         worktree:
           params.worktree === "shared" || params.worktree === "isolated"
             ? params.worktree
+            : undefined,
+        reviewScope:
+          params.reviewScope && typeof params.reviewScope === "object"
+            ? (() => {
+                const scope = params.reviewScope as Record<string, unknown>;
+                const paths = Array.isArray(scope.paths)
+                  ? scope.paths.map(String)
+                  : undefined;
+                if (scope.kind === "working_tree") {
+                  const include = Array.isArray(scope.include)
+                    ? scope.include.filter(
+                        (value): value is "staged" | "unstaged" | "untracked" =>
+                          value === "staged" ||
+                          value === "unstaged" ||
+                          value === "untracked",
+                      )
+                    : undefined;
+                  return { kind: "working_tree" as const, include, paths };
+                }
+                if (scope.kind === "files") {
+                  return { kind: "files" as const, paths: paths ?? [] };
+                }
+                if (scope.kind === "commit_range") {
+                  return {
+                    kind: "commit_range" as const,
+                    range: String(scope.range ?? ""),
+                    paths,
+                  };
+                }
+                if (scope.kind === "diff") {
+                  return {
+                    kind: "diff" as const,
+                    content: String(scope.content ?? ""),
+                    label:
+                      scope.label === undefined
+                        ? undefined
+                        : String(scope.label),
+                  };
+                }
+                return undefined;
+              })()
             : undefined,
         expectedResult:
           params.expectedResult === "text" ||

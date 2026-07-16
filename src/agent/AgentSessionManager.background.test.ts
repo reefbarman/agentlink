@@ -1317,6 +1317,37 @@ describe("AgentSessionManager background agents", () => {
     expect(session.addUserMessage).toHaveBeenCalledWith("review thoroughly");
   });
 
+  it("hands a runtime-captured review scope to the background agent", async () => {
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "review",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "review_code",
+      routingReason: "captured review",
+      fallbackUsed: false,
+    });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "review captured diff",
+      message: "Review this implementation.",
+      taskClass: "review_code",
+      reviewScope: {
+        kind: "diff",
+        label: "Foreground changes",
+        content: "diff --git a/a.ts b/a.ts\n+const value = 2;\n",
+      },
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const handedOff = session.addUserMessage.mock.calls[0][0];
+
+    expect(handedOff).toContain("Review this implementation.");
+    expect(handedOff).toContain("Runtime-captured review scope");
+    expect(handedOff).toContain("Foreground changes");
+    expect(handedOff).toContain("+const value = 2;");
+  });
+
   it("renders structured final-marker results for the foreground", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const structuredResult = {

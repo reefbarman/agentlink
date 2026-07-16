@@ -74,6 +74,7 @@ import {
   pickBackgroundDisplayStatus,
 } from "./backgroundDisplayStatus.js";
 import { BackgroundSummaryScheduler } from "./BackgroundSummaryScheduler.js";
+import { captureReviewScope } from "./reviewScopeSnapshot.js";
 import {
   formatFleetResultEnvelope,
   parseFleetResultEnvelope,
@@ -3019,8 +3020,6 @@ export class AgentSessionManager {
         "spawn_background_agent requires non-empty task and message",
       );
     }
-    const executionMessage = message;
-
     const parent = parentSessionId
       ? this.sessions.get(parentSessionId)
       : this.getForegroundSession();
@@ -3047,9 +3046,15 @@ export class AgentSessionManager {
     }
     this.ensureChildBudgetAdmission(parent, request);
     this.ensureSharedWorkspaceScopeAvailable(request);
+    const executionMessage = request.reviewScope
+      ? `${message}\n\n${await captureReviewScope(this.cwd, request.reviewScope)}`
+      : message;
 
     if (request.worktree === "isolated") {
-      return this.spawnIsolatedWorktree(request, parent);
+      return this.spawnIsolatedWorktree(
+        { ...request, message: executionMessage },
+        parent,
+      );
     }
 
     const backendRoute = resolveBackgroundBackendRoute(
@@ -3064,7 +3069,7 @@ export class AgentSessionManager {
       // serialized-envelope fallback at that external boundary only.
       const acpExecutionMessage = withFleetResultInstruction(
         request.expectedResult,
-        message,
+        executionMessage,
       );
       const resolvedMode = request.mode?.trim() || "review";
       const taskClass = request.taskClass?.trim() || "review";

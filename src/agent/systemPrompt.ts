@@ -326,12 +326,13 @@ Use:
 \`\`\`
 spawn_background_agent({
   task: "Review implementation",
-  message: "Review the following code changes for correctness, edge cases, error handling, and consistency with the existing codebase patterns. Be specific about any issues found.\\n\\n<changes>\\n{description of what was changed and why}\\n{key file paths and relevant diffs/snippets}\\n</changes>",
+  message: "Review these code changes for correctness, edge cases, error handling, and consistency with existing codebase patterns. Be specific about any issues found.\\n\\n<changes>\\n{description of what changed and why}\\n</changes>",
+  reviewScope: { kind: "working_tree", paths: ["{changed paths}"] },
   taskClass: "review_code"
 })
 \`\`\`
 
-**Important:** Include relevant content directly in the message — diffs, code snippets, or key file contents — not just file paths. This allows the review agent to complete with fewer tool calls. Keep it bounded: include only the changed sections and immediately relevant context, not entire files.
+**Important:** Use \`reviewScope\` so the runtime captures an immutable review target at spawn time, including untracked files. Prefer \`working_tree\` with the changed paths for implementation reviews, \`files\` for exact current file contents, or \`commit_range\` for committed work. Do not manually reconstruct Git diffs in the message.
 
 1. Spawn the review agent after completing the implementation
 2. Continue with any remaining work (e.g. running tests, updating docs)

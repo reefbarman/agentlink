@@ -865,17 +865,18 @@ Good examples:
 
 For writable background work, include explicit ownership boundaries in `message`: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts.
 
-For review delegations (`expectedResult: "review_findings"`), pin the review target by value — an explicit commit range (e.g. `abc123..HEAD`) or the diff content itself — rather than by reference like "the current uncommitted diff". The workspace can change between spawn and execution (for example a commit lands), silently emptying the review scope. The `review_findings` envelope includes `reviewedScope` (what was actually reviewed) and `emptyDiff` (true when the requested change set was empty or missing), so consumers should check `emptyDiff` before treating an empty findings list as a clean review.
+For review delegations, use `reviewScope` to describe the target. AgentLink captures it into an immutable snapshot when the agent is spawned, so queued reviews are not affected by later edits or commits. `working_tree` captures unstaged tracked changes and untracked files by default, with optional state and path filters; `files` captures exact current file contents; `commit_range` resolves a Git range immediately; and `diff` accepts content already captured by the caller. The `review_findings` envelope includes `reviewedScope` (what was actually reviewed) and `emptyDiff` (true when the requested scope was empty or missing).
 
 | Parameter        | Type    | Description                                                                                                                       |
 | ---------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `task`           | string  | Short label shown in UI                                                                                                           |
-| `message`        | string  | Full instruction for the background agent, including scope boundaries for writable work and a pinned target for review work       |
+| `message`        | string  | Full instruction for the background agent, including scope boundaries for writable work                                           |
 | `mode`           | string? | Optional mode override (`code`, `architect`, `ask`, `debug`, `review`)                                                            |
 | `model`          | string? | Optional explicit model override                                                                                                  |
 | `provider`       | string? | Optional provider preference/constraint                                                                                           |
 | `taskClass`      | string? | Routing profile key (e.g. `review_code`, `review_plan`, `readonly-research`, `research`, `debug`, `explore`, `design`, `general`) |
 | `modelTier`      | string? | Optional routing tier override (`cheap`, `balanced`, `deep_reasoning`)                                                            |
+| `reviewScope`    | object? | Runtime-captured review target (`working_tree`, `files`, `commit_range`, or `diff`)                                               |
 | `expectedResult` | string? | Structured result envelope (`text`, `review_findings`, `patch`, `verification`)                                                   |
 | `budget`         | object? | Optional resource caps (`maxTokens`, `maxToolCalls`, `maxApiTurns`, `maxElapsedMs`, `maxEstimatedCostUsd`, `scope`) - see below   |
 
