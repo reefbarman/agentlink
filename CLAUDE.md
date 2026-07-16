@@ -1,9 +1,10 @@
-# Claude Code Instructions
+# Agent Instructions
 
 ## Building & Installing
 
 - **Build**: `npm run build`
 - **Release & install**: `npm run release -- --install` — bumps patch version, builds, packages VSIX, and installs into VS Code. Use `--major` or `--minor` for non-patch bumps. Don't currently run when developing the agent.
+- If installing a new extension version leaves a matching version-only bump in `package.json` and `package-lock.json`, include those files in the next commit instead of treating them as unrelated changes.
 
 > ⚠️ **Packaging allowlist gotcha:** [.vscodeignore](.vscodeignore) ignores everything then re-includes specific files with `!`. **Any new bundle output in [esbuild.mjs](esbuild.mjs) (webview entry, worker, css/asset) must get a matching `!dist/<file>` line in `.vscodeignore`**, or it builds fine locally but is silently dropped from the published `.vsix` and 404s for installed users. This is easy to miss because the dev workspace `dist/` still has the file. (It bit us once already: the Monaco diff workers were omitted, so the browser Review pane diff editor rendered both sides but never computed the diff → no red/green highlighting.) After packaging, sanity-check with `npx @vscode/vsce ls`.
 

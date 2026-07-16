@@ -9,3 +9,4 @@ releases/
 .env.local
 plans/
 .mcp.json
+/AGENTS.md
