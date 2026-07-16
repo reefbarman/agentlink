@@ -551,6 +551,47 @@ describe("handleExecuteCommand", () => {
     });
   });
 
+  it("auto-approves workspace-local strings inspection under approve-for-me", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn();
+    const review = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "strings -a fixtures/app.bin" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      {
+        isRecentlyApproved: () => false,
+        enqueueCommandApproval,
+      } as never,
+      "session-strings-inspection",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+      },
+    );
+
+    expect(review).not.toHaveBeenCalled();
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(textPayload(result)).toMatchObject({
+      approval: {
+        by: "tier",
+        tier: "safe",
+        threshold: "safe",
+      },
+    });
+  });
+
   it("prompts sensitive commands when only the safe threshold is enabled", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) => {
@@ -860,7 +901,53 @@ describe("handleExecuteCommand", () => {
     expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
   });
 
-  it("does not review unknown or environment-bearing commands", async () => {
+  it("lets the reviewer approve a confidently recognized unknown executable", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn();
+    const review = vi.fn(async () => ({
+      decision: "approve" as const,
+      reason: "Recognized read-only binary inspection",
+      model: "review-model",
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "otool -L fixtures/app.bin" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-unknown-approved",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "otool -L fixtures/app.bin",
+        classified: expect.objectContaining({ tier: "sensitive" }),
+      }),
+    );
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(textPayload(result).approval).toMatchObject({
+      by: "model_reviewer",
+      model: "review-model",
+      reason: "Recognized read-only binary inspection",
+    });
+  });
+
+  it("reviews unknown executables but keeps environment-bearing commands human-only", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -869,7 +956,11 @@ describe("handleExecuteCommand", () => {
     const enqueueCommandApproval = vi.fn(() => ({
       promise: Promise.resolve({ decision: "accept" }),
     }));
-    const review = vi.fn();
+    const review = vi.fn(async () => ({
+      decision: "ask_user" as const,
+      reason: "Executable is unfamiliar",
+      model: "review-model",
+    }));
     const { handleExecuteCommand } = await import("./executeCommand.js");
     const providers = {
       terminalProvider,
@@ -901,7 +992,10 @@ describe("handleExecuteCommand", () => {
       providers,
     );
 
-    expect(review).not.toHaveBeenCalled();
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "unknown-tool run" }),
+    );
     expect(enqueueCommandApproval).toHaveBeenCalledTimes(2);
   });
 

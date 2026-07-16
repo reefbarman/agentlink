@@ -215,6 +215,7 @@ describe("InputArea slash popup", () => {
     const activeButton = getByRole("button", { name: "Approve for Me On" });
     expect(activeButton.getAttribute("aria-pressed")).toBe("true");
     expect(activeButton.classList.contains("active")).toBe(true);
+    expect(activeButton.title).toContain("plain unknown executables");
     fireEvent.click(activeButton);
     expect(onSetCommandApprovalPolicy).toHaveBeenLastCalledWith("sensitive");
   });

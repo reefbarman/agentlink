@@ -27,6 +27,7 @@ describe("command tier classifier", () => {
   it("classifies read-only commands as safe", () => {
     expect(tier("git status --short")).toBe("safe");
     expect(tier("rg needle src")).toBe("safe");
+    expect(tier("strings -a fixtures/app.bin")).toBe("safe");
     expect(tier("node --version")).toBe("safe");
     expect(tier("python --version")).toBe("safe");
   });
@@ -61,6 +62,8 @@ describe("command tier classifier", () => {
   it("escalates read and write paths outside the workspace", () => {
     expect(tier("rg token /tmp/outside")).toBe("dangerous");
     expect(tier("rg token ~/.ssh")).toBe("dangerous");
+    expect(tier("strings -a /tmp/outside.bin")).toBe("dangerous");
+    expect(tier("strings -a ~/.ssh/id_rsa")).toBe("dangerous");
     expect(tier("mkdir generated", { cwd: "/tmp" })).toBe("dangerous");
     expect(tier("echo ok > /tmp/outside.txt")).toBe("dangerous");
     expect(tier("echo ok > generated.txt")).toBe("sensitive");
@@ -196,6 +199,7 @@ describe("command tier classifier", () => {
 
   it.each([
     ["rg needle src", "safe", "read_only", "rg"],
+    ["strings -a fixtures/app.bin", "safe", "read_only", "strings"],
     ["node --version", "safe", "version_check", "node"],
     ["mkdir generated", "sensitive", "workspace_mutation", "mkdir"],
     ["npm test", "sensitive", "project_toolchain", "npm"],

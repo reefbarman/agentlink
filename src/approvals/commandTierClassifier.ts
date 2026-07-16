@@ -72,6 +72,7 @@ const SAFE_COMMANDS = new Set([
   "rg",
   "shasum",
   "stat",
+  "strings",
   "true",
   "uname",
   "wc",
@@ -197,6 +198,7 @@ const READ_COMMANDS = new Set([
   "head",
   "ls",
   "rg",
+  "strings",
   "tail",
   "wc",
 ]);
