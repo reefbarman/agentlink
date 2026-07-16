@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import type {
   ApprovalRequest,
+  CommandReviewSummary,
   DecisionMessage,
   InlineCommandFilePreview,
   MemoryOperation,
@@ -106,6 +107,8 @@ interface InternalRequest {
   reason?: string;
   /** Working directory a command will run in */
   cwd?: string;
+  /** Automatic review result shown when the command still needs a human. */
+  commandReview?: CommandReviewSummary;
   writeOperation?: "create" | "modify";
   outsideWorkspace?: boolean;
   oldName?: string;
@@ -206,6 +209,7 @@ export class ApprovalPanelProvider
       inlineFiles?: InlineCommandFilePreview[];
       reason?: string;
       cwd?: string;
+      commandReview?: CommandReviewSummary;
     },
   ): { promise: Promise<CommandApprovalResponse>; id: string } {
     const id = randomUUID();
@@ -218,6 +222,7 @@ export class ApprovalPanelProvider
       inlineFiles: options?.inlineFiles,
       reason: options?.reason,
       cwd: options?.cwd,
+      commandReview: options?.commandReview,
     }) as Promise<CommandApprovalResponse>;
     return { promise, id };
   }
@@ -399,6 +404,7 @@ export class ApprovalPanelProvider
         inlineFiles: request.inlineFiles,
         reason: request.reason,
         cwd: request.cwd,
+        commandReview: request.commandReview,
         filePath: request.filePath,
         writeOperation: request.writeOperation,
         outsideWorkspace: request.outsideWorkspace,
@@ -470,6 +476,7 @@ export class ApprovalPanelProvider
       inlineFiles: request.inlineFiles,
       reason: request.reason,
       cwd: request.cwd,
+      commandReview: request.commandReview,
       filePath: request.filePath,
       writeOperation: request.writeOperation,
       outsideWorkspace: request.outsideWorkspace,

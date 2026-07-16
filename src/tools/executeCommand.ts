@@ -18,10 +18,14 @@ import {
 } from "../approvals/commandTierClassifier.js";
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 import {
-  getCommandReviewEligibility,
+  getCommandAutoApprovalEligibility,
+  type CommandReviewContextEntry,
   type CommandApprovalReviewer,
 } from "../approvals/commandApprovalReview.js";
-import type { SubCommandEntry } from "../approvals/webview/types.js";
+import type {
+  CommandReviewSummary,
+  SubCommandEntry,
+} from "../approvals/webview/types.js";
 import { filterOutput, saveOutputTempFile } from "../util/outputFilter.js";
 import { validateCommand } from "../util/pipeValidator.js";
 import { validateInteractiveCommand } from "../util/interactiveValidator.js";
@@ -54,6 +58,8 @@ type CommandApprovalAudit =
       by: "model_reviewer";
       model: string;
       tier: "sensitive";
+      confidence: "high";
+      risk: "low" | "medium";
       reason: string;
     }
   | { by: "human" }
@@ -68,6 +74,7 @@ export interface ExecuteCommandProviders {
   isSessionActive?: (sessionId: string) => boolean;
   toolAbortSignal?: AbortSignal;
   getUserObjective?: (sessionId: string) => string | undefined;
+  getReviewContext?: (sessionId: string) => CommandReviewContextEntry[];
 }
 
 function unavailableExecuteCommandResult(command: string): ToolResult {
@@ -627,12 +634,9 @@ async function approveSubCommands(
   const hasInlineFiles = Boolean(options?.inlineFiles);
   const hasEnvOverrides = Boolean(options?.hasEnvOverrides);
   const forceRequested = Boolean(options?.forceRequested);
-  if (
-    !options?.requireHumanApproval &&
-    policy === "approve-for-me" &&
-    reviewProviders?.commandApprovalReviewer
-  ) {
-    const eligibility = getCommandReviewEligibility({
+  let commandReview: CommandReviewSummary | undefined;
+  if (policy === "approve-for-me" && reviewProviders?.commandApprovalReviewer) {
+    const eligibility = getCommandAutoApprovalEligibility({
       classified: tierInfo,
       cwd,
       workspaceRoots,
@@ -640,40 +644,57 @@ async function approveSubCommands(
       hasEnvOverrides,
       forceRequested,
     });
-    if (eligibility.eligible) {
-      const reviewedCommand = fullCommand;
-      const review = await reviewProviders.commandApprovalReviewer.review({
-        sessionId,
-        command: reviewedCommand,
-        cwd,
-        workspaceRoots,
-        reason,
-        userObjective: reviewProviders.getUserObjective?.(sessionId),
-        classified: tierInfo,
-        signal: reviewProviders.toolAbortSignal,
-      });
-      const currentPolicy =
-        reviewProviders.getCommandApprovalPolicy?.(sessionId) ?? "safe";
-      const sessionActive =
-        reviewProviders.isSessionActive?.(sessionId) ??
-        !reviewProviders.toolAbortSignal?.aborted;
-      if (
-        review.decision === "approve" &&
-        currentPolicy === "approve-for-me" &&
-        sessionActive &&
-        !reviewProviders.toolAbortSignal?.aborted &&
-        reviewedCommand === fullCommand
-      ) {
-        return {
-          approved: true,
-          approval: {
-            by: "model_reviewer",
-            model: review.model,
-            tier: "sensitive",
-            reason: review.reason.slice(0, 500),
-          },
-        };
-      }
+    const reviewedCommand = fullCommand;
+    const review = await reviewProviders.commandApprovalReviewer.review({
+      sessionId,
+      command: reviewedCommand,
+      cwd,
+      workspaceRoots,
+      reason,
+      userObjective: reviewProviders.getUserObjective?.(sessionId),
+      context: reviewProviders.getReviewContext?.(sessionId),
+      autoApproveAllowed: eligibility.eligible,
+      guardrailReason: eligibility.eligible ? undefined : eligibility.reason,
+      classified: tierInfo,
+      signal: reviewProviders.toolAbortSignal,
+    });
+    commandReview = {
+      status: review.status,
+      decision: review.decision,
+      confidence: review.confidence,
+      risk: review.risk,
+      reason: review.reason.slice(0, 500),
+      model: review.model,
+      autoApproveAllowed: eligibility.eligible,
+      guardrailReason: eligibility.eligible ? undefined : eligibility.reason,
+    };
+    const currentPolicy =
+      reviewProviders.getCommandApprovalPolicy?.(sessionId) ?? "safe";
+    const sessionActive =
+      reviewProviders.isSessionActive?.(sessionId) ??
+      !reviewProviders.toolAbortSignal?.aborted;
+    if (
+      eligibility.eligible &&
+      review.status === "reviewed" &&
+      review.decision === "approve" &&
+      review.confidence === "high" &&
+      review.risk !== "high" &&
+      currentPolicy === "approve-for-me" &&
+      sessionActive &&
+      !reviewProviders.toolAbortSignal?.aborted &&
+      reviewedCommand === fullCommand
+    ) {
+      return {
+        approved: true,
+        approval: {
+          by: "model_reviewer",
+          model: review.model,
+          tier: "sensitive",
+          confidence: "high",
+          risk: review.risk,
+          reason: review.reason.slice(0, 500),
+        },
+      };
     }
   }
   if (isCommandApprovalCancelled(sessionId, reviewProviders)) {
@@ -705,7 +726,13 @@ async function approveSubCommands(
   const { promise } = approvalPanel.enqueueCommandApproval(
     options?.displayCommand ?? fullCommand,
     fullCommand,
-    { subCommands: entries, inlineFiles: options?.inlineFiles, reason, cwd },
+    {
+      subCommands: entries,
+      inlineFiles: options?.inlineFiles,
+      reason,
+      cwd,
+      commandReview,
+    },
   );
   const response = await promise;
 

@@ -15,7 +15,10 @@ import { SidebarProvider } from "./sidebar/SidebarProvider.js";
 import { ApprovalManager } from "./approvals/ApprovalManager.js";
 import { ApprovalPanelProvider } from "./approvals/ApprovalPanelProvider.js";
 import { ConfigStore } from "./approvals/ConfigStore.js";
-import { createCommandApprovalReviewer } from "./approvals/commandApprovalReview.js";
+import {
+  buildCommandReviewContext,
+  createCommandApprovalReviewer,
+} from "./approvals/commandApprovalReview.js";
 import { AgentToolCallTracker } from "./agent/AgentToolCallTracker.js";
 import { registerAgentActivityCommands } from "./agent/agentActivityCommands.js";
 import { normalizeBackgroundMaxConcurrent } from "./agent/background/backgroundConcurrency.js";
@@ -1001,6 +1004,12 @@ export function activate(context: vscode.ExtensionContext): void {
         }
       }
       return undefined;
+    },
+    getCommandReviewContext: (sessionId) => {
+      const messages = agentSessionManager
+        .getSession(sessionId)
+        ?.getAllMessages();
+      return messages ? buildCommandReviewContext(messages) : [];
     },
     onModeSwitch: (sessionId, mode, reason, silent) =>
       chatViewProvider.handleModeSwitch(mode, reason, silent, sessionId),

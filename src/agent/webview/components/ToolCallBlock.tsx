@@ -404,9 +404,16 @@ function getCommandApprovalBadge(
       case "model_reviewer": {
         const model = typeof record.model === "string" ? record.model : "model";
         const reason = typeof record.reason === "string" ? record.reason : "";
+        const confidence =
+          typeof record.confidence === "string" ? record.confidence : "";
+        const risk = typeof record.risk === "string" ? record.risk : "";
+        const assessment =
+          confidence && risk
+            ? ` · ${confidence} confidence · ${risk} risk`
+            : "";
         return {
           text: "approved · reviewer",
-          title: `Approved by one-shot reviewer (${model})${reason ? `: ${reason}` : ""}`,
+          title: `Approved by one-shot reviewer (${model})${assessment}${reason ? `: ${reason}` : ""}`,
         };
       }
       case "human":

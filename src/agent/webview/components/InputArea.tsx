@@ -1173,8 +1173,8 @@ export function InputArea({
             }
             title={
               commandApprovalPolicy === "approve-for-me"
-                ? "Approve for Me is on. A separate one-shot reviewer may approve eligible workspace-local commands, including plain unknown executables it confidently recognizes. Dangerous, ambiguous, external, inline-file, environment-bearing, and forced commands still ask you. Uses model quota."
-                : "Let a separate one-shot reviewer approve eligible workspace-local commands. Dangerous or ambiguous commands still ask you. Uses model quota and applies only to this session."
+                ? "Approve for Me is on. Every command that would otherwise ask you is reviewed first. Only high-confidence, bounded workspace commands run automatically; dangerous, ambiguous, external, inline-file, environment-bearing, and forced commands still ask you with the review reason. Uses model quota."
+                : "Review every otherwise-prompting command first. High-confidence, bounded workspace commands may run automatically; protected or uncertain commands still ask you. Uses model quota and applies only to this session."
             }
             type="button"
           >

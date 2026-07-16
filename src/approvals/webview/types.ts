@@ -29,6 +29,17 @@ export interface SubCommandEntry {
   };
 }
 
+export interface CommandReviewSummary {
+  status: "reviewed" | "unavailable" | "timed_out" | "cancelled" | "invalid";
+  decision: "approve" | "ask_user";
+  confidence: "high" | "medium" | "low";
+  risk: "low" | "medium" | "high";
+  reason: string;
+  model: string;
+  autoApproveAllowed: boolean;
+  guardrailReason?: string;
+}
+
 export type MemoryTier = "instructions" | "skill" | "command" | "memory";
 export type MemoryScope = "global" | "project";
 export type MemoryOperation = "add" | "update" | "remove";
@@ -72,6 +83,8 @@ export interface ApprovalRequest {
   reason?: string;
   /** For commands: the working directory the command will run in */
   cwd?: string;
+  /** For commands: why Approve for Me handed the decision to the user. */
+  commandReview?: CommandReviewSummary;
   /** For MCP: detail text (input preview) */
   mcpDetail?: string;
   /** For MCP: approval choices */

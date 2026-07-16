@@ -3,6 +3,7 @@ import picomatch from "picomatch";
 
 import { parseMcpToolName } from "../agent/mcpToolNames.js";
 import { tryGetFirstWorkspaceRoot, getRelativePath } from "../util/paths.js";
+import { scanShellLexWords } from "../util/shellLex.js";
 import type { ConfigStore } from "./ConfigStore.js";
 import { CommandRuleStore, type CommandRule } from "./CommandRuleStore.js";
 import { PathRuleStore, type PathRule } from "./PathRuleStore.js";
@@ -714,8 +715,17 @@ export class ApprovalManager {
       switch (rule.mode) {
         case "exact":
           return command === rule.pattern.trim();
-        case "prefix":
-          return command.startsWith(rule.pattern.trim());
+        case "prefix": {
+          const patternWords = scanShellLexWords(rule.pattern.trim()).words;
+          const commandWords = scanShellLexWords(command).words;
+          return (
+            patternWords.length > 0 &&
+            patternWords.length <= commandWords.length &&
+            patternWords.every(
+              (word, index) => word.raw === commandWords[index]?.raw,
+            )
+          );
+        }
         case "regex":
           return new RegExp(rule.pattern).test(command);
       }

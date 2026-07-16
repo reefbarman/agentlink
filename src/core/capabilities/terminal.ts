@@ -29,6 +29,8 @@ export interface TerminalCommandResult {
         by: "model_reviewer";
         model: string;
         tier: "sensitive";
+        confidence: "high";
+        risk: "low" | "medium";
         reason: string;
       }
     | { by: "human" }

@@ -360,6 +360,7 @@ export function CommandCard({
     ) : undefined;
 
   const reason = request.reason;
+  const commandReview = request.commandReview;
   const inlineFiles = request.inlineFiles ?? [];
 
   return (
@@ -380,6 +381,23 @@ export function CommandCard({
         <div class="command-reason">
           <span class="codicon codicon-info" />
           <span>{reason}</span>
+        </div>
+      )}
+      {commandReview && (
+        <div class="command-review">
+          <span class="codicon codicon-shield" />
+          <div>
+            <div class="command-review-heading">
+              Approve for Me asked you
+              {commandReview.status === "reviewed"
+                ? ` · ${commandReview.confidence} confidence · ${commandReview.risk} risk`
+                : ` · ${commandReview.status.replace("_", " ")}`}
+            </div>
+            <div>{commandReview.reason}</div>
+            {commandReview.guardrailReason && (
+              <div>Human-only guardrail: {commandReview.guardrailReason}</div>
+            )}
+          </div>
         </div>
       )}
       {inlineFiles.length > 0 && (

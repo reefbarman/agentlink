@@ -154,8 +154,8 @@ describe("ApprovalManager session approval persistence", () => {
     {
       mode: "prefix" as const,
       pattern: "npm test",
-      matches: ["npm test", "npm test -- --runInBand"],
-      misses: ["npm run test"],
+      matches: ["npm test", "npm  test -- --runInBand"],
+      misses: ["npm run test", "npm testing"],
     },
     {
       mode: "regex" as const,
@@ -188,6 +188,25 @@ describe("ApprovalManager session approval persistence", () => {
       disposeManagers({ approvalManager, configStore });
     },
   );
+
+  it("matches command prefixes by shell word instead of string prefix", async () => {
+    const memento = new MockMemento();
+    const { approvalManager, configStore } = await createManagers(memento);
+    approvalManager.addCommandRule(
+      "word-prefix",
+      { pattern: "git", mode: "prefix" },
+      "session",
+    );
+
+    expect(approvalManager.isCommandApproved("word-prefix", "git status")).toBe(
+      true,
+    );
+    expect(
+      approvalManager.isCommandApproved("word-prefix", "github auth"),
+    ).toBe(false);
+
+    disposeManagers({ approvalManager, configStore });
+  });
 
   it("ignores malformed command regex rules", async () => {
     const memento = new MockMemento();

@@ -765,8 +765,11 @@ describe("handleExecuteCommand", () => {
     const enqueueCommandApproval = vi.fn();
     const review = vi.fn(async () => ({
       decision: "approve" as const,
+      confidence: "high" as const,
+      risk: "medium" as const,
       reason: "Bounded workspace directory creation",
       model: "review-model",
+      status: "reviewed" as const,
     }));
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
@@ -805,6 +808,8 @@ describe("handleExecuteCommand", () => {
         by: "model_reviewer",
         model: "review-model",
         tier: "sensitive",
+        confidence: "high",
+        risk: "medium",
         reason: "Bounded workspace directory creation",
       },
     });
@@ -822,8 +827,11 @@ describe("handleExecuteCommand", () => {
     }));
     const review = vi.fn(async () => ({
       decision: "ask_user" as const,
+      confidence: "low" as const,
+      risk: "high" as const,
       reason: "Intent is ambiguous",
       model: "review-model",
+      status: "reviewed" as const,
     }));
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
@@ -846,6 +854,18 @@ describe("handleExecuteCommand", () => {
 
     expect(review).toHaveBeenCalledTimes(1);
     expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
+    expect(enqueueCommandApproval).toHaveBeenCalledWith(
+      "mkdir generated",
+      "mkdir generated",
+      expect.objectContaining({
+        commandReview: expect.objectContaining({
+          decision: "ask_user",
+          confidence: "low",
+          risk: "high",
+          reason: "Intent is ambiguous",
+        }),
+      }),
+    );
     expect(textPayload(result).approval).toEqual({ by: "human" });
   });
 
@@ -878,8 +898,11 @@ describe("handleExecuteCommand", () => {
         commandApprovalReviewer: {
           review: async () => ({
             decision: "ask_user",
+            confidence: "low",
+            risk: "high",
             reason: "Needs human confirmation",
             model: "review-model",
+            status: "reviewed",
           }),
         },
         isSessionActive: () => true,
@@ -910,8 +933,11 @@ describe("handleExecuteCommand", () => {
     const enqueueCommandApproval = vi.fn();
     const review = vi.fn(async () => ({
       decision: "approve" as const,
+      confidence: "high" as const,
+      risk: "low" as const,
       reason: "Recognized read-only binary inspection",
       model: "review-model",
+      status: "reviewed" as const,
     }));
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
@@ -947,7 +973,7 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("reviews unknown executables but keeps environment-bearing commands human-only", async () => {
+  it("reviews all prompting commands but keeps environment-bearing commands human-only", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -958,8 +984,11 @@ describe("handleExecuteCommand", () => {
     }));
     const review = vi.fn(async () => ({
       decision: "ask_user" as const,
+      confidence: "low" as const,
+      risk: "high" as const,
       reason: "Executable is unfamiliar",
       model: "review-model",
+      status: "reviewed" as const,
     }));
     const { handleExecuteCommand } = await import("./executeCommand.js");
     const providers = {
@@ -992,12 +1021,122 @@ describe("handleExecuteCommand", () => {
       providers,
     );
 
-    expect(review).toHaveBeenCalledTimes(1);
+    expect(review).toHaveBeenCalledTimes(2);
     expect(review).toHaveBeenCalledWith(
       expect.objectContaining({ command: "unknown-tool run" }),
     );
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "mkdir generated",
+        autoApproveAllowed: false,
+        guardrailReason: expect.stringContaining("environment overrides"),
+      }),
+    );
     expect(enqueueCommandApproval).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps dangerous commands human-only even when the reviewer approves", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "accept" }),
+    }));
+    const review = vi.fn(async () => ({
+      decision: "approve" as const,
+      confidence: "high" as const,
+      risk: "low" as const,
+      reason: "Incorrectly considered safe",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "git push origin main" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-dangerous",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "git push origin main",
+        autoApproveAllowed: false,
+        guardrailReason: expect.stringContaining("not sensitive"),
+      }),
+    );
+    expect(enqueueCommandApproval).toHaveBeenCalledWith(
+      "git push origin main",
+      "git push origin main",
+      expect.objectContaining({
+        commandReview: expect.objectContaining({
+          decision: "approve",
+          autoApproveAllowed: false,
+        }),
+      }),
+    );
+    expect(textPayload(result).approval).toEqual({ by: "human" });
+  });
+
+  it.each([
+    { confidence: "medium" as const, risk: "medium" as const },
+    { confidence: "high" as const, risk: "high" as const },
+  ])(
+    "requires a human for a $confidence-confidence $risk-risk approval",
+    async ({ confidence, risk }) => {
+      getConfiguration.mockReturnValue({
+        get: vi.fn((key: string, fallback?: unknown) =>
+          key === "masterBypass" ? false : fallback,
+        ),
+      });
+      const enqueueCommandApproval = vi.fn(() => ({
+        promise: Promise.resolve({ decision: "accept" }),
+      }));
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command: "mkdir generated" },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: () => undefined,
+        } as never,
+        { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+        `session-review-${confidence}-${risk}`,
+        undefined,
+        {
+          terminalProvider,
+          getCommandApprovalPolicy: () => "approve-for-me",
+          commandApprovalReviewer: {
+            review: async () => ({
+              decision: "approve",
+              confidence,
+              risk,
+              reason: "Not sufficient for automatic execution",
+              model: "review-model",
+              status: "reviewed",
+            }),
+          },
+          isSessionActive: () => true,
+        },
+      );
+
+      expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
+      expect(textPayload(result).approval).toEqual({ by: "human" });
+    },
+  );
 
   it("does not auto-execute when policy changes during review", async () => {
     getConfiguration.mockReturnValue({
@@ -1013,8 +1152,11 @@ describe("handleExecuteCommand", () => {
       policy = "safe";
       return {
         decision: "approve" as const,
+        confidence: "high" as const,
+        risk: "medium" as const,
         reason: "Would otherwise approve",
         model: "review-model",
+        status: "reviewed" as const,
       };
     });
     const { handleExecuteCommand } = await import("./executeCommand.js");

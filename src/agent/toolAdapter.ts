@@ -1487,6 +1487,9 @@ export interface ToolDispatchContext {
   commandApprovalReviewer?: CommandApprovalReviewer;
   isSessionActive?: (sessionId: string) => boolean;
   getCommandReviewObjective?: (sessionId: string) => string | undefined;
+  getCommandReviewContext?: (
+    sessionId: string,
+  ) => import("../approvals/commandApprovalReview.js").CommandReviewContextEntry[];
   delegationPolicy?: {
     ownedPaths?: string[];
     forbiddenPaths?: string[];
@@ -2346,6 +2349,7 @@ export async function dispatchToolCall(
           isSessionActive: ctx.isSessionActive,
           toolAbortSignal,
           getUserObjective: ctx.getCommandReviewObjective,
+          getReviewContext: ctx.getCommandReviewContext,
         },
       );
     case "get_terminal_output":
