@@ -142,10 +142,8 @@ const BTW_MAX_TOOL_CALLS = 10;
 /** Default overall deadline for a /btw run before it self-aborts. */
 const BTW_DEFAULT_TIMEOUT_MS = 120_000;
 
-/** Overage allowed on an exhausted budget dimension while a wrap-up is in flight. */
-const BUDGET_WRAP_UP_GRACE_RATIO = 1.5;
-/** Time allowed for a wrap-up turn to complete before the hard kill. */
-const BUDGET_WRAP_UP_GRACE_MS = 120_000;
+/** Hard-stop backstop after the nominal budget has triggered a wrap-up. */
+const BUDGET_HARD_LIMIT_RATIO = 2;
 
 /** Human-readable label for a budget check kind (e.g. "tool_calls" → "tool call"). */
 function formatBudgetKind(kind: string): string {
@@ -231,11 +229,8 @@ export class AgentSessionManager {
     string,
     ReturnType<AgentSessionManagerHost["timers"]["setTimeout"]>[]
   >();
-  /** Budget wrap-up requests per owner session: exhausted dimension + when the wrap-up was injected. */
-  private bgBudgetWrapUps = new Map<
-    string,
-    { kind: string; requestedAt: number }
-  >();
+  /** Budget owners that have already received a soft-limit wrap-up request. */
+  private bgBudgetWrapUps = new Map<string, { kind: string }>();
   /** Accumulated streaming text for background sessions (for UI preview). */
   private bgStreamingText = new Map<string, string>();
   /** Completion timestamps for background sessions (for auto-dismiss). */
@@ -2996,11 +2991,14 @@ export class AgentSessionManager {
       if (meta) meta.startedAt = Date.now();
       const maxElapsedMs = session.fleetMetadata?.budget?.maxElapsedMs;
       if (maxElapsedMs !== undefined && maxElapsedMs > 0) {
-        const timer = this.host.timers.setTimeout(() => {
-          this.enforceBackgroundBudget(session);
-        }, maxElapsedMs);
-        const timers = this.bgSafetyTimers.get(session.id) ?? [];
-        timers.push(timer);
+        const timers = [
+          maxElapsedMs,
+          maxElapsedMs * BUDGET_HARD_LIMIT_RATIO,
+        ].map((delayMs) =>
+          this.host.timers.setTimeout(() => {
+            this.enforceBackgroundBudget(session);
+          }, delayMs),
+        );
         this.bgSafetyTimers.set(session.id, timers);
       }
       await start();
@@ -4950,49 +4948,39 @@ export class AgentSessionManager {
       this.saveSession(owner.id);
       this.onSessionsChanged?.();
     }
+    const hardExhausted = checks.find(
+      ([limit, used]) =>
+        limit !== undefined &&
+        limit >= 0 &&
+        used >= limit * BUDGET_HARD_LIMIT_RATIO,
+    );
     const exhausted = checks.find(
       ([limit, used]) => limit !== undefined && limit >= 0 && used >= limit,
     );
     if (!exhausted) return false;
-    const [exhaustedLimit, exhaustedUsed, kind] = exhausted;
-    // Prefer a graceful landing over discarding the work: ask running
-    // in-process members to deliver findings now, and hard-kill only when
-    // the grace window or the overage cap is breached (or when no member
-    // has an interjection channel, e.g. ACP/worktree backends).
-    const wrapUp = this.bgBudgetWrapUps.get(owner.id);
-    if (!wrapUp) {
+
+    const [, , exhaustedKind] = exhausted;
+    if (!this.bgBudgetWrapUps.has(owner.id)) {
       const accepted = this.injectBudgetInterjection(
         members,
-        `[fleet budget] The ${formatBudgetKind(kind)} budget for this task is exhausted. Do not start new tool calls — deliver your final findings now with the information you already have.`,
+        `[fleet budget] The ${formatBudgetKind(exhaustedKind)} budget for this task is exhausted. Do not start new tool calls — deliver your final findings now with the information you already have.`,
       );
-      if (accepted) {
-        this.bgBudgetWrapUps.set(owner.id, { kind, requestedAt: Date.now() });
-        this.appendFleetEvent(
-          owner,
-          "budget_warning",
-          `${kind} budget exhausted — wrap-up requested`,
-        );
-        // A hung agent produces no further events, so nothing would re-run
-        // enforcement — schedule the hard kill at the end of the grace window.
-        const timer = this.host.timers.setTimeout(() => {
-          this.enforceBackgroundBudget(owner);
-        }, BUDGET_WRAP_UP_GRACE_MS);
-        const timers = this.bgSafetyTimers.get(owner.id) ?? [];
-        timers.push(timer);
-        this.bgSafetyTimers.set(owner.id, timers);
-        this.saveSession(owner.id);
-        this.onSessionsChanged?.();
-        return false;
-      }
-    } else if (
-      Date.now() - wrapUp.requestedAt < BUDGET_WRAP_UP_GRACE_MS &&
-      exhaustedLimit !== undefined &&
-      exhaustedUsed < exhaustedLimit * BUDGET_WRAP_UP_GRACE_RATIO
-    ) {
-      return false;
+      this.bgBudgetWrapUps.set(owner.id, { kind: exhaustedKind });
+      this.appendFleetEvent(
+        owner,
+        "budget_warning",
+        accepted
+          ? `${exhaustedKind} budget exhausted — wrap-up requested`
+          : `${exhaustedKind} soft limit reached — hard backstop active`,
+      );
+      this.saveSession(owner.id);
+      this.onSessionsChanged?.();
     }
+    if (!hardExhausted) return false;
+
     this.bgBudgetWrapUps.delete(owner.id);
-    const reason = `budget_exhausted:${kind}`;
+    const [, , hardExhaustedKind] = hardExhausted;
+    const reason = `budget_exhausted:${hardExhaustedKind}`;
     fleet.terminalReason = reason;
     owner.status = "error";
     this.setBgError(owner.id, reason);

@@ -737,13 +737,44 @@ describe("AgentSessionManager background agents", () => {
     });
   });
 
-  it("hard-stops past the wrap-up grace overage and persists an explicit terminal reason", async () => {
+  it("keeps the nominal cap soft when the backend cannot accept a wrap-up interjection", async () => {
     mocks.runBehavior.mockReturnValue(
       (async function* () {
         yield { type: "tool_start", toolCallId: "tc-1", toolName: "search" };
         yield { type: "tool_start", toolCallId: "tc-2", toolName: "read" };
-        // Third call reaches the 1.5x overage cap (2 * 1.5 = 3) → hard kill.
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "bounded external task",
+      message: "run",
+      budget: { maxToolCalls: 2 },
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    session.setPendingInterjection.mockReturnValue(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(session.fleetMetadata).toEqual(
+      expect.objectContaining({
+        lifecycle: "completed",
+        budgetUsage: expect.objectContaining({ toolCalls: 2 }),
+      }),
+    );
+  });
+
+  it("hard-stops only at double the nominal budget and persists an explicit terminal reason", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        yield { type: "tool_start", toolCallId: "tc-1", toolName: "search" };
+        yield { type: "tool_start", toolCallId: "tc-2", toolName: "read" };
+        // 1.5x usage remains inside the wrap-up backstop.
         yield { type: "tool_start", toolCallId: "tc-3", toolName: "read" };
+        // Double the nominal budget is the hard-stop boundary.
+        yield { type: "tool_start", toolCallId: "tc-4", toolName: "read" };
         yield { type: "done" };
       })(),
     );
@@ -763,9 +794,76 @@ describe("AgentSessionManager background agents", () => {
       expect.objectContaining({
         lifecycle: "budget_exhausted",
         terminalReason: "budget_exhausted:tool_calls",
-        budgetUsage: expect.objectContaining({ toolCalls: 3 }),
+        budgetUsage: expect.objectContaining({ toolCalls: 4 }),
       }),
     );
+  });
+
+  it("allows a full additional elapsed-time window before the hard stop", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const spawned = await mgr.spawnBackground({
+      task: "elapsed budget",
+      message: "run",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+    session.fleetMetadata.lifecycle = "running";
+    session.fleetMetadata.budget = { maxElapsedMs: 240_000 };
+    meta.startedAt = 0;
+
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(240_000);
+      expect((mgr as any).enforceBudgetOwner(session)).toBe(false);
+      expect(session.abort).not.toHaveBeenCalled();
+
+      // The old fixed two-minute grace would have stopped the agent here.
+      now.mockReturnValue(360_000);
+      expect((mgr as any).enforceBudgetOwner(session)).toBe(false);
+      expect(session.abort).not.toHaveBeenCalled();
+
+      now.mockReturnValue(480_000);
+      expect((mgr as any).enforceBudgetOwner(session)).toBe(true);
+      expect(session.abort).toHaveBeenCalled();
+      expect(session.fleetMetadata.terminalReason).toBe(
+        "budget_exhausted:elapsed_time",
+      );
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("hard-stops a doubled dimension even when another dimension was exhausted first", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const spawned = await mgr.spawnBackground({
+      task: "multi-dimensional budget",
+      message: "run",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const meta = (mgr as any).bgMeta.get(spawned.sessionId);
+    session.fleetMetadata.lifecycle = "running";
+    session.fleetMetadata.budget = {
+      maxToolCalls: 1,
+      maxElapsedMs: 240_000,
+    };
+    meta.toolCalls = 1;
+    meta.startedAt = 0;
+
+    const now = vi.spyOn(Date, "now").mockReturnValue(480_000);
+    try {
+      expect((mgr as any).enforceBudgetOwner(session)).toBe(true);
+      expect(session.fleetMetadata.terminalReason).toBe(
+        "budget_exhausted:elapsed_time",
+      );
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("passes session-scoped budget caps into the background engine run", async () => {
@@ -1349,10 +1447,10 @@ describe("AgentSessionManager background agents", () => {
       routingReason: "balanced bounded review",
       fallbackUsed: false,
       defaultBudget: {
-        maxToolCalls: 12,
-        maxApiTurns: 8,
-        maxElapsedMs: 240_000,
-        warningThresholdRatio: 0.7,
+        maxToolCalls: 24,
+        maxApiTurns: 14,
+        maxElapsedMs: 480_000,
+        warningThresholdRatio: 0.75,
       },
     });
     const mgr = new AgentSessionManager(config, "/tmp");
@@ -1382,10 +1480,10 @@ describe("AgentSessionManager background agents", () => {
           expectedResult: "review_findings",
         }),
         budget: {
-          maxToolCalls: 12,
-          maxApiTurns: 8,
-          maxElapsedMs: 240_000,
-          warningThresholdRatio: 0.7,
+          maxToolCalls: 24,
+          maxApiTurns: 14,
+          maxElapsedMs: 480_000,
+          warningThresholdRatio: 0.75,
         },
       }),
     );
@@ -1393,8 +1491,8 @@ describe("AgentSessionManager background agents", () => {
       session,
       expect.objectContaining({
         toolProfile: "review",
-        maxToolCalls: 12,
-        maxApiTurns: 8,
+        maxToolCalls: 24,
+        maxApiTurns: 14,
       }),
     );
   });
@@ -1438,7 +1536,7 @@ describe("AgentSessionManager background agents", () => {
       taskClass: "review_code",
       routingReason: "balanced bounded review",
       fallbackUsed: false,
-      defaultBudget: { maxToolCalls: 12, maxApiTurns: 8 },
+      defaultBudget: { maxToolCalls: 24, maxApiTurns: 14 },
     });
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);

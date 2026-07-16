@@ -22,22 +22,22 @@ function isForegroundOnlyModel(modelId: string): boolean {
 
 const REVIEW_BUDGETS: Record<ModelTier, AgentBudget> = {
   cheap: {
-    maxToolCalls: 6,
-    maxApiTurns: 5,
-    maxElapsedMs: 120_000,
-    warningThresholdRatio: 0.65,
-  },
-  balanced: {
     maxToolCalls: 12,
     maxApiTurns: 8,
     maxElapsedMs: 240_000,
     warningThresholdRatio: 0.7,
   },
-  deep_reasoning: {
+  balanced: {
     maxToolCalls: 24,
     maxApiTurns: 14,
     maxElapsedMs: 480_000,
     warningThresholdRatio: 0.75,
+  },
+  deep_reasoning: {
+    maxToolCalls: 40,
+    maxApiTurns: 24,
+    maxElapsedMs: 900_000,
+    warningThresholdRatio: 0.8,
   },
 };
 

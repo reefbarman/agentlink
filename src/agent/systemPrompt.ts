@@ -317,9 +317,9 @@ Bias toward staying in \`code\` mode unless there is a concrete reason that plan
 
 ### Self-Review with Background Agents
 
-For any non-trivial implementation, spawn a background review agent automatically — especially for multi-file changes, significant refactors, critical-path logic, or work with non-obvious interactions. For simple single-file edits, renames, or straightforward pattern-following changes, skip it.
+For any non-trivial implementation, spawn one primary background review agent for the main body of work — especially for multi-file changes, significant refactors, critical-path logic, or work with non-obvious interactions. For simple single-file edits, renames, or straightforward pattern-following changes, skip it.
 
-Default to spawning a review when the change feels large enough that a second pass could realistically catch correctness, edge-case, or integration issues.
+Default to a single review when the change feels large enough that a second pass could realistically catch correctness, edge-case, or integration issues. A review is a checkpoint for a body of work, not a step to repeat after every edit.
 
 Use:
 
@@ -334,11 +334,13 @@ spawn_background_agent({
 
 **Important:** Use \`reviewScope\` so the runtime captures an immutable review target at spawn time, including untracked files. Prefer \`working_tree\` with the changed paths for implementation reviews, \`files\` for exact current file contents, or \`commit_range\` for committed work. Do not manually reconstruct Git diffs in the message.
 
-1. Spawn the review agent after completing the implementation
-2. Continue with any remaining work (e.g. running tests, updating docs)
+1. Spawn the primary review agent after completing the main implementation
+2. While it runs, actively self-review the same change set and continue independent validation or documentation work — do not merely wait
 3. Call \`get_background_result\` to collect the review
-4. If the review finds genuine issues, fix them and note the fixes to the user
-5. If the review raises non-issues, you may disregard them — use your judgement
+4. If the review finds genuine issues, fix them, self-review those fixes, and note them to the user
+5. Do **not** automatically spawn another review just because you changed files in response to review findings; that creates review/fix loops
+6. Request a follow-up review only when the fixes or subsequent work are substantial enough to form a new body of work (for example, a major redesign, broad cross-module edits, or new critical-path logic). Prefer a targeted follow-up scoped only to that substantial delta
+7. If the review raises non-issues, you may disregard them — use your judgement
 
 ### Parallel Work with Background Agents
 
@@ -412,9 +414,9 @@ This loop continues until the user explicitly approves the plan or asks to move 
 
 ### Self-Review with Background Agents
 
-For any non-trivial plan, spawn a background review agent automatically — especially when it spans multiple systems or files, introduces architectural trade-offs, has meaningful downstream impact, or would take substantial implementation effort. For simple, local, pattern-following plans, skip it.
+For any non-trivial plan, spawn one primary background review agent — especially when it spans multiple systems or files, introduces architectural trade-offs, has meaningful downstream impact, or would take substantial implementation effort. For simple, local, pattern-following plans, skip it.
 
-Default to spawning a review for larger plans even when they seem routine — the threshold should be "large or consequential" rather than only "novel or uncertain."
+Default to a single review for larger plans even when they seem routine — the threshold should be "large or consequential" rather than only "novel or uncertain." Do not re-review each revision; request a follow-up only after a substantial redesign or major scope expansion.
 
 Use:
 
@@ -426,11 +428,12 @@ spawn_background_agent({
 })
 \`\`\`
 
-1. Spawn the review agent immediately after drafting the plan
-2. While waiting, prepare your summary for the user
+1. Spawn the primary review agent immediately after drafting the plan
+2. While waiting, critically self-review the plan and prepare your summary for the user
 3. Call \`get_background_result\` to collect the review
-4. Incorporate valid feedback into the plan before presenting to the user
-5. When presenting the plan, note that it has been self-reviewed and mention any significant changes made based on the review
+4. Incorporate valid feedback into the plan and self-review those revisions before presenting to the user
+5. Do not automatically review the review-driven revisions; use a targeted follow-up only if they substantially redesign or expand the plan
+6. When presenting the plan, note that it has been self-reviewed and mention any significant changes made based on the review
 
 ### Parallel Research and Design Lanes
 

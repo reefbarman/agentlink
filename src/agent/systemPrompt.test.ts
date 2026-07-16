@@ -120,13 +120,17 @@ describe("buildSystemPrompt", () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).toContain("Code mode");
     expect(result).toContain(
-      "For any non-trivial implementation, spawn a background review agent automatically",
+      "For any non-trivial implementation, spawn one primary background review agent",
     );
     expect(result).toContain(
-      "Default to spawning a review when the change feels large enough",
+      "A review is a checkpoint for a body of work, not a step to repeat after every edit",
+    );
+    expect(result).toContain("actively self-review the same change set");
+    expect(result).toContain(
+      "Do **not** automatically spawn another review just because you changed files in response to review findings",
     );
     expect(result).toContain(
-      "Spawn the review agent after completing the implementation",
+      "Request a follow-up review only when the fixes or subsequent work are substantial enough to form a new body of work",
     );
   });
 
@@ -172,11 +176,15 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Review & Iteration");
     expect(result).toContain("switch_mode");
     expect(result).toContain(
-      "For any non-trivial plan, spawn a background review agent automatically",
+      "For any non-trivial plan, spawn one primary background review agent",
     );
     expect(result).toContain('threshold should be "large or consequential"');
+    expect(result).toContain("Do not re-review each revision");
     expect(result).toContain(
-      "Spawn the review agent immediately after drafting the plan",
+      "Do not automatically review the review-driven revisions",
+    );
+    expect(result).toContain(
+      "Spawn the primary review agent immediately after drafting the plan",
     );
   });
 

@@ -169,10 +169,10 @@ describe("resolveBackgroundRoute", () => {
     expect(route.resolvedProvider).toBe("codex");
     expect(route.resolvedModel).toBe("gpt-5.6-luna");
     expect(route.defaultBudget).toEqual({
-      maxToolCalls: 6,
-      maxApiTurns: 5,
-      maxElapsedMs: 120_000,
-      warningThresholdRatio: 0.65,
+      maxToolCalls: 12,
+      maxApiTurns: 8,
+      maxElapsedMs: 240_000,
+      warningThresholdRatio: 0.7,
     });
   });
 
@@ -258,10 +258,10 @@ describe("resolveBackgroundRoute", () => {
     expect(route.routingReason).toContain("tier=balanced");
     expect(route.routingReason).toContain("policy=review-preference");
     expect(route.defaultBudget).toEqual({
-      maxToolCalls: 12,
-      maxApiTurns: 8,
-      maxElapsedMs: 240_000,
-      warningThresholdRatio: 0.7,
+      maxToolCalls: 24,
+      maxApiTurns: 14,
+      maxElapsedMs: 480_000,
+      warningThresholdRatio: 0.75,
     });
   });
 
@@ -348,10 +348,10 @@ describe("resolveBackgroundRoute", () => {
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=deep_reasoning");
     expect(route.defaultBudget).toEqual({
-      maxToolCalls: 24,
-      maxApiTurns: 14,
-      maxElapsedMs: 480_000,
-      warningThresholdRatio: 0.75,
+      maxToolCalls: 40,
+      maxApiTurns: 24,
+      maxElapsedMs: 900_000,
+      warningThresholdRatio: 0.8,
     });
   });
 
@@ -420,7 +420,7 @@ describe("resolveBackgroundRoute", () => {
 
     expect(route.resolvedModel).toBe("claude-sonnet-5");
     expect(route.routingReason).toContain("tier=balanced");
-    expect(route.defaultBudget?.maxToolCalls).toBe(12);
+    expect(route.defaultBudget?.maxToolCalls).toBe(24);
   });
 
   it("honors explicit modelTier override for review tasks", async () => {
@@ -545,10 +545,10 @@ describe("resolveBackgroundRoute", () => {
     expect(route.thinkingBudget).toBeUndefined();
     expect(route.toolProfile).toBeUndefined();
     expect(route.defaultBudget).toEqual({
-      maxToolCalls: 12,
-      maxApiTurns: 8,
-      maxElapsedMs: 240_000,
-      warningThresholdRatio: 0.7,
+      maxToolCalls: 24,
+      maxApiTurns: 14,
+      maxElapsedMs: 480_000,
+      warningThresholdRatio: 0.75,
     });
   });
 
@@ -572,7 +572,7 @@ describe("resolveBackgroundRoute", () => {
 
     expect(route.thinkingBudget).toBeUndefined();
     expect(route.toolProfile).toBeUndefined();
-    expect(route.defaultBudget?.maxToolCalls).toBe(12);
+    expect(route.defaultBudget?.maxToolCalls).toBe(24);
   });
 
   it("does not return turn or tool limits for general task class", async () => {
