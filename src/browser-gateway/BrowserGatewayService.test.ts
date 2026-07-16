@@ -938,6 +938,70 @@ describe("BrowserGatewayService", () => {
     }
   });
 
+  it("publishes background projection changes with the recurring poll disabled", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const sessionManager = makeSessionManagerStub();
+      let sessionListener: (() => void) | undefined;
+      const service = new BrowserGatewayService(
+        hub,
+        sessionManager as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projectedForeground() as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setHasActiveClientsProbe(() => true);
+      service.subscribeToSessionChanges((listener) => {
+        sessionListener = listener;
+        return { dispose: vi.fn() } as never;
+      });
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      sessionManager.getBgSessionInfos.mockReturnValue([
+        {
+          id: "bg-1",
+          task: "Review implementation",
+          status: "streaming",
+          displayStatus: "Inspecting files",
+          displayStatusSource: "heuristic",
+          lifecycle: "running",
+          streamingText: "partial review",
+        },
+      ] as never);
+      sessionListener?.();
+      vi.advanceTimersByTime(150);
+
+      expect(disabledPollTimers.setInterval).toHaveBeenCalledTimes(1);
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+      expect(onDidChange.mock.calls[0][0].snapshot.background).toEqual([
+        expect.objectContaining({
+          id: "bg-1",
+          lifecycle: "running",
+          streamingText: "partial review",
+        }),
+      ]);
+
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes projected foreground changes through explicit invalidation with the recurring poll disabled", () => {
     vi.useFakeTimers();
     try {

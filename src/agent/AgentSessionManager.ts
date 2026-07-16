@@ -88,6 +88,7 @@ import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeSto
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
 
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /**
  * Per-turn budget for auto-continuing after a mode switch. Kept separate from
@@ -276,6 +277,11 @@ export class AgentSessionManager {
     string,
     ReturnType<AgentSessionManagerHost["timers"]["setInterval"]>
   >();
+  private fleetVisibilityExpiryTimer?: ReturnType<
+    AgentSessionManagerHost["timers"]["setTimeout"]
+  >;
+  private fleetVisibilityExpiryDeadline?: number;
+  private fleetVisibilityExpiryDisposed = false;
   private readonly fleetScheduler: FleetScheduler;
   /** True while a transient /btw side question is running. */
   private btwInFlight = false;
@@ -347,12 +353,69 @@ export class AgentSessionManager {
     const legacyListener = this.onSessionsChanged;
     legacyListener?.();
     this.notifySessionChangeListeners();
+    this.scheduleFleetVisibilityExpiry();
   }
 
   private notifySessionChangeListeners(): void {
     for (const listener of this.sessionChangeListeners) {
       listener();
     }
+  }
+
+  private scheduleFleetVisibilityExpiry(): void {
+    if (this.fleetVisibilityExpiryDisposed) return;
+
+    const now = Date.now();
+    let nextDeadline: number | undefined;
+    for (const session of this.sessions.values()) {
+      if (!session.background) continue;
+      const fleet = session.fleetMetadata;
+      const { done } = this.getProjectedBgStatus(session);
+      if (!done || fleet?.lifecycle === "paused") continue;
+      const activity =
+        fleet?.completedAt ?? session.lastActiveAt ?? session.createdAt;
+      const deadline = activity + FLEET_VISIBILITY_MAX_AGE_MS + 1;
+      if (
+        deadline > now &&
+        (nextDeadline === undefined || deadline < nextDeadline)
+      ) {
+        nextDeadline = deadline;
+      }
+    }
+
+    if (
+      nextDeadline === this.fleetVisibilityExpiryDeadline &&
+      this.fleetVisibilityExpiryTimer
+    ) {
+      return;
+    }
+    if (this.fleetVisibilityExpiryTimer) {
+      this.host.timers.clearTimeout(this.fleetVisibilityExpiryTimer);
+      this.fleetVisibilityExpiryTimer = undefined;
+    }
+    this.fleetVisibilityExpiryDeadline = nextDeadline;
+    if (nextDeadline === undefined) return;
+    this.fleetVisibilityExpiryTimer = this.host.timers.setTimeout(
+      () => {
+        this.fleetVisibilityExpiryTimer = undefined;
+        this.fleetVisibilityExpiryDeadline = undefined;
+        if (this.fleetVisibilityExpiryDisposed) return;
+        if (Date.now() >= nextDeadline) {
+          this.notifySessionChangeListeners();
+        }
+        this.scheduleFleetVisibilityExpiry();
+      },
+      Math.min(MAX_TIMER_DELAY_MS, Math.max(0, nextDeadline - now)),
+    );
+  }
+
+  /** Clear only the browser-projection visibility timer owned by A4 publication. */
+  disposeFleetVisibilityExpiry(): void {
+    this.fleetVisibilityExpiryDisposed = true;
+    if (!this.fleetVisibilityExpiryTimer) return;
+    this.host.timers.clearTimeout(this.fleetVisibilityExpiryTimer);
+    this.fleetVisibilityExpiryTimer = undefined;
+    this.fleetVisibilityExpiryDeadline = undefined;
   }
 
   constructor(
@@ -3250,6 +3313,7 @@ export class AgentSessionManager {
               if (event.type === "stop") {
                 promptResponse = event.response;
                 this.applyAcpPromptResponseUsage(session, event.response);
+                this.notifySessionChangeListeners();
                 return;
               }
               this.applyAcpSessionUpdate({
@@ -3269,7 +3333,7 @@ export class AgentSessionManager {
                 streamingText: this.bgStreamingText.get(session.id),
                 statusDetail: this.bgStatusDetail.get(session.id),
               });
-              this.notifySessionsChanged();
+              this.notifySessionChangeListeners();
             },
             onRequestPermission: (permissionRequest) =>
               this.handleAcpPermissionRequest({
@@ -3596,7 +3660,10 @@ export class AgentSessionManager {
             }
           }
 
-          if (this.enforceBackgroundBudget(session)) break;
+          if (this.enforceBackgroundBudget(session)) {
+            this.notifySessionChangeListeners();
+            break;
+          }
 
           const { status } = this.getProjectedBgStatus(session);
           this.maybeScheduleBgSummary({
@@ -3614,6 +3681,7 @@ export class AgentSessionManager {
           });
 
           this.recordAndEmitEvent(session.id, event);
+          this.notifySessionChangeListeners();
         }
         if (terminalEngineError) {
           session.status = "error";
@@ -4446,6 +4514,7 @@ export class AgentSessionManager {
       },
     ];
     this.saveSession(session.id);
+    this.notifySessionsChanged();
   }
 
   markFleetEventsRead(sessionId: string): { marked: number } {
@@ -5046,6 +5115,8 @@ export class AgentSessionManager {
         this.stopSession(candidate.id);
         if (candidate.fleetMetadata) {
           candidate.fleetMetadata.terminalReason = "parent_budget_exhausted";
+          this.saveSession(candidate.id);
+          this.notifySessionsChanged();
         }
       }
     }
@@ -5068,6 +5139,8 @@ export class AgentSessionManager {
       this.stopSession(child.id);
       if (child.fleetMetadata) {
         child.fleetMetadata.terminalReason = "parent_completed_without_join";
+        this.saveSession(child.id);
+        this.notifySessionsChanged();
       }
     }
   }
@@ -5311,7 +5384,8 @@ export class AgentSessionManager {
           structuredResult: s.fleetMetadata?.structuredResult,
           streamingText,
           errorMessage,
-          completedAt: this.bgCompletedAt.get(s.id),
+          completedAt:
+            this.bgCompletedAt.get(s.id) ?? s.fleetMetadata?.completedAt,
           resultSummary: summary.shortStatus,
           summaryMeta: {
             inFlight: summary.inFlight,

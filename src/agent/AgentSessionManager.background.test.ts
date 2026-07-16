@@ -435,6 +435,68 @@ describe("AgentSessionManager background agents", () => {
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
   });
 
+  it("publishes ACP stop usage before terminal finalization", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      defaultAgent: "acp:claude",
+      acpAgents: [{ id: "claude", command: "claude-agent-acp" }],
+    });
+    const projectionListener = vi.fn();
+    const legacyListener = vi.fn();
+    let mgr!: AgentSessionManager;
+    let usageAtStop: number | undefined;
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        projectionListener.mockClear();
+        legacyListener.mockClear();
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "ACP intermediate output" },
+          },
+        });
+        expect(projectionListener).toHaveBeenCalledTimes(1);
+        expect(legacyListener).not.toHaveBeenCalled();
+
+        projectionListener.mockClear();
+        request.onEvent({
+          type: "stop",
+          response: {
+            stopReason: "end_turn",
+            usage: { inputTokens: 30, outputTokens: 12 },
+          },
+        });
+        usageAtStop = mgr.getBgSessionInfos()[0]?.totalInputTokens;
+        expect(projectionListener).toHaveBeenCalledTimes(1);
+        expect(legacyListener).not.toHaveBeenCalled();
+      }),
+    };
+    mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    mgr.onDidChangeSessions(projectionListener);
+    mgr.onSessionsChanged = legacyListener;
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "ACP usage publication",
+      message: "run",
+    });
+    await mgr.waitForBackground(spawned.sessionId);
+
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(session.totalInputTokens).toBe(30);
+    expect(session.totalOutputTokens).toBe(12);
+    expect(usageAtStop).toBe(30);
+  });
+
   it("uses configured default ACP provider without native route resolution", async () => {
     configHost.getBackgroundAgentSettings.mockReturnValue({
       defaultAgent: "acp:claude",
@@ -1149,6 +1211,130 @@ describe("AgentSessionManager background agents", () => {
     expect(mgr.getBgSessionInfos()).toEqual([]);
   });
 
+  it("notifies projection listeners when completed agents cross the visibility cutoff", async () => {
+    let now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const timeouts: Array<{ handler: () => void; delay: number }> = [];
+    const timers = {
+      setInterval: vi.fn(() => ({ kind: "interval" }) as never),
+      clearInterval: vi.fn(),
+      setTimeout: vi.fn((handler: () => void, delay: number) => {
+        timeouts.push({ handler, delay });
+        return { kind: "timeout", index: timeouts.length - 1 } as never;
+      }),
+      clearTimeout: vi.fn(),
+    };
+    try {
+      const mgr = new AgentSessionManager(
+        config,
+        "/tmp",
+        undefined,
+        false,
+        undefined,
+        undefined,
+        { maxConcurrent: 3 },
+        { host: { timers } },
+      );
+      mgr.setToolContext(toolCtx);
+      await mgr.createSession("code");
+      const spawned = await mgr.spawnBackground({
+        task: "expiring agent",
+        message: "work",
+      });
+      await waitFor(
+        () =>
+          (mgr as any).sessions.get(spawned.sessionId).fleetMetadata.lifecycle,
+        (lifecycle) => lifecycle === "completed",
+      );
+      const session = (mgr as any).sessions.get(spawned.sessionId);
+      const completedAt = session.fleetMetadata.completedAt as number;
+      const expiry = timeouts.find(
+        ({ delay }) => delay === 6 * 60 * 60 * 1000 + 1,
+      );
+      expect(expiry).toBeDefined();
+      const scheduledTimerCount = timers.setTimeout.mock.calls.length;
+      (mgr as any).notifySessionsChanged();
+      expect(timers.setTimeout).toHaveBeenCalledTimes(scheduledTimerCount);
+
+      const listener = vi.fn();
+      mgr.onDidChangeSessions(listener);
+      now = completedAt + 6 * 60 * 60 * 1000 + 1;
+      expiry?.handler();
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(mgr.getBgSessionInfos()).toEqual([]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("cancels the visibility timer without late projection notifications", async () => {
+    const timeouts: Array<{ handler: () => void; delay: number }> = [];
+    const timers = {
+      setInterval: vi.fn(() => ({ kind: "interval" }) as never),
+      clearInterval: vi.fn(),
+      setTimeout: vi.fn((handler: () => void, delay: number) => {
+        timeouts.push({ handler, delay });
+        return { kind: "timeout", index: timeouts.length - 1 } as never;
+      }),
+      clearTimeout: vi.fn(),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { timers } },
+    );
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground({
+      task: "disposed timer",
+      message: "work",
+    });
+    await waitFor(
+      () =>
+        (mgr as any).sessions.get(spawned.sessionId).fleetMetadata.lifecycle,
+      (lifecycle) => lifecycle === "completed",
+    );
+    const expiry = timeouts.find(
+      ({ delay }) => delay > 6 * 60 * 60 * 1000 - 100,
+    );
+    expect(expiry).toBeDefined();
+    const listener = vi.fn();
+    mgr.onDidChangeSessions(listener);
+
+    mgr.disposeFleetVisibilityExpiry();
+    expiry?.handler();
+
+    expect(timers.clearTimeout).toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("serializes durable completion when transient background state is absent", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground({
+      task: "durable completion",
+      message: "work",
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    await waitFor(
+      () => session.fleetMetadata.lifecycle,
+      (lifecycle) => lifecycle === "completed",
+    );
+    (mgr as any).bgCompletedAt.delete(spawned.sessionId);
+
+    expect(
+      mgr.getBgSessionInfos().find((info) => info.id === spawned.sessionId)
+        ?.completedAt,
+    ).toBe(session.fleetMetadata.completedAt);
+  });
+
   it("prefers the structured set_task_status result when the final turn has no prose", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
@@ -1369,6 +1555,87 @@ describe("AgentSessionManager background agents", () => {
     expect((mgr as any).sessions.get(child.sessionId).fleetMetadata).toEqual(
       expect.objectContaining({ rootSessionId: parent.sessionId, depth: 2 }),
     );
+  });
+
+  it("persists and publishes child terminal reasons after parent completion", async () => {
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "work",
+    });
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "work" },
+      parent.sessionId,
+    );
+    const savedReasons: Array<string | undefined> = [];
+    vi.spyOn(mgr, "saveSession").mockImplementation((sessionId) => {
+      if (sessionId === child.sessionId) {
+        savedReasons.push(
+          (mgr as any).sessions.get(sessionId).fleetMetadata.terminalReason,
+        );
+      }
+    });
+    const listener = vi.fn();
+    mgr.onDidChangeSessions(listener);
+    listener.mockClear();
+
+    (mgr as any).cancelOwnedChildrenOnCompletion(parent.sessionId);
+
+    expect(savedReasons).toContain("parent_completed_without_join");
+    expect(
+      (mgr as any).sessions.get(child.sessionId).fleetMetadata.terminalReason,
+    ).toBe("parent_completed_without_join");
+    expect(listener).toHaveBeenCalled();
+  });
+
+  it("persists and publishes child terminal reasons after parent budget exhaustion", async () => {
+    mocks.runBehavior.mockImplementation(() =>
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const parent = await mgr.spawnBackground({
+      task: "parent",
+      message: "work",
+    });
+    const child = await mgr.spawnBackground(
+      { task: "child", message: "work" },
+      parent.sessionId,
+    );
+    const parentSession = (mgr as any).sessions.get(parent.sessionId);
+    parentSession.fleetMetadata.budget = { maxToolCalls: 1 };
+    (mgr as any).bgMeta.get(parent.sessionId).toolCalls = 2;
+    const savedReasons: Array<string | undefined> = [];
+    vi.spyOn(mgr, "saveSession").mockImplementation((sessionId) => {
+      if (sessionId === child.sessionId) {
+        savedReasons.push(
+          (mgr as any).sessions.get(sessionId).fleetMetadata.terminalReason,
+        );
+      }
+    });
+    const listener = vi.fn();
+    mgr.onDidChangeSessions(listener);
+    listener.mockClear();
+
+    expect((mgr as any).enforceBudgetOwner(parentSession)).toBe(true);
+
+    expect(savedReasons).toContain("parent_budget_exhausted");
+    expect(
+      (mgr as any).sessions.get(child.sessionId).fleetMetadata.terminalReason,
+    ).toBe("parent_budget_exhausted");
+    expect(listener).toHaveBeenCalled();
   });
 
   it("pauses native work durably and resumes it as a linked replacement", async () => {
@@ -1638,6 +1905,38 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("notifies after durable policy-audit mutations", async () => {
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        await new Promise<never>(() => undefined);
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const spawned = await mgr.spawnBackground({
+      task: "audited policy",
+      message: "work",
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const listener = vi.fn();
+    mgr.onDidChangeSessions(listener);
+    listener.mockClear();
+
+    (mgr as any).appendPolicyAudit(session, {
+      decision: "denied",
+      operation: "write_file",
+      reason: "review-only delegation",
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(
+      mgr.getBgSessionInfos().find((info) => info.id === spawned.sessionId)
+        ?.policyAuditCount,
+    ).toBe(1);
+    mgr.stopSession(spawned.sessionId);
+  });
+
   it("persists sequenced fleet events and read state", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
@@ -1870,6 +2169,60 @@ describe("AgentSessionManager background agents", () => {
     expect(opts).toMatchObject({ isBackground: true });
     expect(opts.maxToolCalls).toBeUndefined();
     expect(opts.maxApiTurns).toBeUndefined();
+  });
+
+  it("publishes native event batches without invoking the legacy session callback", async () => {
+    let releaseEvent: (() => void) | undefined;
+    let releaseCompletion: (() => void) | undefined;
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        await new Promise<void>((resolve) => {
+          releaseEvent = resolve;
+        });
+        yield { type: "text_delta", text: "visible intermediate output" };
+        await new Promise<void>((resolve) => {
+          releaseCompletion = resolve;
+        });
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost } },
+    );
+    mgr.setToolContext(toolCtx);
+    const projectionListener = vi.fn();
+    const legacyListener = vi.fn();
+    mgr.onDidChangeSessions(projectionListener);
+    mgr.onSessionsChanged = legacyListener;
+    const spawned = await mgr.spawnBackground({
+      task: "streaming publication",
+      message: "work",
+    });
+    await waitFor(
+      () => releaseEvent,
+      (release) => typeof release === "function",
+    );
+    projectionListener.mockClear();
+    legacyListener.mockClear();
+
+    releaseEvent?.();
+    await waitFor(
+      () =>
+        mgr.getBgSessionInfos().find((info) => info.id === spawned.sessionId)
+          ?.streamingText,
+      (text) => text === "visible intermediate output",
+    );
+
+    expect(projectionListener).toHaveBeenCalled();
+    expect(legacyListener).not.toHaveBeenCalled();
+    releaseCompletion?.();
   });
 
   it("killBackground stops a running session and returns partial output", async () => {

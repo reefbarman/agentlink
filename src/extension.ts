@@ -1290,6 +1290,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({
     dispose: () => {
       agentSessionManager.saveAllSessions();
+      agentSessionManager.disposeFleetVisibilityExpiry();
       disposeTerminalManager();
       void browserGatewayServer?.stop();
       browserGatewayServer = null;
