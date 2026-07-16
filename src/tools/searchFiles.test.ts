@@ -129,6 +129,24 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(args).toContain("templates/templates/**/*.ts");
   });
 
+  it("returns canonical data for regex search results", async () => {
+    const result = await handleSearchFiles(
+      { path: ".", regex: "missing", semantic: false },
+      { isPathTrusted: () => true } as never,
+      {} as never,
+      "session-canonical-regex",
+    );
+
+    expect(result).toMatchObject({
+      data: {
+        total_matches: 0,
+        truncated: false,
+        results: "No results found",
+      },
+      isError: false,
+    });
+  });
+
   it("supports passing a file path in path by searching only that file", async () => {
     const filePath = path.resolve("src/tools/searchFiles.ts");
     resolveAndValidatePath.mockReturnValue({
@@ -184,6 +202,11 @@ describe("handleSearchFiles ripgrep args", () => {
     expect(firstContent).toBeDefined();
     const payload = JSON.parse((firstContent as { text: string }).text);
     expect(payload.error).toContain("file_pattern must be omitted");
+    expect(result).toMatchObject({
+      data: payload,
+      isError: true,
+      error: { kind: "tool_error" },
+    });
   });
 
   it("returns rejected output when outside-workspace access is denied", async () => {

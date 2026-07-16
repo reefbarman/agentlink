@@ -15,6 +15,7 @@ export interface ToolUsageEvent {
   mode?: string;
   outcome: ToolUsageOutcome;
   durationMs?: number;
+  metrics?: Record<string, number | string | boolean>;
 }
 
 interface ToolUsageBucket {
@@ -25,6 +26,8 @@ interface ToolUsageBucket {
   parameters: Record<string, number>;
   totalDurationMs: number;
   maxDurationMs: number;
+  numericMetrics: Record<string, number>;
+  categoricalMetrics: Record<string, number>;
 }
 
 interface ToolUsageFlushRecord {
@@ -71,6 +74,8 @@ function createBucket(): ToolUsageBucket {
     parameters: {},
     totalDurationMs: 0,
     maxDurationMs: 0,
+    numericMetrics: {},
+    categoricalMetrics: {},
   };
 }
 
@@ -134,6 +139,16 @@ export class ToolUsageTelemetry {
     if (event.params && typeof event.params === "object") {
       for (const key of Object.keys(event.params).sort()) {
         bucket.parameters[key] = (bucket.parameters[key] ?? 0) + 1;
+      }
+    }
+
+    for (const [key, value] of Object.entries(event.metrics ?? {}).sort()) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        bucket.numericMetrics[key] = (bucket.numericMetrics[key] ?? 0) + value;
+      } else if (typeof value === "string" || typeof value === "boolean") {
+        const category = `${key}:${String(value)}`;
+        bucket.categoricalMetrics[category] =
+          (bucket.categoricalMetrics[category] ?? 0) + 1;
       }
     }
 
@@ -218,6 +233,14 @@ export class ToolUsageTelemetry {
       }
       for (const [key, value] of Object.entries(failed.parameters)) {
         current.parameters[key] = (current.parameters[key] ?? 0) + value;
+      }
+      for (const [key, value] of Object.entries(failed.numericMetrics)) {
+        current.numericMetrics[key] =
+          (current.numericMetrics[key] ?? 0) + value;
+      }
+      for (const [key, value] of Object.entries(failed.categoricalMetrics)) {
+        current.categoricalMetrics[key] =
+          (current.categoricalMetrics[key] ?? 0) + value;
       }
       current.totalDurationMs += failed.totalDurationMs;
       current.maxDurationMs = Math.max(

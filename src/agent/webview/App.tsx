@@ -414,6 +414,8 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             type: "TOOL_START",
             toolCallId: msg.toolCallId,
             toolName: msg.toolName,
+            parentCallId: msg.parentCallId,
+            input: msg.input,
           });
           break;
         case "agentToolInputDelta":
@@ -439,7 +441,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             result: msg.result,
             durationMs: msg.durationMs,
             input: msg.input,
+            parentCallId: msg.parentCallId,
             mcpApprovalPromotion: msg.mcpApprovalPromotion,
+            composeTrace: msg.composeTrace,
           });
           break;
         case "agentTokenEstimate":

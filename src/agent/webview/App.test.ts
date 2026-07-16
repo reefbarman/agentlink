@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
   bgTranscriptStreamingOverride,
   initialState,
@@ -7,6 +6,7 @@ import {
   shouldDropSessionScopedEvent,
   shouldProjectBackgroundCompletion,
 } from "./App";
+import { describe, expect, it } from "vitest";
 
 describe("webview App reducer background agent launch blocks", () => {
   it("uses final tool input to populate the bg_agent message for spawn_background_agent", () => {
@@ -658,6 +658,55 @@ describe("webview App reducer background agent launch blocks", () => {
         serverName: "notion",
         bareToolName: "search",
         scopes: ["session", "project", "global"],
+      },
+    });
+  });
+
+  it("projects nested tool activity into the compose parent without child tool cards", () => {
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "Compose context reads",
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "compose-parent",
+      toolName: "compose",
+    });
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId: "compose-child-1",
+      toolName: "get_context",
+      parentCallId: "compose-parent",
+      input: { path: "src/index.ts" },
+    });
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId: "compose-child-1",
+      toolName: "get_context",
+      parentCallId: "compose-parent",
+      result: JSON.stringify({ ok: true }),
+      durationMs: 12,
+    });
+
+    const assistant = state.messages.at(-1);
+    const toolBlocks = assistant?.blocks.filter(
+      (block) => block.type === "tool_call",
+    );
+    expect(toolBlocks).toHaveLength(1);
+    expect(toolBlocks?.[0]).toMatchObject({
+      id: "compose-parent",
+      composeTrace: {
+        status: "running",
+        totalChildren: 1,
+        completedChildren: 1,
+        children: [
+          {
+            id: "compose-child-1",
+            name: "get_context",
+            status: "completed",
+            durationMs: 12,
+          },
+        ],
       },
     });
   });
@@ -1910,6 +1959,60 @@ describe("webview App reducer background agent launch blocks", () => {
           scopes: ["session", "project", "global"],
         },
       },
+    ]);
+  });
+
+  it("restores persisted compose traces onto the parent tool call", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+    const composeTrace = {
+      description: "Read two contexts",
+      status: "completed" as const,
+      totalChildren: 1,
+      completedChildren: 1,
+      children: [
+        {
+          id: "compose-child-1",
+          name: "get_context",
+          status: "completed" as const,
+          durationMs: 12,
+          inputSummary: '{"path":"src/index.ts"}',
+        },
+      ],
+    };
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "compose reads" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "compose-restore",
+            name: "compose",
+            input: { script: "return 1" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "compose-restore",
+            content: JSON.stringify({ result: 1 }),
+            composeTrace,
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored[1]?.blocks).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        id: "compose-restore",
+        name: "compose",
+        composeTrace,
+      }),
     ]);
   });
 

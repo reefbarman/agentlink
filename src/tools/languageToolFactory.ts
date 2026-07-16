@@ -1,5 +1,9 @@
 import type { LanguagePositionParams } from "../core/capabilities/language.js";
-import { jsonResult, type ToolResult } from "../shared/types.js";
+import {
+  errorResult,
+  handleToolError,
+  type ToolResult,
+} from "../shared/types.js";
 
 export interface LanguageToolOptions<
   TProvider,
@@ -43,8 +47,12 @@ export type PositionLanguageToolHandler<
   providers?: TProviders,
 ) => Promise<ToolResult>;
 
-function isToolResult(error: unknown): error is ToolResult {
-  return typeof error === "object" && error !== null && "content" in error;
+function errorPayloadResult(payload: Record<string, unknown>): ToolResult {
+  const { error, ...extra } = payload;
+  return errorResult(
+    typeof error === "string" ? error : "Language tool execution failed",
+    extra,
+  );
 }
 
 export function createLanguageToolHandler<
@@ -57,11 +65,15 @@ export function createLanguageToolHandler<
   return async (params, sessionId, providers) => {
     try {
       const provider = providers ? options.getProvider(providers) : undefined;
-      if (!provider) return jsonResult(options.unavailablePayload(params));
+      if (!provider) {
+        return errorPayloadResult(options.unavailablePayload(params));
+      }
       return await options.invoke(provider, { ...params, sessionId });
     } catch (error) {
-      if (isToolResult(error)) return error;
-      return jsonResult(options.errorPayload(error, params));
+      if (typeof error === "object" && error !== null && "content" in error) {
+        return handleToolError(error);
+      }
+      return errorPayloadResult(options.errorPayload(error, params));
     }
   };
 }

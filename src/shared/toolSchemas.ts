@@ -875,6 +875,23 @@ export const getInlayHintsSchema = {
 
 // ─── Search tools ────────────────────────────────────────────────────────────
 
+export const composeSchema = {
+  script: z
+    .string()
+    .min(1)
+    .max(64 * 1024)
+    .describe(
+      "Sandboxed JavaScript function body. Use synchronous guest helpers tool(name, input) and toolAll([{ name, input }, ...]); top-level return is supported.",
+    ),
+  description: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      "Optional one-line intent shown in the transcript header (maximum 200 characters).",
+    ),
+};
+
 export const codebaseSearchSchema = {
   query: z
     .string()

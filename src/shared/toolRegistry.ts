@@ -211,6 +211,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
 
   // --- Dev-only tools ---
 
+  compose: {
+    label: "Compose read-only tools",
+    devOnly: true,
+    description:
+      'Use when you need results from many dependent read-only tool calls and only care about a reduced answer: list references/files/items, fetch details for each, then filter or aggregate. This runs in one model round-trip and intermediate child results never enter model context. Do NOT use for exploratory work where each result changes the next step; call tools directly instead. Use the terminal for pure shell pipelines and direct calls for small one-off operations. The script is a JavaScript function body with synchronous tool(name, input) and toolAll([{ name, input }, ...]) helpers. Example:\nconst refs = tool("get_references", { path: "src/api.ts", line: 20, column: 10 });\nconst hovers = toolAll(refs.references.slice(0, 16).map((ref) => ({\n  name: "get_hover",\n  input: { path: ref.path, line: ref.line, column: ref.column },\n})));\nreturn hovers.filter((hover) => hover.contents?.length).map((hover) => hover.contents);\nComposable tools: get_context, get_repo_map, get_module_neighbors, list_files (non-semantic), search_files (regex only), get_diagnostics, go_to_definition, go_to_implementation, go_to_type_definition, get_references, get_symbols, get_hover, get_completions, get_code_actions, get_call_hierarchy, get_type_hierarchy, and get_inlay_hints. tool() returns each tool\'s canonical data object. Limits: 64 children/script, 16 items/toolAll, concurrency 4, 60 seconds, 64 KiB script, 1 MiB/child bridge data, 8 MiB cumulative bridge data, and 40 KiB final return.',
+  },
   send_feedback: {
     label: "Submit tool feedback",
     devOnly: true,

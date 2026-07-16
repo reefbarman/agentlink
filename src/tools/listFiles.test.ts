@@ -1,5 +1,5 @@
-import * as path from "path";
 import * as os from "os";
+import * as path from "path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -50,6 +50,17 @@ vi.mock("./pathAccessUI.js", () => ({
   approveOutsideWorkspaceAccess: approveOutsideWorkspaceAccessMock,
 }));
 
+function textResult(result: {
+  content: Array<
+    | { type: "text"; text: string }
+    | { type: "image"; data: string; mimeType: string }
+  >;
+}): string {
+  const item = result.content[0];
+  if (item?.type !== "text") throw new Error("Expected text result");
+  return item.text;
+}
+
 describe("handleListFiles", () => {
   const sessionId = "session-list-files";
   const approvalManager = {
@@ -88,12 +99,14 @@ describe("handleListFiles", () => {
     expect(readdirMock).toHaveBeenCalledWith("/workspace/docs", {
       withFileTypes: true,
     });
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    const payload = {
       path: "docs",
       entries: "README.md\nsrc/",
       count: 2,
       truncated: false,
-    });
+    };
+    expect(JSON.parse(textResult(result))).toEqual(payload);
+    expect(result).toMatchObject({ data: payload, isError: false });
   });
 
   it("returns rejected output when outside-workspace access is denied", async () => {
@@ -125,7 +138,7 @@ describe("handleListFiles", () => {
       sessionId,
     );
     expect(statMock).not.toHaveBeenCalled();
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(textResult(result))).toEqual({
       status: "rejected",
       path: "/outside/docs",
       reason: "outside workspace",
@@ -159,10 +172,18 @@ describe("handleListFiles", () => {
 
     expect(approveOutsideWorkspaceAccessMock).not.toHaveBeenCalled();
     expect(statMock).toHaveBeenCalledWith(outputPath);
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(textResult(result))).toEqual({
       error:
         "Path is a file, not a directory — use read_file to read its contents",
       path: outputPath,
+    });
+    expect(result).toMatchObject({
+      isError: true,
+      error: {
+        kind: "tool_error",
+        message:
+          "Path is a file, not a directory — use read_file to read its contents",
+      },
     });
   });
 
@@ -186,7 +207,7 @@ describe("handleListFiles", () => {
     expect(args).toContain("--no-ignore");
     expect(args).toContain("*.pdf");
 
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(textResult(result));
     expect(parsed).toMatchObject({
       path: "docs",
       entries: "ignored/manual.pdf",

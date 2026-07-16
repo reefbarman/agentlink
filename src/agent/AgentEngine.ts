@@ -21,6 +21,7 @@ import type {
   AgentToolExecutionContext,
   SessionImageReference,
 } from "../core/tools/types.js";
+import { ToolCallBudget } from "../core/tools/toolCallBudget.js";
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
@@ -405,6 +406,7 @@ interface ToolCallResult {
   result: ToolResult;
   durationMs: number;
   mcpApprovalPromotion?: McpApprovalPromotionMeta;
+  composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
 }
 
 function parseToolResultPayload(
@@ -649,8 +651,8 @@ export class AgentEngine {
 
     const maxApiTurns = opts?.maxApiTurns ?? 0; // 0 = unlimited
     const maxToolCalls = opts?.maxToolCalls ?? 0; // 0 = unlimited
+    const toolCallBudget = new ToolCallBudget(maxToolCalls);
     let apiTurnCount = 0;
-    let totalToolCalls = 0;
     let wrapUpAttempts = 0; // Track wrap-up injections to prevent infinite loops
     const MAX_WRAP_UP_ATTEMPTS = 2;
     let pendingFinalMarker: FinalMessageMarker | null = null;
@@ -1538,10 +1540,11 @@ export class AgentEngine {
         const dispatchableToolCount = toolUseBlocks.filter(
           (b) => b.name !== TODO_TOOL_NAME,
         ).length;
-        if (
-          maxToolCalls > 0 &&
-          totalToolCalls + dispatchableToolCount > maxToolCalls
-        ) {
+        const toolCallReservation =
+          dispatchableToolCount > 0
+            ? toolCallBudget.tryReserve(dispatchableToolCount)
+            : undefined;
+        if (toolCallReservation && !toolCallReservation.ok) {
           wrapUpAttempts++;
           if (wrapUpAttempts > MAX_WRAP_UP_ATTEMPTS) {
             session.appendAssistantTurn(contentBlocks);
@@ -1566,7 +1569,6 @@ export class AgentEngine {
           };
           continue;
         }
-        totalToolCalls += dispatchableToolCount;
 
         // The response and its budget checks are now committed. Publish only
         // tool calls that will actually dispatch; provisional calls from
@@ -1611,6 +1613,8 @@ export class AgentEngine {
           sessionId: session.id,
           mode: session.agentMode.slug,
           toolProfile: opts?.toolProfile,
+          availableToolNames: new Set(rawTools?.map((tool) => tool.name) ?? []),
+          toolCallBudget,
           commandExecutionPolicy:
             session.agentMode.toolGroups.includes("read-only-command") ||
             opts?.toolProfile === "review" ||
@@ -1715,7 +1719,27 @@ export class AgentEngine {
           const dispatchPromise = this.executeToolCalls(
             dispatchBlocks,
             signal,
-            sessionToolContext,
+            {
+              ...sessionToolContext,
+              onNestedToolStart: (nested) =>
+                pushDispatchEvent({
+                  type: "tool_start",
+                  toolCallId: nested.toolCallId,
+                  toolName: nested.toolName,
+                  parentCallId: nested.parentCallId,
+                  input: nested.input,
+                }),
+              onNestedToolComplete: (nested) =>
+                pushDispatchEvent({
+                  type: "tool_result",
+                  toolCallId: nested.toolCallId,
+                  toolName: nested.toolName,
+                  parentCallId: nested.parentCallId,
+                  result: nested.result.content,
+                  durationMs: nested.durationMs,
+                  input: nested.input,
+                }),
+            },
             session,
             (tr) => {
               const toolUseBlock = toolUseBlocksById.get(tr.tool_use_id);
@@ -1727,6 +1751,7 @@ export class AgentEngine {
                 durationMs: tr.durationMs,
                 input: toolUseBlock?.input,
                 mcpApprovalPromotion: tr.mcpApprovalPromotion,
+                composeTrace: tr.composeTrace,
               });
               if (
                 tr.toolName === "set_task_status" &&
@@ -1834,6 +1859,7 @@ export class AgentEngine {
             tool_use_id: tr.tool_use_id,
             content: toolResultContents[index]!,
             mcpApprovalPromotion: tr.mcpApprovalPromotion,
+            composeTrace: tr.composeTrace,
           })),
         );
 
@@ -2020,6 +2046,7 @@ export class AgentEngine {
           forceResolve(result);
         },
         JSON.stringify(call.input, null, 2),
+        ctx.parentCallId,
       );
       trackedCalls.set(call.id, {
         trackerCtx,
@@ -2063,6 +2090,7 @@ export class AgentEngine {
                 context: {
                   ...ctx,
                   sessionId: session.id,
+                  toolCallId: call.id,
                   trackerCtx,
                   toolAbortSignal: controller?.signal,
                   getAdvertisedSkills: () => session.getAdvertisedSkills(),
@@ -2080,6 +2108,7 @@ export class AgentEngine {
               context: {
                 ...ctx,
                 sessionId: session.id,
+                toolCallId: call.id,
                 trackerCtx,
                 toolAbortSignal: controller?.signal,
                 getAdvertisedSkills: () => session.getAdvertisedSkills(),
@@ -2095,6 +2124,7 @@ export class AgentEngine {
           result,
           durationMs: Date.now() - start,
           mcpApprovalPromotion: result.uiMeta?.mcpApprovalPromotion,
+          composeTrace: result.uiMeta?.composeTrace,
         };
       } catch (err) {
         return {

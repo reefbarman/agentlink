@@ -30,7 +30,10 @@ export async function handleGetDiagnostics(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
+      data: `Error: ${message}`,
       content: [{ type: "text", text: `Error: ${message}` }],
+      isError: true,
+      error: { kind: "tool_error", message },
     };
   }
 }

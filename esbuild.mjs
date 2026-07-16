@@ -152,6 +152,13 @@ const browserGatewayHelperOptions = {
   },
 };
 
+const wasmDestDir = "dist/wasm";
+mkdirSync(wasmDestDir, { recursive: true });
+copyFileSync(
+  "node_modules/@jitl/quickjs-wasmfile-release-asyncify/dist/emscripten-module.wasm",
+  path.join(wasmDestDir, "quickjs-release-asyncify.wasm"),
+);
+
 if (watch) {
   const [
     extCtx,
@@ -208,8 +215,6 @@ if (watch) {
     "dist/codicon.ttf",
   );
   // Copy tree-sitter WASM files to dist/wasm/
-  const wasmDestDir = "dist/wasm";
-  mkdirSync(wasmDestDir, { recursive: true });
   // Core parser WASM
   copyFileSync(
     "node_modules/web-tree-sitter/web-tree-sitter.wasm",

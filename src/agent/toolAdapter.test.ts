@@ -6,7 +6,12 @@ import {
   READ_ONLY_TOOLS,
   type ToolDispatchContext,
 } from "./toolAdapter.js";
-import { PARALLEL_SAFE_TOOLS } from "../core/tools/toolCapabilities.js";
+import {
+  COMPOSABLE_TOOLS,
+  PARALLEL_SAFE_TOOLS,
+  TOOL_CAPABILITIES,
+} from "../core/tools/toolCapabilities.js";
+import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "../shared/types.js";
@@ -354,6 +359,17 @@ describe("getAgentTools", () => {
     expect(names).not.toContain("handshake");
   });
 
+  it("gates all registry dev-only tools by build type", () => {
+    const devOnlyNames = Object.entries(TOOL_REGISTRY)
+      .filter(([, metadata]) => metadata.devOnly)
+      .map(([name]) => name);
+    const names = getAgentTools().map((tool) => tool.name);
+
+    for (const name of devOnlyNames) {
+      expect(names.includes(name)).toBe(__DEV_BUILD__);
+    }
+  });
+
   it("gates feedback tools by build type", () => {
     const names = getAgentTools().map((t) => t.name);
     if (__DEV_BUILD__) {
@@ -365,6 +381,39 @@ describe("getAgentTools", () => {
       expect(names).not.toContain("get_feedback");
       expect(names).not.toContain("delete_feedback");
     }
+  });
+
+  it("keeps compose out of background, restrictive profile, and skill catalogs", () => {
+    expect(
+      getAgentTools(undefined, undefined, true).map((tool) => tool.name),
+    ).not.toContain("compose");
+    expect(
+      getAgentTools(undefined, undefined, true, "readonly-research").map(
+        (tool) => tool.name,
+      ),
+    ).not.toContain("compose");
+    expect(
+      getAgentTools(undefined, undefined, false, undefined, [
+        "get_context",
+      ]).map((tool) => tool.name),
+    ).not.toContain("compose");
+  });
+
+  it("keeps composability metadata canonical and registered", () => {
+    const definitions = new Set(getAgentTools().map((tool) => tool.name));
+    for (const name of COMPOSABLE_TOOLS) {
+      expect(TOOL_CAPABILITIES[name]).toMatchObject({
+        composable: true,
+        canonicalResult: true,
+        sideEffect: "read",
+        requiresApproval: "never",
+      });
+      expect(TOOL_REGISTRY[name]).toBeDefined();
+      expect(definitions.has(name)).toBe(true);
+    }
+    expect(COMPOSABLE_TOOLS.has("compose")).toBe(false);
+    expect(COMPOSABLE_TOOLS.has("read_file")).toBe(false);
+    expect(COMPOSABLE_TOOLS.has("codebase_search")).toBe(false);
   });
 
   it("includes the core file tools and foreground task status tool", () => {
@@ -1160,6 +1209,36 @@ describe("dispatchToolCall", () => {
       ok: false,
       error: { code: "session_transcript_unavailable" },
     });
+  });
+
+  it("denies untrusted nested read paths without invoking the handler", async () => {
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      approvalManager: {
+        isPathTrusted: vi.fn(() => false),
+      } as any,
+    });
+    vi.mocked(handleGetContext).mockClear();
+
+    const result = await runtime.executeTool({
+      name: "get_context",
+      input: { path: "/outside/private.ts" },
+      context: {
+        sessionId: "test-session",
+        interactionPolicy: "deny",
+      },
+    });
+
+    expect(result).toMatchObject({
+      isError: true,
+      data: {
+        status: "rejected",
+        path: "/outside/private.ts",
+        reason: "interaction_denied",
+      },
+    });
+    expect(handleGetContext).not.toHaveBeenCalled();
+    expect(mockOnApprovalRequest).not.toHaveBeenCalled();
   });
 
   it("forwards the execution-scoped transcript getter through the tool runtime", async () => {

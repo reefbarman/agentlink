@@ -10,6 +10,7 @@ import type {
   WebviewModelInfo,
 } from "../agent/webview/types.js";
 
+import type { ComposeChildStatus, ComposeTrace } from "./composeTypes.js";
 import type { DetectedQuestion } from "./questionDetection.js";
 import { randomId } from "./randomId.js";
 import type {
@@ -391,7 +392,13 @@ export type AppAction =
       providerResponseId?: string;
       contextBreakdown?: RequestContextBreakdown;
     }
-  | { type: "TOOL_START"; toolCallId: string; toolName: string }
+  | {
+      type: "TOOL_START";
+      toolCallId: string;
+      toolName: string;
+      parentCallId?: string;
+      input?: unknown;
+    }
   | { type: "TOOL_INPUT_DELTA"; toolCallId: string; partialJson: string }
   | {
       type: "TOOL_COMPLETE";
@@ -401,7 +408,9 @@ export type AppAction =
       resultImages?: Array<{ mimeType: string; data: string }>;
       durationMs: number;
       input?: unknown;
+      parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: ComposeTrace;
     }
   | { type: "TODO_UPDATE"; todos: TodoItem[] }
   | { type: "ADD_ANNOTATION"; text: string; badge: "follow-up" | "rejection" }
@@ -577,7 +586,10 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
   >();
   const toolResultUiMeta = new Map<
     string,
-    { mcpApprovalPromotion?: McpApprovalPromotionMeta }
+    {
+      mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: ComposeTrace;
+    }
   >();
   for (const msg of raw) {
     const m = msg as { role: string; content: unknown };
@@ -587,6 +599,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         tool_use_id?: string;
         content?: unknown;
         mcpApprovalPromotion?: McpApprovalPromotionMeta;
+        composeTrace?: ComposeTrace;
       }>) {
         if (block.type === "tool_result" && block.tool_use_id) {
           const content = block.content;
@@ -620,9 +633,10 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
             if (images.length > 0)
               toolResultImages.set(block.tool_use_id, images);
           }
-          if (block.mcpApprovalPromotion) {
+          if (block.mcpApprovalPromotion || block.composeTrace) {
             toolResultUiMeta.set(block.tool_use_id, {
               mcpApprovalPromotion: block.mcpApprovalPromotion,
+              composeTrace: block.composeTrace,
             });
           }
         }
@@ -937,6 +951,7 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
               complete: true,
               mcpApprovalPromotion:
                 toolResultUiMeta.get(toolId)?.mcpApprovalPromotion,
+              composeTrace: toolResultUiMeta.get(toolId)?.composeTrace,
             });
           }
         }
@@ -1376,6 +1391,48 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_START": {
+      if (action.parentCallId) {
+        const messages = state.messages.map((message) => ({
+          ...message,
+          blocks: message.blocks.map((block) => {
+            if (
+              block.type !== "tool_call" ||
+              block.id !== action.parentCallId
+            ) {
+              return block;
+            }
+            const trace = block.composeTrace ?? {
+              status: "running" as const,
+              totalChildren: 0,
+              completedChildren: 0,
+              children: [],
+            };
+            const inputSummary =
+              action.input === undefined
+                ? undefined
+                : JSON.stringify(action.input).slice(0, 240);
+            return {
+              ...block,
+              composeTrace: {
+                ...trace,
+                status: "running" as const,
+                totalChildren: trace.totalChildren + 1,
+                children: [
+                  ...trace.children,
+                  {
+                    id: action.toolCallId,
+                    name: action.toolName,
+                    status: "running" as const,
+                    inputSummary,
+                  },
+                ].slice(-64),
+              },
+            };
+          }),
+        }));
+        return { ...state, messages, statusOverride: null };
+      }
+
       const all = ensureAssistant(state.messages);
       const { msgs, last } = cloneLast(all);
       last.blocks.push(
@@ -1394,6 +1451,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
               inputJson: "",
               result: "",
               complete: false,
+              ...(action.toolName === "compose"
+                ? {
+                    composeTrace: {
+                      status: "running" as const,
+                      totalChildren: 0,
+                      completedChildren: 0,
+                      children: [],
+                    },
+                  }
+                : {}),
             },
       );
       return { ...state, messages: msgs, statusOverride: null };
@@ -1428,6 +1495,50 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case "TOOL_COMPLETE": {
+      if (action.parentCallId) {
+        const messages = state.messages.map((message) => ({
+          ...message,
+          blocks: message.blocks.map((block) => {
+            if (
+              block.type !== "tool_call" ||
+              block.id !== action.parentCallId
+            ) {
+              return block;
+            }
+            const trace = block.composeTrace;
+            if (!trace) return block;
+            const childStatus: ComposeChildStatus = parseJsonObject(
+              action.result,
+            )?.error
+              ? "error"
+              : "completed";
+            return {
+              ...block,
+              composeTrace: {
+                ...trace,
+                completedChildren: Math.min(
+                  trace.totalChildren,
+                  trace.completedChildren + 1,
+                ),
+                children: trace.children.map((child) =>
+                  child.id === action.toolCallId
+                    ? {
+                        ...child,
+                        status: childStatus,
+                        durationMs: action.durationMs,
+                        ...(childStatus === "error"
+                          ? { errorSummary: action.result.slice(0, 240) }
+                          : {}),
+                      }
+                    : child,
+                ),
+              },
+            };
+          }),
+        }));
+        return { ...state, messages };
+      }
+
       // Search ALL messages for the matching tool_call — not just the last one.
       // Events like ADD_ANNOTATION, ADD_INTERJECTION, BG_AGENT_DONE, or ADD_CONDENSE
       // can push new messages between TOOL_START and TOOL_COMPLETE, leaving the
@@ -1468,7 +1579,10 @@ export function reducer(state: AppState, action: AppAction): AppState {
             complete: true,
             durationMs: action.durationMs,
             ...(b.type === "tool_call"
-              ? { mcpApprovalPromotion: action.mcpApprovalPromotion }
+              ? {
+                  mcpApprovalPromotion: action.mcpApprovalPromotion,
+                  composeTrace: action.composeTrace ?? b.composeTrace,
+                }
               : {}),
           };
           if (b.type === "skill_load") {

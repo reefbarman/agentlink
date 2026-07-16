@@ -10,7 +10,12 @@ import type {
 } from "../../core/capabilities/readSearch.js";
 
 import { SYMBOL_KIND_NAMES } from "../languageFeatures.js";
-import { jsonResult, type ToolResult } from "../../shared/types.js";
+import {
+  errorResult,
+  handleToolError,
+  jsonResult,
+  type ToolResult,
+} from "../../shared/types.js";
 import path from "node:path";
 
 export interface GetContextParams {
@@ -52,10 +57,10 @@ export async function handleGetContext(
 
     const rawLimit = Math.trunc(params.limit ?? DEFAULT_LIMIT);
     if (!Number.isFinite(rawLimit) || rawLimit <= 0) {
-      return jsonResult({
-        error: `Invalid limit: ${params.limit}. Must be a positive number.`,
-        path: params.path,
-      });
+      return errorResult(
+        `Invalid limit: ${params.limit}. Must be a positive number.`,
+        { path: params.path },
+      );
     }
 
     const offset = Math.max(1, Math.trunc(params.offset ?? 1));
@@ -128,11 +133,7 @@ export async function handleGetContext(
 
     return jsonResult(result, true);
   } catch (err) {
-    if (typeof err === "object" && err !== null && "content" in err) {
-      return err as ToolResult;
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    return jsonResult({ error: message, path: params.path });
+    return handleToolError(err, { path: params.path });
   }
 }
 

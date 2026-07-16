@@ -349,7 +349,7 @@ describe("createVscodeDiagnosticsProvider", () => {
 
     await expect(
       provider.getDiagnostics({ path: "src/file.ts", severity: "error" }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [{ type: "text", text: "No diagnostics found for src/file.ts" }],
     });
   });
@@ -358,14 +358,14 @@ describe("createVscodeDiagnosticsProvider", () => {
     getDiagnostics.mockReturnValue([]);
     const provider = createVscodeDiagnosticsProvider();
 
-    await expect(provider.getDiagnostics({})).resolves.toEqual({
+    await expect(provider.getDiagnostics({})).resolves.toMatchObject({
       content: [{ type: "text", text: "No diagnostics found in workspace" }],
     });
 
     getDiagnostics.mockReturnValue([]);
     await expect(
       provider.getDiagnostics({ path: "src/empty.ts" }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         { type: "text", text: "No diagnostics found for src/empty.ts" },
       ],
@@ -455,7 +455,7 @@ describe("createVscodeNavigationProvider", () => {
         column: 1,
         sessionId: "session-1",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -474,7 +474,7 @@ describe("createVscodeNavigationProvider", () => {
         column: 1,
         sessionId: "session-1",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -590,7 +590,7 @@ describe("createVscodeReferencesProvider", () => {
         column: 3,
         sessionId: "session-1",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -770,7 +770,7 @@ describe("createVscodeSymbolsProvider", () => {
 
     await expect(
       provider.getSymbols({ sessionId: "session-1" }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -845,7 +845,7 @@ describe("createVscodeSymbolsProvider", () => {
 
     await expect(
       provider.getSymbols({ path: "src/file.ts", sessionId: "session-1" }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -913,7 +913,7 @@ describe("createVscodeSymbolsProvider", () => {
 
     await expect(
       provider.getSymbols({ query: "Missing", sessionId: "session-1" }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -1026,7 +1026,7 @@ describe("createVscodeHoverProvider", () => {
         column: 5,
         sessionId: "session-1",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -1127,7 +1127,7 @@ describe("createVscodeCompletionsProvider", () => {
         column: 5,
         sessionId: "session-1",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -1174,7 +1174,7 @@ describe("createVscodeCodeActionsProvider", () => {
         column: 5,
         sessionId: "session-1",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -1193,7 +1193,7 @@ describe("createVscodeCodeActionsProvider", () => {
 
     await expect(
       provider.applyCodeAction({ sessionId: "session-1", index: 0 }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -1216,7 +1216,7 @@ describe("createVscodeCodeActionsProvider", () => {
 
     await expect(
       provider.applyCodeAction({ sessionId: "session-1", index: 2 }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -1504,7 +1504,7 @@ describe("createVscodeInlayHintsProvider", () => {
         path: "src/file.ts",
         sessionId: "session-1",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -1578,7 +1578,7 @@ describe("createVscodeHierarchyProvider", () => {
         direction: "both",
         sessionId: "session-1",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -1748,7 +1748,7 @@ describe("createVscodeHierarchyProvider", () => {
         direction: "both",
         sessionId: "session-1",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",

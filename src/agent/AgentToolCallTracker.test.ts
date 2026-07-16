@@ -297,6 +297,52 @@ describe("AgentToolCallTracker lifecycle", () => {
     });
   });
 
+  it("cancels all active descendants with their parent", () => {
+    const tracker = new AgentToolCallTracker();
+    const parentResolve = vi.fn();
+    const childResolve = vi.fn();
+    const grandchildResolve = vi.fn();
+    tracker.registerAgentCall(
+      "parent",
+      "compose",
+      "",
+      "session-a",
+      parentResolve,
+    );
+    tracker.registerAgentCall(
+      "child",
+      "get_context",
+      "",
+      "session-a",
+      childResolve,
+      undefined,
+      "parent",
+    );
+    tracker.registerAgentCall(
+      "grandchild",
+      "get_hover",
+      "",
+      "session-a",
+      grandchildResolve,
+      undefined,
+      "child",
+    );
+
+    tracker.cancelCall("parent");
+
+    expect(parentResolve).toHaveBeenCalledOnce();
+    expect(childResolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "cancelled" }),
+      }),
+    );
+    expect(grandchildResolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "cancelled" }),
+      }),
+    );
+  });
+
   it("force-completes generic tools with the existing fallback", async () => {
     const tracker = new AgentToolCallTracker();
     const forceResolve = vi.fn();

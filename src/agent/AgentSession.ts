@@ -443,6 +443,7 @@ export class AgentSession {
       tool_use_id: string;
       content: string | ContentBlock[];
       mcpApprovalPromotion?: import("../shared/types.js").McpApprovalPromotionMeta;
+      composeTrace?: import("../shared/composeTypes.js").ComposeTrace;
     }>,
   ): void {
     this.messages.push({ role: "user", content: results } as AgentMessage);

@@ -323,6 +323,42 @@ When a connected MCP server requests URL elicitation, AgentLink shows an explici
 
 The tools below are available to the built-in agent according to its active mode and capability profile. Some development or orchestration tools are intentionally exposed only in specific modes.
 
+### compose (development builds only)
+
+Run a bounded JavaScript function body that calls native read-only AgentLink tools and returns a reduced JSON-compatible result in one model-visible tool phase. Use it for dependent fan-out/filter/aggregate workflows where intermediate results should stay out of model context. Do not use it for exploratory work where each result changes the next step, pure shell pipelines, or small one-off calls.
+
+| Parameter     | Type    | Description                                                                      |
+| ------------- | ------- | -------------------------------------------------------------------------------- |
+| `script`      | string  | JavaScript function body (1–65,536 bytes). Top-level `return` is supported.      |
+| `description` | string? | Optional one-line intent shown in the parent tool card (maximum 200 characters). |
+
+The isolated QuickJS-WASM context exposes two synchronous guest helpers backed by the async host bridge:
+
+```js
+const refs = tool("get_references", {
+  path: "src/api.ts",
+  line: 20,
+  column: 10,
+});
+const hovers = toolAll(
+  refs.references.slice(0, 16).map((ref) => ({
+    name: "get_hover",
+    input: { path: ref.path, line: ref.line, column: ref.column },
+  })),
+);
+return hovers.filter((hover) => hover.contents?.length);
+```
+
+- `tool(name, input)` returns the child tool's canonical structured `data` value or throws a structured script error.
+- `toolAll([{ name, input }, ...])` performs one host-side batch with concurrency 4 and preserves input order. Guest `Promise.all` over `tool()` calls is not supported.
+- Composable tools are `get_context`, `get_repo_map`, `get_module_neighbors`, non-semantic `list_files`, regex-only `search_files`, `get_diagnostics`, `go_to_definition`, `go_to_implementation`, `go_to_type_definition`, `get_references`, `get_symbols`, `get_hover`, `get_completions`, `get_code_actions`, `get_call_hierarchy`, `get_type_hierarchy`, and `get_inlay_hints`.
+- Child names must also be present in the exact provider request that invoked `compose`. Nested compose, MCP, shell, background/fleet, writes, media, transcript recall, editor UI, semantic search variants, and interactive controls are rejected.
+- Outside-workspace child paths are limited to AgentLink temporary artifacts and paths already trusted before composition. Compose never opens approval, question, diff, mode, or editor UI.
+- Limits: 64 child calls, 16 descriptors per `toolAll`, 32 MiB QuickJS memory, 60 seconds, 1 MiB canonical data per child, 8 MiB cumulative child data, 40 KiB final serialized return, and a bounded UI-only child trace.
+- Failures return `isError: true` with a canonical error kind such as `validation`, `policy`, `budget_exhausted`, `child_failed`, `serialization`, `memory_limit`, `timeout`, `aborted`, `script_error`, or `internal`. The parent trace remains visible after session restore in both VS Code and mirrored browser sessions.
+
+`compose` is available only when the extension is built with `DEV_BUILD=true`. It is foreground-only and is not exposed to background profiles or standalone projectless browser Ask Agent.
+
 ### read_file
 
 Read file contents with line numbers. Returns rich metadata that built-in read tools cannot provide. Supports text files, local images, and PDF text extraction.

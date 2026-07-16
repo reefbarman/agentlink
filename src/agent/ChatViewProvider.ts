@@ -28,6 +28,7 @@ import type {
   RevertRecoveryState,
 } from "./persistenceContracts.js";
 import type { AgentErrorActions, AgentEvent } from "./types.js";
+import type { ComposeTrace } from "../shared/composeTypes.js";
 import type {
   BrowserGatewayThemeSnapshot,
   McpApprovalPromotionMeta,
@@ -260,6 +261,8 @@ export type ExtensionToWebview =
       sessionId: string;
       toolCallId: string;
       toolName: string;
+      parentCallId?: string;
+      input?: unknown;
     }
   | {
       type: "agentToolInputDelta";
@@ -276,7 +279,9 @@ export type ExtensionToWebview =
       resultImages?: Array<{ mimeType: string; data: string }>;
       durationMs: number;
       input?: unknown;
+      parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: ComposeTrace;
     }
   | {
       type: "agentUserAnnotation";
@@ -5475,6 +5480,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           type: "TOOL_START",
           toolCallId: extMsg.toolCallId,
           toolName: extMsg.toolName,
+          parentCallId: extMsg.parentCallId,
+          input: extMsg.input,
         });
         break;
 
@@ -5496,7 +5503,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           resultImages: extMsg.resultImages,
           durationMs: extMsg.durationMs,
           input: extMsg.input,
+          parentCallId: extMsg.parentCallId,
           mcpApprovalPromotion: extMsg.mcpApprovalPromotion,
+          composeTrace: extMsg.composeTrace,
         });
         break;
 
@@ -5926,6 +5935,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           sessionId,
           toolCallId: event.toolCallId,
           toolName: event.toolName,
+          parentCallId: event.parentCallId,
+          input: event.input,
         });
         // Keep bg strip in sync when a bg session starts a new tool
         if (isBackground) {
@@ -5998,7 +6009,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ...(resultImages.length ? { resultImages } : {}),
           durationMs: event.durationMs,
           input: event.input,
+          parentCallId: event.parentCallId,
           mcpApprovalPromotion: event.mcpApprovalPromotion,
+          composeTrace: event.composeTrace,
         });
         // Send running token estimate so the context bar stays current
         // between API responses (tool results can add 10-100k+ tokens).

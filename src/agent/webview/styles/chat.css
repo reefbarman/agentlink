@@ -1443,6 +1443,48 @@ body {
   gap: 2px;
 }
 
+.compose-trace-description {
+  margin-bottom: 6px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.compose-trace-children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.compose-trace-child {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.compose-trace-child-name {
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-editor-font-family);
+}
+
+.compose-trace-child-input,
+.compose-trace-child-error {
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compose-trace-child-error {
+  color: var(--vscode-errorForeground);
+}
+
+.compose-trace-child-duration {
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+}
+
 .tool-call-section-label {
   font-size: 10px;
   text-transform: uppercase;

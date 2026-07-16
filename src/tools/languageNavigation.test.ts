@@ -13,7 +13,9 @@ const params = { path: "src/file.ts", line: 2, column: 3 };
 
 describe("language navigation handlers", () => {
   it("returns explicit unavailable results when no navigation provider is supplied", async () => {
-    await expect(handleGoToDefinition(params, "session-1")).resolves.toEqual({
+    await expect(
+      handleGoToDefinition(params, "session-1"),
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -30,7 +32,7 @@ describe("language navigation handlers", () => {
 
     await expect(
       handleGoToImplementation(params, "session-1"),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",
@@ -47,7 +49,7 @@ describe("language navigation handlers", () => {
 
     await expect(
       handleGoToTypeDefinition(params, "session-1"),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       content: [
         {
           type: "text",

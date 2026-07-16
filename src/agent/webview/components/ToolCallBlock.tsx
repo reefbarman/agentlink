@@ -586,6 +586,7 @@ export function ToolCallBlock({
       p.type === "file" || p.type === "badge" || (p.type === "text" && p.text),
   );
   const mcpApprovalPromotion = toolCall.mcpApprovalPromotion;
+  const composeTrace = toolCall.composeTrace;
   const availablePromotionScopes =
     mcpApprovalPromotion?.scopes.filter(
       (scope) => !promotedScopes.has(scope),
@@ -729,6 +730,52 @@ export function ToolCallBlock({
             <div class="tool-call-section">
               <div class="tool-call-section-label">Input</div>
               <JsonHighlight json={formattedInput} />
+            </div>
+          )}
+          {composeTrace && (
+            <div class="tool-call-section compose-trace">
+              <div class="tool-call-section-label">
+                Child tools ({composeTrace.completedChildren}/
+                {composeTrace.totalChildren})
+              </div>
+              {composeTrace.description && (
+                <div class="compose-trace-description">
+                  {composeTrace.description}
+                </div>
+              )}
+              <div class="compose-trace-children">
+                {composeTrace.children.map((child) => (
+                  <div class="compose-trace-child" key={child.id}>
+                    <i
+                      class={`codicon ${
+                        child.status === "running"
+                          ? "codicon-loading codicon-modifier-spin"
+                          : child.status === "completed"
+                            ? "codicon-pass-filled"
+                            : child.status === "cancelled"
+                              ? "codicon-circle-slash"
+                              : "codicon-error"
+                      }`}
+                    />
+                    <span class="compose-trace-child-name">{child.name}</span>
+                    {child.inputSummary && (
+                      <span class="compose-trace-child-input">
+                        {child.inputSummary}
+                      </span>
+                    )}
+                    {child.durationMs != null && (
+                      <span class="compose-trace-child-duration">
+                        {fmtDuration(child.durationMs)}
+                      </span>
+                    )}
+                    {child.errorSummary && (
+                      <span class="compose-trace-child-error">
+                        {child.errorSummary}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           {(displayedResult || resultImages.length > 0) && (

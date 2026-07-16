@@ -361,7 +361,10 @@ describe("ChatViewProvider session state sync", () => {
       { get: vi.fn(), update: vi.fn() } as never,
     );
     const rebuildSystemPrompts = vi.fn(async () => {});
-    provider.setSessionManager({ rebuildSystemPrompts } as never);
+    provider.setSessionManager({
+      rebuildSystemPrompts,
+      getForegroundSession: () => undefined,
+    } as never);
     const listener = vi.fn();
     const subscription = provider.onDidChangeBrowserGatewaySurface(listener);
     const handleMcpStatusChange = (

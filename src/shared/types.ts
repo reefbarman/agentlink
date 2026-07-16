@@ -60,12 +60,19 @@ export interface McpApprovalPromotionMeta {
 }
 
 export type ToolResult = {
+  data?: unknown;
   content: Array<
     | { type: "text"; text: string }
     | { type: "image"; data: string; mimeType: string }
   >;
+  isError?: boolean;
+  error?: {
+    kind: string;
+    message: string;
+  };
   uiMeta?: {
     mcpApprovalPromotion?: McpApprovalPromotionMeta;
+    composeTrace?: import("./composeTypes.js").ComposeTrace;
   };
 };
 
@@ -115,20 +122,24 @@ export interface RevertRecoveryNotice {
   message: string;
 }
 
-/** Create a ToolResult containing a JSON-serialized text payload. */
+const TOOL_ERROR_KIND = "tool_error";
+
+/** Create a ToolResult containing a canonical JSON-serialized payload. */
 export function jsonResult(payload: unknown, pretty = false): ToolResult {
   return {
+    data: payload,
     content: [
       {
         type: "text",
         text: JSON.stringify(payload, null, pretty ? 2 : undefined),
       },
     ],
+    isError: false,
   };
 }
 
 /** Create a successful ToolResult from a JSON-serializable payload. */
-export function successResult(payload: Record<string, unknown>): ToolResult {
+export function successResult(payload: unknown): ToolResult {
   return jsonResult(payload, true);
 }
 
@@ -137,7 +148,15 @@ export function errorResult(
   message: string,
   extra?: Record<string, unknown>,
 ): ToolResult {
-  return jsonResult({ error: message, ...extra });
+  const payload = { error: message, ...extra };
+  return {
+    ...jsonResult(payload),
+    isError: true,
+    error: {
+      kind: TOOL_ERROR_KIND,
+      message: typeof payload.error === "string" ? payload.error : message,
+    },
+  };
 }
 
 /** Wrap a caught error into a ToolResult. */
@@ -146,7 +165,13 @@ export function handleToolError(
   context?: Record<string, unknown>,
 ): ToolResult {
   if (typeof err === "object" && err !== null && "content" in err) {
-    return err as ToolResult;
+    const result = err as ToolResult;
+    result.isError = true;
+    result.error ??= {
+      kind: TOOL_ERROR_KIND,
+      message: "Tool execution failed",
+    };
+    return result;
   }
   const message = err instanceof Error ? err.message : String(err);
   return errorResult(message, context);

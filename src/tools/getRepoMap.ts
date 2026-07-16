@@ -8,6 +8,7 @@ import type {
 import {
   errorResult,
   handleToolError,
+  jsonResult,
   type ToolResult,
 } from "../shared/types.js";
 
@@ -125,9 +126,7 @@ export async function handleGetRepoMap(
       includeExternal: params.include_external !== false,
     });
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    };
+    return jsonResult(payload, true);
   } catch (err) {
     return handleToolError(err, { path: params.path });
   }

@@ -18,6 +18,7 @@ export interface TrackedCall {
   sessionId: string;
   startedAt: number;
   forceResolve: (result: ToolResult) => void;
+  parentCallId?: string;
   terminalId?: string;
   backgroundRequested?: boolean;
   revealTerminalRequested?: boolean;
@@ -31,6 +32,7 @@ export interface TrackedCallInfo {
   startedAt: number;
   status: "active" | "completed";
   completedAt?: number;
+  parentCallId?: string;
   canContinueInBackground?: boolean;
 }
 
@@ -65,6 +67,7 @@ export class AgentToolCallTracker extends EventEmitter {
         params: c.params,
         startedAt: c.startedAt,
         status: "active" as const,
+        parentCallId: c.parentCallId,
         canContinueInBackground: canContinueInBackground(c.toolName),
       }),
     );
@@ -81,6 +84,7 @@ export class AgentToolCallTracker extends EventEmitter {
       startedAt: call.startedAt,
       status: "completed",
       completedAt: Date.now(),
+      parentCallId: call.parentCallId,
     };
     this.recentCalls.set(call.id, info);
     setTimeout(() => {
@@ -141,6 +145,7 @@ export class AgentToolCallTracker extends EventEmitter {
     sessionId: string,
     forceResolve: (result: ToolResult) => void,
     params?: string,
+    parentCallId?: string,
   ): TrackerContext {
     const tracked: TrackedCall = {
       id: toolCallId,
@@ -150,6 +155,7 @@ export class AgentToolCallTracker extends EventEmitter {
       sessionId,
       startedAt: Date.now(),
       forceResolve,
+      parentCallId,
     };
     this.activeCalls.set(toolCallId, tracked);
     this.log(
@@ -261,6 +267,33 @@ export class AgentToolCallTracker extends EventEmitter {
     }
 
     this.log(`CANCEL_AGENT ${call.toolName} (${id.slice(0, 8)})`);
+
+    const descendantIds = new Set([id]);
+    let foundDescendant = true;
+    while (foundDescendant) {
+      foundDescendant = false;
+      for (const active of this.activeCalls.values()) {
+        if (
+          active.parentCallId &&
+          descendantIds.has(active.parentCallId) &&
+          !descendantIds.has(active.id)
+        ) {
+          descendantIds.add(active.id);
+          foundDescendant = true;
+        }
+      }
+    }
+    for (const descendantId of descendantIds) {
+      if (descendantId === id) continue;
+      const descendant = this.activeCalls.get(descendantId);
+      descendant?.forceResolve(
+        successResult({
+          status: "cancelled",
+          tool: descendant.toolName,
+          message: "Cancelled with parent tool call",
+        }),
+      );
+    }
 
     // Kill the running terminal process if applicable
     if (call.terminalId) {

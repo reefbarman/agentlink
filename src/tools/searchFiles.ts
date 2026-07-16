@@ -19,7 +19,12 @@ import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 
 const DEFAULT_MAX_RESULTS = 300;
 
-import { type ToolResult } from "../shared/types.js";
+import {
+  errorResult,
+  handleToolError,
+  jsonResult,
+  type ToolResult,
+} from "../shared/types.js";
 
 export interface SearchFilesProviders {
   workspaceFileProvider: WorkspaceFileProvider;
@@ -234,18 +239,11 @@ export async function handleSearchFiles(
       kind: "read",
     });
     if (!access.approved) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              status: "rejected",
-              path: params.path,
-              ...(access.reason && { reason: access.reason }),
-            }),
-          },
-        ],
-      };
+      return jsonResult({
+        status: "rejected",
+        path: params.path,
+        ...(access.reason && { reason: access.reason }),
+      });
     }
 
     let searchDir = resolvedPath;
@@ -258,31 +256,13 @@ export async function handleSearchFiles(
         pathIsFile = true;
         searchDir = path.dirname(resolvedPath);
       } else if (!stat.isDirectory()) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error:
-                  "path must point to either a file or directory for search_files",
-                path: params.path,
-              }),
-            },
-          ],
-        };
+        return errorResult(
+          "path must point to either a file or directory for search_files",
+          { path: params.path },
+        );
       }
     } catch {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: "path does not exist",
-              path: params.path,
-            }),
-          },
-        ],
-      };
+      return errorResult("path does not exist", { path: params.path });
     }
 
     // Semantic search is handled separately
@@ -292,19 +272,10 @@ export async function handleSearchFiles(
     }
 
     if (pathIsFile && params.file_pattern) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error:
-                "When path points to a file, file_pattern must be omitted (path already scopes to a single file)",
-              path: params.path,
-              file_pattern: params.file_pattern,
-            }),
-          },
-        ],
-      };
+      return errorResult(
+        "When path points to a file, file_pattern must be omitted (path already scopes to a single file)",
+        { path: params.path, file_pattern: params.file_pattern },
+      );
     }
 
     const maxResults = params.max_results ?? DEFAULT_MAX_RESULTS;
@@ -373,33 +344,18 @@ export async function handleSearchFiles(
       // Ripgrep error — may be invalid regex syntax etc.
       const message = error instanceof Error ? error.message : String(error);
       const hint = getEscapingHint(params.regex);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: message,
-              regex: params.regex,
-              ...(hint && { hint }),
-            }),
-          },
-        ],
-      };
+      return errorResult(message, {
+        regex: params.regex,
+        ...(hint && { hint }),
+      });
     }
 
     if (!output.trim()) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              total_matches: 0,
-              truncated: false,
-              results: "No results found",
-            }),
-          },
-        ],
-      };
+      return jsonResult({
+        total_matches: 0,
+        truncated: false,
+        results: "No results found",
+      });
     }
 
     const { results: fileResults, totalMatches } = parseRipgrepOutput(
@@ -462,19 +418,9 @@ export async function handleSearchFiles(
       results: formatted.join("\n\n"),
     };
 
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
+    return jsonResult(result, true);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ error: message, path: params.path }),
-        },
-      ],
-    };
+    return handleToolError(err, { path: params.path });
   }
 }
 
@@ -515,18 +461,10 @@ async function searchFilesOnly(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const hint = getEscapingHint(params.regex);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            error: message,
-            regex: params.regex,
-            ...(hint && { hint }),
-          }),
-        },
-      ],
-    };
+    return errorResult(message, {
+      regex: params.regex,
+      ...(hint && { hint }),
+    });
   }
 
   const files = output.trim().split("\n").filter(Boolean);
@@ -535,23 +473,15 @@ async function searchFilesOnly(
   const sliced = files.slice(offsetVal, offsetVal + maxResults);
   const limited = sliced.map((f) => path.relative(searchDir, f));
 
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(
-          {
-            total_files: limited.length,
-            truncated: files.length > offsetVal + maxResults,
-            ...(offsetVal > 0 && { offset: offsetVal }),
-            files: limited,
-          },
-          null,
-          2,
-        ),
-      },
-    ],
-  };
+  return jsonResult(
+    {
+      total_files: limited.length,
+      truncated: files.length > offsetVal + maxResults,
+      ...(offsetVal > 0 && { offset: offsetVal }),
+      files: limited,
+    },
+    true,
+  );
 }
 
 // --- count mode ---
@@ -591,18 +521,10 @@ async function searchCount(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const hint = getEscapingHint(params.regex);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            error: message,
-            regex: params.regex,
-            ...(hint && { hint }),
-          }),
-        },
-      ],
-    };
+    return errorResult(message, {
+      regex: params.regex,
+      ...(hint && { hint }),
+    });
   }
 
   const lines = output.trim().split("\n").filter(Boolean);
@@ -624,22 +546,14 @@ async function searchCount(
 
   const sliced = allCounts.slice(offsetVal, offsetVal + maxResults);
 
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(
-          {
-            total_files: sliced.length,
-            total_matches: totalMatches,
-            truncated: allCounts.length > offsetVal + maxResults,
-            ...(offsetVal > 0 && { offset: offsetVal }),
-            counts: sliced,
-          },
-          null,
-          2,
-        ),
-      },
-    ],
-  };
+  return jsonResult(
+    {
+      total_files: sliced.length,
+      total_matches: totalMatches,
+      truncated: allCounts.length > offsetVal + maxResults,
+      ...(offsetVal > 0 && { offset: offsetVal }),
+      counts: sliced,
+    },
+    true,
+  );
 }

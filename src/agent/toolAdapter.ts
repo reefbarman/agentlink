@@ -167,7 +167,12 @@ import type {
 } from "../telemetry/ToolUsageTelemetry.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { randomUUID } from "crypto";
+import * as path from "path";
 import { z } from "zod";
+import { resolveAndValidatePath } from "../util/paths.js";
+import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
+import { createComposeExecutionScope } from "./compose/composeScope.js";
+import { handleCompose, type ComposeParams } from "./compose/composeRuntime.js";
 
 // --- Read-only tools (safe to execute in parallel) ---
 
@@ -176,11 +181,6 @@ export const READ_ONLY_TOOLS = new Set(PARALLEL_SAFE_TOOLS);
 // --- Tools excluded from the agent (MCP-only or not applicable) ---
 
 const EXCLUDED_TOOLS = new Set(["handshake", "load_rule", "load_skill"]);
-const DEV_FEEDBACK_TOOLS = new Set([
-  "send_feedback",
-  "get_feedback",
-  "delete_feedback",
-]);
 
 // --- Zod schema record → JSON Schema conversion ---
 
@@ -246,6 +246,7 @@ const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
   get_type_hierarchy: schemas.getTypeHierarchySchema,
   get_inlay_hints: schemas.getInlayHintsSchema,
   codebase_search: schemas.codebaseSearchSchema,
+  compose: schemas.composeSchema,
   ...(__DEV_BUILD__
     ? {
         send_feedback: {
@@ -1021,13 +1022,14 @@ export function getAgentTools(
   const nativeTools = Object.entries(TOOL_SCHEMAS)
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
-    .filter(([name]) => (__DEV_BUILD__ ? true : !DEV_FEEDBACK_TOOLS.has(name)))
+    .filter(([name]) => !(isBackground && name === "compose"))
+    .filter(([name]) => __DEV_BUILD__ || !TOOL_REGISTRY[name]?.devOnly)
     .filter(
       ([name]) =>
         Boolean(profileAllowlist) ||
         !allowed ||
         allowed.has(name) ||
-        (__DEV_BUILD__ && DEV_FEEDBACK_TOOLS.has(name)),
+        (__DEV_BUILD__ && TOOL_REGISTRY[name]?.devOnly),
     )
     .filter(([name]) => !profileAllowlist || profileAllowlist.has(name))
     .filter(([name]) => !skillAllowlist || skillAllowlist.has(name))
@@ -1179,6 +1181,9 @@ export async function buildAskUserToolResult(args: {
 }
 
 function getToolUsageOutcomeFromResult(result: ToolResult): ToolUsageOutcome {
+  if (result.isError) {
+    return result.error?.kind === "aborted" ? "cancelled" : "error";
+  }
   const text = result.content.find((item) => item.type === "text")?.text;
   if (!text) return "ok";
   try {
@@ -1696,41 +1701,91 @@ export function createAgentToolRuntime(
           request.input,
           ctx.delegationPolicy,
         );
-        const result = await dispatchToolCall(request.name, request.input, {
-          ...ctx,
-          sessionId: request.context.sessionId,
-          mode: request.context.mode,
-          commandExecutionPolicy:
-            request.context.commandExecutionPolicy ??
-            ctx.commandExecutionPolicy,
-          backgroundExpectedResult: request.context.backgroundExpectedResult,
-          trackerCtx: request.context
-            .trackerCtx as ToolDispatchContext["trackerCtx"],
-          toolAbortSignal: request.context.toolAbortSignal,
-          getAdvertisedSkills: request.context.getAdvertisedSkills,
-          getAdvertisedRules: request.context.getAdvertisedRules,
-          onSkillLoad: request.context.onSkillLoad,
-          skillAllowedTools: request.context.skillAllowedTools,
-          onFinalStatus: request.context.onFinalStatus,
-          onCompleteTodos: request.context.onCompleteTodos as
-            | ToolDispatchContext["onCompleteTodos"]
-            | undefined,
-          getSessionImages: request.context.getSessionImages,
-          getSessionTranscript: request.context.getSessionTranscript,
-        });
+        if (request.context.interactionPolicy === "deny") {
+          const denied = enforceNonInteractiveReadPathPolicy(
+            request.input,
+            request.context.sessionId,
+            ctx.approvalManager,
+          );
+          if (denied) return denied;
+        }
+        const result =
+          request.name === "compose"
+            ? __DEV_BUILD__
+              ? await handleCompose({
+                  params: request.input as unknown as ComposeParams,
+                  scope: createComposeExecutionScope({
+                    runtime: this,
+                    parentContext: request.context,
+                  }),
+                  signal:
+                    request.context.toolAbortSignal ??
+                    new AbortController().signal,
+                  wasmPath: path.join(
+                    ctx.extensionUri.fsPath,
+                    "dist",
+                    "wasm",
+                    "quickjs-release-asyncify.wasm",
+                  ),
+                })
+              : errorResult("Tool 'compose' is available only in dev builds")
+            : await dispatchToolCall(request.name, request.input, {
+                ...ctx,
+                sessionId: request.context.sessionId,
+                mode: request.context.mode,
+                commandExecutionPolicy:
+                  request.context.commandExecutionPolicy ??
+                  ctx.commandExecutionPolicy,
+                backgroundExpectedResult:
+                  request.context.backgroundExpectedResult,
+                trackerCtx: request.context
+                  .trackerCtx as ToolDispatchContext["trackerCtx"],
+                toolAbortSignal: request.context.toolAbortSignal,
+                getAdvertisedSkills: request.context.getAdvertisedSkills,
+                getAdvertisedRules: request.context.getAdvertisedRules,
+                onSkillLoad: request.context.onSkillLoad,
+                skillAllowedTools: request.context.skillAllowedTools,
+                onFinalStatus: request.context.onFinalStatus,
+                onCompleteTodos: request.context.onCompleteTodos as
+                  | ToolDispatchContext["onCompleteTodos"]
+                  | undefined,
+                getSessionImages: request.context.getSessionImages,
+                getSessionTranscript: request.context.getSessionTranscript,
+              });
+        const composeTrace = result.uiMeta?.composeTrace;
         ctx.toolUsageTelemetry?.record({
           toolName: request.name,
-          params: request.input,
+          params:
+            request.name === "compose"
+              ? {
+                  descriptionProvided:
+                    typeof request.input.description === "string",
+                }
+              : request.input,
           source: "agent",
           mode: request.context.mode,
           outcome: getToolUsageOutcomeFromResult(result),
           durationMs: Date.now() - startedAt,
+          ...(composeTrace
+            ? {
+                metrics: {
+                  childCount: composeTrace.totalChildren,
+                  completedChildCount: composeTrace.completedChildren,
+                  toolAllBatchCount: composeTrace.toolAllBatchCount ?? 0,
+                  bridgedBytes: composeTrace.bridgedBytes ?? 0,
+                  ...(composeTrace.errorKind
+                    ? { errorKind: composeTrace.errorKind }
+                    : {}),
+                  cancelled: composeTrace.status === "cancelled",
+                },
+              }
+            : {}),
         });
         return result;
       } catch (err) {
         ctx.toolUsageTelemetry?.record({
           toolName: request.name,
-          params: request.input,
+          params: request.name === "compose" ? {} : request.input,
           source: "agent",
           mode: request.context.mode,
           outcome: "error",
@@ -1752,6 +1807,30 @@ export function createAgentToolRuntime(
       return ctx.mcpHub?.getServerConfig(serverName)?.toolDisclosure;
     },
   };
+}
+
+function enforceNonInteractiveReadPathPolicy(
+  input: Record<string, unknown>,
+  sessionId: string,
+  approvalManager: ApprovalManager,
+): ToolResult | undefined {
+  const inputPath = input.path;
+  if (typeof inputPath !== "string" || inputPath.trim() === "")
+    return undefined;
+
+  const { absolutePath, inWorkspace } = resolveAndValidatePath(inputPath);
+  if (
+    inWorkspace ||
+    isAgentlinkTmpArtifact(absolutePath) ||
+    approvalManager.isPathTrusted(sessionId, absolutePath)
+  ) {
+    return undefined;
+  }
+
+  return errorResult(
+    `Compose child path requires interactive approval and was denied: ${absolutePath}`,
+    { status: "rejected", path: absolutePath, reason: "interaction_denied" },
+  );
 }
 
 const PATH_MUTATING_TOOLS = new Set([
@@ -1830,6 +1909,10 @@ export async function dispatchToolCall(
   input: Record<string, unknown>,
   ctx: ToolDispatchContext,
 ): Promise<ToolResult> {
+  if (!__DEV_BUILD__ && TOOL_REGISTRY[toolName]?.devOnly) {
+    return errorResult(`Tool '${toolName}' is available only in dev builds`);
+  }
+
   const {
     approvalManager,
     approvalPanel,

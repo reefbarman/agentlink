@@ -14,6 +14,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "open_file",
     "search_session_history",
     "read_session_excerpt",
+    "compose",
   ],
   edit: [
     "write_file",

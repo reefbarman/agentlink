@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+
 import { BUILT_IN_MODES } from "./modes.js";
 import { getAgentTools } from "./toolAdapter.js";
+
+const FOREGROUND_ONLY_TOOLS = new Set(["compose"]);
 
 const mcpTools = [
   {
@@ -13,13 +16,16 @@ const mcpTools = [
 describe("foreground/background capability parity contract", () => {
   for (const mode of BUILT_IN_MODES) {
     it(`${mode.slug} exposes the same native and MCP tools by placement`, () => {
-      const foreground = getAgentTools(mode, mcpTools, false).map(
-        (tool) => tool.name,
-      );
+      const foreground = getAgentTools(mode, mcpTools, false)
+        .map((tool) => tool.name)
+        .filter((name) => !FOREGROUND_ONLY_TOOLS.has(name));
       const background = getAgentTools(mode, mcpTools, true).map(
         (tool) => tool.name,
       );
       expect(background).toEqual(foreground);
+      expect(
+        getAgentTools(mode, mcpTools, true).map((tool) => tool.name),
+      ).not.toContain("compose");
     });
   }
 

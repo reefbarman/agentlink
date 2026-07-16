@@ -9,6 +9,7 @@ import type {
 } from "../../shared/mcpManagerTypes.js";
 
 import type { CommandApprovalPolicy } from "../../approvals/commandApprovalPolicy.js";
+import type { ComposeTrace } from "../../shared/composeTypes.js";
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
 
@@ -152,6 +153,8 @@ export type ExtensionMessage =
       sessionId: string;
       toolCallId: string;
       toolName: string;
+      parentCallId?: string;
+      input?: unknown;
     }
   | {
       type: "agentToolInputDelta";
@@ -168,7 +171,9 @@ export type ExtensionMessage =
       resultImages?: Array<{ mimeType: string; data: string }>;
       durationMs: number;
       input?: unknown;
+      parentCallId?: string;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: ComposeTrace;
     }
   | {
       type: "agentUserAnnotation";
@@ -752,6 +757,7 @@ export type ContentBlock =
       complete: boolean;
       durationMs?: number;
       mcpApprovalPromotion?: McpApprovalPromotionMeta;
+      composeTrace?: ComposeTrace;
     }
   | {
       type: "skill_load";
