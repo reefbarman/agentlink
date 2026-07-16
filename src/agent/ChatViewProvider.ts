@@ -909,6 +909,8 @@ export function getPreviousChunkByUserTurns(
   };
 }
 
+export type BrowserGatewaySurfaceChangeKind = "mcp" | "theme";
+
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "agentLink.chatView";
 
@@ -1011,6 +1013,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private askAgentMcpConfigVersion = 0;
   private readonly uiEventHub: InMemoryAgentUiEventHub;
   private readonly uiPublisher: AgentUiPublisher;
+  private readonly browserGatewaySurfaceChangeEmitter =
+    new vscode.EventEmitter<BrowserGatewaySurfaceChangeKind>();
   private browserGatewayThemeSnapshot: BrowserGatewayThemeSnapshot | null =
     null;
   private readonly projectedForegroundStore = new ProjectedForegroundStore();
@@ -1187,6 +1191,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     this.outputChannel.dispose();
     this.uiEventHub.dispose();
+    this.browserGatewaySurfaceChangeEmitter.dispose();
     this.specialBlockPanel?.dispose();
     this.specialBlockPanel = undefined;
     for (const w of this.fileWatchers) w.dispose();
@@ -1206,11 +1211,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.projectedForegroundStore.onDidChange(listener);
   }
 
+  onDidChangeBrowserGatewaySurface(
+    listener: (kind: BrowserGatewaySurfaceChangeKind) => void,
+  ): vscode.Disposable {
+    return this.browserGatewaySurfaceChangeEmitter.event(listener);
+  }
+
   getBrowserGatewayThemeSnapshot(): BrowserGatewayThemeSnapshot {
     if (this.view && this.webviewReady && this.browserGatewayThemeSnapshot) {
-      return this.browserGatewayThemeSnapshot;
+      return {
+        ...this.browserGatewayThemeSnapshot,
+        cssVariables: {
+          ...this.browserGatewayThemeSnapshot.cssVariables,
+          ...this.getBrowserGatewayTerminalSettingsCssVariables(),
+        },
+      };
     }
     return this.getFallbackThemeSnapshot();
+  }
+
+  private updateBrowserGatewayThemeState(update: () => void): void {
+    const previous = JSON.stringify(this.getBrowserGatewayThemeSnapshot());
+    update();
+    const next = JSON.stringify(this.getBrowserGatewayThemeSnapshot());
+    if (next !== previous) {
+      this.browserGatewaySurfaceChangeEmitter.fire("theme");
+    }
   }
 
   getConfiguredCommandApprovalPolicy(): Exclude<
@@ -1498,16 +1524,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await this.slashRegistry.reload();
 
     this.mcpHub.onStatusChange = (infos) => {
-      this.logMcpStatusTransitions("mcp", this.lastMcpStatuses, infos);
-
-      // Push live updates to the status panel if it's open.
-      void this.postMcpManagerSnapshot({ profile: "main", infos });
-
-      const promptSignature = this.buildMcpPromptSignature(infos);
-      if (promptSignature !== this.lastMcpPromptSignature) {
-        this.lastMcpPromptSignature = promptSignature;
-        void this.rebuildSessionSystemPromptsForMcp();
-      }
+      this.handleMcpStatusChange(infos);
     };
     this.askAgentMcpHub.onStatusChange = (infos) => {
       this.logMcpStatusTransitions(
@@ -1544,6 +1561,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Returns the Ask Agent MCP client hub (always defined, may not yet be connected). */
   getAskAgentMcpHub(): McpClientHub {
     return this.askAgentMcpHub;
+  }
+
+  private handleMcpStatusChange(infos: McpServerInfo[]): void {
+    this.logMcpStatusTransitions("mcp", this.lastMcpStatuses, infos);
+    this.browserGatewaySurfaceChangeEmitter.fire("mcp");
+
+    // Push live updates to the status panel if it's open.
+    void this.postMcpManagerSnapshot({ profile: "main", infos });
+
+    const promptSignature = this.buildMcpPromptSignature(infos);
+    if (promptSignature !== this.lastMcpPromptSignature) {
+      this.lastMcpPromptSignature = promptSignature;
+      void this.rebuildSessionSystemPromptsForMcp();
+    }
   }
 
   private logMcpStatusTransitions(
@@ -3790,7 +3821,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
-    this.view = webviewView;
+    this.updateBrowserGatewayThemeState(() => {
+      this.view = webviewView;
+      this.webviewReady = false;
+      this.browserGatewayThemeSnapshot = null;
+    });
 
     webviewView.webview.options = {
       enableScripts: true,
@@ -3798,11 +3833,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
 
     webviewView.webview.html = this.getHtml();
-    this.webviewReady = false;
 
     webviewView.onDidDispose(() => {
-      this.view = undefined;
-      this.webviewReady = false;
+      if (this.view !== webviewView) return;
+      this.updateBrowserGatewayThemeState(() => {
+        this.view = undefined;
+        this.webviewReady = false;
+        this.browserGatewayThemeSnapshot = null;
+      });
     });
 
     webviewView.onDidChangeVisibility(() => {
@@ -3857,7 +3895,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "webviewReady":
-        this.webviewReady = true;
+        this.updateBrowserGatewayThemeState(() => {
+          this.webviewReady = true;
+        });
         void this.sendModesUpdate();
         void this.sendModelsUpdate();
         this.sendSlashCommands();
@@ -3902,7 +3942,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "themeSnapshot": {
         const parsed = this.parseThemeSnapshot(msg);
         if (parsed) {
-          this.browserGatewayThemeSnapshot = parsed;
+          this.updateBrowserGatewayThemeState(() => {
+            this.browserGatewayThemeSnapshot = parsed;
+          });
         }
         break;
       }
@@ -7279,7 +7321,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.webviewReady && this.pendingMessages.includes(msg)) return;
 
     this.log(`[webview] postMessage failed; queueing until ready: ${reason}`);
-    this.webviewReady = false;
+    this.updateBrowserGatewayThemeState(() => {
+      this.webviewReady = false;
+    });
     this.pendingMessages.push(msg);
   }
 

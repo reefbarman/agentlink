@@ -712,6 +712,147 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("publishes surface and approval-policy changes with the recurring poll disabled", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const sessionManager = makeSessionManagerStub();
+      let theme = themeSnapshotStub;
+      let effectivePolicy: "safe" | "approve-for-me" = "safe";
+      let configuredPolicy: "safe" | "sensitive" = "safe";
+      let surfaceListener: ((kind: "mcp" | "theme") => void) | undefined;
+      const service = new BrowserGatewayService(
+        hub,
+        sessionManager as never,
+        () => theme,
+        () => "project",
+        () => true,
+        () => "high",
+        () =>
+          projectedForeground({
+            commandApprovalPolicy: "safe",
+            configuredCommandApprovalPolicy: "safe",
+          }) as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setCommandApprovalPolicyGetters(
+        () => effectivePolicy,
+        () => configuredPolicy,
+      );
+      service.setHasActiveClientsProbe(() => true);
+      service.subscribeToSurfaceChanges((listener) => {
+        surfaceListener = listener;
+        return { dispose: vi.fn() } as never;
+      });
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      effectivePolicy = "approve-for-me";
+      configuredPolicy = "sensitive";
+      surfaceListener?.("mcp");
+      vi.advanceTimersByTime(150);
+
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+      expect(
+        onDidChange.mock.calls[0][0].snapshot.session.foreground,
+      ).toMatchObject({
+        agentWriteApproval: "project",
+        commandApprovalPolicy: "approve-for-me",
+        configuredCommandApprovalPolicy: "sensitive",
+      });
+
+      theme = {
+        ...themeSnapshotStub,
+        themeLabel: "Updated Dark",
+      };
+      surfaceListener?.("theme");
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).toHaveBeenCalledTimes(2);
+      expect(onDidChange.mock.calls[1][0].snapshot.theme.themeLabel).toBe(
+        "Updated Dark",
+      );
+
+      surfaceListener?.("mcp");
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).toHaveBeenCalledTimes(2);
+
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes theme changes without clients while skipping ordinary surface changes", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      let theme: {
+        cssVariables: Record<string, string>;
+        colorScheme: "light" | "dark";
+        themeLabel: string;
+        source: "vscode-theme-api";
+      } = themeSnapshotStub;
+      let surfaceListener: ((kind: "mcp" | "theme") => void) | undefined;
+      const service = new BrowserGatewayService(
+        hub,
+        makeSessionManagerStub() as never,
+        () => theme,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => projectedForeground() as never,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setHasActiveClientsProbe(() => false);
+      service.subscribeToSurfaceChanges((listener) => {
+        surfaceListener = listener;
+        return { dispose: vi.fn() } as never;
+      });
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      surfaceListener?.("mcp");
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).not.toHaveBeenCalled();
+
+      let hasClients = true;
+      service.setHasActiveClientsProbe(() => hasClients);
+      service.invalidateBrowserSnapshot();
+      theme = { ...themeSnapshotStub, colorScheme: "light" };
+      surfaceListener?.("theme");
+      hasClients = false;
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+      expect(onDidChange.mock.calls[0][0].snapshot.theme.colorScheme).toBe(
+        "light",
+      );
+
+      subscription.dispose();
+      service.dispose();
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes fallback foreground and persisted-session changes with the recurring poll disabled", () => {
     vi.useFakeTimers();
     try {

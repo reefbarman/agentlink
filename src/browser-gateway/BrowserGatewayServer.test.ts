@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BrowserGatewayServer } from "./BrowserGatewayServer.js";
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
+import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
 import { StreamingBaselineRecorder } from "../shared/streamingBaselineMetrics.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
@@ -226,6 +227,66 @@ afterEach(() => {
 });
 
 describe("BrowserGatewayServer", () => {
+  it("persists explicit theme publications without connected SSE clients", async () => {
+    const hub = new InMemoryAgentUiEventHub();
+    let theme: BrowserGatewayThemeSnapshot = {
+      cssVariables: { "--vscode-editor-background": "#111111" },
+      colorScheme: "dark",
+      themeLabel: "Dark",
+      source: "vscode-theme-api",
+    };
+    const service = new BrowserGatewayService(
+      hub,
+      makeSessionManagerStub() as never,
+      () => theme,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => null,
+      () => [],
+    );
+    const server = new BrowserGatewayServer(
+      service,
+      makeChatViewProviderStub() as never,
+      "test-token",
+      "theme-no-client-instance",
+      "Theme Workspace",
+      "/workspace/theme",
+      vi.fn(),
+    );
+
+    try {
+      await server.start(0);
+      const persistCurrentThemeSnapshot = vi
+        .spyOn(
+          server as unknown as {
+            persistCurrentThemeSnapshot(
+              theme?: BrowserGatewayThemeSnapshot,
+            ): Promise<void>;
+          },
+          "persistCurrentThemeSnapshot",
+        )
+        .mockResolvedValue();
+
+      theme = {
+        ...theme,
+        cssVariables: { "--vscode-editor-background": "#eeeeee" },
+        colorScheme: "light",
+        themeLabel: "Light",
+      };
+      service.invalidateBrowserSnapshot({
+        immediate: true,
+        publishWithoutClients: true,
+      });
+
+      expect(persistCurrentThemeSnapshot).toHaveBeenCalledWith(theme);
+    } finally {
+      await server.stop();
+      service.dispose();
+      hub.dispose();
+    }
+  });
+
   it("records one wire serialization per broadcast across multiple SSE clients", async () => {
     const hub = new InMemoryAgentUiEventHub();
     const sessionManager = makeSessionManagerStub();

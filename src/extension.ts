@@ -269,6 +269,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Approval manager for built-in agent sessions
   approvalManager = new ApprovalManager(context.globalState, configStore);
+  context.subscriptions.push(approvalManager);
   approvalManager.migrateFromGlobalState().catch((err) => {
     log(`Migration warning: ${err}`);
   });
@@ -505,13 +506,46 @@ export function activate(context: vscode.ExtensionContext): void {
     () => chatViewProvider.getBrowserProjectedForegroundState(),
     () => chatViewProvider.getBrowserMcpStatusInfos(),
   );
+  browserGatewayService.setCommandApprovalPolicyGetters(
+    () => chatViewProvider.getBrowserCommandApprovalPolicy(),
+    () => chatViewProvider.getConfiguredCommandApprovalPolicy(),
+  );
   browserGatewayService.subscribeToProjectedForegroundChanges((listener) =>
     chatViewProvider.onDidChangeBrowserProjectedForeground(listener),
   );
   browserGatewayService.subscribeToSessionChanges((listener) =>
     agentSessionManager!.onDidChangeSessions(listener),
   );
-  context.subscriptions.push(browserGatewayService);
+  browserGatewayService.subscribeToSurfaceChanges((listener) =>
+    chatViewProvider.onDidChangeBrowserGatewaySurface(listener),
+  );
+  context.subscriptions.push(
+    browserGatewayService,
+    approvalManager.onDidChange(() => {
+      browserGatewayService?.invalidateBrowserSnapshot();
+    }),
+    vscode.window.onDidChangeActiveColorTheme(() => {
+      browserGatewayService?.invalidateBrowserSnapshot({
+        publishWithoutClients: true,
+      });
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      const affectsCommandPolicy = event.affectsConfiguration(
+        "agentlink.commandAutoApproveTier",
+      );
+      const affectsTerminalTheme = [
+        "fontFamily",
+        "fontSize",
+        "lineHeight",
+        "letterSpacing",
+        "fontWeight",
+      ].some((key) => event.affectsConfiguration(`terminal.integrated.${key}`));
+      if (!affectsCommandPolicy && !affectsTerminalTheme) return;
+      browserGatewayService?.invalidateBrowserSnapshot({
+        publishWithoutClients: affectsTerminalTheme,
+      });
+    }),
+  );
   // Keep the browser model list in parity after a dynamic capability refresh.
   chatViewProvider.setBrowserModelsChangedNotifier(() => {
     browserGatewayService?.bumpModelsVersion();

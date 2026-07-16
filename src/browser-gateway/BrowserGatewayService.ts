@@ -135,8 +135,8 @@ export interface BrowserGatewaySessionState {
         revertRecoveryNotice: AppState["revertRecoveryNotice"];
         contextBudget?: ChatState["contextBudget"];
         condenseThreshold?: number;
-        commandApprovalPolicy?: CommandApprovalPolicy;
-        configuredCommandApprovalPolicy?: Exclude<
+        commandApprovalPolicy: CommandApprovalPolicy;
+        configuredCommandApprovalPolicy: Exclude<
           CommandApprovalPolicy,
           "approve-for-me"
         >;
@@ -269,6 +269,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     | ReturnType<typeof setTimeout>
     | undefined;
   private foregroundInvalidationGeneration = 0;
+  private foregroundInvalidationPublishWithoutClients = false;
   private lastSerializedSnapshot = "";
   private snapshotRevision = 0;
   // Optional probe, set by the gateway server, reporting whether any browser
@@ -292,6 +293,11 @@ export class BrowserGatewayService implements vscode.Disposable {
   private repositoryInfoCache:
     | { value: BrowserGatewayRepositoryInfo | null; expiresAt: number }
     | undefined;
+  private getCommandApprovalPolicy: () => CommandApprovalPolicy = () => "safe";
+  private getConfiguredCommandApprovalPolicy: () => Exclude<
+    CommandApprovalPolicy,
+    "approve-for-me"
+  > = () => "safe";
 
   readonly onDidChange = this.onDidChangeEmitter.event;
 
@@ -357,6 +363,18 @@ export class BrowserGatewayService implements vscode.Disposable {
     return this.getThemeSnapshot();
   }
 
+  setCommandApprovalPolicyGetters(
+    getEffective: () => ReturnType<
+      ChatViewProvider["getBrowserCommandApprovalPolicy"]
+    >,
+    getConfigured: () => ReturnType<
+      ChatViewProvider["getConfiguredCommandApprovalPolicy"]
+    >,
+  ): void {
+    this.getCommandApprovalPolicy = getEffective;
+    this.getConfiguredCommandApprovalPolicy = getConfigured;
+  }
+
   subscribeToProjectedForegroundChanges(
     onDidChangeProjectedForeground: (listener: () => void) => {
       dispose(): void;
@@ -379,24 +397,49 @@ export class BrowserGatewayService implements vscode.Disposable {
     );
   }
 
-  invalidateBrowserSnapshot(options: { immediate?: boolean } = {}): void {
-    if (this.hasActiveClientsProbe && !this.hasActiveClientsProbe()) {
+  subscribeToSurfaceChanges(
+    onDidChangeSurface: (listener: (kind: "mcp" | "theme") => void) => {
+      dispose(): void;
+    },
+  ): void {
+    this.disposables.push(
+      onDidChangeSurface((kind) => {
+        this.invalidateBrowserSnapshot({
+          publishWithoutClients: kind === "theme",
+        });
+      }),
+    );
+  }
+
+  invalidateBrowserSnapshot(
+    options: { immediate?: boolean; publishWithoutClients?: boolean } = {},
+  ): void {
+    if (
+      !options.publishWithoutClients &&
+      this.hasActiveClientsProbe &&
+      !this.hasActiveClientsProbe()
+    ) {
       return;
     }
 
     if (options.immediate) {
       this.cancelPendingForegroundInvalidation();
-      this.emitSnapshotIfChanged();
+      this.emitSnapshotIfChanged(options.publishWithoutClients);
       return;
     }
 
+    this.foregroundInvalidationPublishWithoutClients ||=
+      options.publishWithoutClients === true;
     if (this.foregroundInvalidationTimer) return;
 
     const generation = ++this.foregroundInvalidationGeneration;
     this.foregroundInvalidationTimer = this.scheduleTimeout(() => {
       if (generation !== this.foregroundInvalidationGeneration) return;
       this.foregroundInvalidationTimer = undefined;
-      this.emitSnapshotIfChanged();
+      const publishWithoutClients =
+        this.foregroundInvalidationPublishWithoutClients;
+      this.foregroundInvalidationPublishWithoutClients = false;
+      this.emitSnapshotIfChanged(publishWithoutClients);
     }, this.timers.foregroundCoalesceMs ?? DEFAULT_FOREGROUND_PUBLICATION_COALESCE_MS);
   }
 
@@ -517,6 +560,9 @@ export class BrowserGatewayService implements vscode.Disposable {
         condenseThreshold: projectedMatchesForeground
           ? projected.condenseThreshold
           : undefined,
+        commandApprovalPolicy: this.getCommandApprovalPolicy(),
+        configuredCommandApprovalPolicy:
+          this.getConfiguredCommandApprovalPolicy(),
       },
     };
   }
@@ -570,9 +616,9 @@ export class BrowserGatewayService implements vscode.Disposable {
             condenseThreshold: sessionState.foreground.condenseThreshold,
             agentWriteApproval: this.getAgentWriteApprovalState(),
             commandApprovalPolicy:
-              sessionState.foreground.commandApprovalPolicy ?? "safe",
+              sessionState.foreground.commandApprovalPolicy,
             configuredCommandApprovalPolicy:
-              sessionState.foreground.configuredCommandApprovalPolicy ?? "safe",
+              sessionState.foreground.configuredCommandApprovalPolicy,
           }
         : null,
     };
@@ -808,6 +854,7 @@ export class BrowserGatewayService implements vscode.Disposable {
 
   private cancelPendingForegroundInvalidation(): void {
     this.foregroundInvalidationGeneration += 1;
+    this.foregroundInvalidationPublishWithoutClients = false;
     if (!this.foregroundInvalidationTimer) return;
     this.cancelTimeout(this.foregroundInvalidationTimer);
     this.foregroundInvalidationTimer = undefined;
@@ -835,11 +882,16 @@ export class BrowserGatewayService implements vscode.Disposable {
     (this.timers.clearInterval ?? clearInterval)(timer);
   }
 
-  private emitSnapshotIfChanged(): void {
+  private emitSnapshotIfChanged(publishWithoutClients = false): void {
     // No browser client connected → skip the snapshot build and serialize. The
     // server pushes a fresh snapshot to each client on connect, so a paused poll
-    // never leaves a connected client stale.
-    if (this.hasActiveClientsProbe && !this.hasActiveClientsProbe()) {
+    // never leaves a connected client stale. Theme changes bypass this gate while
+    // the server uses gateway publications to persist its shared theme cache.
+    if (
+      !publishWithoutClients &&
+      this.hasActiveClientsProbe &&
+      !this.hasActiveClientsProbe()
+    ) {
       return;
     }
     const snapshotStartedAt = this.streamingMetrics.enabled

@@ -30,9 +30,13 @@ const mockOutputChannel = {
   dispose: vi.fn(),
 };
 const mockConfigUpdate = vi.fn();
+const terminalSettings: Record<string, unknown> = {};
 
-const mockGetConfiguration = vi.fn(() => ({
+const mockGetConfiguration = vi.fn((section?: string) => ({
   get: vi.fn((key: string, fallback?: unknown) => {
+    if (section === "terminal.integrated" && key in terminalSettings) {
+      return terminalSettings[key];
+    }
     if (key === "modelCondenseThresholds") {
       return { "claude-sonnet-4-6": 0.8 };
     }
@@ -79,6 +83,7 @@ vi.mock("vscode", () => ({
     showWarningMessage: vi.fn(),
     showErrorMessage: vi.fn(),
     activeTextEditor: undefined,
+    activeColorTheme: { kind: 2 },
   },
   env: {
     sessionId: "test-session",
@@ -166,6 +171,12 @@ vi.mock("vscode", () => ({
   },
   ViewColumn: { One: 1, Beside: 2 },
   ConfigurationTarget: { Global: 1 },
+  ColorThemeKind: {
+    Light: 1,
+    Dark: 2,
+    HighContrast: 3,
+    HighContrastLight: 4,
+  },
 }));
 
 describe("persisted session mutation failure messages", () => {
@@ -337,6 +348,100 @@ describe("ChatViewProvider session state sync", () => {
     vi.resetModules();
     vi.clearAllMocks();
     mockGetConfiguration.mockClear();
+    for (const key of Object.keys(terminalSettings))
+      delete terminalSettings[key];
+  });
+
+  it("publishes MCP status changes through the existing owner callback", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const rebuildSystemPrompts = vi.fn(async () => {});
+    provider.setSessionManager({ rebuildSystemPrompts } as never);
+    const listener = vi.fn();
+    const subscription = provider.onDidChangeBrowserGatewaySurface(listener);
+    const handleMcpStatusChange = (
+      provider as unknown as {
+        handleMcpStatusChange(infos: unknown[]): void;
+      }
+    ).handleMcpStatusChange.bind(provider);
+
+    handleMcpStatusChange([
+      {
+        name: "linear",
+        status: "connected",
+        toolCount: 1,
+        resourceCount: 0,
+        promptCount: 0,
+        tools: [{ name: "list_issues", description: "List issues" }],
+      },
+    ]);
+    await Promise.resolve();
+
+    expect(listener).toHaveBeenCalledWith("mcp");
+    expect(rebuildSystemPrompts).toHaveBeenCalledTimes(1);
+
+    subscription.dispose();
+    provider.dispose();
+  });
+
+  it("publishes semantic browser theme changes and overlays live terminal settings", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => ({ id: "foreground-1" })),
+    } as never);
+    (provider as unknown as { view: unknown; webviewReady: boolean }).view = {};
+    (
+      provider as unknown as { view: unknown; webviewReady: boolean }
+    ).webviewReady = true;
+    const listener = vi.fn();
+    const subscription = provider.onDidChangeBrowserGatewaySurface(listener);
+    const handleWebviewMessage = (
+      provider as unknown as {
+        handleWebviewMessage(message: Record<string, unknown>): Promise<void>;
+      }
+    ).handleWebviewMessage.bind(provider);
+
+    await handleWebviewMessage({
+      command: "themeSnapshot",
+      cssVariables: {
+        "--vscode-editor-background": "#111111",
+        "--vscode-terminal-fontSize": "11px",
+      },
+      colorScheme: "dark",
+      themeLabel: "Dark",
+    });
+    expect(listener).toHaveBeenCalledWith("theme");
+    listener.mockClear();
+
+    await handleWebviewMessage({
+      command: "themeSnapshot",
+      cssVariables: {
+        "--vscode-editor-background": "#111111",
+        "--vscode-terminal-fontSize": "11px",
+      },
+      colorScheme: "dark",
+      themeLabel: "Dark",
+    });
+    expect(listener).not.toHaveBeenCalled();
+
+    terminalSettings.fontSize = 16;
+    expect(provider.getBrowserGatewayThemeSnapshot()).toMatchObject({
+      source: "webview-dom",
+      cssVariables: {
+        "--vscode-editor-background": "#111111",
+        "--vscode-terminal-fontSize": "16px",
+      },
+    });
+
+    subscription.dispose();
+    provider.dispose();
   });
 
   it("keeps nested background results out of the browser foreground transcript", async () => {
