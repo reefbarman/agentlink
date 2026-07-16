@@ -53,11 +53,6 @@ interface BrowserGatewayServiceTimerOptions {
     timeoutMs: number,
   ) => ReturnType<typeof setTimeout>;
   clearTimeout?: (timer: ReturnType<typeof setTimeout>) => void;
-  setInterval?: (
-    callback: () => void,
-    intervalMs: number,
-  ) => ReturnType<typeof setInterval>;
-  clearInterval?: (timer: ReturnType<typeof setInterval>) => void;
 }
 
 export interface QuestionProgressState {
@@ -211,7 +206,6 @@ export class BrowserGatewayService implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly onDidChangeEmitter =
     new vscode.EventEmitter<BrowserGatewaySnapshotPublication>();
-  private pollTimer: ReturnType<typeof setInterval> | undefined;
   private foregroundInvalidationTimer:
     | ReturnType<typeof setTimeout>
     | undefined;
@@ -220,9 +214,8 @@ export class BrowserGatewayService implements vscode.Disposable {
   private lastSerializedSnapshot = "";
   private snapshotRevision = 0;
   // Optional probe, set by the gateway server, reporting whether any browser
-  // client is currently connected. When no client is listening, the 150ms poll
-  // skips the snapshot build+serialize entirely — newly-connected clients are
-  // sent a fresh snapshot on connect, so nothing is missed by pausing it.
+  // client is currently connected. Explicit invalidations skip snapshot work when
+  // nobody is listening; newly connected clients receive a fresh connect snapshot.
   private hasActiveClientsProbe: (() => boolean) | undefined;
   private approval: ApprovalRequest | undefined;
   private question:
@@ -251,9 +244,8 @@ export class BrowserGatewayService implements vscode.Disposable {
   readonly onDidChange = this.onDidChangeEmitter.event;
 
   /**
-   * Register a probe the poll consults to decide whether any browser client is
-   * connected. The gateway server wires this to its SSE client set so the poll
-   * can stay idle when nobody is watching.
+   * Register a probe used to skip explicit snapshot work when no browser client
+   * is connected. The gateway server wires this to its active SSE client set.
    */
   setHasActiveClientsProbe(probe: (() => boolean) | undefined): void {
     this.hasActiveClientsProbe = probe;
@@ -295,17 +287,9 @@ export class BrowserGatewayService implements vscode.Disposable {
         this.applyEvent(event);
       }),
       diffSnapshotHub.onDidChange(() => {
-        this.emitSnapshot();
+        this.invalidateBrowserSnapshot({ immediate: true });
       }),
     );
-
-    // Session and background transcript/state changes are not yet fully
-    // published through dedicated browser event producers. A4 migrates those
-    // producers incrementally; keep this safety poll until the field matrix is
-    // complete and tested with the recurring poll disabled.
-    this.pollTimer = this.scheduleInterval(() => {
-      this.emitSnapshotIfChanged();
-    }, 150);
   }
 
   getCurrentThemeSnapshot(): BrowserGatewayThemeSnapshot {
@@ -665,11 +649,11 @@ export class BrowserGatewayService implements vscode.Disposable {
 
   /**
    * Signal that provider model metadata changed so browser clients re-fetch
-   * `/api/models`. Bumps the snapshot's `modelsVersion` and emits a snapshot.
+   * `/api/models`. Bumps the snapshot's `modelsVersion` and invalidates immediately.
    */
   bumpModelsVersion(): void {
     this.modelsVersion += 1;
-    this.emitSnapshot();
+    this.invalidateBrowserSnapshot({ immediate: true });
   }
 
   dispose(): void {
@@ -678,10 +662,6 @@ export class BrowserGatewayService implements vscode.Disposable {
     }
     this.disposables.length = 0;
     this.cancelPendingForegroundInvalidation();
-    if (this.pollTimer) {
-      this.cancelInterval(this.pollTimer);
-      this.pollTimer = undefined;
-    }
     this.approval = undefined;
     this.question = undefined;
     this.questionProgress = undefined;
@@ -797,7 +777,7 @@ export class BrowserGatewayService implements vscode.Disposable {
     this.recentEvents = [...this.recentEvents, event].slice(
       -this.maxRecentEvents,
     );
-    this.emitSnapshot();
+    this.invalidateBrowserSnapshot({ immediate: true });
   }
 
   createSnapshotPublication(): BrowserGatewaySnapshotPublication {
@@ -813,10 +793,6 @@ export class BrowserGatewayService implements vscode.Disposable {
     const bytes = this.recordSerialization(serialized, serializationStartedAt);
     this.lastSerializedSnapshot = serialized;
     return this.createPublication(snapshot, serialized, bytes);
-  }
-
-  private emitSnapshot(): void {
-    this.onDidChangeEmitter.fire(this.createSnapshotPublication());
   }
 
   private cancelPendingForegroundInvalidation(): void {
@@ -838,22 +814,10 @@ export class BrowserGatewayService implements vscode.Disposable {
     (this.timers.clearTimeout ?? clearTimeout)(timer);
   }
 
-  private scheduleInterval(
-    callback: () => void,
-    intervalMs: number,
-  ): ReturnType<typeof setInterval> {
-    return (this.timers.setInterval ?? setInterval)(callback, intervalMs);
-  }
-
-  private cancelInterval(timer: ReturnType<typeof setInterval>): void {
-    (this.timers.clearInterval ?? clearInterval)(timer);
-  }
-
   private emitSnapshotIfChanged(publishWithoutClients = false): void {
-    // No browser client connected → skip the snapshot build and serialize. The
-    // server pushes a fresh snapshot to each client on connect, so a paused poll
-    // never leaves a connected client stale. Theme changes bypass this gate while
-    // the server uses gateway publications to persist its shared theme cache.
+    // No browser client connected → skip the snapshot build and serialization.
+    // The server creates a fresh snapshot for each client on connect. Theme changes
+    // bypass this gate while the server persists its shared theme cache.
     if (
       !publishWithoutClients &&
       this.hasActiveClientsProbe &&

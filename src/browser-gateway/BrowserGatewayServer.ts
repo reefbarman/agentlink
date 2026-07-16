@@ -102,7 +102,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       }),
     );
 
-    // Let the service pause its poll when no browser client is connected.
+    // Let the service skip explicit snapshot work when no client is connected.
     this.gatewayService.setHasActiveClientsProbe(
       () => (this.sseHub?.size ?? 0) > 0,
     );

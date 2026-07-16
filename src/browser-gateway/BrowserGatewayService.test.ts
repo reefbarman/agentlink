@@ -114,11 +114,6 @@ function projectedForeground(overrides: Record<string, unknown> = {}) {
   };
 }
 
-const disabledPollTimers = {
-  setInterval: vi.fn(() => ({ kind: "disabled-poll" }) as never),
-  clearInterval: vi.fn(),
-};
-
 const themeSnapshotStub = {
   cssVariables: {
     "--vscode-editor-background": "#1e1e1e",
@@ -128,7 +123,7 @@ const themeSnapshotStub = {
   source: "vscode-theme-api" as const,
 };
 
-function makePollService(hub: InMemoryAgentUiEventHub): BrowserGatewayService {
+function makeService(hub: InMemoryAgentUiEventHub): BrowserGatewayService {
   const sessionManager = makeSessionManagerStub();
   return new BrowserGatewayService(
     hub,
@@ -145,7 +140,7 @@ function makePollService(hub: InMemoryAgentUiEventHub): BrowserGatewayService {
 describe("BrowserGatewayService", () => {
   it("publishes monotonic snapshots with their prebuilt wire payload", () => {
     const hub = new InMemoryAgentUiEventHub();
-    const service = makePollService(hub);
+    const service = makeService(hub);
     const publications = vi.fn();
     const subscription = service.onDidChange(publications);
 
@@ -712,7 +707,7 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
-  it("publishes surface and approval-policy changes with the recurring poll disabled", () => {
+  it("publishes surface and approval-policy changes through explicit invalidation", () => {
     vi.useFakeTimers();
     try {
       const hub = new InMemoryAgentUiEventHub();
@@ -737,7 +732,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -815,7 +809,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -853,7 +846,7 @@ describe("BrowserGatewayService", () => {
     }
   });
 
-  it("publishes fallback foreground and persisted-session changes with the recurring poll disabled", () => {
+  it("publishes fallback foreground and persisted-session changes through explicit invalidation", () => {
     vi.useFakeTimers();
     try {
       const hub = new InMemoryAgentUiEventHub();
@@ -872,7 +865,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -938,7 +930,7 @@ describe("BrowserGatewayService", () => {
     }
   });
 
-  it("publishes background projection changes with the recurring poll disabled", () => {
+  it("publishes background projection changes through explicit invalidation", () => {
     vi.useFakeTimers();
     try {
       const hub = new InMemoryAgentUiEventHub();
@@ -956,7 +948,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -984,7 +975,6 @@ describe("BrowserGatewayService", () => {
       sessionListener?.();
       vi.advanceTimersByTime(150);
 
-      expect(disabledPollTimers.setInterval).toHaveBeenCalledTimes(1);
       expect(onDidChange).toHaveBeenCalledTimes(1);
       expect(onDidChange.mock.calls[0][0].snapshot.background).toEqual([
         expect.objectContaining({
@@ -1002,7 +992,7 @@ describe("BrowserGatewayService", () => {
     }
   });
 
-  it("publishes repository changes with the recurring poll disabled", () => {
+  it("publishes repository changes through explicit invalidation", () => {
     vi.useFakeTimers();
     try {
       const hub = new InMemoryAgentUiEventHub();
@@ -1021,7 +1011,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -1080,7 +1069,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -1112,7 +1100,7 @@ describe("BrowserGatewayService", () => {
     }
   });
 
-  it("publishes projected foreground changes through explicit invalidation with the recurring poll disabled", () => {
+  it("publishes projected foreground changes through explicit invalidation", () => {
     vi.useFakeTimers();
     try {
       const hub = new InMemoryAgentUiEventHub();
@@ -1131,7 +1119,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -1194,7 +1181,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -1253,7 +1239,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -1305,7 +1290,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -1355,7 +1339,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -1404,7 +1387,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -1426,7 +1408,7 @@ describe("BrowserGatewayService", () => {
     }
   });
 
-  it("publishes every mutable snapshot area with the recurring poll disabled", () => {
+  it("publishes every mutable snapshot area through explicit producers", () => {
     vi.useFakeTimers();
     const diffId = "producer-matrix-diff";
     try {
@@ -1452,7 +1434,6 @@ describe("BrowserGatewayService", () => {
         undefined,
         undefined,
         {
-          ...disabledPollTimers,
           setTimeout,
           clearTimeout,
           foregroundCoalesceMs: 150,
@@ -1631,7 +1612,6 @@ describe("BrowserGatewayService", () => {
         { coalesced: false },
       );
 
-      expect(disabledPollTimers.setInterval).toHaveBeenCalledTimes(1);
       subscription.dispose();
       service.dispose();
       hub.dispose();
@@ -1641,29 +1621,43 @@ describe("BrowserGatewayService", () => {
     }
   });
 
-  it("skips the poll snapshot build when no browser client is connected", () => {
-    vi.useFakeTimers();
-    try {
-      const hub = new InMemoryAgentUiEventHub();
-      const service = makePollService(hub);
-      const onDidChange = vi.fn();
-      const subscription = service.onDidChange(onDidChange);
+  it("captures changes skipped without clients in the next connect snapshot", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+    const diffId = "connect-time-diff";
+    const onDidChange = vi.fn();
+    const subscription = service.onDidChange(onDidChange);
 
-      // No clients connected → poll ticks should not emit.
+    try {
       service.setHasActiveClientsProbe(() => false);
-      vi.advanceTimersByTime(450);
+      hub.publishApproval({
+        kind: "write",
+        id: "connect-time-approval",
+        filePath: "src/connect.ts",
+        writeOperation: "modify",
+      });
+      diffSnapshotHub.upsert({
+        requestId: diffId,
+        filePath: "src/connect.ts",
+        operation: "modify",
+        originalContent: "before",
+        proposedContent: "after",
+        outsideWorkspace: false,
+        createdAt: 1,
+      });
+      service.bumpModelsVersion();
+
       expect(onDidChange).not.toHaveBeenCalled();
 
-      // Client connects → next poll tick emits the (changed) snapshot.
-      service.setHasActiveClientsProbe(() => true);
-      vi.advanceTimersByTime(150);
-      expect(onDidChange).toHaveBeenCalledTimes(1);
-
+      const connectSnapshot = service.createSnapshotPublication().snapshot;
+      expect(connectSnapshot.ui.approval?.id).toBe("connect-time-approval");
+      expect(connectSnapshot.diffs[0]?.requestId).toBe(diffId);
+      expect(connectSnapshot.modelsVersion).toBe(1);
+    } finally {
       subscription.dispose();
       service.dispose();
+      diffSnapshotHub.remove(diffId);
       hub.dispose();
-    } finally {
-      vi.useRealTimers();
     }
   });
 });
