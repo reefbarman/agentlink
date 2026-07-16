@@ -32,4 +32,45 @@ describe("BackgroundSessionStrip defaults", () => {
         .classList.contains("active"),
     ).toBe(true);
   });
+
+  it("opens to the active filter when a background agent is admitted", () => {
+    const onStop = vi.fn();
+    const sessions = [
+      { id: "active", task: "Active review", status: "streaming" as const },
+      { id: "done", task: "Old result", status: "idle" as const },
+    ];
+    const { container, rerender } = render(
+      h(BackgroundSessionStrip, {
+        sessions,
+        openToActiveRequest: 0,
+        onStop,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+    fireEvent.click(screen.getByRole("button", { name: "completed" }));
+    expect(screen.getByText("Old result")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+    expect(container.querySelector(".bg-session-strip-body")).toBeNull();
+
+    rerender(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          ...sessions,
+          { id: "new", task: "New review", status: "queued" as const },
+        ],
+        openToActiveRequest: 1,
+        onStop,
+      }),
+    );
+
+    expect(container.querySelector(".bg-session-strip-body")).toBeTruthy();
+    expect(screen.getByText("New review")).toBeTruthy();
+    expect(screen.queryByText("Old result")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "active" })
+        .classList.contains("active"),
+    ).toBe(true);
+  });
 });

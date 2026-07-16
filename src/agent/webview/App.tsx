@@ -281,6 +281,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
   const [bgSessions, setBgSessions] = useState<BgSessionInfoProps[]>([]);
   const bgSessionsRef = useRef<BgSessionInfoProps[]>([]);
   bgSessionsRef.current = bgSessions;
+  const [openFleetToActiveRequest, setOpenFleetToActiveRequest] = useState(0);
   const [transcriptView, setTranscriptView] =
     useState<OpenTranscriptState | null>(null);
   const [btwState, setBtwState] = useState<BtwState | null>(null);
@@ -888,6 +889,17 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
 
         case "agentBgSessionsUpdate":
           setBgSessions(msg.sessions as BgSessionInfoProps[]);
+          break;
+
+        case "agentFleetEvent":
+          if (
+            typeof msg.event === "object" &&
+            msg.event !== null &&
+            "type" in msg.event &&
+            msg.event.type === "queued"
+          ) {
+            setOpenFleetToActiveRequest((request) => request + 1);
+          }
           break;
 
         // Background-only stream events are intentionally not rendered into the
@@ -2595,6 +2607,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         )}
         <BackgroundSessionStrip
           sessions={bgSessions}
+          openToActiveRequest={openFleetToActiveRequest}
           onStop={handleStopBackground}
           onOpenTranscript={handleOpenBgTranscript}
           onSteer={handleSteerBackground}

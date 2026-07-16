@@ -579,7 +579,7 @@ const SWITCH_MODE_TOOL: ToolDefinition = {
 const AGENT_BUDGET_SCHEMA = {
   type: "object",
   description:
-    "Optional resource caps. Omit entirely for a standard review or research task — an uncapped agent simply runs to completion. When a cap is reached the agent is asked to wrap up and deliver its findings, then force-stopped after a short grace (50% overage or 2 minutes).",
+    "Optional resource-cap overrides. Review task classes receive an automatic complexity-based session budget when this is omitted; other task classes remain uncapped. When a cap is reached the agent is asked to wrap up and deliver its findings, then force-stopped after a short grace (50% overage or 2 minutes).",
   properties: {
     maxTokens: {
       type: "number",

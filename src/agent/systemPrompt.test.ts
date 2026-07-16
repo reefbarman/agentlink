@@ -953,7 +953,7 @@ describe("buildSystemPrompt", () => {
     expect(lightweight.length).toBeLessThan(full.length * 0.5);
   });
 
-  it("gives background reviews full capabilities without an artificial tool-call target", async () => {
+  it("gives full-prompt background reviews a bounded utility loop", async () => {
     const result = await buildSystemPrompt("review", tmpDir, {
       isBackground: true,
     });
@@ -965,6 +965,12 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain(
       "same context-management and recovery expectations",
     );
+    expect(result).toContain("Bounded Review Loop");
+    expect(result).toContain("Before every additional tool call");
+    expect(result).toContain("new medium-or-higher issue");
+    expect(result).toContain(
+      "Report residual uncertainty as an assumption instead of searching indefinitely",
+    );
     expect(result).not.toContain("3-5 tool calls");
   });
 
@@ -975,6 +981,7 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("Background Agent");
     expect(result).toContain("Skip pre-task user alignment");
     expect(result).not.toContain("Scope rules");
+    expect(result).not.toContain("Bounded Review Loop");
     expect(result).not.toContain("3-5 tool calls");
   });
 

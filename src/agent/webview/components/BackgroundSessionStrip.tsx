@@ -119,6 +119,8 @@ export interface BgSessionInfoProps {
 
 interface Props {
   sessions: BgSessionInfoProps[];
+  /** Incremented when a newly admitted agent should reveal the active fleet view. */
+  openToActiveRequest?: number;
   onStop: (sessionId: string) => void;
   onOpenTranscript?: (sessionId: string) => void;
   onSteer?: (sessionId: string, message: string) => void;
@@ -190,6 +192,7 @@ function statusText(
 
 export function BackgroundSessionStrip({
   sessions,
+  openToActiveRequest = 0,
   onStop,
   onOpenTranscript,
   onSteer,
@@ -210,6 +213,14 @@ export function BackgroundSessionStrip({
   const [goalFilter, setGoalFilter] = useState("");
   const [startedAt, setStartedAt] = useState<Map<string, number>>(new Map());
   const [now, setNow] = useState(Date.now());
+  const previousOpenRequestRef = useRef(openToActiveRequest);
+
+  useEffect(() => {
+    if (openToActiveRequest === previousOpenRequestRef.current) return;
+    previousOpenRequestRef.current = openToActiveRequest;
+    setCollapsed(false);
+    setFilter("active");
+  }, [openToActiveRequest]);
 
   // Record start time the first time we see each active session
   useEffect(() => {

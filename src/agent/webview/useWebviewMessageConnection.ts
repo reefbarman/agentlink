@@ -37,6 +37,7 @@ export interface WebviewMessageConnectionOptions {
 }
 
 const BACKGROUND_EVENT_TYPES = new Set<ExtensionMessage["type"]>([
+  "agentFleetEvent",
   "agentBgThinkingStart",
   "agentBgThinkingDelta",
   "agentBgThinkingEnd",

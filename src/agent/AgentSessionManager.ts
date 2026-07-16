@@ -3338,6 +3338,12 @@ export class AgentSessionManager {
       mode: foregroundMode,
       model: foregroundModel,
     });
+    const isReviewTask = route.taskClass.startsWith("review_");
+    const effectivePermissionProfile =
+      request.permissionProfile ?? (isReviewTask ? "review-only" : undefined);
+    const effectiveExpectedResult =
+      request.expectedResult ?? (isReviewTask ? "review_findings" : undefined);
+    const effectiveBudget = request.budget ?? route.defaultBudget;
 
     this.log?.(
       `[bg-route] task=${task} class=${route.taskClass} requested={mode:${request.mode ?? "-"},model:${request.model ?? "-"},provider:${request.provider ?? "-"}} resolved={mode:${route.resolvedMode},model:${route.resolvedModel},provider:${route.resolvedProvider}} fallback=${route.fallbackUsed} reason="${route.routingReason}"`,
@@ -3411,11 +3417,11 @@ export class AgentSessionManager {
       delegation: {
         ownedPaths: request.ownedPaths,
         forbiddenPaths: request.forbiddenPaths,
-        permissionProfile: request.permissionProfile,
+        permissionProfile: effectivePermissionProfile,
         worktree: request.worktree,
-        expectedResult: request.expectedResult,
+        expectedResult: effectiveExpectedResult,
       },
-      budget: request.budget,
+      budget: effectiveBudget,
       goalId: request.goalId,
       workflowId: request.workflowId,
     });
@@ -3467,9 +3473,8 @@ export class AgentSessionManager {
     session.addUserMessage(executionMessage);
 
     // Fire-and-forget — runs concurrently alongside the foreground session.
-    // Background agents run indefinitely (like foreground agents) using
-    // auto-condensing to manage context. The foreground agent can kill
-    // a background agent via the kill_background_agent tool if needed.
+    // Reviews receive an automatic bounded budget unless the caller supplies
+    // one; other task classes retain foreground-style open-ended execution.
     const runNativeBackground = async () => {
       let lastPersistedActiveAt = session.lastActiveAt;
       let terminalEngineError: string | undefined;
@@ -3497,7 +3502,9 @@ export class AgentSessionManager {
         for await (const event of bgEngine.run(session, {
           isBackground: true,
           toolProfile:
-            request.permissionProfile === "review-only" ? "review" : undefined,
+            effectivePermissionProfile === "review-only"
+              ? "review"
+              : route.toolProfile,
           maxToolCalls: engineBudget?.maxToolCalls,
           maxApiTurns: engineBudget?.maxApiTurns,
         })) {

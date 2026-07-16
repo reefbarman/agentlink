@@ -168,6 +168,12 @@ describe("resolveBackgroundRoute", () => {
 
     expect(route.resolvedProvider).toBe("codex");
     expect(route.resolvedModel).toBe("gpt-5.6-luna");
+    expect(route.defaultBudget).toEqual({
+      maxToolCalls: 6,
+      maxApiTurns: 5,
+      maxElapsedMs: 120_000,
+      warningThresholdRatio: 0.65,
+    });
   });
 
   it("uses the newest thinking-capable Sonnet for cheap Anthropic code reviews", async () => {
@@ -250,6 +256,13 @@ describe("resolveBackgroundRoute", () => {
     expect(route.resolvedModel).toBe("claude-sonnet-5");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=balanced");
+    expect(route.routingReason).toContain("policy=review-preference");
+    expect(route.defaultBudget).toEqual({
+      maxToolCalls: 12,
+      maxApiTurns: 8,
+      maxElapsedMs: 240_000,
+      warningThresholdRatio: 0.7,
+    });
   });
 
   it("defaults explicit anthropic provider routing to opus when fable is also available", async () => {
@@ -334,6 +347,38 @@ describe("resolveBackgroundRoute", () => {
     expect(route.resolvedModel).toBe("claude-fable-5");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=deep_reasoning");
+    expect(route.defaultBudget).toEqual({
+      maxToolCalls: 24,
+      maxApiTurns: 14,
+      maxElapsedMs: 480_000,
+      warningThresholdRatio: 0.75,
+    });
+  });
+
+  it("keeps routine review language on the balanced tier", async () => {
+    const sonnet5 = makeModel("claude-sonnet-5", "anthropic");
+    const sonnet46 = makeModel("claude-sonnet-4-6", "anthropic");
+    const opus = makeModel("claude-opus-4-8", "anthropic");
+    const codexModel = makeModel("gpt-5", "codex");
+    const registry = makeRegistry([
+      makeProvider("anthropic", [sonnet46, opus, sonnet5], true),
+      makeProvider("codex", [codexModel], true),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      {
+        task: "Review implementation",
+        message:
+          "Review these multi-file code changes for correctness, edge cases, error handling, and consistency.",
+        taskClass: "review_code",
+      },
+      { mode: "code", model: "gpt-5" },
+    );
+
+    expect(route.resolvedModel).toBe("claude-sonnet-5");
+    expect(route.routingReason).toContain("tier=balanced");
+    expect(route.defaultBudget?.maxToolCalls).toBe(12);
   });
 
   it("honors explicit modelTier override for review tasks", async () => {
@@ -437,7 +482,7 @@ describe("resolveBackgroundRoute", () => {
     expect(route.routingReason).toContain("ignored requested provider");
   });
 
-  it("does not impose thinking or tool restrictions for review_code", async () => {
+  it("bounds review_code without imposing thinking or route tool restrictions", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const codexModel = makeModel("gpt-5", "codex");
     const registry = makeRegistry([
@@ -457,6 +502,12 @@ describe("resolveBackgroundRoute", () => {
 
     expect(route.thinkingBudget).toBeUndefined();
     expect(route.toolProfile).toBeUndefined();
+    expect(route.defaultBudget).toEqual({
+      maxToolCalls: 12,
+      maxApiTurns: 8,
+      maxElapsedMs: 240_000,
+      warningThresholdRatio: 0.7,
+    });
   });
 
   it("does not impose thinking or tool restrictions for review_plan", async () => {
@@ -479,6 +530,7 @@ describe("resolveBackgroundRoute", () => {
 
     expect(route.thinkingBudget).toBeUndefined();
     expect(route.toolProfile).toBeUndefined();
+    expect(route.defaultBudget?.maxToolCalls).toBe(12);
   });
 
   it("does not return turn or tool limits for general task class", async () => {

@@ -1,4 +1,5 @@
 import type {
+  AgentBudget,
   BackgroundRouteResolution,
   ModelTier,
   ProviderStrategy,
@@ -11,6 +12,27 @@ import type { ProviderRegistry } from "./providers/index.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
 const ANTHROPIC_BACKGROUND_DEFAULT_MODEL = "claude-opus-4-8";
+
+const REVIEW_BUDGETS: Record<ModelTier, AgentBudget> = {
+  cheap: {
+    maxToolCalls: 6,
+    maxApiTurns: 5,
+    maxElapsedMs: 120_000,
+    warningThresholdRatio: 0.65,
+  },
+  balanced: {
+    maxToolCalls: 12,
+    maxApiTurns: 8,
+    maxElapsedMs: 240_000,
+    warningThresholdRatio: 0.7,
+  },
+  deep_reasoning: {
+    maxToolCalls: 24,
+    maxApiTurns: 14,
+    maxElapsedMs: 480_000,
+    warningThresholdRatio: 0.75,
+  },
+};
 
 interface TaskRouteRule {
   preferredMode?: string;
@@ -79,14 +101,9 @@ function inferReviewTier(
     /\bsecurity\b/,
     /\brisky?\b/,
     /\bdeep\s+review\b/,
-    /\bthorough\b/,
     /\barchitecture\b/,
     /\bprincipal[-\s]engineer\b/,
-    /\bnon[- ]?obvious\b/,
-    /\bedge cases?\b/,
-    /\bmulti[- ]file\b/,
     /\bcross[- ](cutting|system|module)\b/,
-    /\bcorrectness\b/,
     /\bdata integrity\b/,
     /\bproduction\b/,
   ];
@@ -94,6 +111,14 @@ function inferReviewTier(
   return deepSignals.some((pattern) => pattern.test(text))
     ? "deep_reasoning"
     : "balanced";
+}
+
+function getDefaultReviewBudget(
+  taskClass: string,
+  tier: ModelTier,
+): AgentBudget | undefined {
+  if (!taskClass.startsWith("review_")) return undefined;
+  return { ...REVIEW_BUDGETS[tier] };
 }
 
 function pickPreferredReviewModel(
@@ -187,6 +212,12 @@ export async function resolveBackgroundRoute(
 
   const { taskClass, rule } = getTaskRule(request.taskClass);
   const resolvedMode = pickMode(request, foreground.mode, rule);
+  const modelTier =
+    request.modelTier ??
+    inferReviewTier(request) ??
+    rule.modelTier ??
+    "balanced";
+  const defaultBudget = getDefaultReviewBudget(taskClass, modelTier);
 
   // Per-task-class overrides forwarded to the caller
   const ruleOverrides = {
@@ -216,15 +247,10 @@ export async function resolveBackgroundRoute(
         ? `explicit model override (${modelInfo.id}) ignored requested provider (${requestedProvider})`
         : `explicit model override (${modelInfo.id})`,
       fallbackUsed: providerMismatch,
+      ...(defaultBudget ? { defaultBudget } : {}),
       ...ruleOverrides,
     };
   }
-
-  const modelTier =
-    request.modelTier ??
-    inferReviewTier(request) ??
-    rule.modelTier ??
-    "balanced";
   const strategy = rule.providerStrategy ?? "same";
   const specificProvider = rule.specificProvider;
 
@@ -248,6 +274,7 @@ export async function resolveBackgroundRoute(
       taskClass,
       routingReason: "defaulted to foreground model",
       fallbackUsed: false,
+      ...(defaultBudget ? { defaultBudget } : {}),
       ...ruleOverrides,
     };
   }
@@ -342,6 +369,7 @@ export async function resolveBackgroundRoute(
       taskClass,
       routingReason,
       fallbackUsed,
+      ...(defaultBudget ? { defaultBudget } : {}),
       ...ruleOverrides,
     };
   }
@@ -358,6 +386,7 @@ export async function resolveBackgroundRoute(
         ? "no preferred/authenticated candidates available; using first authenticated model"
         : "no authenticated providers available; using first discovered model",
     fallbackUsed: true,
+    ...(defaultBudget ? { defaultBudget } : {}),
     ...ruleOverrides,
   };
 }

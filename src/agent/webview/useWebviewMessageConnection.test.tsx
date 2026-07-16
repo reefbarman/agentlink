@@ -214,6 +214,27 @@ describe("useWebviewMessageConnection", () => {
     expect(onMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("routes fleet lifecycle events independently of the foreground session", () => {
+    const onMessage = vi.fn();
+    render(
+      <Harness
+        postMessage={vi.fn()}
+        sessionIdRef={{ current: "foreground-1" }}
+        streamingRef={{ current: true }}
+        dispatchDelta={vi.fn()}
+        onMessage={onMessage}
+      />,
+    );
+
+    sendMessage({
+      type: "agentFleetEvent",
+      sessionId: "background-1",
+      event: { type: "queued" },
+    });
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects stale deltas after done marks the stream inactive", () => {
     const postMessage = vi.fn();
     const streamingRef = { current: true };

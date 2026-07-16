@@ -1,12 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp } from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AgentSessionManager } from "./AgentSessionManager.js";
 import { ProviderRegistry } from "./providers/index.js";
 import type { ToolDispatchContext } from "./toolAdapter.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
+import { mkdtemp } from "fs/promises";
 
 const mocks = vi.hoisted(() => {
   let seq = 0;
@@ -1319,6 +1320,20 @@ describe("AgentSessionManager background agents", () => {
   });
 
   it("creates native review agents with the full prompt path", async () => {
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "review",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "review_code",
+      routingReason: "balanced bounded review",
+      fallbackUsed: false,
+      defaultBudget: {
+        maxToolCalls: 12,
+        maxApiTurns: 8,
+        maxElapsedMs: 240_000,
+        warningThresholdRatio: 0.7,
+      },
+    });
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
 
@@ -1326,7 +1341,6 @@ describe("AgentSessionManager background agents", () => {
       task: "review task",
       message: "review thoroughly",
       taskClass: "review_code",
-      expectedResult: "review_findings",
     });
 
     expect(mocks.createSession).toHaveBeenCalledWith(
@@ -1340,6 +1354,28 @@ describe("AgentSessionManager background agents", () => {
     );
     const session = Array.from((mgr as any).sessions.values()).at(-1) as any;
     expect(session.addUserMessage).toHaveBeenCalledWith("review thoroughly");
+    expect(session.fleetMetadata).toEqual(
+      expect.objectContaining({
+        delegation: expect.objectContaining({
+          permissionProfile: "review-only",
+          expectedResult: "review_findings",
+        }),
+        budget: {
+          maxToolCalls: 12,
+          maxApiTurns: 8,
+          maxElapsedMs: 240_000,
+          warningThresholdRatio: 0.7,
+        },
+      }),
+    );
+    expect(mocks.runArgs).toHaveBeenCalledWith(
+      session,
+      expect.objectContaining({
+        toolProfile: "review",
+        maxToolCalls: 12,
+        maxApiTurns: 8,
+      }),
+    );
   });
 
   it("hands a runtime-captured review scope to the background agent", async () => {
@@ -1371,6 +1407,48 @@ describe("AgentSessionManager background agents", () => {
     expect(handedOff).toContain("Runtime-captured review scope");
     expect(handedOff).toContain("Foreground changes");
     expect(handedOff).toContain("+const value = 2;");
+  });
+
+  it("honors explicit review execution overrides", async () => {
+    mocks.resolveBackgroundRoute.mockResolvedValueOnce({
+      resolvedMode: "review",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "review_code",
+      routingReason: "balanced bounded review",
+      fallbackUsed: false,
+      defaultBudget: { maxToolCalls: 12, maxApiTurns: 8 },
+    });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground({
+      task: "custom review",
+      message: "review with caller controls",
+      taskClass: "review_code",
+      permissionProfile: "interactive",
+      expectedResult: "text",
+      budget: { maxToolCalls: 20, maxApiTurns: 11 },
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+
+    expect(session.fleetMetadata).toEqual(
+      expect.objectContaining({
+        delegation: expect.objectContaining({
+          permissionProfile: "interactive",
+          expectedResult: "text",
+        }),
+        budget: { maxToolCalls: 20, maxApiTurns: 11 },
+      }),
+    );
+    expect(mocks.runArgs).toHaveBeenCalledWith(
+      session,
+      expect.objectContaining({
+        toolProfile: undefined,
+        maxToolCalls: 20,
+        maxApiTurns: 11,
+      }),
+    );
   });
 
   it("renders structured final-marker results for the foreground", () => {
