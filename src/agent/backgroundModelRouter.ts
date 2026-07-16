@@ -12,6 +12,13 @@ import type { ProviderRegistry } from "./providers/index.js";
 import routingConfigRaw from "./backgroundModelRouting.config.json";
 
 const ANTHROPIC_BACKGROUND_DEFAULT_MODEL = "claude-opus-4-8";
+const FOREGROUND_ONLY_MODEL_PATTERNS = [/^claude-fable-5(?:-|$)/i];
+
+function isForegroundOnlyModel(modelId: string): boolean {
+  return FOREGROUND_ONLY_MODEL_PATTERNS.some((pattern) =>
+    pattern.test(modelId),
+  );
+}
 
 const REVIEW_BUDGETS: Record<ModelTier, AgentBudget> = {
   cheap: {
@@ -198,9 +205,17 @@ export async function resolveBackgroundRoute(
   request: SpawnBackgroundRequest,
   foreground: { mode: string; model: string },
 ): Promise<BackgroundRouteResolution> {
-  const allModels = registry.listAllModels();
-  if (allModels.length === 0) {
+  const registeredModels = registry.listAllModels();
+  if (registeredModels.length === 0) {
     throw new Error("No models are registered. Cannot spawn background agent.");
+  }
+  const allModels = registeredModels.filter(
+    (model) => !isForegroundOnlyModel(model.id),
+  );
+  if (allModels.length === 0) {
+    throw new Error(
+      "No background-eligible models are registered. Cannot spawn background agent.",
+    );
   }
 
   const authStatus = await registry.getAuthStatus();
@@ -231,6 +246,14 @@ export async function resolveBackgroundRoute(
   const requestedModel = request.model?.trim();
 
   if (requestedModel) {
+    const registeredModel = registeredModels.find(
+      (model) => model.id === requestedModel,
+    );
+    if (registeredModel && isForegroundOnlyModel(registeredModel.id)) {
+      throw new Error(
+        `Requested model "${requestedModel}" is foreground-only and cannot run background agents.`,
+      );
+    }
     const modelInfo = allModels.find((m) => m.id === requestedModel);
     if (!modelInfo) {
       throw new Error(`Requested model "${requestedModel}" is not available.`);

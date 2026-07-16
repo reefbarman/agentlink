@@ -319,7 +319,7 @@ describe("resolveBackgroundRoute", () => {
     expect(route.routingReason).toContain("tier=balanced");
   });
 
-  it("defaults complex opposite-provider Anthropic reviews to Fable 5", async () => {
+  it("defaults complex opposite-provider Anthropic reviews to Opus instead of foreground-only Fable 5", async () => {
     const sonnet5 = makeModel("claude-sonnet-5", "anthropic");
     const sonnet46 = makeModel("claude-sonnet-4-6", "anthropic");
     const opus = makeModel("claude-opus-4-8", "anthropic");
@@ -344,7 +344,7 @@ describe("resolveBackgroundRoute", () => {
     );
 
     expect(route.resolvedProvider).toBe("anthropic");
-    expect(route.resolvedModel).toBe("claude-fable-5");
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
     expect(route.fallbackUsed).toBe(false);
     expect(route.routingReason).toContain("tier=deep_reasoning");
     expect(route.defaultBudget).toEqual({
@@ -353,6 +353,48 @@ describe("resolveBackgroundRoute", () => {
       maxElapsedMs: 480_000,
       warningThresholdRatio: 0.75,
     });
+  });
+
+  it("does not inherit foreground-only Fable 5 for a background task", async () => {
+    const fable = makeModel("claude-fable-5", "anthropic");
+    const opus = makeModel("claude-opus-4-8", "anthropic");
+    const registry = makeRegistry([
+      makeProvider("anthropic", [fable, opus], true),
+    ]);
+
+    const route = await resolveBackgroundRoute(
+      registry,
+      {
+        task: "Investigate",
+        message: "Look into this in the background",
+        taskClass: "general",
+      },
+      { mode: "code", model: "claude-fable-5" },
+    );
+
+    expect(route.resolvedModel).toBe("claude-opus-4-8");
+    expect(route.resolvedProvider).toBe("anthropic");
+  });
+
+  it("rejects an explicit Fable 5 background model override", async () => {
+    const fable = makeModel("claude-fable-5", "anthropic");
+    const opus = makeModel("claude-opus-4-8", "anthropic");
+    const registry = makeRegistry([
+      makeProvider("anthropic", [fable, opus], true),
+    ]);
+
+    await expect(
+      resolveBackgroundRoute(
+        registry,
+        {
+          task: "Review",
+          message: "Review these changes",
+          taskClass: "review_code",
+          model: "claude-fable-5",
+        },
+        { mode: "code", model: "claude-opus-4-8" },
+      ),
+    ).rejects.toThrow(/foreground-only/);
   });
 
   it("keeps routine review language on the balanced tier", async () => {
