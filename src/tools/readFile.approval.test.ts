@@ -302,6 +302,37 @@ describe("handleReadFile outside-workspace approval ordering", () => {
     );
   });
 
+  it("converts ASCII PPM files to PNG image blocks for the agent", async () => {
+    resolveAndValidatePathMock.mockReturnValue({
+      absolutePath: "/workspace/assets/pixel.ppm",
+      inWorkspace: true,
+    });
+    isBinaryFileMock.mockReturnValue(false);
+
+    const ppm = Buffer.from("P3\n1 1\n255\n255 0 0\n", "ascii");
+    statMock.mockResolvedValue({ size: ppm.length });
+    readFileMock.mockResolvedValue(ppm);
+
+    const approvalManager = {
+      isPathTrusted: vi.fn(() => true),
+    } as unknown as ApprovalManager;
+    const approvalPanel = {} as ApprovalPanelProvider;
+
+    const result = await handleReadFile(
+      { path: "assets/pixel.ppm", include_symbols: false },
+      approvalManager,
+      approvalPanel,
+      sessionId,
+    );
+
+    expect(isBinaryFileMock).not.toHaveBeenCalled();
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toMatchObject({
+      type: "image",
+      mimeType: "image/png",
+    });
+  });
+
   it("reads text content when editor enrichment provider is degraded", async () => {
     resolveAndValidatePathMock.mockReturnValue({
       absolutePath: "/workspace/src/example.ts",

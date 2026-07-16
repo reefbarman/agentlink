@@ -23,6 +23,7 @@ import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import { type ToolResult } from "../shared/types.js";
 import { semanticFileQuery } from "../services/semanticSearch.js";
 import { convertBmpToPng } from "./bmpToPng.js";
+import { convertPpmToPng } from "./ppmToPng.js";
 
 // --- Image support ---
 
@@ -35,7 +36,10 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-const BMP_EXTENSION = ".bmp";
+const IMAGE_CONVERTERS: Record<string, (data: Buffer) => Buffer> = {
+  ".bmp": convertBmpToPng,
+  ".ppm": convertPpmToPng,
+};
 
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -686,36 +690,37 @@ export async function handleReadFile(
       return await readPdfFile(filePath, params);
     }
 
-    if (isBinaryFile(filePath)) {
-      if (ext === BMP_EXTENSION) {
-        const stat = await fs.stat(filePath);
-        if (stat.size > MAX_IMAGE_SIZE) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  error: `Image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_IMAGE_SIZE / 1024 / 1024} MB`,
-                  path: params.path,
-                }),
-              },
-            ],
-          };
-        }
-
-        const data = await fs.readFile(filePath);
-        const png = convertBmpToPng(data);
+    const imageConverter = IMAGE_CONVERTERS[ext];
+    if (imageConverter) {
+      const stat = await fs.stat(filePath);
+      if (stat.size > MAX_IMAGE_SIZE) {
         return {
           content: [
             {
-              type: "image",
-              data: png.toString("base64"),
-              mimeType: "image/png",
+              type: "text",
+              text: JSON.stringify({
+                error: `Image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_IMAGE_SIZE / 1024 / 1024} MB`,
+                path: params.path,
+              }),
             },
           ],
         };
       }
 
+      const data = await fs.readFile(filePath);
+      const png = imageConverter(data);
+      return {
+        content: [
+          {
+            type: "image",
+            data: png.toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
+      };
+    }
+
+    if (isBinaryFile(filePath)) {
       // Check if it's a supported binary format we can return.
       const mimeType = IMAGE_EXTENSIONS[ext];
 

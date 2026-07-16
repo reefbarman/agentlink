@@ -353,7 +353,7 @@ Read file contents with line numbers. Returns rich metadata that built-in read t
 
 Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not available rather than returned as null.
 
-**Image support:** Local image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) are returned as base64-encoded `image` content that the agent can view directly. Max image size: 10 MB.
+**Image support:** Local image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.ppm`) are returned as base64-encoded `image` content that the agent can view directly. BMP and PPM (P3/P6) files are converted to PNG first. Max image size: 10 MB.
 
 **PDF support:** Local `.pdf` files are parsed to extracted text and returned in the same numbered-line JSON shape as text files, with `file_type: "pdf"`. Max PDF size: 50 MB. `offset` and `limit` apply to extracted text lines.
 
