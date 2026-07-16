@@ -598,6 +598,14 @@ export function ToolCallBlock({
     (onContinueToolCallInBackground || onCompleteToolCall || onCancelToolCall);
   const resultImages =
     complete && toolCall.resultImages ? toolCall.resultImages : [];
+  const displayedResult =
+    resultImages.length > 0
+      ? toolCall.result
+          .split(/\r?\n/)
+          .filter((line) => line.trim() !== "[image]")
+          .join("\n")
+          .trim()
+      : toolCall.result;
   const revealsRunningTerminal =
     !complete &&
     toolCall.name === "execute_command" &&
@@ -723,23 +731,28 @@ export function ToolCallBlock({
               <JsonHighlight json={formattedInput} />
             </div>
           )}
-          {toolCall.result && (
+          {(displayedResult || resultImages.length > 0) && (
             <div class="tool-call-section">
               <div class="tool-call-section-label">Result</div>
-              {isJson(toolCall.result) ? (
-                <JsonHighlight json={formatJson(toolCall.result)} />
-              ) : (
-                <pre class="tool-call-code">{toolCall.result}</pre>
+              {displayedResult &&
+                (isJson(displayedResult) ? (
+                  <JsonHighlight json={formatJson(displayedResult)} />
+                ) : (
+                  <pre class="tool-call-code">{displayedResult}</pre>
+                ))}
+              {resultImages.length > 0 && (
+                <div class="tool-result-image-previews">
+                  {resultImages.map((image, index) => (
+                    <img
+                      key={`${image.mimeType}-${index}`}
+                      class="tool-result-image-preview"
+                      src={`data:${image.mimeType};base64,${image.data}`}
+                      alt={`${toolCall.name} result image ${index + 1}`}
+                      loading="lazy"
+                    />
+                  ))}
+                </div>
               )}
-            </div>
-          )}
-          {resultImages.length > 0 && (
-            <div class="tool-call-section">
-              <div class="tool-call-section-label">Generated images</div>
-              <div class="tool-result-image-count">
-                {resultImages.length} image
-                {resultImages.length === 1 ? "" : "s"} shown above.
-              </div>
             </div>
           )}
           {complete &&

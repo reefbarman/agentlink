@@ -519,7 +519,7 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 8px;
-  margin: 6px 0 8px 28px;
+  margin-top: 6px;
   max-width: min(100%, 620px);
 }
 
@@ -552,11 +552,6 @@ body {
     color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
-}
-
-.tool-result-image-count {
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
 }
 
 .user-image-lightbox {

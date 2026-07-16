@@ -1,8 +1,48 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import { h } from "preact";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+
 import {
+  ToolCallBlock,
   formatToolFileDisplayPath,
   getToolCallVisualState,
 } from "./ToolCallBlock";
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("ToolCallBlock", () => {
+  it("shows image results as previews instead of placeholder text when expanded", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "read-image",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "assets/pixel.ppm" }),
+          result: "[image]",
+          resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+          complete: true,
+        },
+      }),
+    );
+
+    expect(
+      screen.queryByRole("img", { name: "read_file result image 1" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /read_file/i }));
+
+    const preview = screen.getByRole("img", {
+      name: "read_file result image 1",
+    });
+    expect(preview.getAttribute("src")).toBe("data:image/png;base64,YWJjZA==");
+    expect(screen.queryByText("[image]")).toBeNull();
+  });
+});
 
 describe("formatToolFileDisplayPath", () => {
   it("returns an empty display for empty paths", () => {
