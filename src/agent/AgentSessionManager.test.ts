@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => {
     model: opts.config.model,
     providerId: opts.providerId,
     autoCondenseThreshold: opts.config.autoCondenseThreshold,
+    reasoningEffort: "high",
+    thinkingBudget: opts.config.thinkingBudget,
     title: "New Chat",
     background: Boolean(opts.background),
     status: "idle",
@@ -36,6 +38,9 @@ const mocks = vi.hoisted(() => {
     autoTitle: vi.fn(),
     getAllMessages: vi.fn(() => []),
     rebuildSystemPrompt: vi.fn(async () => {}),
+    setMode: vi.fn(async function (this: { mode: string }, mode: string) {
+      this.mode = mode;
+    }),
   }));
 
   return {
@@ -160,6 +165,8 @@ describe("AgentSessionManager host injection", () => {
       model: opts.config.model,
       providerId: opts.providerId,
       autoCondenseThreshold: opts.config.autoCondenseThreshold,
+      reasoningEffort: "high",
+      thinkingBudget: opts.config.thinkingBudget,
       title: "New Chat",
       background: Boolean(opts.background),
       status: "idle",
@@ -180,6 +187,9 @@ describe("AgentSessionManager host injection", () => {
       autoTitle: vi.fn(),
       getAllMessages: vi.fn(() => []),
       rebuildSystemPrompt: vi.fn(async () => {}),
+      setMode: vi.fn(async function (this: { mode: string }, mode: string) {
+        this.mode = mode;
+      }),
     });
     mocks.createSession
       .mockImplementationOnce(createEmptySession)
@@ -354,6 +364,42 @@ describe("AgentSessionManager host injection", () => {
         workspaceFolders: [{ name: "Injected", path: "/workspace/injected" }],
       }),
     );
+  });
+
+  it("restores the configured reasoning effort when modes change", async () => {
+    const mgr = new AgentSessionManager(
+      { ...makeConfig(), thinkingBudget: 2048 },
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      {
+        host: {
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            resolveReasoningEffortForMode: (mode) =>
+              mode === "architect" ? "xhigh" : "high",
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+          },
+        },
+      },
+    );
+
+    const session = await mgr.createSession("code");
+    expect(session.reasoningEffort).toBe("high");
+
+    await mgr.switchForegroundMode("architect");
+    expect(session.mode).toBe("architect");
+    expect(session.reasoningEffort).toBe("xhigh");
+
+    session.thinkingBudget = 0;
+    await mgr.switchForegroundMode("code");
+    expect(session.reasoningEffort).toBe("high");
+    expect(session.thinkingBudget).toBe(2048);
   });
 
   it("memoizes the foreground engine and updates its runtime when tool context changes", async () => {

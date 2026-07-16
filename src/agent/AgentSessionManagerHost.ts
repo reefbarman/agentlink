@@ -14,6 +14,7 @@ import {
   getEffectiveAutoCondenseThreshold,
 } from "./modelCondenseThresholds.js";
 import { resolveModelForMode } from "./modeModelPreferences.js";
+import { resolveReasoningEffortForMode } from "./modeReasoningEffortPreferences.js";
 import { providerRegistry, type ProviderRegistry } from "./providers/index.js";
 import {
   StdioAcpBackgroundRunner,
@@ -46,6 +47,9 @@ export type BgSummaryMode = "agent" | "openai" | "heuristic";
 export interface AgentSessionConfigHost {
   getCondenseThresholdForModel(model: string): number;
   resolveModelForMode(mode: string, fallbackModel: string): string;
+  resolveReasoningEffortForMode?(
+    mode: string,
+  ): import("./providers/types.js").ReasoningEffort;
   getBgSummaryMode(): BgSummaryMode;
   getBackgroundAgentSettings(): RawBackgroundAgentSettings;
 }
@@ -142,6 +146,11 @@ export function createDefaultAgentSessionManagerHost(args: {
           vscode.workspace.getConfiguration("agentlink"),
           mode,
           fallbackModel,
+        ),
+      resolveReasoningEffortForMode: (mode) =>
+        resolveReasoningEffortForMode(
+          vscode.workspace.getConfiguration("agentlink"),
+          mode,
         ),
       getBgSummaryMode: () => {
         const value = vscode.workspace

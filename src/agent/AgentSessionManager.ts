@@ -777,6 +777,29 @@ export class AgentSessionManager {
     }
   }
 
+  private getReasoningEffortForMode(mode: string): ReasoningEffort {
+    try {
+      return this.host.config.resolveReasoningEffortForMode?.(mode) ?? "high";
+    } catch (err) {
+      this.log?.(
+        `[agent] Failed to resolve configured reasoning effort for mode ${mode}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return "high";
+    }
+  }
+
+  private applyReasoningEffortToSession(
+    session: AgentSession,
+    effort: ReasoningEffort,
+  ): void {
+    session.reasoningEffort = effort;
+    if (effort === "none") {
+      session.thinkingBudget = 0;
+    } else if (session.thinkingBudget === 0) {
+      session.thinkingBudget = this.config.thinkingBudget;
+    }
+  }
+
   private applyThresholdToSession(session: AgentSession): void {
     session.autoCondenseThreshold = this.getCondenseThresholdForModel(
       session.model,
@@ -837,6 +860,10 @@ export class AgentSessionManager {
       providerId,
       mcpToolDisclosure: this.buildMcpToolDisclosure(),
     });
+    this.applyReasoningEffortToSession(
+      session,
+      this.getReasoningEffortForMode(mode),
+    );
     this.sessions.set(session.id, session);
     const pendingPolicy = this.commandApprovalPolicies.get("agent");
     if (pendingPolicy) {
@@ -918,12 +945,7 @@ export class AgentSessionManager {
     const session = this.getForegroundSession();
     if (!session) return false;
 
-    session.reasoningEffort = effort;
-    if (effort === "none") {
-      session.thinkingBudget = 0;
-    } else if (session.thinkingBudget === 0) {
-      session.thinkingBudget = this.config.thinkingBudget;
-    }
+    this.applyReasoningEffortToSession(session, effort);
     this.saveSession(session.id);
     this.notifySessionsChanged();
     return true;
@@ -1982,6 +2004,10 @@ export class AgentSessionManager {
 
     session.model = model;
     session.providerId = newProviderId;
+    this.applyReasoningEffortToSession(
+      session,
+      this.getReasoningEffortForMode(mode),
+    );
     this.applyThresholdToSession(session);
     this.refreshMcpToolDisclosure(session);
     await session.setMode(mode, opts);

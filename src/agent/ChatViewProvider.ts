@@ -15,6 +15,7 @@ import type {
 } from "./webview/types.js";
 import { getConfiguredBaseThresholdForModel } from "./modelCondenseThresholds.js";
 import { getModeModelPreferences } from "./modeModelPreferences.js";
+import { getModeReasoningEffortPreferences } from "./modeReasoningEffortPreferences.js";
 import type {
   AgentSessionManager,
   CheckpointRevertResult,
@@ -2633,22 +2634,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return fg?.reasoningEffort ?? "high";
   }
 
-  public submitBrowserSetThinkingEnabled(enabled: boolean): { ok: boolean } {
+  public async submitBrowserSetThinkingEnabled(
+    enabled: boolean,
+  ): Promise<{ ok: boolean }> {
     return this.submitBrowserSetReasoningEffort(enabled ? "high" : "none");
   }
 
-  public submitBrowserSetReasoningEffort(
+  public async submitBrowserSetReasoningEffort(
     effort: import("./providers/types.js").ReasoningEffort,
-  ): { ok: boolean } {
+  ): Promise<{ ok: boolean }> {
     const fg = this.sessionManager?.getForegroundSession();
     if (!fg || !this.sessionManager) return { ok: false };
     this.ensureProjectedForegroundSession(fg);
     if (!this.sessionManager.setForegroundReasoningEffort(effort)) {
       return { ok: false };
     }
+    const config = vscode.workspace.getConfiguration("agentlink");
+    const mode = fg.mode ?? "code";
+    const preferences = getModeReasoningEffortPreferences(config);
+    await config.update(
+      "modeReasoningEffortPreferences",
+      { ...preferences, [mode]: effort },
+      vscode.ConfigurationTarget.Global,
+    );
     this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
     this.sendInitialState();
-    this.log(`Reasoning effort changed: ${effort}`);
+    this.log(`Reasoning effort changed: ${effort} (saved for mode: ${mode})`);
     return { ok: true };
   }
 
@@ -4050,7 +4061,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSetReasoningEffort": {
         const effort = msg.effort;
         if (isCoreReasoningEffort(effort)) {
-          this.submitBrowserSetReasoningEffort(effort);
+          await this.submitBrowserSetReasoningEffort(effort);
         }
         break;
       }

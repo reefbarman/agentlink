@@ -29,6 +29,7 @@ const mockOutputChannel = {
   info: vi.fn(),
   dispose: vi.fn(),
 };
+const mockConfigUpdate = vi.fn();
 
 const mockGetConfiguration = vi.fn(() => ({
   get: vi.fn((key: string, fallback?: unknown) => {
@@ -38,7 +39,7 @@ const mockGetConfiguration = vi.fn(() => ({
     return fallback;
   }),
   inspect: vi.fn(() => undefined),
-  update: vi.fn(),
+  update: mockConfigUpdate,
 }));
 
 describe("tool terminal reveal messages", () => {
@@ -164,6 +165,7 @@ vi.mock("vscode", () => ({
     file: vi.fn((fsPath: string) => ({ fsPath })),
   },
   ViewColumn: { One: 1, Beside: 2 },
+  ConfigurationTarget: { Global: 1 },
 }));
 
 describe("persisted session mutation failure messages", () => {
@@ -429,13 +431,20 @@ describe("ChatViewProvider session state sync", () => {
       getBgSessionInfos: vi.fn(() => []),
     } as never);
 
-    expect(provider.submitBrowserSetReasoningEffort("max")).toEqual({
+    await expect(
+      provider.submitBrowserSetReasoningEffort("max"),
+    ).resolves.toEqual({
       ok: true,
     });
     expect(setForegroundReasoningEffort).toHaveBeenCalledWith("max");
     expect(session.reasoningEffort).toBe("max");
     expect(provider.getBrowserProjectedForegroundState()?.reasoningEffort).toBe(
       "max",
+    );
+    expect(mockConfigUpdate).toHaveBeenCalledWith(
+      "modeReasoningEffortPreferences",
+      { code: "max" },
+      1,
     );
   });
 

@@ -1333,9 +1333,10 @@ export class BrowserGatewayServer implements vscode.Disposable {
         this.writeJson(res, 400, { error: "invalid_request" });
         return;
       }
-      const result = this.chatViewProvider.submitBrowserSetReasoningEffort(
-        body.effort,
-      );
+      const result =
+        await this.chatViewProvider.submitBrowserSetReasoningEffort(
+          body.effort,
+        );
       this.writeJson(res, result.ok ? 200 : 400, result);
       return;
     }
@@ -1344,7 +1345,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = this.chatViewProvider.submitBrowserSetThinkingEnabled(
+    const result = await this.chatViewProvider.submitBrowserSetThinkingEnabled(
       body.enabled,
     );
     this.writeJson(res, result.ok ? 200 : 400, result);

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.16.105",
+  "version": "1.16.106",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -523,6 +523,23 @@
             "type": "string"
           },
           "description": "Default model per chat mode, keyed by mode slug (e.g. code, architect, ask, debug, review). Manually selecting a model in a mode updates that mode's saved preference."
+        },
+        "agentlink.modeReasoningEffortPreferences": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "description": "Default thinking level per chat mode, keyed by mode slug. Manually selecting a thinking level in a mode updates that mode's saved preference."
         },
         "agentlink.agentMaxTokens": {
           "type": "number",

@@ -1302,6 +1302,7 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 | `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                     |
 | `agentlink.agentModel`                         | `claude-sonnet-4-6`        | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`            |
 | `agentlink.modeModelPreferences`               | per-mode defaults          | Default model by mode slug; changing the picker in a mode updates that mode's preference                         |
+| `agentlink.modeReasoningEffortPreferences`     | `{}`                       | Default thinking level by mode slug; changing the picker in a mode updates that mode's preference                |
 | `agentlink.agentMaxTokens`                     | `8192`                     | Maximum output tokens per built-in agent response                                                                |
 | `agentlink.thinkingBudget`                     | `10000`                    | Extended thinking budget for thinking-capable models                                                             |
 | `agentlink.showThinking`                       | `true`                     | Show thinking blocks in the built-in agent chat UI                                                               |

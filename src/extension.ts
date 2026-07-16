@@ -1095,6 +1095,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (
         e.affectsConfiguration("agentlink.agentModel") ||
         e.affectsConfiguration("agentlink.modeModelPreferences") ||
+        e.affectsConfiguration("agentlink.modeReasoningEffortPreferences") ||
         e.affectsConfiguration("agentlink.defaultMode") ||
         e.affectsConfiguration("agentlink.agentMaxTokens") ||
         e.affectsConfiguration("agentlink.thinkingBudget") ||
