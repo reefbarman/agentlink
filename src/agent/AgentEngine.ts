@@ -747,8 +747,13 @@ export class AgentEngine {
             preservedContext,
           );
           if (signal.aborted) break;
-          const interjection = session.consumePendingInterjection();
-          if (interjection) {
+          // Drain every pending interjection FIFO so multiple queued messages
+          // all land at this break, each as its own user message.
+          for (
+            let interjection = session.consumePendingInterjection();
+            interjection !== null;
+            interjection = session.consumePendingInterjection()
+          ) {
             const resolvedInterjectionText = await resolveQueuedAttachments(
               interjection.text,
               interjection.attachments,
@@ -821,6 +826,11 @@ export class AgentEngine {
         let promptCacheRetention: "in_memory" | "24h" | undefined;
         let storeResponseState = false;
         let transportMonitor: ProviderStreamActivityMonitor | undefined;
+        // Tool stream events are provisional until the provider completes the
+        // response. Publishing them immediately leaves a permanently-running
+        // tool card when the stream disconnects partway through its JSON, and
+        // makes background accounting charge a tool that was never dispatched.
+        const pendingToolInputDeltas = new Map<string, string[]>();
         const retryTextPrefix = visibleTextFromRetriedStream;
         let retryTextOffset = 0;
         let retryTextDiverged = false;
@@ -1108,19 +1118,12 @@ export class AgentEngine {
                   }
                   break;
                 case "tool_start":
-                  session.currentTool = event.toolName;
-                  yield {
-                    type: "tool_start",
-                    toolCallId: event.toolCallId,
-                    toolName: event.toolName,
-                  };
+                  pendingToolInputDeltas.set(event.toolCallId, []);
                   break;
                 case "tool_input_delta":
-                  yield {
-                    type: "tool_input_delta",
-                    toolCallId: event.toolCallId,
-                    partialJson: event.partialJson,
-                  };
+                  pendingToolInputDeltas
+                    .get(event.toolCallId)
+                    ?.push(event.partialJson);
                   break;
                 case "tool_done":
                   // Handled at content_blocks
@@ -1524,6 +1527,27 @@ export class AgentEngine {
         }
         totalToolCalls += dispatchableToolCount;
 
+        // The response and its budget checks are now committed. Publish only
+        // tool calls that will actually dispatch; provisional calls from
+        // failed/retried streams and calls refused at a hard limit never reach
+        // UI or background budget accounting.
+        for (const block of toolUseBlocks) {
+          session.currentTool = block.name;
+          yield {
+            type: "tool_start",
+            toolCallId: block.id,
+            toolName: block.name,
+          };
+          for (const partialJson of pendingToolInputDeltas.get(block.id) ??
+            []) {
+            yield {
+              type: "tool_input_delta",
+              toolCallId: block.id,
+              partialJson,
+            };
+          }
+        }
+
         const pendingQuestionRecovery =
           !opts?.isBackground &&
           toolUseBlocks.length === 1 &&
@@ -1548,6 +1572,7 @@ export class AgentEngine {
           toolProfile: opts?.toolProfile,
           commandExecutionPolicy:
             session.agentMode.toolGroups.includes("read-only-command") ||
+            opts?.toolProfile === "review" ||
             opts?.toolProfile === "readonly-research"
               ? "read-only"
               : undefined,
@@ -1819,10 +1844,14 @@ export class AgentEngine {
           );
         }
 
-        // Inject any pending user interjection between tool batches
+        // Inject any pending user interjections between tool batches,
+        // draining FIFO so multiple queued messages all land at this break.
         if (!signal.aborted) {
-          const interjection = session.consumePendingInterjection();
-          if (interjection) {
+          for (
+            let interjection = session.consumePendingInterjection();
+            interjection !== null;
+            interjection = session.consumePendingInterjection()
+          ) {
             const resolvedInterjectionText = await resolveQueuedAttachments(
               interjection.text,
               interjection.attachments,

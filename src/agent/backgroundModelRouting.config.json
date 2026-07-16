@@ -11,14 +11,16 @@
       "preferredMode": "review",
       "providerStrategy": "opposite",
       "useForegroundModelByDefault": false,
-      "requireReviewCapableModel": true
+      "requireReviewCapableModel": true,
+      "thinkingBudgetByTier": { "balanced": 6000 }
     },
     "review_plan": {
       "preferredMode": "review",
       "providerStrategy": "opposite",
       "modelTier": "balanced",
       "useForegroundModelByDefault": false,
-      "requireReviewCapableModel": false
+      "requireReviewCapableModel": false,
+      "thinkingBudgetByTier": { "balanced": 6000 }
     },
     "readonly-research": {
       "preferredMode": "ask",
@@ -61,11 +63,11 @@
         "claude-sonnet-4-6",
         "claude-opus-4-8"
       ],
-      "balanced": ["claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-4-8"],
+      "balanced": ["claude-opus-4-8", "claude-sonnet-4-6", "claude-sonnet-5"],
       "deep_reasoning": [
         "claude-opus-4-8",
-        "claude-sonnet-5",
-        "claude-sonnet-4-6"
+        "claude-sonnet-4-6",
+        "claude-sonnet-5"
       ]
     },
     "codex": {

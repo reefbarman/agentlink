@@ -22,21 +22,21 @@ function isForegroundOnlyModel(modelId: string): boolean {
 
 const REVIEW_BUDGETS: Record<ModelTier, AgentBudget> = {
   cheap: {
-    maxToolCalls: 12,
-    maxApiTurns: 8,
-    maxElapsedMs: 240_000,
-    warningThresholdRatio: 0.7,
+    maxToolCalls: 36,
+    maxApiTurns: 16,
+    maxElapsedMs: 480_000,
+    warningThresholdRatio: 0.8,
   },
   balanced: {
-    maxToolCalls: 24,
-    maxApiTurns: 14,
-    maxElapsedMs: 480_000,
-    warningThresholdRatio: 0.75,
+    maxToolCalls: 72,
+    maxApiTurns: 32,
+    maxElapsedMs: 1_200_000,
+    warningThresholdRatio: 0.8,
   },
   deep_reasoning: {
-    maxToolCalls: 40,
-    maxApiTurns: 24,
-    maxElapsedMs: 900_000,
+    maxToolCalls: 120,
+    maxApiTurns: 56,
+    maxElapsedMs: 2_400_000,
     warningThresholdRatio: 0.8,
   },
 };
@@ -50,6 +50,8 @@ interface TaskRouteRule {
   requireReviewCapableModel?: boolean;
   /** Override thinking budget for background agents of this task class. */
   thinkingBudget?: number;
+  /** Override thinking budget only for selected routing tiers. */
+  thinkingBudgetByTier?: Partial<Record<ModelTier, number>>;
   /** Restrict the tool set for this task class (e.g. "review" for read-only review tools). */
   toolProfile?: string;
 }
@@ -236,8 +238,12 @@ export async function resolveBackgroundRoute(
 
   // Per-task-class overrides forwarded to the caller
   const ruleOverrides = {
-    ...(rule.thinkingBudget !== undefined
-      ? { thinkingBudget: rule.thinkingBudget }
+    ...(rule.thinkingBudgetByTier?.[modelTier] !== undefined ||
+    rule.thinkingBudget !== undefined
+      ? {
+          thinkingBudget:
+            rule.thinkingBudgetByTier?.[modelTier] ?? rule.thinkingBudget,
+        }
       : {}),
     ...(rule.toolProfile ? { toolProfile: rule.toolProfile } : {}),
   };

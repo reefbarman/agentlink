@@ -144,7 +144,13 @@ const BTW_MAX_TOOL_CALLS = 10;
 const BTW_DEFAULT_TIMEOUT_MS = 120_000;
 
 /** Hard-stop backstop after the nominal budget has triggered a wrap-up. */
-const BUDGET_HARD_LIMIT_RATIO = 2;
+const BUDGET_HARD_LIMIT_RATIO = 3;
+
+function getEngineHardLimit(limit: number | undefined): number | undefined {
+  return limit === undefined
+    ? undefined
+    : Math.ceil(limit * BUDGET_HARD_LIMIT_RATIO);
+}
 
 /** Human-readable label for a budget check kind (e.g. "tool_calls" → "tool call"). */
 function formatBudgetKind(kind: string): string {
@@ -1488,10 +1494,12 @@ export class AgentSessionManager {
         refreshExisting: true,
       });
 
-      // Clear any stale pending interjection from the previous run — if the
+      // Clear any stale pending interjections from the previous run — if the
       // webview already drained the queue and sent this message via agentSend,
-      // the old interjection would otherwise be re-emitted mid-turn as a duplicate.
-      session.consumePendingInterjection();
+      // the old interjections would otherwise be re-emitted mid-turn as duplicates.
+      while (session.consumePendingInterjection() !== null) {
+        // drain
+      }
       // Pasted images/PDFs are stored on the message itself so they're injected
       // into every API call (the API is stateless) and survive session restore.
       const priorUserTexts = session
@@ -3547,12 +3555,17 @@ export class AgentSessionManager {
 
     // Build a bg-specific tool context and preserve session-scoped fleet
     // controls so this agent may coordinate descendants within scheduler policy.
+    const effectiveToolProfile =
+      effectivePermissionProfile === "review-only"
+        ? "review"
+        : route.toolProfile;
     const baseCtx = this.toolCtx;
     const bgCtx: ToolDispatchContext = {
       ...baseCtx,
       sessionId: session.id,
       commandExecutionPolicy:
-        route.toolProfile === "readonly-research"
+        effectiveToolProfile === "review" ||
+        effectiveToolProfile === "readonly-research"
           ? "read-only"
           : baseCtx.commandExecutionPolicy,
       delegationPolicy: {
@@ -3609,10 +3622,11 @@ export class AgentSessionManager {
         1000,
       );
 
-      // Session-scoped caps also flow into the engine, which refuses
-      // over-limit tool calls and demands a final answer — a graceful
-      // landing instead of the manager's hard kill. Subtree/goal budgets are
-      // shared pools, so their totals don't apply to a single engine run.
+      // Session-scoped caps also flow into the engine as a final safety net.
+      // The nominal caps stay soft: the manager warns and interjects while the
+      // engine only refuses work at the same 3x boundary as the hard backstop.
+      // Subtree/goal budgets are shared pools, so their totals don't apply to
+      // a single engine run.
       const budget = session.fleetMetadata?.budget;
       const engineBudget =
         budget && (budget.scope === undefined || budget.scope === "session")
@@ -3621,12 +3635,9 @@ export class AgentSessionManager {
       try {
         for await (const event of bgEngine.run(session, {
           isBackground: true,
-          toolProfile:
-            effectivePermissionProfile === "review-only"
-              ? "review"
-              : route.toolProfile,
-          maxToolCalls: engineBudget?.maxToolCalls,
-          maxApiTurns: engineBudget?.maxApiTurns,
+          toolProfile: effectiveToolProfile,
+          maxToolCalls: getEngineHardLimit(engineBudget?.maxToolCalls),
+          maxApiTurns: getEngineHardLimit(engineBudget?.maxApiTurns),
         })) {
           if (event.type === "text_delta") {
             this.appendBgStreamingText(session.id, event.text);
@@ -4231,7 +4242,10 @@ export class AgentSessionManager {
     this.notifySessionsChanged();
     return accepted
       ? { accepted: true }
-      : { accepted: false, reason: "another steering message is pending" };
+      : {
+          accepted: false,
+          reason: "the session cannot accept steering messages",
+        };
   }
 
   detachAuthorizedBackground(
@@ -5081,14 +5095,14 @@ export class AgentSessionManager {
     if (!this.bgBudgetWrapUps.has(owner.id)) {
       const accepted = this.injectBudgetInterjection(
         members,
-        `[fleet budget] The ${formatBudgetKind(exhaustedKind)} budget for this task is exhausted. Do not start new tool calls — deliver your final findings now with the information you already have.`,
+        `[fleet budget] The planned ${formatBudgetKind(exhaustedKind)} budget for this task has been reached. Finish promptly, but use any additional tool calls that are genuinely needed to produce a correct, useful result. A hard safety backstop remains well beyond this soft limit.`,
       );
       this.bgBudgetWrapUps.set(owner.id, { kind: exhaustedKind });
       this.appendFleetEvent(
         owner,
         "budget_warning",
         accepted
-          ? `${exhaustedKind} budget exhausted — wrap-up requested`
+          ? `${exhaustedKind} planned budget reached — prompt finish requested`
           : `${exhaustedKind} soft limit reached — hard backstop active`,
       );
       this.saveSession(owner.id);
@@ -5326,15 +5340,13 @@ export class AgentSessionManager {
                   canWrite:
                     s.fleetMetadata.delegation?.permissionProfile !==
                     "review-only",
-                  canExecute:
-                    s.fleetMetadata.delegation?.permissionProfile !==
-                    "review-only",
+                  canExecute: true,
                   canUseMcp: true,
                   canDelegate: true,
                   limitationReason:
                     s.fleetMetadata.delegation?.permissionProfile ===
                     "review-only"
-                      ? "The delegation selected the review-only permission profile."
+                      ? "The delegation can execute only classifier-approved read-only commands."
                       : undefined,
                 }
               : {

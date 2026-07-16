@@ -629,4 +629,61 @@ describe("AgentSession", () => {
       expect(session.isAborted).toBe(false);
     });
   });
+
+  describe("pending interjections", () => {
+    it("accepts multiple interjections and consumes them FIFO", async () => {
+      const session = await makeSession();
+      expect(session.setPendingInterjection("first", "q1")).toBe(true);
+      expect(session.setPendingInterjection("second", "q2")).toBe(true);
+      expect(session.setPendingInterjection("third", "q3")).toBe(true);
+
+      expect(session.consumePendingInterjection()?.text).toBe("first");
+      expect(session.consumePendingInterjection()?.text).toBe("second");
+      expect(session.consumePendingInterjection()?.text).toBe("third");
+      expect(session.consumePendingInterjection()).toBeNull();
+    });
+
+    it("re-registering an existing queueId replaces the entry in place", async () => {
+      const session = await makeSession();
+      session.setPendingInterjection("first", "q1");
+      session.setPendingInterjection("second", "q2");
+      session.setPendingInterjection("first edited", "q1");
+
+      const first = session.consumePendingInterjection();
+      expect(first?.queueId).toBe("q1");
+      expect(first?.text).toBe("first edited");
+      expect(session.consumePendingInterjection()?.queueId).toBe("q2");
+      expect(session.consumePendingInterjection()).toBeNull();
+    });
+
+    it("updatePendingInterjection edits only the matching entry", async () => {
+      const session = await makeSession();
+      session.setPendingInterjection("first", "q1");
+      session.setPendingInterjection("second", "q2");
+
+      expect(session.updatePendingInterjection("q2", { text: "edited" })).toBe(
+        true,
+      );
+      expect(session.updatePendingInterjection("missing", { text: "x" })).toBe(
+        false,
+      );
+
+      expect(session.consumePendingInterjection()?.text).toBe("first");
+      expect(session.consumePendingInterjection()?.text).toBe("edited");
+    });
+
+    it("clearPendingInterjectionIf removes only the matching entry", async () => {
+      const session = await makeSession();
+      session.setPendingInterjection("first", "q1");
+      session.setPendingInterjection("second", "q2");
+      session.setPendingInterjection("third", "q3");
+
+      expect(session.clearPendingInterjectionIf("q2")?.text).toBe("second");
+      expect(session.clearPendingInterjectionIf("q2")).toBeNull();
+
+      expect(session.consumePendingInterjection()?.queueId).toBe("q1");
+      expect(session.consumePendingInterjection()?.queueId).toBe("q3");
+      expect(session.consumePendingInterjection()).toBeNull();
+    });
+  });
 });

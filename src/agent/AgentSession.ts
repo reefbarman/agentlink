@@ -34,6 +34,18 @@ import { buildSessionTitleFromUserText } from "./sessionTitle.js";
 import { estimateTokensFromChars } from "../util/tokenEstimation.js";
 import { randomUUID } from "crypto";
 
+export interface PendingInterjection {
+  text: string;
+  queueId: string;
+  messageId?: string;
+  displayText?: string;
+  isSlashCommand?: boolean;
+  slashCommandLabel?: string;
+  attachments?: string[];
+  images?: Array<{ name: string; mimeType: string; base64: string }>;
+  documents?: Array<{ name: string; mimeType: string; base64: string }>;
+}
+
 export class AgentSession {
   id: string;
   readonly background: boolean;
@@ -146,17 +158,7 @@ export class AgentSession {
   private abortController: AbortController | null = null;
   private _abortSignal: AbortSignal | undefined;
   private _abortGeneration = 0;
-  private _pendingInterjection: {
-    text: string;
-    queueId: string;
-    messageId?: string;
-    displayText?: string;
-    isSlashCommand?: boolean;
-    slashCommandLabel?: string;
-    attachments?: string[];
-    images?: Array<{ name: string; mimeType: string; base64: string }>;
-    documents?: Array<{ name: string; mimeType: string; base64: string }>;
-  } | null = null;
+  private _pendingInterjections: PendingInterjection[] = [];
   private _pendingModeResume: {
     mode: string;
     reason?: string;
@@ -645,9 +647,10 @@ export class AgentSession {
   }
 
   /**
-   * Queue an interjection for injection between tool batches.
-   * Returns true if the slot was free and the interjection was accepted,
-   * false if the slot was already occupied (caller should fall back).
+   * Queue an interjection for injection between tool batches. Multiple
+   * interjections may be pending at once; they are consumed FIFO at the next
+   * break. Registering a queueId that is already pending replaces that entry
+   * in place. Always returns true (the interjection is accepted).
    */
   setPendingInterjection(
     text: string,
@@ -660,22 +663,23 @@ export class AgentSession {
     images?: Array<{ name: string; mimeType: string; base64: string }>,
     documents?: Array<{ name: string; mimeType: string; base64: string }>,
   ): boolean {
-    // Only register the first queued item; subsequent items wait until done
-    if (this._pendingInterjection === null) {
-      this._pendingInterjection = {
-        text,
-        queueId,
-        messageId,
-        displayText,
-        isSlashCommand,
-        slashCommandLabel,
-        attachments,
-        images,
-        documents,
-      };
-      return true;
-    }
-    return false;
+    const entry: PendingInterjection = {
+      text,
+      queueId,
+      messageId,
+      displayText,
+      isSlashCommand,
+      slashCommandLabel,
+      attachments,
+      images,
+      documents,
+    };
+    const index = this._pendingInterjections.findIndex(
+      (item) => item.queueId === queueId,
+    );
+    if (index >= 0) this._pendingInterjections[index] = entry;
+    else this._pendingInterjections.push(entry);
+    return true;
   }
 
   updatePendingInterjection(
@@ -691,48 +695,32 @@ export class AgentSession {
       documents?: Array<{ name: string; mimeType: string; base64: string }>;
     },
   ): boolean {
-    if (this._pendingInterjection?.queueId !== queueId) return false;
-    this._pendingInterjection = { queueId, ...updates };
+    const index = this._pendingInterjections.findIndex(
+      (item) => item.queueId === queueId,
+    );
+    if (index < 0) return false;
+    this._pendingInterjections[index] = { queueId, ...updates };
     return true;
   }
 
-  consumePendingInterjection(): {
-    text: string;
-    queueId: string;
-    messageId?: string;
-    displayText?: string;
-    isSlashCommand?: boolean;
-    slashCommandLabel?: string;
-    attachments?: string[];
-    images?: Array<{ name: string; mimeType: string; base64: string }>;
-    documents?: Array<{ name: string; mimeType: string; base64: string }>;
-  } | null {
-    const interjection = this._pendingInterjection;
-    this._pendingInterjection = null;
-    return interjection;
+  /**
+   * Consume the oldest pending interjection (FIFO), or null when none remain.
+   * Callers drain by looping until null.
+   */
+  consumePendingInterjection(): PendingInterjection | null {
+    return this._pendingInterjections.shift() ?? null;
   }
 
   /**
    * Remove a pending interjection by queueId if it hasn't been consumed yet.
    * Returns the removed interjection, or null if it was already consumed.
    */
-  clearPendingInterjectionIf(queueId: string): {
-    text: string;
-    queueId: string;
-    messageId?: string;
-    displayText?: string;
-    isSlashCommand?: boolean;
-    slashCommandLabel?: string;
-    attachments?: string[];
-    images?: Array<{ name: string; mimeType: string; base64: string }>;
-    documents?: Array<{ name: string; mimeType: string; base64: string }>;
-  } | null {
-    if (this._pendingInterjection?.queueId === queueId) {
-      const interjection = this._pendingInterjection;
-      this._pendingInterjection = null;
-      return interjection;
-    }
-    return null;
+  clearPendingInterjectionIf(queueId: string): PendingInterjection | null {
+    const index = this._pendingInterjections.findIndex(
+      (item) => item.queueId === queueId,
+    );
+    if (index < 0) return null;
+    return this._pendingInterjections.splice(index, 1)[0];
   }
 
   queuePendingModeResume(

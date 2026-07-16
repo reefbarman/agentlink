@@ -579,7 +579,7 @@ const SWITCH_MODE_TOOL: ToolDefinition = {
 const AGENT_BUDGET_SCHEMA = {
   type: "object",
   description:
-    "Optional soft resource-cap overrides. Review task classes receive an automatic complexity-based session budget when this is omitted; other task classes remain uncapped. Reaching a cap requests an immediate wrap-up; the agent is force-stopped only when observed usage reaches the 2x backstop.",
+    "Optional soft resource-cap overrides. Review task classes receive an automatic complexity-based session budget when this is omitted; other task classes remain uncapped. Reaching a cap asks the agent to finish promptly without blocking necessary tools; work is force-stopped only when observed usage reaches the 3x safety backstop.",
   properties: {
     maxTokens: {
       type: "number",
@@ -589,12 +589,12 @@ const AGENT_BUDGET_SCHEMA = {
     maxToolCalls: {
       type: "number",
       description:
-        "Cap on tool invocations. More predictable than maxTokens for bounding work; a typical diff review uses 10-40 tool calls.",
+        "Soft cap on successfully committed tool invocations. Interrupted/provisional tool streams are not charged. Automatic review budgets allow substantially more tool calls than API turns so codebase inspection is weighted less aggressively.",
     },
     maxApiTurns: {
       type: "number",
       description:
-        "Cap on model API turns. A typical diff review takes 5-25 turns.",
+        "Soft cap on successful model API turns. Provider retry attempts are not charged.",
     },
     maxElapsedMs: {
       type: "number",
@@ -931,7 +931,7 @@ export interface BgStatusResult {
  */
 const MCP_ENABLED_TOOL_PROFILES = new Set(["review", "readonly-research"]);
 
-const READ_ONLY_COMMAND_PROFILES = new Set(["readonly-research"]);
+const READ_ONLY_COMMAND_PROFILES = new Set(["review", "readonly-research"]);
 
 const TOOL_PROFILES: Record<string, Set<string>> = {
   review: new Set([
@@ -949,6 +949,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "go_to_definition",
     "go_to_implementation",
     "get_type_hierarchy",
+    "execute_command",
   ]),
   "readonly-research": new Set([
     "read_file",
@@ -1058,9 +1059,9 @@ export function getAgentTools(
     }));
 
   // Restrictive profiles are authoritative: native tools come from the profile
-  // allowlist, and selected background profiles can opt into MCP explicitly,
-  // while still blocking native write/shell tools, nested background spawning,
-  // and foreground-only controls.
+  // allowlist, and selected background profiles can opt into MCP or restricted
+  // read-only command execution explicitly, while still blocking native write
+  // tools, nested background spawning, and foreground-only controls.
   const canUseMcpTools =
     profileAllowsMcp ||
     (!profileAllowlist && (!mode || mode.toolGroups.includes("mcp")));

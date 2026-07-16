@@ -449,16 +449,27 @@ describe("getAgentTools", () => {
     expect(names).toContain("get_hover");
     expect(names).toContain("get_symbols");
     expect(names).toContain("get_references");
+    expect(names).toContain("execute_command");
+    const executeCommand = reviewTools.find(
+      (tool) => tool.name === "execute_command",
+    );
+    expect(executeCommand?.description).toContain(
+      "recognized read-only command",
+    );
+    expect(executeCommand?.input_schema.properties).toHaveProperty("command");
+    expect(executeCommand?.input_schema.properties).not.toHaveProperty(
+      "background",
+    );
+    expect(executeCommand?.input_schema.properties).not.toHaveProperty("env");
     // Should include MCP discovery/call tools and directly exposed ddg tools.
     expect(names).toContain("find_mcp_tools");
     expect(names).toContain("call_mcp_tool");
     expect(names).toContain("ddg-search__search");
     expect(names).toContain("ddg-search__fetch_content");
 
-    // Should NOT include write tools, command tools, or foreground-only helpers.
+    // Should NOT include write tools or foreground-only helpers.
     expect(names).not.toContain("write_file");
     expect(names).not.toContain("apply_diff");
-    expect(names).not.toContain("execute_command");
     expect(names).not.toContain("find_and_replace");
     expect(names).not.toContain("load_rule");
     expect(names).not.toContain("ask_user");

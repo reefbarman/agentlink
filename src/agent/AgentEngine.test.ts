@@ -775,6 +775,67 @@ describe("AgentEngine", () => {
       });
     });
 
+    it("injects multiple pending interjections FIFO at the same tool-batch break", async () => {
+      const requests: StreamRequest[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_read",
+                name: "read_file",
+                input: { path: "src/a.ts" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "done" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("read then follow up");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      };
+      setEngineToolContext(engine, toolCtx, async () => {
+        session.setPendingInterjection("first follow up", "queue-1");
+        session.setPendingInterjection("second follow up", "queue-2");
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        };
+      });
+
+      const events = await collectEvents(engine.run(session));
+
+      const interjections = events.filter(
+        (e): e is Extract<AgentEvent, { type: "user_interjection" }> =>
+          e.type === "user_interjection",
+      );
+      expect(interjections.map((e) => e.queueId)).toEqual([
+        "queue-1",
+        "queue-2",
+      ]);
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1].messages.slice(-2)).toEqual([
+        { role: "user", content: "first follow up" },
+        { role: "user", content: "second follow up" },
+      ]);
+    });
+
     it("propagates the active tool profile into tool execution context", async () => {
       let streamCall = 0;
       const provider = makeMockProvider();
@@ -2501,6 +2562,54 @@ describe("AgentEngine", () => {
           "retrying stream",
         );
         expect(session.getLastAssistantText()).toBe("Recovered response");
+      } finally {
+        timerSpy.mockRestore();
+      }
+    });
+
+    it("does not publish or charge a provisional tool call from an interrupted stream", async () => {
+      let attempts = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        attempts += 1;
+        if (attempts === 1) {
+          yield {
+            type: "tool_start",
+            toolCallId: "partial-read",
+            toolName: "read_file",
+          };
+          yield {
+            type: "tool_input_delta",
+            toolCallId: "partial-read",
+            partialJson: '{"path":"src/Agent',
+          };
+          throw new Error("Connection error: stream terminated");
+        }
+        yield* makeProviderStream({ text: "Recovered without a tool" });
+      };
+      const timerSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((fn: TimerHandler) => {
+          if (typeof fn === "function") fn();
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        });
+
+      try {
+        const session = await makeSession();
+        session.addUserMessage("inspect the code");
+        const engine = new AgentEngine(makeRegistry(provider));
+
+        const events = await collectEvents(engine.run(session));
+
+        expect(attempts).toBe(2);
+        expect(events.filter((event) => event.type === "tool_start")).toEqual(
+          [],
+        );
+        expect(
+          events.filter((event) => event.type === "tool_input_delta"),
+        ).toEqual([]);
+        expect(session.currentTool).toBeUndefined();
+        expect(session.getLastAssistantText()).toBe("Recovered without a tool");
       } finally {
         timerSpy.mockRestore();
       }

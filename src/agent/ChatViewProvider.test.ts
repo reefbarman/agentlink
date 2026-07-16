@@ -59,7 +59,9 @@ describe("tool terminal reveal messages", () => {
       { get: vi.fn(), update: vi.fn() } as never,
     );
     const revealTerminal = vi.fn();
-    (provider as unknown as { sessionManager: unknown }).sessionManager = {};
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => undefined,
+    };
     provider.setToolCallTracker({ revealTerminal } as never);
 
     await (

@@ -758,7 +758,7 @@ describe("AgentSessionManager background agents", () => {
     // Hitting the limit injects a wrap-up instruction instead of killing the
     // run, so the agent's findings survive.
     expect(session.setPendingInterjection).toHaveBeenCalledWith(
-      expect.stringContaining("budget for this task is exhausted"),
+      expect.stringContaining("planned tool call budget"),
       expect.any(String),
     );
     expect(session.abort).not.toHaveBeenCalled();
@@ -828,15 +828,17 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
-  it("hard-stops only at double the nominal budget and persists an explicit terminal reason", async () => {
+  it("hard-stops only at triple the nominal budget and persists an explicit terminal reason", async () => {
     mocks.runBehavior.mockReturnValue(
       (async function* () {
         yield { type: "tool_start", toolCallId: "tc-1", toolName: "search" };
         yield { type: "tool_start", toolCallId: "tc-2", toolName: "read" };
-        // 1.5x usage remains inside the wrap-up backstop.
+        // 1.5x and 2x usage remain inside the safety backstop.
         yield { type: "tool_start", toolCallId: "tc-3", toolName: "read" };
-        // Double the nominal budget is the hard-stop boundary.
         yield { type: "tool_start", toolCallId: "tc-4", toolName: "read" };
+        yield { type: "tool_start", toolCallId: "tc-5", toolName: "read" };
+        // Triple the nominal budget is the hard-stop boundary.
+        yield { type: "tool_start", toolCallId: "tc-6", toolName: "read" };
         yield { type: "done" };
       })(),
     );
@@ -856,7 +858,7 @@ describe("AgentSessionManager background agents", () => {
       expect.objectContaining({
         lifecycle: "budget_exhausted",
         terminalReason: "budget_exhausted:tool_calls",
-        budgetUsage: expect.objectContaining({ toolCalls: 4 }),
+        budgetUsage: expect.objectContaining({ toolCalls: 6 }),
       }),
     );
   });
@@ -888,6 +890,10 @@ describe("AgentSessionManager background agents", () => {
       expect(session.abort).not.toHaveBeenCalled();
 
       now.mockReturnValue(480_000);
+      expect((mgr as any).enforceBudgetOwner(session)).toBe(false);
+      expect(session.abort).not.toHaveBeenCalled();
+
+      now.mockReturnValue(720_000);
       expect((mgr as any).enforceBudgetOwner(session)).toBe(true);
       expect(session.abort).toHaveBeenCalled();
       expect(session.fleetMetadata.terminalReason).toBe(
@@ -898,7 +904,7 @@ describe("AgentSessionManager background agents", () => {
     }
   });
 
-  it("hard-stops a doubled dimension even when another dimension was exhausted first", async () => {
+  it("hard-stops a tripled dimension even when another dimension was exhausted first", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
     const spawned = await mgr.spawnBackground({
@@ -917,7 +923,7 @@ describe("AgentSessionManager background agents", () => {
     meta.toolCalls = 1;
     meta.startedAt = 0;
 
-    const now = vi.spyOn(Date, "now").mockReturnValue(480_000);
+    const now = vi.spyOn(Date, "now").mockReturnValue(720_000);
     try {
       expect((mgr as any).enforceBudgetOwner(session)).toBe(true);
       expect(session.fleetMetadata.terminalReason).toBe(
@@ -928,7 +934,7 @@ describe("AgentSessionManager background agents", () => {
     }
   });
 
-  it("passes session-scoped budget caps into the background engine run", async () => {
+  it("passes only the 3x hard backstop caps into the background engine run", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
 
@@ -940,7 +946,7 @@ describe("AgentSessionManager background agents", () => {
 
     expect(mocks.runArgs).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ maxToolCalls: 5, maxApiTurns: 7 }),
+      expect.objectContaining({ maxToolCalls: 15, maxApiTurns: 21 }),
     );
   });
 
@@ -1616,7 +1622,7 @@ describe("AgentSessionManager background agents", () => {
     );
     const parentSession = (mgr as any).sessions.get(parent.sessionId);
     parentSession.fleetMetadata.budget = { maxToolCalls: 1 };
-    (mgr as any).bgMeta.get(parent.sessionId).toolCalls = 2;
+    (mgr as any).bgMeta.get(parent.sessionId).toolCalls = 3;
     const savedReasons: Array<string | undefined> = [];
     vi.spyOn(mgr, "saveSession").mockImplementation((sessionId) => {
       if (sessionId === child.sessionId) {
@@ -1714,14 +1720,16 @@ describe("AgentSessionManager background agents", () => {
       routingReason: "balanced bounded review",
       fallbackUsed: false,
       defaultBudget: {
-        maxToolCalls: 24,
-        maxApiTurns: 14,
-        maxElapsedMs: 480_000,
-        warningThresholdRatio: 0.75,
+        maxToolCalls: 72,
+        maxApiTurns: 32,
+        maxElapsedMs: 1_200_000,
+        warningThresholdRatio: 0.8,
       },
     });
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
+    const createToolRuntime = vi.fn(() => ({ executeTool: vi.fn() }));
+    (mgr as any).host.createToolRuntime = createToolRuntime;
 
     await mgr.spawnBackground({
       task: "review task",
@@ -1747,10 +1755,10 @@ describe("AgentSessionManager background agents", () => {
           expectedResult: "review_findings",
         }),
         budget: {
-          maxToolCalls: 24,
-          maxApiTurns: 14,
-          maxElapsedMs: 480_000,
-          warningThresholdRatio: 0.75,
+          maxToolCalls: 72,
+          maxApiTurns: 32,
+          maxElapsedMs: 1_200_000,
+          warningThresholdRatio: 0.8,
         },
       }),
     );
@@ -1758,10 +1766,25 @@ describe("AgentSessionManager background agents", () => {
       session,
       expect.objectContaining({
         toolProfile: "review",
-        maxToolCalls: 24,
-        maxApiTurns: 14,
+        maxToolCalls: 216,
+        maxApiTurns: 96,
       }),
     );
+    expect(createToolRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ commandExecutionPolicy: "read-only" }),
+    );
+    expect(
+      mgr.getBgSessionInfos().find((info) => info.id === session.id)
+        ?.capabilities,
+    ).toEqual({
+      canRead: true,
+      canWrite: false,
+      canExecute: true,
+      canUseMcp: true,
+      canDelegate: true,
+      limitationReason:
+        "The delegation can execute only classifier-approved read-only commands.",
+    });
   });
 
   it("hands a runtime-captured review scope to the background agent", async () => {
@@ -1803,7 +1826,7 @@ describe("AgentSessionManager background agents", () => {
       taskClass: "review_code",
       routingReason: "balanced bounded review",
       fallbackUsed: false,
-      defaultBudget: { maxToolCalls: 24, maxApiTurns: 14 },
+      defaultBudget: { maxToolCalls: 72, maxApiTurns: 32 },
     });
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
@@ -1831,8 +1854,8 @@ describe("AgentSessionManager background agents", () => {
       session,
       expect.objectContaining({
         toolProfile: undefined,
-        maxToolCalls: 20,
-        maxApiTurns: 11,
+        maxToolCalls: 60,
+        maxApiTurns: 33,
       }),
     );
   });
@@ -2117,7 +2140,7 @@ describe("AgentSessionManager background agents", () => {
     ]);
   });
 
-  it("disables reasoning effort when the background route disables thinking", async () => {
+  it("disables reasoning effort and restricts commands when the background route disables thinking", async () => {
     mocks.resolveBackgroundRoute.mockResolvedValueOnce({
       resolvedMode: "review",
       resolvedModel: "gpt-5.4-pro",
@@ -2131,6 +2154,8 @@ describe("AgentSessionManager background agents", () => {
 
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
+    const createToolRuntime = vi.fn(() => ({ executeTool: vi.fn() }));
+    (mgr as any).host.createToolRuntime = createToolRuntime;
 
     const spawned = await mgr.spawnBackground({
       task: "plan review",
@@ -2140,6 +2165,12 @@ describe("AgentSessionManager background agents", () => {
 
     const session = (mgr as any).sessions.get(spawned.sessionId);
     expect(session.reasoningEffort).toBe("none");
+    expect(createToolRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: spawned.sessionId,
+        commandExecutionPolicy: "read-only",
+      }),
+    );
   });
 
   it("does not forward legacy route turn limits to background engine runs", async () => {
