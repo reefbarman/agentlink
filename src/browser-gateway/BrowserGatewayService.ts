@@ -369,6 +369,16 @@ export class BrowserGatewayService implements vscode.Disposable {
     );
   }
 
+  subscribeToSessionChanges(
+    onDidChangeSessions: (listener: () => void) => { dispose(): void },
+  ): void {
+    this.disposables.push(
+      onDidChangeSessions(() => {
+        this.invalidateBrowserSnapshot();
+      }),
+    );
+  }
+
   invalidateBrowserSnapshot(options: { immediate?: boolean } = {}): void {
     if (this.hasActiveClientsProbe && !this.hasActiveClientsProbe()) {
       return;

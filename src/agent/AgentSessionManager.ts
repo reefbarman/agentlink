@@ -312,6 +312,15 @@ export class AgentSessionManager {
 
   /** Callback when session list changes */
   onSessionsChanged?: () => void;
+  private readonly sessionChangeListeners = new Set<() => void>();
+
+  onDidChangeSessions(listener: () => void): { dispose(): void } {
+    this.sessionChangeListeners.add(listener);
+    return {
+      dispose: () => this.sessionChangeListeners.delete(listener),
+    };
+  }
+
   /** Durable fleet lifecycle hook for notifications and automations. */
   onFleetEvent?: (
     sessionId: string,
@@ -332,6 +341,18 @@ export class AgentSessionManager {
   ): () => void {
     this.fleetEventListeners.add(listener);
     return () => this.fleetEventListeners.delete(listener);
+  }
+
+  private notifySessionsChanged(): void {
+    const legacyListener = this.onSessionsChanged;
+    legacyListener?.();
+    this.notifySessionChangeListeners();
+  }
+
+  private notifySessionChangeListeners(): void {
+    for (const listener of this.sessionChangeListeners) {
+      listener();
+    }
   }
 
   constructor(
@@ -624,7 +645,7 @@ export class AgentSessionManager {
         });
       }
       this.saveSession(sessionId);
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     }
     this.activityTraceRecorder.appendAgentEvent(
       sessionId,
@@ -823,7 +844,7 @@ export class AgentSessionManager {
       this.commandApprovalPolicies.delete("agent");
     }
     this.foregroundId = session.id;
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return session;
   }
 
@@ -885,12 +906,12 @@ export class AgentSessionManager {
   ): void {
     if (!this.sessions.has(sessionId) && sessionId !== "agent") return;
     this.commandApprovalPolicies.set(sessionId, policy);
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
   }
 
   clearSessionCommandApprovalPolicy(sessionId: string): void {
     if (!this.commandApprovalPolicies.delete(sessionId)) return;
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
   }
 
   setForegroundReasoningEffort(effort: ReasoningEffort): boolean {
@@ -904,7 +925,7 @@ export class AgentSessionManager {
       session.thinkingBudget = this.config.thinkingBudget;
     }
     this.saveSession(session.id);
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return true;
   }
 
@@ -984,6 +1005,7 @@ export class AgentSessionManager {
       getAllMessages: () => session.getAllMessages(),
       checkpoints: this.checkpoints.get(session.id) ?? [],
     });
+    this.notifySessionChangeListeners();
   }
 
   private async saveSessionRevisionAware(id: string): Promise<void> {
@@ -1035,6 +1057,7 @@ export class AgentSessionManager {
 
     if (result.ok) {
       this.sessionRevisions.set(id, result.revision);
+      this.notifySessionChangeListeners();
       return;
     }
 
@@ -1468,7 +1491,7 @@ export class AgentSessionManager {
         1000,
       );
 
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
 
       const MAX_AUTO_CONTINUE = 5;
       let autoContinueCount = 0;
@@ -1614,7 +1637,7 @@ export class AgentSessionManager {
           this.sessionRunSettled.delete(session.id);
         }
         resolveRunSettled();
-        this.onSessionsChanged?.();
+        this.notifySessionsChanged();
       }
     });
   }
@@ -1708,7 +1731,7 @@ export class AgentSessionManager {
           this.appendFleetEvent(session, "cancelled", "Agent cancelled");
         }
       }
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     }
   }
 
@@ -1869,7 +1892,7 @@ export class AgentSessionManager {
       persistIfHistoryChanged,
       1000,
     );
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
 
     let modeSwitchResumeCount = 0;
     try {
@@ -1934,14 +1957,14 @@ export class AgentSessionManager {
     } finally {
       this.host.timers.clearInterval(inFlightPersistTimer);
       persistIfHistoryChanged();
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     }
   }
 
   switchTo(sessionId: string): void {
     if (this.sessions.has(sessionId)) {
       this.foregroundId = sessionId;
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     }
   }
 
@@ -1970,7 +1993,7 @@ export class AgentSessionManager {
       });
     }
 
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     this.saveSession(session.id);
     return session;
   }
@@ -2070,7 +2093,7 @@ export class AgentSessionManager {
     const engine = this.getEngine();
     const preservedContext = this.buildPreservedContext(session);
     session.status = "streaming";
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
 
     let condenseSucceeded = false;
 
@@ -2149,7 +2172,7 @@ export class AgentSessionManager {
       this.recordAndEmitEvent(session.id, { type: "condense_error", error });
     } finally {
       session.status = "idle";
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     }
   }
 
@@ -2317,7 +2340,7 @@ export class AgentSessionManager {
     session.replaceMessages(truncateResult.messages);
     session.status = "idle";
     this.checkpoints.set(sessionId, nextCheckpoints);
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return {
       ok: true,
       restoredPrompt: truncateResult.restoredPrompt,
@@ -2539,7 +2562,7 @@ export class AgentSessionManager {
       }
       if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
       this.foregroundId = sessionId;
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
       return this.sessions.get(sessionId)!;
     }
 
@@ -2593,7 +2616,7 @@ export class AgentSessionManager {
     if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
     this.sessions.set(sessionId, session);
     this.foregroundId = sessionId;
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return session;
   }
 
@@ -2732,7 +2755,7 @@ export class AgentSessionManager {
         await this.saveSessionNow(session.id);
       }
     }
-    if (restored.length > 0) this.onSessionsChanged?.();
+    if (restored.length > 0) this.notifySessionsChanged();
     return restored;
   }
 
@@ -2788,7 +2811,7 @@ export class AgentSessionManager {
         this.foregroundId = null;
       }
     }
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return { ok: true };
   }
 
@@ -2844,7 +2867,7 @@ export class AgentSessionManager {
     if (session) {
       session.title = title;
     }
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return { ok: true };
   }
 
@@ -3008,7 +3031,7 @@ export class AgentSessionManager {
       if (session.fleetMetadata) session.fleetMetadata.lifecycle = "queued";
       this.bgLaunchQueue.push({ sessionId: session.id, start: launch });
       this.saveSession(session.id);
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
       return;
     }
     session.status = "streaming";
@@ -3036,7 +3059,7 @@ export class AgentSessionManager {
       if (session.fleetMetadata) session.fleetMetadata.lifecycle = "running";
       this.appendFleetEvent(session, "started", "Agent started from queue");
       this.saveSession(session.id);
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
       void queued.start().finally(() => this.drainBackgroundQueue());
     }
   }
@@ -3179,7 +3202,7 @@ export class AgentSessionManager {
       });
       this.appendFleetEvent(session, "queued", "Agent admitted to the fleet");
       this.saveSession(session.id);
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
 
       const assistantTextParts: string[] = [];
       let promptResponse: PromptResponse | undefined;
@@ -3220,7 +3243,7 @@ export class AgentSessionManager {
                 streamingText: this.bgStreamingText.get(session.id),
                 statusDetail: this.bgStatusDetail.get(session.id),
               });
-              this.onSessionsChanged?.();
+              this.notifySessionsChanged();
             },
             onRequestPermission: (permissionRequest) =>
               this.handleAcpPermissionRequest({
@@ -3284,7 +3307,7 @@ export class AgentSessionManager {
         } finally {
           if (session.fleetMetadata?.lifecycle === "paused") {
             this.saveSession(session.id);
-            this.onSessionsChanged?.();
+            this.notifySessionsChanged();
           } else {
             this.bgStatusDetail.delete(session.id);
             this.markBgCompleted(session.id);
@@ -3305,7 +3328,7 @@ export class AgentSessionManager {
               resolve(resultText);
             }
             this.bgResultWaiters.delete(session.id);
-            this.onSessionsChanged?.();
+            this.notifySessionsChanged();
             void this.resumeParentAfterBackgroundCompletion(
               session.id,
               resultText,
@@ -3430,7 +3453,7 @@ export class AgentSessionManager {
     });
     this.appendFleetEvent(session, "queued", "Agent admitted to the fleet");
     this.saveSession(session.id);
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
 
     // Build a bg-specific tool context and preserve session-scoped fleet
     // controls so this agent may coordinate descendants within scheduler policy.
@@ -3595,7 +3618,7 @@ export class AgentSessionManager {
 
       if (session.fleetMetadata?.lifecycle === "paused") {
         this.saveSession(session.id);
-        this.onSessionsChanged?.();
+        this.notifySessionsChanged();
         return;
       }
 
@@ -3629,7 +3652,7 @@ export class AgentSessionManager {
         resolve(resultText);
       }
       this.bgResultWaiters.delete(session.id);
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
       void this.resumeParentAfterBackgroundCompletion(session.id, resultText);
 
       // Cleanup stored result after 5 minutes to prevent unbounded memory growth
@@ -3806,7 +3829,7 @@ export class AgentSessionManager {
     summary.inFlight = true;
     summary.lastAttemptAt = now;
     summary.lastInputHash = contextHash;
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
 
     try {
       const session = this.sessions.get(args.sessionId);
@@ -3934,7 +3957,7 @@ export class AgentSessionManager {
       summary.needsRefresh = false;
     } finally {
       summary.inFlight = false;
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     }
   }
 
@@ -4111,7 +4134,7 @@ export class AgentSessionManager {
       undefined,
       instruction,
     );
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return accepted
       ? { accepted: true }
       : { accepted: false, reason: "another steering message is pending" };
@@ -4148,7 +4171,7 @@ export class AgentSessionManager {
     this.bgParents.delete(sessionId);
     updateSubtree(session, session.id, 1);
     this.appendFleetEvent(session, "detached", "Subtree detached");
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return { detached: true };
   }
 
@@ -4167,7 +4190,7 @@ export class AgentSessionManager {
     }
     session.fleetMetadata.archivedAt = Date.now();
     this.saveSession(sessionId);
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return { archived: true };
   }
 
@@ -4197,7 +4220,7 @@ export class AgentSessionManager {
     session.status = "idle";
     this.appendFleetEvent(session, "paused", "Agent paused");
     this.saveSession(sessionId);
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return { paused: true };
   }
 
@@ -4216,7 +4239,7 @@ export class AgentSessionManager {
     session.fleetMetadata.terminalReason = "resumed_as_new_session";
     session.fleetMetadata.archivedAt = Date.now();
     this.saveSession(sessionId);
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     return result;
   }
 
@@ -4374,7 +4397,7 @@ export class AgentSessionManager {
     for (const listener of this.fleetEventListeners) {
       listener(session.id, event);
     }
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
   }
 
   private appendPolicyAudit(
@@ -4413,7 +4436,7 @@ export class AgentSessionManager {
     }
     if (marked) {
       this.saveSession(sessionId);
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     }
     return { marked };
   }
@@ -4709,7 +4732,7 @@ export class AgentSessionManager {
     session.fleetMetadata.worktreeExchangeId = exchange.id;
     this.appendFleetEvent(session, "queued", "Worktree agent launch requested");
     this.saveSession(session.id);
-    this.onSessionsChanged?.();
+    this.notifySessionsChanged();
     try {
       const result = await provider.start({
         task: request.task,
@@ -4827,7 +4850,7 @@ export class AgentSessionManager {
         );
       }
       this.saveSession(session.id);
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     };
     const timer = this.host.timers.setInterval(() => {
       void poll().catch((error) =>
@@ -4946,7 +4969,7 @@ export class AgentSessionManager {
         `[fleet budget] About ${Math.round(warning.ratio * 100)}% of the ${formatBudgetKind(warning.kind)} budget for this task is used. Prioritize the remaining work and start wrapping up so you can deliver your findings before the budget runs out.`,
       );
       this.saveSession(owner.id);
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     }
     const hardExhausted = checks.find(
       ([limit, used]) =>
@@ -4974,7 +4997,7 @@ export class AgentSessionManager {
           : `${exhaustedKind} soft limit reached — hard backstop active`,
       );
       this.saveSession(owner.id);
-      this.onSessionsChanged?.();
+      this.notifySessionsChanged();
     }
     if (!hardExhausted) return false;
 

@@ -508,6 +508,9 @@ export function activate(context: vscode.ExtensionContext): void {
   browserGatewayService.subscribeToProjectedForegroundChanges((listener) =>
     chatViewProvider.onDidChangeBrowserProjectedForeground(listener),
   );
+  browserGatewayService.subscribeToSessionChanges((listener) =>
+    agentSessionManager!.onDidChangeSessions(listener),
+  );
   context.subscriptions.push(browserGatewayService);
   // Keep the browser model list in parity after a dynamic capability refresh.
   chatViewProvider.setBrowserModelsChangedNotifier(() => {

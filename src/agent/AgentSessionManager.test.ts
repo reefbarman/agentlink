@@ -103,6 +103,55 @@ describe("AgentSessionManager host injection", () => {
     expect(mgr.getCommandApprovalPolicy(session.id, "manual")).toBe("manual");
   });
 
+  it("fans out session changes without replacing the legacy callback", async () => {
+    const mgr = new AgentSessionManager(makeConfig(), "/tmp");
+    const legacyListener = vi.fn();
+    const retainedListener = vi.fn();
+    const disposedListener = vi.fn();
+    mgr.onSessionsChanged = legacyListener;
+    mgr.onDidChangeSessions(retainedListener);
+    const disposedSubscription = mgr.onDidChangeSessions(disposedListener);
+
+    const session = await mgr.createSession("code");
+
+    expect(legacyListener).toHaveBeenCalledTimes(1);
+    expect(retainedListener).toHaveBeenCalledTimes(1);
+    expect(disposedListener).toHaveBeenCalledTimes(1);
+
+    disposedSubscription.dispose();
+    mgr.setCommandApprovalPolicy(session.id, "sensitive");
+
+    expect(legacyListener).toHaveBeenCalledTimes(2);
+    expect(retainedListener).toHaveBeenCalledTimes(2);
+    expect(disposedListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies session listeners after a persisted snapshot commits", async () => {
+    const store = {
+      saveSession: vi.fn(async () => ({ ok: true, revision: "revision-1" })),
+      list: vi.fn(() => []),
+    };
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      store as any,
+    );
+    const session = await mgr.createSession("code");
+    const legacyListener = vi.fn();
+    const sessionListener = vi.fn();
+    mgr.onSessionsChanged = legacyListener;
+    mgr.onDidChangeSessions(sessionListener);
+
+    mgr.saveSession(session.id);
+    await flushPromises();
+
+    expect(store.saveSession).toHaveBeenCalledTimes(1);
+    expect(sessionListener).toHaveBeenCalledTimes(1);
+    expect(legacyListener).not.toHaveBeenCalled();
+  });
+
   it("replaces empty foreground sessions instead of keeping them in memory", async () => {
     let nextSessionNumber = 1;
     const createEmptySession = async (opts: any) => ({

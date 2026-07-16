@@ -712,6 +712,91 @@ describe("BrowserGatewayService", () => {
     hub.dispose();
   });
 
+  it("publishes fallback foreground and persisted-session changes with the recurring poll disabled", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new InMemoryAgentUiEventHub();
+      const sessionManager = makeSessionManagerStub();
+      let sessionListener: (() => void) | undefined;
+      const sessionSubscriptionDispose = vi.fn();
+      const service = new BrowserGatewayService(
+        hub,
+        sessionManager as never,
+        () => themeSnapshotStub,
+        () => "prompt",
+        () => true,
+        () => "high",
+        () => null,
+        () => [],
+        undefined,
+        undefined,
+        {
+          ...disabledPollTimers,
+          setTimeout,
+          clearTimeout,
+          foregroundCoalesceMs: 150,
+        },
+      );
+      service.setHasActiveClientsProbe(() => true);
+      service.subscribeToSessionChanges((listener) => {
+        sessionListener = listener;
+        return { dispose: sessionSubscriptionDispose } as never;
+      });
+      const onDidChange = vi.fn();
+      const subscription = service.onDidChange(onDidChange);
+
+      sessionManager.listPersistedSessions.mockReturnValue([
+        {
+          schemaVersion: 1,
+          id: "session-1",
+          mode: "code",
+          model: "claude-sonnet-4-6",
+          title: "Renamed Session",
+          messageCount: 2,
+          totalInputTokens: 10,
+          totalOutputTokens: 20,
+          createdAt: 1,
+          lastActiveAt: 3,
+        },
+      ]);
+      sessionManager.getForegroundSession.mockReturnValue({
+        ...sessionManager.getForegroundSession(),
+        title: "Renamed Session",
+        status: "tool_executing",
+      });
+      sessionListener?.();
+      vi.advanceTimersByTime(150);
+
+      expect(onDidChange).toHaveBeenCalledTimes(1);
+      expect(onDidChange.mock.calls[0][0].snapshot.session).toMatchObject({
+        sessions: [expect.objectContaining({ title: "Renamed Session" })],
+        foreground: {
+          title: "Renamed Session",
+          status: "tool_executing",
+          streaming: true,
+        },
+      });
+
+      sessionManager.getForegroundSession.mockImplementation(
+        () => undefined as never,
+      );
+      sessionListener?.();
+      vi.advanceTimersByTime(150);
+
+      expect(onDidChange).toHaveBeenCalledTimes(2);
+      expect(
+        onDidChange.mock.calls[1][0].snapshot.session.foreground,
+      ).toBeNull();
+
+      subscription.dispose();
+      service.dispose();
+      expect(sessionSubscriptionDispose).toHaveBeenCalledTimes(1);
+      hub.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes projected foreground changes through explicit invalidation with the recurring poll disabled", () => {
     vi.useFakeTimers();
     try {
