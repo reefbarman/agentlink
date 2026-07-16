@@ -775,6 +775,70 @@ describe("AgentEngine", () => {
       });
     });
 
+    it("propagates the active tool profile into tool execution context", async () => {
+      let streamCall = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCall += 1;
+        if (streamCall === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              {
+                type: "tool_use",
+                id: "call_command",
+                name: "execute_command",
+                input: { command: "pwd" },
+              },
+            ],
+          };
+        } else {
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "done" }],
+          };
+        }
+        yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+        yield { type: "done" };
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("inspect the workspace");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const executeTool = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+      }));
+      engine.setToolRuntime({
+        listTools: () => [
+          {
+            name: "execute_command",
+            description: "read-only command",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        isParallelSafe: () => false,
+        executeTool,
+      });
+
+      await collectEvents(
+        engine.run(session, {
+          isBackground: true,
+          toolProfile: "readonly-research",
+        }),
+      );
+
+      expect(executeTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "execute_command",
+          context: expect.objectContaining({
+            mode: "code",
+            toolProfile: "readonly-research",
+            commandExecutionPolicy: "read-only",
+          }),
+        }),
+      );
+    });
+
     it("does not emit completed tool events after abort", async () => {
       const provider = makeMockProvider();
       provider.stream = async function* () {

@@ -1336,6 +1336,194 @@ describe("handleExecuteCommand", () => {
     expect(payload.reason).toBe("Use output_grep instead");
   });
 
+  describe("read-only execution policy", () => {
+    const providers = () => ({
+      terminalProvider,
+      commandExecutionPolicy: "read-only" as const,
+    });
+
+    it("executes a recognized safe command without entering the approval flow", async () => {
+      const enqueueCommandApproval = vi.fn();
+      const { handleExecuteCommand } = await import("./executeCommand.js");
+
+      const result = await handleExecuteCommand(
+        { command: "git status --short", output_head: 20 },
+        {
+          isCommandApproved: () => false,
+          findMatchingCommandRule: () => undefined,
+        } as never,
+        {
+          isRecentlyApproved: () => false,
+          enqueueCommandApproval,
+        } as never,
+        "readonly-safe",
+        undefined,
+        providers(),
+      );
+
+      expect(enqueueCommandApproval).not.toHaveBeenCalled();
+      expect(executeCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "git status --short",
+          cwd: "/workspace",
+          background: undefined,
+          env: undefined,
+        }),
+      );
+      expect(textPayload(result)).toMatchObject({
+        approval: { by: "readonly_policy" },
+      });
+      expect(textPayload(result)).not.toHaveProperty("auto_approved");
+    });
+
+    it.each([
+      ["unsafe command", { command: "rm -rf src" }, "dangerous command"],
+      [
+        "unknown command",
+        { command: "custom-inspector src" },
+        "unrecognized command",
+      ],
+      [
+        "mutating command",
+        { command: "mkdir generated" },
+        "workspace-local command",
+      ],
+      [
+        "redirected command",
+        { command: "echo ok > generated.txt" },
+        "shell redirection",
+      ],
+      [
+        "input-redirected command",
+        { command: "rg --no-config token < input.txt" },
+        "shell redirection",
+      ],
+      [
+        "environment overrides",
+        { command: "pwd", env: { CI: "1" } },
+        "env parameter",
+      ],
+      [
+        "inline files",
+        {
+          command: "wc -l $AL_FILE(input)",
+          files: [{ name: "input", content: "hello" }],
+        },
+        "files parameter",
+      ],
+      [
+        "force",
+        { command: "pwd", force: true, force_reason: "test" },
+        "force parameter",
+      ],
+      [
+        "background execution",
+        { command: "pwd", background: true },
+        "background parameter",
+      ],
+      ["timeout", { command: "pwd", timeout: 1 }, "timeout parameter"],
+      [
+        "named terminal",
+        { command: "pwd", terminal_name: "Research" },
+        "terminal_name parameter",
+      ],
+      [
+        "split terminal",
+        { command: "pwd", split_from: "term_1" },
+        "split_from parameter",
+      ],
+      [
+        "outside-workspace cwd",
+        { command: "pwd", cwd: "/tmp" },
+        "inside the workspace",
+      ],
+      [
+        "mixed compound command",
+        { command: "pwd && mkdir generated" },
+        "workspace-local command",
+      ],
+      [
+        "path-qualified executable",
+        { command: "./ls" },
+        "path-qualified executable",
+      ],
+      [
+        "git external helper",
+        { command: "git grep -O../evil.sh token" },
+        "git executable or output option",
+      ],
+      [
+        "git output",
+        { command: "git log --output=/tmp/log" },
+        "git executable or output option",
+      ],
+      [
+        "git path override",
+        { command: "git --git-dir=/tmp/repo status" },
+        "git path or config override",
+      ],
+      [
+        "git network remote",
+        { command: "git remote update" },
+        "git remote operation",
+      ],
+      [
+        "ripgrep preprocessor",
+        { command: "rg --pre=./evil token src" },
+        "ripgrep preprocessor execution",
+      ],
+      ["unquoted shell glob", { command: "ls *" }, "shell path expansion"],
+      [
+        "symlink-following find",
+        { command: "find -L ." },
+        "find option is not read-only-safe",
+      ],
+      [
+        "ripgrep ignore file",
+        { command: "rg --no-config --ignore-file config/ignore token src" },
+        "rg option is not read-only-safe",
+      ],
+      [
+        "grep pattern file",
+        { command: "grep -f config/patterns src/file" },
+        "grep option is not read-only-safe",
+      ],
+      [
+        "secret hash",
+        { command: "shasum ~/.ssh/id_rsa" },
+        "read targets secret path",
+      ],
+    ])(
+      "rejects %s before approval or execution",
+      async (_name, params, reason) => {
+        const enqueueCommandApproval = vi.fn();
+        const { handleExecuteCommand } = await import("./executeCommand.js");
+
+        const result = await handleExecuteCommand(
+          params as Parameters<typeof handleExecuteCommand>[0],
+          {
+            isCommandApproved: () => true,
+            findMatchingCommandRule: () => undefined,
+          } as never,
+          {
+            isRecentlyApproved: () => true,
+            enqueueCommandApproval,
+          } as never,
+          `readonly-reject-${_name}`,
+          undefined,
+          providers(),
+        );
+
+        expect(executeCommand).not.toHaveBeenCalled();
+        expect(enqueueCommandApproval).not.toHaveBeenCalled();
+        expect(textPayload(result)).toMatchObject({
+          status: "rejected",
+          reason: expect.stringContaining(reason),
+        });
+      },
+    );
+  });
+
   it("returns actionable newline regex hint on ripgrep newline error", async () => {
     executeCommand.mockRejectedValue(
       new Error("ripgrep error: regex parse error: unescaped literal newline"),

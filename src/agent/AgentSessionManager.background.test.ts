@@ -2025,6 +2025,8 @@ describe("AgentSessionManager background agents", () => {
 
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
+    const createToolRuntime = vi.fn(() => ({ executeTool: vi.fn() }));
+    (mgr as any).host.createToolRuntime = createToolRuntime;
 
     const spawned = await mgr.spawnBackground({
       task: "research tests",
@@ -2045,6 +2047,17 @@ describe("AgentSessionManager background agents", () => {
     expect(status.toolCalls).toBe(1);
     expect(status.tokenUsage).toBe(100);
     expect(status.partialOutput).toBeUndefined();
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    expect(mocks.runArgs).toHaveBeenCalledWith(
+      session,
+      expect.objectContaining({ toolProfile: "readonly-research" }),
+    );
+    expect(createToolRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: spawned.sessionId,
+        commandExecutionPolicy: "read-only",
+      }),
+    );
 
     release?.();
   });

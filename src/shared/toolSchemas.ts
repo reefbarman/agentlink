@@ -582,6 +582,26 @@ export const executeCommandSchema = {
     ),
 };
 
+export const readOnlyExecuteCommandSchema = {
+  command: z
+    .string()
+    .describe(
+      "Recognized read-only shell command to execute. Unknown, mutating, redirected, networked, privileged, or opaque commands are rejected.",
+    ),
+  cwd: z
+    .string()
+    .optional()
+    .describe(
+      "Working directory inside the workspace. Defaults to the first workspace root.",
+    ),
+  output_head: executeCommandSchema.output_head,
+  output_tail: executeCommandSchema.output_tail,
+  output_offset: executeCommandSchema.output_offset,
+  output_grep: executeCommandSchema.output_grep,
+  output_grep_context: executeCommandSchema.output_grep_context,
+  reason: executeCommandSchema.reason,
+};
+
 export const getTerminalOutputSchema = {
   terminal_id: z
     .string()

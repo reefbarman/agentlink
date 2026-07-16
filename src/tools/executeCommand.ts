@@ -4,7 +4,10 @@ import * as os from "os";
 import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js";
 
 import { getWorkspaceRoots, tryGetFirstWorkspaceRoot } from "../util/paths.js";
-import type { TerminalProvider } from "../core/capabilities/terminal.js";
+import type {
+  CommandExecutionPolicy,
+  TerminalProvider,
+} from "../core/capabilities/terminal.js";
 import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import type { ApprovalPanelProvider } from "../approvals/ApprovalPanelProvider.js";
 import type { TrackerContext } from "../agent/AgentToolCallTracker.js";
@@ -14,6 +17,8 @@ import {
 } from "../approvals/commandSplitter.js";
 import {
   classifyCommand,
+  isCommandEligibleForReadOnlyExecution,
+  isCommandPathInsideWorkspace,
   type CommandTier,
 } from "../approvals/commandTierClassifier.js";
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
@@ -50,6 +55,7 @@ import {
 const approvalGate = new Semaphore(1);
 
 type CommandApprovalAudit =
+  | { by: "readonly_policy" }
   | { by: "master_bypass" }
   | { by: "explicit_rule" }
   | { by: "recent_approval" }
@@ -75,6 +81,7 @@ export interface ExecuteCommandProviders {
   toolAbortSignal?: AbortSignal;
   getUserObjective?: (sessionId: string) => string | undefined;
   getReviewContext?: (sessionId: string) => CommandReviewContextEntry[];
+  commandExecutionPolicy?: CommandExecutionPolicy;
 }
 
 function unavailableExecuteCommandResult(command: string): ToolResult {
@@ -144,6 +151,19 @@ export async function handleExecuteCommand(
         : path.resolve(cwd, params.cwd);
     }
 
+    const workspaceRoots = getWorkspaceRoots();
+    const readOnlyPolicy = providers.commandExecutionPolicy === "read-only";
+    if (readOnlyPolicy) {
+      const rejectionReason = getReadOnlyCommandRejectionReason(
+        params,
+        cwd,
+        workspaceRoots,
+      );
+      if (rejectionReason) {
+        return rejectedCommandResult(params.command, rejectionReason);
+      }
+    }
+
     // Master bypass check
     const masterBypass = getConfiguredMasterBypass();
 
@@ -159,9 +179,11 @@ export async function handleExecuteCommand(
       inlineRun?.cleanup();
     };
     let approvalFollowUp: string | undefined;
-    let approvalAudit: CommandApprovalAudit | undefined = masterBypass
-      ? { by: "master_bypass" }
-      : undefined;
+    let approvalAudit: CommandApprovalAudit | undefined = readOnlyPolicy
+      ? { by: "readonly_policy" }
+      : masterBypass
+        ? { by: "master_bypass" }
+        : undefined;
     let autoApprovedByTier:
       | { tier: CommandTier; threshold: "safe" | "sensitive" }
       | undefined;
@@ -283,7 +305,7 @@ export async function handleExecuteCommand(
         };
       }
 
-      if (!masterBypass) {
+      if (!masterBypass && !readOnlyPolicy) {
         // Gate: only one command goes through approval at a time, so pending
         // dialogs aren't buried by terminals from auto-approved commands.
         const releaseGate = await approvalGate.acquire();
@@ -297,7 +319,7 @@ export async function handleExecuteCommand(
             sessionId,
             params.reason,
             cwd,
-            getWorkspaceRoots(),
+            workspaceRoots,
             {
               displayCommand: commandToRun,
               inlineFiles,
@@ -490,6 +512,39 @@ export async function handleExecuteCommand(
       ],
     };
   }
+}
+
+function getReadOnlyCommandRejectionReason(
+  params: Parameters<typeof handleExecuteCommand>[0],
+  cwd: string,
+  workspaceRoots: string[],
+): string | undefined {
+  const unsupported = [
+    ["terminal_id", params.terminal_id],
+    ["terminal_name", params.terminal_name],
+    ["split_from", params.split_from],
+    ["background", params.background],
+    ["timeout", params.timeout],
+    ["env", params.env],
+    ["files", params.files],
+    ["force", params.force],
+    ["force_reason", params.force_reason],
+  ].find(([, value]) => value !== undefined);
+  if (unsupported) {
+    return `Read-only command execution does not allow the ${unsupported[0]} parameter`;
+  }
+  if (!isCommandPathInsideWorkspace(cwd, workspaceRoots)) {
+    return "Read-only command execution requires a working directory inside the workspace";
+  }
+
+  const eligibility = isCommandEligibleForReadOnlyExecution(params.command, {
+    cwd,
+    workspaceRoots,
+  });
+  if (!eligibility.eligible) {
+    return `Read-only command execution rejected ${eligibility.reason}`;
+  }
+  return undefined;
 }
 
 function cancelledCommandResult(command: string): ToolResult {

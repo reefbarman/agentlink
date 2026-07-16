@@ -1,5 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+
 import { parseJsonWithComments } from "../util/jsonc.js";
 
 export interface AgentMode {
@@ -29,7 +30,7 @@ export const BUILT_IN_MODES: AgentMode[] = [
     slug: "ask",
     name: "Ask",
     icon: "question",
-    toolGroups: ["read", "search"],
+    toolGroups: ["read", "search", "read-only-command"],
   },
   {
     slug: "debug",

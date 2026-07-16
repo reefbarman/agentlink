@@ -43,6 +43,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "get_inlay_hints",
   ],
   search: ["codebase_search", "search_files"],
+  "read-only-command": ["execute_command"],
   plan: ["write_file", "apply_diff", "execute_command", "get_terminal_output"],
   mcp: [], // populated dynamically from McpClientHub
 };

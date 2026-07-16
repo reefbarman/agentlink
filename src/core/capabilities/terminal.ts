@@ -1,3 +1,5 @@
+export type CommandExecutionPolicy = "read-only";
+
 export interface TerminalCommandResult {
   exit_code: number | null;
   output: string;
@@ -17,6 +19,7 @@ export interface TerminalCommandResult {
   inline_files?: Array<{ name: string; bytes: number; sha256: string }>;
   follow_up?: string;
   approval?:
+    | { by: "readonly_policy" }
     | { by: "master_bypass" }
     | { by: "explicit_rule" }
     | { by: "recent_approval" }

@@ -67,6 +67,8 @@ export interface PendingQuestionRecoveryContext {
 export interface AgentToolExecutionContext {
   sessionId: string;
   mode?: string;
+  toolProfile?: string;
+  commandExecutionPolicy?: import("../capabilities/terminal.js").CommandExecutionPolicy;
   trackerCtx?: unknown;
   toolAbortSignal?: AbortSignal;
   getAdvertisedSkills?: () => AdvertisedSkillReference[];

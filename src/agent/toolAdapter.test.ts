@@ -487,14 +487,73 @@ describe("getAgentTools", () => {
     expect(names).toContain("call_mcp_tool");
     expect(names).toContain("ddg-search__search");
     expect(names).toContain("ddg-search__fetch_content");
+    expect(names).toContain("execute_command");
+
+    const executeCommand = tools.find(
+      (tool) => tool.name === "execute_command",
+    );
+    expect(executeCommand?.description).toContain(
+      "recognized read-only command",
+    );
+    expect(executeCommand?.input_schema.properties).toHaveProperty("command");
+    expect(executeCommand?.input_schema.properties).toHaveProperty("cwd");
+    expect(executeCommand?.input_schema.properties).toHaveProperty(
+      "output_grep",
+    );
+    for (const forbidden of [
+      "terminal_id",
+      "terminal_name",
+      "split_from",
+      "background",
+      "timeout",
+      "env",
+      "files",
+      "force",
+      "force_reason",
+    ]) {
+      expect(executeCommand?.input_schema.properties).not.toHaveProperty(
+        forbidden,
+      );
+    }
 
     expect(names).not.toContain("write_file");
     expect(names).not.toContain("apply_diff");
-    expect(names).not.toContain("execute_command");
     expect(names).not.toContain("rename_symbol");
     expect(names).not.toContain("apply_code_action");
     expect(names).not.toContain("ask_user");
     expect(names).not.toContain("spawn_background_agent");
+  });
+
+  it("exposes the restricted command schema in ask mode and the full schema in code mode", () => {
+    const askCommand = getAgentTools(BUILT_IN_MODES[2]).find(
+      (tool) => tool.name === "execute_command",
+    );
+    const codeCommand = getAgentTools(BUILT_IN_MODES[0]).find(
+      (tool) => tool.name === "execute_command",
+    );
+
+    expect(askCommand?.input_schema.properties).not.toHaveProperty(
+      "background",
+    );
+    expect(askCommand?.input_schema.properties).not.toHaveProperty("env");
+    expect(codeCommand?.input_schema.properties).toHaveProperty("background");
+    expect(codeCommand?.input_schema.properties).toHaveProperty("env");
+  });
+
+  it("uses the restricted command schema for custom modes with the read-only command capability", () => {
+    const customMode = {
+      slug: "research-custom",
+      name: "Research Custom",
+      icon: "search",
+      toolGroups: ["read", "read-only-command"],
+    };
+    const command = getAgentTools(customMode).find(
+      (tool) => tool.name === "execute_command",
+    );
+
+    expect(command).toBeDefined();
+    expect(command?.input_schema.properties).not.toHaveProperty("background");
+    expect(command?.input_schema.properties).not.toHaveProperty("env");
   });
 
   it("restricts tools when toolProfile is set to 'btw'", () => {
@@ -1546,6 +1605,49 @@ describe("dispatchToolCall", () => {
         error: expect.stringContaining("not available"),
       });
     });
+  });
+
+  it("forwards explicit read-only command execution policy", async () => {
+    const { handleExecuteCommand } = await import("../tools/executeCommand.js");
+    const runtime = createAgentToolRuntime(mockCtx);
+
+    await runtime.executeTool({
+      name: "execute_command",
+      input: { command: "pwd" },
+      context: {
+        sessionId: mockCtx.sessionId,
+        mode: "research-custom",
+        commandExecutionPolicy: "read-only",
+      },
+    });
+
+    expect(handleExecuteCommand).toHaveBeenCalledWith(
+      { command: "pwd" },
+      mockCtx.approvalManager,
+      mockCtx.approvalPanel,
+      mockCtx.sessionId,
+      undefined,
+      expect.objectContaining({ commandExecutionPolicy: "read-only" }),
+    );
+  });
+
+  it("enforces read-only execution for direct ask-mode dispatch", async () => {
+    const { handleExecuteCommand } = await import("../tools/executeCommand.js");
+
+    await dispatchToolCall(
+      "execute_command",
+      { command: "pwd" },
+      { ...mockCtx, mode: "ask" },
+    );
+
+    expect(handleExecuteCommand).toHaveBeenCalledWith(
+      { command: "pwd" },
+      mockCtx.approvalManager,
+      mockCtx.approvalPanel,
+      mockCtx.sessionId,
+      mockCtx.trackerCtx,
+      expect.objectContaining({ commandExecutionPolicy: "read-only" }),
+    );
   });
 
   it("dispatches execute_command to handleExecuteCommand", async () => {

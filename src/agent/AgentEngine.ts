@@ -1545,6 +1545,12 @@ export class AgentEngine {
         const sessionToolContext: AgentToolExecutionContext = {
           sessionId: session.id,
           mode: session.agentMode.slug,
+          toolProfile: opts?.toolProfile,
+          commandExecutionPolicy:
+            session.agentMode.toolGroups.includes("read-only-command") ||
+            opts?.toolProfile === "readonly-research"
+              ? "read-only"
+              : undefined,
           pendingQuestionRecovery,
           onFinalStatus: (marker) => {
             pendingFinalMarker = marker;

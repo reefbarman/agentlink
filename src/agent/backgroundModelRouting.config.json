@@ -23,7 +23,8 @@
     "readonly-research": {
       "preferredMode": "ask",
       "providerStrategy": "same",
-      "modelTier": "balanced"
+      "modelTier": "balanced",
+      "toolProfile": "readonly-research"
     },
     "research": {
       "preferredMode": "ask",

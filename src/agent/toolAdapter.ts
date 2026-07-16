@@ -931,6 +931,8 @@ export interface BgStatusResult {
  */
 const MCP_ENABLED_TOOL_PROFILES = new Set(["review", "readonly-research"]);
 
+const READ_ONLY_COMMAND_PROFILES = new Set(["readonly-research"]);
+
 const TOOL_PROFILES: Record<string, Set<string>> = {
   review: new Set([
     "read_file",
@@ -966,6 +968,7 @@ const TOOL_PROFILES: Record<string, Set<string>> = {
     "get_call_hierarchy",
     "get_type_hierarchy",
     "get_inlay_hints",
+    "execute_command",
   ]),
   btw: new Set([
     "read_file",
@@ -1023,6 +1026,9 @@ export function getAgentTools(
     ? new Set(skillAllowedTools)
     : undefined;
 
+  const usesReadOnlyCommand =
+    mode?.toolGroups.includes("read-only-command") ||
+    (toolProfile !== undefined && READ_ONLY_COMMAND_PROFILES.has(toolProfile));
   const nativeTools = Object.entries(TOOL_SCHEMAS)
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
@@ -1038,8 +1044,17 @@ export function getAgentTools(
     .filter(([name]) => !skillAllowlist || skillAllowlist.has(name))
     .map(([name, zodSchema]) => ({
       name,
-      description: TOOL_REGISTRY[name]?.description ?? name,
-      input_schema: cachedJsonSchemaFor(name, zodSchema),
+      description:
+        name === "execute_command" && usesReadOnlyCommand
+          ? "Run a recognized read-only command synchronously inside the workspace. Unknown, mutating, redirected, networked, privileged, opaque, background, timed, environment-bearing, forced, and inline-file commands are rejected. Git diff/show/log/blame require --no-pager, --no-ext-diff, and --no-textconv; git grep requires --no-pager."
+          : (TOOL_REGISTRY[name]?.description ?? name),
+      input_schema:
+        name === "execute_command" && usesReadOnlyCommand
+          ? cachedJsonSchemaFor(
+              "execute_command:read-only",
+              schemas.readOnlyExecuteCommandSchema,
+            )
+          : cachedJsonSchemaFor(name, zodSchema),
     }));
 
   // Restrictive profiles are authoritative: native tools come from the profile
@@ -1479,6 +1494,8 @@ export interface ToolDispatchContext {
   sessionId: string;
   /** Resolves the active session command policy at dispatch time. */
   getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
+  /** Restricts execute_command independently of user approval settings. */
+  commandExecutionPolicy?: import("../core/capabilities/terminal.js").CommandExecutionPolicy;
   /** Snapshots session-scoped write trust from a spawning session into its child. */
   inheritSessionWriteState?: (
     parentSessionId: string,
@@ -1692,6 +1709,9 @@ export function createAgentToolRuntime(
           ...ctx,
           sessionId: request.context.sessionId,
           mode: request.context.mode,
+          commandExecutionPolicy:
+            request.context.commandExecutionPolicy ??
+            ctx.commandExecutionPolicy,
           backgroundExpectedResult: request.context.backgroundExpectedResult,
           trackerCtx: request.context
             .trackerCtx as ToolDispatchContext["trackerCtx"],
@@ -2350,6 +2370,9 @@ export async function dispatchToolCall(
           toolAbortSignal,
           getUserObjective: ctx.getCommandReviewObjective,
           getReviewContext: ctx.getCommandReviewContext,
+          commandExecutionPolicy:
+            ctx.commandExecutionPolicy ??
+            (ctx.mode === "ask" ? "read-only" : undefined),
         },
       );
     case "get_terminal_output":

@@ -595,7 +595,7 @@ describe("resolveBackgroundRoute", () => {
     expect(route.toolProfile).toBeUndefined();
   });
 
-  it("uses ask mode without a placement-specific readonly tool profile", async () => {
+  it("uses ask mode with the readonly research tool profile", async () => {
     const anthModel = makeModel("claude-sonnet-4-6", "anthropic");
     const registry = makeRegistry([makeProvider("anthropic", [anthModel])]);
 
@@ -612,7 +612,7 @@ describe("resolveBackgroundRoute", () => {
     expect(route.resolvedMode).toBe("ask");
     expect("maxToolCalls" in route).toBe(false);
     expect("maxApiTurns" in route).toBe(false);
-    expect(route.toolProfile).toBeUndefined();
+    expect(route.toolProfile).toBe("readonly-research");
   });
 
   it.each([

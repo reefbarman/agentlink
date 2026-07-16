@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyCommand,
+  isCommandEligibleForReadOnlyExecution,
   isTierAtOrBelow,
   type CommandTierContext,
 } from "./commandTierClassifier.js";
@@ -36,6 +37,8 @@ describe("command tier classifier", () => {
     expect(tier("mkdir src/generated")).toBe("sensitive");
     expect(tier("npm test")).toBe("sensitive");
     expect(tier("custom-tool --flag")).toBe("sensitive");
+    expect(tier("./ls")).toBe("sensitive");
+    expect(tier("/bin/ls")).toBe("sensitive");
   });
 
   it("classifies destructive and external commands as dangerous", () => {
@@ -43,6 +46,88 @@ describe("command tier classifier", () => {
     expect(tier("sudo git status")).toBe("dangerous");
     expect(tier("git push origin main")).toBe("dangerous");
     expect(tier("curl https://example.com")).toBe("dangerous");
+    expect(tier("find src -execdir rm {} ;")).toBe("dangerous");
+    expect(tier("find src -fprint generated.txt")).toBe("dangerous");
+  });
+
+  it("does not classify networked package metadata queries as safe", () => {
+    expect(tier("npm view react version")).toBe("sensitive");
+    expect(tier("pnpm audit")).toBe("sensitive");
+    expect(tier("yarn outdated")).toBe("sensitive");
+    expect(tier("npm ls --depth=0")).toBe("safe");
+  });
+
+  it.each([
+    ["git grep -O../evil.sh token", "git executable or output option"],
+    ["git log --output=/tmp/log", "git executable or output option"],
+    ["git --git-dir=/tmp/repo status", "git path or config override"],
+    ["git remote update", "git remote operation"],
+    ["git branch new-branch", "git branch mutation"],
+    ["rg --pre=./evil token src", "ripgrep preprocessor execution"],
+    ["arch ./evil", "arch command execution"],
+    ["date 010100002030", "date may set system time"],
+    ["shasum ~/.ssh/id_rsa", "read targets secret path"],
+    ["stat /etc/passwd", "read target outside workspace"],
+  ])("rejects readonly execution bypass: %s", (command, reason) => {
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+      eligible: false,
+      reason: expect.stringContaining(reason),
+    });
+  });
+
+  it("requires hook-disabling flags for git diff-style readonly execution", () => {
+    expect(isCommandEligibleForReadOnlyExecution("git diff", ctx)).toEqual({
+      eligible: false,
+      reason: expect.stringContaining("requires --no-pager"),
+    });
+    expect(
+      isCommandEligibleForReadOnlyExecution(
+        "git --no-pager diff --no-ext-diff --no-textconv",
+        ctx,
+      ),
+    ).toEqual({ eligible: true });
+    expect(
+      isCommandEligibleForReadOnlyExecution(
+        "git --no-pager diff --no-ext-diff --no-textconv --no-index a b",
+        ctx,
+      ),
+    ).toEqual({
+      eligible: false,
+      reason: expect.stringContaining("--no-index"),
+    });
+  });
+
+  it("requires ripgrep config isolation for readonly execution", () => {
+    expect(isCommandEligibleForReadOnlyExecution("rg token src", ctx)).toEqual({
+      eligible: false,
+      reason: expect.stringContaining("requires --no-config"),
+    });
+    expect(
+      isCommandEligibleForReadOnlyExecution("rg --no-config token src", ctx),
+    ).toEqual({ eligible: true });
+  });
+
+  it.each([
+    ["ls *", "shell path expansion"],
+    ["find src/{one,two}", "shell path expansion"],
+    ["find -L .", "find option"],
+    ["ls -L src", "ls option"],
+    ["rg --no-config --follow token src", "rg option"],
+    ["rg --no-config --ignore-file config/ignore token src", "rg option"],
+    ["grep -f config/patterns src/file", "grep option"],
+    ["file --magic-file config/magic src/file", "file option"],
+    ["shasum --check checksums.txt", "shasum option"],
+  ])("rejects deferred readonly path resolution: %s", (command, reason) => {
+    expect(isCommandEligibleForReadOnlyExecution(command, ctx)).toEqual({
+      eligible: false,
+      reason: expect.stringContaining(reason),
+    });
+  });
+
+  it("allows quoted glob characters that the shell will not expand", () => {
+    expect(
+      isCommandEligibleForReadOnlyExecution("rg --no-config '*' src", ctx),
+    ).toEqual({ eligible: true });
   });
 
   it("uses the highest tier across compound commands", () => {
@@ -103,6 +188,19 @@ describe("command tier classifier", () => {
   it("detects attached redirections", () => {
     expect(tier("echo ok>/tmp/outside.txt")).toBe("dangerous");
     expect(tier("echo ok>>generated.txt")).toBe("sensitive");
+    expect(tier("rg --no-config token<input.txt")).toBe("sensitive");
+  });
+
+  it("rejects input redirection for readonly execution", () => {
+    expect(
+      isCommandEligibleForReadOnlyExecution(
+        "rg --no-config token < input.txt",
+        ctx,
+      ),
+    ).toEqual({
+      eligible: false,
+      reason: expect.stringContaining("shell redirection"),
+    });
   });
 
   it.each([
@@ -134,7 +232,7 @@ describe("command tier classifier", () => {
     {
       command: `echo ok 2>> generated.log`,
       tier: "sensitive",
-      reason: "output redirection",
+      reason: "shell redirection",
     },
     {
       command: `echo ok &> /tmp/outside.log`,

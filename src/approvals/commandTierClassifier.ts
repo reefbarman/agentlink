@@ -201,6 +201,10 @@ const READ_COMMANDS = new Set([
   "strings",
   "tail",
   "wc",
+  "md5",
+  "md5sum",
+  "shasum",
+  "stat",
 ]);
 
 const MUTATING_COMMANDS = new Set([
@@ -233,6 +237,14 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
 
     const command = path.basename(commandToken);
     const args = tokens.slice(1).map(stripQuotes);
+
+    if (commandToken !== command) {
+      return sensitive(
+        "path-qualified executable",
+        "unrecognized_executable",
+        command,
+      );
+    }
 
     const redirection = classifyRedirection(tokens, ctx, command);
     if (redirection?.tier === "dangerous") return redirection;
@@ -267,11 +279,60 @@ export class StaticCommandTierClassifier implements CommandTierClassifier {
       return classifyGit(args);
     }
 
+    if (command === "arch" && args.length > 0) {
+      return sensitive(
+        "arch command execution",
+        "unrecognized_operation",
+        command,
+      );
+    }
+    if (
+      command === "date" &&
+      args.some((arg) => !arg.startsWith("+") && arg !== "-u")
+    ) {
+      return sensitive(
+        "date may set system time",
+        "unrecognized_operation",
+        command,
+      );
+    }
+    if (
+      command === "rg" &&
+      args.some(
+        (arg) =>
+          arg === "--pre" ||
+          arg.startsWith("--pre=") ||
+          arg.startsWith("--pre-glob="),
+      )
+    ) {
+      return dangerous(
+        "ripgrep preprocessor execution",
+        "opaque_shell",
+        command,
+      );
+    }
+
     if (command === "find" && args.includes("-delete")) {
       return dangerous("find -delete deletes files", "destructive", command);
     }
-    if (command === "find" && args.includes("-exec")) {
-      return dangerous("find -exec executes commands", "opaque_shell", command);
+    const findAction = args.find((arg) =>
+      [
+        "-exec",
+        "-execdir",
+        "-ok",
+        "-okdir",
+        "-fprint",
+        "-fprint0",
+        "-fprintf",
+        "-fls",
+      ].includes(arg),
+    );
+    if (command === "find" && findAction) {
+      return dangerous(
+        `find ${findAction} executes or writes`,
+        "opaque_shell",
+        command,
+      );
     }
 
     if (command === "npm" || command === "pnpm" || command === "yarn") {
@@ -317,6 +378,158 @@ export function classifyCommand(
   return { tier, perSubCommand };
 }
 
+export function isCommandEligibleForReadOnlyExecution(
+  command: string,
+  ctx: CommandTierContext,
+): { eligible: true } | { eligible: false; reason: string } {
+  const classified = classifyCommand(command, ctx);
+  if (
+    classified.tier !== "safe" ||
+    classified.perSubCommand.length === 0 ||
+    classified.perSubCommand.some(({ result }) => result.tier !== "safe")
+  ) {
+    const blocked = classified.perSubCommand.find(
+      ({ result }) => result.tier !== "safe",
+    );
+    return {
+      eligible: false,
+      reason: `${blocked?.command ?? command}: ${blocked?.result.reason ?? `classified as ${classified.tier}`}`,
+    };
+  }
+
+  for (const entry of classified.perSubCommand) {
+    const rawWords = scanShellLexWords(entry.command).words.map(
+      ({ raw }) => raw,
+    );
+    const unsafeExpansion = rawWords
+      .slice(1)
+      .find(hasUnquotedShellPathExpansion);
+    if (unsafeExpansion) {
+      return {
+        eligible: false,
+        reason: `shell path expansion is not read-only-safe: ${unsafeExpansion}`,
+      };
+    }
+
+    const words = rawWords.map(stripQuotes);
+    const executable = path.basename(words[0] ?? "");
+    const args = words.slice(1);
+    const readOptionResult = validateReadOnlyCommandOptions(executable, args);
+    if (readOptionResult) {
+      return { eligible: false, reason: readOptionResult };
+    }
+    if (executable === "git") {
+      const gitResult = validateReadOnlyGit(args);
+      if (gitResult) return { eligible: false, reason: gitResult };
+    }
+    if (executable === "rg") {
+      const rgResult = validateReadOnlyRipgrep(args);
+      if (rgResult) return { eligible: false, reason: rgResult };
+    }
+  }
+  return { eligible: true };
+}
+
+function validateReadOnlyCommandOptions(
+  command: string,
+  args: string[],
+): string | undefined {
+  const unsafeFlags: Partial<Record<string, RegExp>> = {
+    du: /^(?:-H|-L|--dereference(?:-args)?|--exclude-from(?:=|$))/,
+    file: /^(?:-L|--dereference|--magic-file(?:=|$)|-m(?:.+|$))/,
+    find: /^(?:-H|-L|-follow|-files0-from(?:=|$))/,
+    grep: /^(?:-R|--dereference-recursive|--exclude-from(?:=|$)|--file(?:=|$)|-f(?:.+|$))/,
+    ls: /^(?:-H|-L|--dereference(?:-command-line-symlink-to-dir)?)/,
+    md5sum: /^(?:-c|--check)$/,
+    rg: /^(?:-L|--follow|--hostname-bin(?:=|$)|--ignore-file(?:=|$)|--file(?:=|$)|-f(?:.+|$))/,
+    shasum: /^(?:-c|--check)$/,
+  };
+  const unsafeFlag = args.find((arg) => unsafeFlags[command]?.test(arg));
+  return unsafeFlag
+    ? `${command} option is not read-only-safe: ${unsafeFlag}`
+    : undefined;
+}
+
+function hasUnquotedShellPathExpansion(raw: string): boolean {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (const char of raw) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      if (quote === char) quote = null;
+      else if (quote === null) quote = char;
+      continue;
+    }
+    if (quote === null && ["*", "?", "[", "]", "{", "}"].includes(char)) {
+      return true;
+    }
+  }
+  return quote === null && raw.startsWith("~");
+}
+
+function validateReadOnlyGit(args: string[]): string | undefined {
+  const subcommand = args.find((arg) => arg && !arg.startsWith("-"));
+  if (!subcommand) return "git requires an explicit read-only subcommand";
+  const unsafeFlag = args.find(
+    (arg) =>
+      arg === "-c" ||
+      arg === "-C" ||
+      arg === "--git-dir" ||
+      arg.startsWith("--git-dir=") ||
+      arg === "--work-tree" ||
+      arg.startsWith("--work-tree=") ||
+      arg === "--namespace" ||
+      arg.startsWith("--namespace=") ||
+      arg === "--config-env" ||
+      arg.startsWith("--config-env=") ||
+      arg === "--ext-diff" ||
+      arg === "--textconv" ||
+      arg === "--no-index" ||
+      arg === "-O" ||
+      /^-O.+/.test(arg) ||
+      arg === "--open-files-in-pager" ||
+      arg.startsWith("--open-files-in-pager=") ||
+      arg === "--output" ||
+      arg.startsWith("--output="),
+  );
+  if (unsafeFlag) return `git option is not read-only-safe: ${unsafeFlag}`;
+
+  if (["diff", "show", "log", "blame", "grep"].includes(subcommand)) {
+    if (!args.includes("--no-pager")) {
+      return `git ${subcommand} requires --no-pager for read-only execution`;
+    }
+    if (
+      ["diff", "show", "log", "blame"].includes(subcommand) &&
+      (!args.includes("--no-ext-diff") || !args.includes("--no-textconv"))
+    ) {
+      return `git ${subcommand} requires --no-ext-diff and --no-textconv for read-only execution`;
+    }
+  }
+  return undefined;
+}
+
+function validateReadOnlyRipgrep(args: string[]): string | undefined {
+  if (!args.includes("--no-config")) {
+    return "ripgrep requires --no-config for read-only execution";
+  }
+  const unsafeFlag = args.find(
+    (arg) =>
+      arg === "--pre" ||
+      arg.startsWith("--pre=") ||
+      arg.startsWith("--pre-glob="),
+  );
+  return unsafeFlag
+    ? `ripgrep option is not read-only-safe: ${unsafeFlag}`
+    : undefined;
+}
+
 export function isTierAtOrBelow(
   tier: CommandTier,
   threshold: "off" | "safe" | "sensitive",
@@ -326,8 +539,49 @@ export function isTierAtOrBelow(
 }
 
 function classifyGit(args: string[]): CommandTierResult {
+  const unsafeGlobalFlag = args.find((arg) =>
+    [
+      "-C",
+      "-c",
+      "--git-dir",
+      "--work-tree",
+      "--namespace",
+      "--config-env",
+    ].some((flag) => arg === flag || arg.startsWith(`${flag}=`)),
+  );
+  if (unsafeGlobalFlag) {
+    return sensitive(
+      `git path or config override (${unsafeGlobalFlag})`,
+      "external_path",
+      "git",
+    );
+  }
+
   const subcommand = args.find((arg) => arg && !arg.startsWith("-"));
   if (!subcommand) return safe("git command inspection", "read_only", "git");
+  const subcommandIndex = args.indexOf(subcommand);
+  const subcommandArgs = args.slice(subcommandIndex + 1);
+  const unsafeInspectionFlag = args.find(
+    (arg) =>
+      arg === "--ext-diff" ||
+      arg === "--textconv" ||
+      arg === "--no-index" ||
+      arg === "-O" ||
+      /^-O.+/.test(arg) ||
+      arg === "--open-files-in-pager" ||
+      arg.startsWith("--open-files-in-pager=") ||
+      arg === "--output" ||
+      arg.startsWith("--output="),
+  );
+  if (unsafeInspectionFlag) {
+    return sensitive(
+      `git executable or output option (${unsafeInspectionFlag})`,
+      unsafeInspectionFlag.startsWith("--output")
+        ? "workspace_redirection"
+        : "unrecognized_operation",
+      "git",
+    );
+  }
 
   if (DANGEROUS_GIT_SUBCOMMANDS.has(subcommand)) {
     if (subcommand === "reset" && !args.includes("--hard")) {
@@ -344,22 +598,63 @@ function classifyGit(args: string[]): CommandTierResult {
     );
   }
 
-  if (
-    subcommand === "branch" &&
-    args.some((a) => ["-d", "-D", "-m", "-M"].includes(a))
-  ) {
-    return sensitive("git branch mutation", "unrecognized_operation", "git");
+  if (subcommand === "branch") {
+    const safeBranchFlags = new Set([
+      "-a",
+      "--all",
+      "-r",
+      "--remotes",
+      "-v",
+      "-vv",
+      "--verbose",
+      "--list",
+      "--show-current",
+      "--contains",
+      "--no-contains",
+      "--merged",
+      "--no-merged",
+      "--sort",
+      "--format",
+      "--column",
+      "--no-column",
+      "--color",
+      "--no-color",
+      "--ignore-case",
+    ]);
+    const hasMutationFlag = subcommandArgs.some((arg) =>
+      [
+        "-c",
+        "-C",
+        "-d",
+        "-D",
+        "-m",
+        "-M",
+        "--copy",
+        "--move",
+        "--delete",
+      ].includes(arg),
+    );
+    const hasUnscopedPositional =
+      !subcommandArgs.includes("--list") &&
+      subcommandArgs.some(
+        (arg) => !arg.startsWith("-") && !safeBranchFlags.has(arg),
+      );
+    if (hasMutationFlag || hasUnscopedPositional) {
+      return sensitive("git branch mutation", "git_mutation", "git");
+    }
   }
 
-  if (
-    subcommand === "remote" &&
-    args.some((a) => ["add", "remove", "rm", "set-url"].includes(a))
-  ) {
-    return sensitive(
-      "git remote mutation",
-      "network_or_external_effect",
-      "git",
-    );
+  if (subcommand === "remote") {
+    const operation = subcommandArgs.find((arg) => !arg.startsWith("-"));
+    if (operation) {
+      return sensitive(
+        `git remote operation (${operation})`,
+        operation === "update"
+          ? "network_or_external_effect"
+          : "unrecognized_operation",
+        "git",
+      );
+    }
   }
 
   if (subcommand === "stash") {
@@ -402,11 +697,14 @@ function classifyPackageManager(
       command,
     );
   }
-  if (
-    ["view", "info", "ls", "list", "audit", "outdated", "why"].includes(
-      subcommand,
-    )
-  ) {
+  if (["view", "info", "audit", "outdated"].includes(subcommand)) {
+    return sensitive(
+      `${command} ${subcommand}`,
+      "network_or_external_effect",
+      command,
+    );
+  }
+  if (["ls", "list", "why"].includes(subcommand)) {
     return safe(`${command} ${subcommand}`, "read_only", command);
   }
   const subcommandIndex = args.indexOf(subcommand);
@@ -494,7 +792,7 @@ function classifyRedirection(
   const target = findRedirectionTarget(tokens);
   if (target) {
     const resolved = resolvePathLike(target, ctx.cwd);
-    if (!isInsideAnyRoot(resolved, ctx.workspaceRoots)) {
+    if (!isCommandPathInsideWorkspace(resolved, ctx.workspaceRoots)) {
       return dangerous(
         "redirection target outside workspace",
         "external_path",
@@ -502,24 +800,29 @@ function classifyRedirection(
       );
     }
   }
-  return sensitive("output redirection", "workspace_redirection", executable);
+  return sensitive("shell redirection", "workspace_redirection", executable);
 }
 
 function hasRedirection(tokens: string[]): boolean {
   return tokens.some((rawToken) => {
     if (isFullyQuoted(rawToken)) return false;
     const token = stripQuotes(rawToken);
-    return /(?:\d?>\|?|\d?>>|&>)/.test(token);
+    return /(?:\d?>\|?|\d?>>|&>|\d?<)/.test(token);
   });
 }
 
 function findRedirectionTarget(tokens: string[]): string | undefined {
   for (let i = 0; i < tokens.length; i++) {
     const token = stripQuotes(tokens[i] ?? "");
-    if (/^\d?>\|?$/.test(token) || /^\d?>>$/.test(token) || token === "&>") {
+    if (
+      /^\d?>\|?$/.test(token) ||
+      /^\d?>>$/.test(token) ||
+      token === "&>" ||
+      /^\d?<$/.test(token)
+    ) {
       return tokens[i + 1] ? stripQuotes(tokens[i + 1]) : undefined;
     }
-    const attached = token.match(/^(?:.*?)(?:\d?>\|?|\d?>>|&>)(.+)$/);
+    const attached = token.match(/^(?:.*?)(?:\d?>\|?|\d?>>|&>|\d?<)(.+)$/);
     if (attached) return attached[1];
   }
   const teeIndex = tokens.map(stripQuotes).indexOf("tee");
@@ -544,7 +847,7 @@ function classifyReadPathGuard(
     if (isSecretPath(resolved)) {
       return dangerous("read targets secret path", "secret_path", command);
     }
-    if (!isInsideAnyRoot(resolved, ctx.workspaceRoots)) {
+    if (!isCommandPathInsideWorkspace(resolved, ctx.workspaceRoots)) {
       return dangerous(
         "read target outside workspace",
         "external_path",
@@ -561,7 +864,9 @@ function classifyMutationPathGuard(
   ctx: CommandTierContext,
 ): CommandTierResult | null {
   if (!MUTATING_COMMANDS.has(command)) return null;
-  if (!isInsideAnyRoot(path.resolve(ctx.cwd), ctx.workspaceRoots)) {
+  if (
+    !isCommandPathInsideWorkspace(path.resolve(ctx.cwd), ctx.workspaceRoots)
+  ) {
     return dangerous(
       "mutating command cwd outside workspace",
       "external_path",
@@ -580,7 +885,7 @@ function classifyMutationPathGuard(
       continue;
     }
     const resolved = resolvePathLike(arg, ctx.cwd);
-    if (!isInsideAnyRoot(resolved, ctx.workspaceRoots)) {
+    if (!isCommandPathInsideWorkspace(resolved, ctx.workspaceRoots)) {
       return dangerous(
         "mutating command target outside workspace",
         "external_path",
@@ -627,7 +932,10 @@ function resolvePathLike(rawPath: string, cwd: string): string {
   return path.resolve(cwd, stripped);
 }
 
-function isInsideAnyRoot(absPath: string, roots: string[]): boolean {
+export function isCommandPathInsideWorkspace(
+  absPath: string,
+  roots: string[],
+): boolean {
   const resolved = normalizeForCompare(resolvePhysicalPath(absPath));
   return roots.some((root) => {
     const normalizedRoot = normalizeForCompare(resolvePhysicalPath(root));

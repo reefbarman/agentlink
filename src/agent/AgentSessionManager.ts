@@ -3440,6 +3440,10 @@ export class AgentSessionManager {
     const bgCtx: ToolDispatchContext = {
       ...baseCtx,
       sessionId: session.id,
+      commandExecutionPolicy:
+        route.toolProfile === "readonly-research"
+          ? "read-only"
+          : baseCtx.commandExecutionPolicy,
       delegationPolicy: {
         ownedPaths: request.ownedPaths,
         forbiddenPaths: request.forbiddenPaths,
