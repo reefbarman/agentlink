@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as os from "os";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -558,7 +559,9 @@ describe("handleExecuteCommand", () => {
       ),
     });
     const enqueueCommandApproval = vi.fn();
-    const review = vi.fn();
+    const review = vi.fn(async () => {
+      throw new Error("guardrail should skip reviewer");
+    });
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
@@ -973,7 +976,7 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("reviews all prompting commands but keeps environment-bearing commands human-only", async () => {
+  it("sends eligible commands to the reviewer but routes guardrails directly to the user", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -1021,21 +1024,22 @@ describe("handleExecuteCommand", () => {
       providers,
     );
 
-    expect(review).toHaveBeenCalledTimes(2);
+    expect(review).toHaveBeenCalledTimes(1);
     expect(review).toHaveBeenCalledWith(
       expect.objectContaining({ command: "unknown-tool run" }),
     );
-    expect(review).toHaveBeenCalledWith(
+    expect(enqueueCommandApproval).toHaveBeenCalledTimes(2);
+    expect(enqueueCommandApproval).toHaveBeenLastCalledWith(
+      "mkdir generated",
+      "mkdir generated",
       expect.objectContaining({
-        command: "mkdir generated",
-        autoApproveAllowed: false,
-        guardrailReason: expect.stringContaining("environment overrides"),
+        commandReview: undefined,
+        humanOnlyReason: "Environment overrides",
       }),
     );
-    expect(enqueueCommandApproval).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps dangerous commands human-only even when the reviewer approves", async () => {
+  it("routes dangerous commands directly to the user without reviewer output", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) =>
         key === "masterBypass" ? false : fallback,
@@ -1071,24 +1075,101 @@ describe("handleExecuteCommand", () => {
       },
     );
 
-    expect(review).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "git push origin main",
-        autoApproveAllowed: false,
-        guardrailReason: expect.stringContaining("not sensitive"),
-      }),
-    );
+    expect(review).not.toHaveBeenCalled();
     expect(enqueueCommandApproval).toHaveBeenCalledWith(
       "git push origin main",
       "git push origin main",
       expect.objectContaining({
-        commandReview: expect.objectContaining({
-          decision: "approve",
-          autoApproveAllowed: false,
-        }),
+        commandReview: undefined,
+        humanOnlyReason: "External or network effect",
       }),
     );
     expect(textPayload(result).approval).toEqual({ by: "human" });
+  });
+
+  it("shows only a concise guardrail reason for non-temp outside paths", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn(() => ({
+      promise: Promise.resolve({ decision: "accept" }),
+    }));
+    const review = vi.fn();
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    await handleExecuteCommand(
+      { command: "custom-tool /outside/input.txt" },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-outside",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).not.toHaveBeenCalled();
+    expect(enqueueCommandApproval).toHaveBeenCalledWith(
+      "custom-tool /outside/input.txt",
+      "custom-tool /outside/input.txt",
+      expect.objectContaining({
+        commandReview: undefined,
+        humanOnlyReason: "Outside workspace",
+      }),
+    );
+  });
+
+  it("lets the reviewer approve read-only extraction from an OS temp file", async () => {
+    getConfiguration.mockReturnValue({
+      get: vi.fn((key: string, fallback?: unknown) =>
+        key === "masterBypass" ? false : fallback,
+      ),
+    });
+    const enqueueCommandApproval = vi.fn();
+    const review = vi.fn(async () => ({
+      decision: "approve" as const,
+      confidence: "high" as const,
+      risk: "low" as const,
+      reason: "Read-only extraction from generated test output",
+      model: "review-model",
+      status: "reviewed" as const,
+    }));
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+    const tempOutput = `${os.tmpdir()}/agentlink-output.txt`;
+    const command = `awk 'match($0, /testId: "[^"]+"/) { print $0 }' ${tempOutput}`;
+
+    const result = await handleExecuteCommand(
+      { command },
+      {
+        isCommandApproved: () => false,
+        findMatchingCommandRule: () => undefined,
+      } as never,
+      { isRecentlyApproved: () => false, enqueueCommandApproval } as never,
+      "session-review-temp-output",
+      undefined,
+      {
+        terminalProvider,
+        getCommandApprovalPolicy: () => "approve-for-me",
+        commandApprovalReviewer: { review },
+        isSessionActive: () => true,
+      },
+    );
+
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ command }));
+    expect(enqueueCommandApproval).not.toHaveBeenCalled();
+    expect(textPayload(result).approval).toMatchObject({
+      by: "model_reviewer",
+      confidence: "high",
+      risk: "low",
+    });
   });
 
   it.each([
@@ -1179,6 +1260,14 @@ describe("handleExecuteCommand", () => {
     );
 
     expect(enqueueCommandApproval).toHaveBeenCalledTimes(1);
+    expect(enqueueCommandApproval).toHaveBeenCalledWith(
+      "mkdir generated",
+      "mkdir generated",
+      expect.objectContaining({
+        commandReview: undefined,
+        humanOnlyReason: "Approve for Me was turned off during review",
+      }),
+    );
     expect(textPayload(result).approval).toEqual({ by: "human" });
   });
 

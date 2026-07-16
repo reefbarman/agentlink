@@ -188,7 +188,7 @@ describe("InputArea slash popup", () => {
     const button = getByRole("button", { name: "Approve for Me" });
     expect(button.getAttribute("aria-pressed")).toBe("false");
     expect(button.classList.contains("approve-for-me-toggle")).toBe(true);
-    expect(button.title).toContain("otherwise-prompting command");
+    expect(button.title).toContain("temporary-file commands");
     expect(button.title).toContain("model quota");
 
     fireEvent.click(button);
@@ -215,7 +215,7 @@ describe("InputArea slash popup", () => {
     const activeButton = getByRole("button", { name: "Approve for Me On" });
     expect(activeButton.getAttribute("aria-pressed")).toBe("true");
     expect(activeButton.classList.contains("active")).toBe(true);
-    expect(activeButton.title).toContain("reviewed first");
+    expect(activeButton.title).toContain("guardrail-triggered commands");
     fireEvent.click(activeButton);
     expect(onSetCommandApprovalPolicy).toHaveBeenLastCalledWith("sensitive");
   });

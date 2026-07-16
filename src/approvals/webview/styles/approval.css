@@ -292,6 +292,20 @@ body {
   color: var(--vscode-foreground);
 }
 
+.command-guardrail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--vscode-descriptionForeground);
+}
+.command-guardrail .codicon {
+  flex-shrink: 0;
+  color: var(--vscode-terminal-ansiYellow, #d7ba7d);
+}
+
 /* ── Terminal-style command box ───────────────────────────────────────── */
 
 .terminal-box {

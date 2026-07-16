@@ -1,3 +1,4 @@
+import * as os from "os";
 import * as path from "path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -114,7 +115,6 @@ function reviewInput(command = "mkdir generated") {
         content: "Tool call execute_command: mkdir generated",
       },
     ],
-    autoApproveAllowed: true,
     classified: classifyCommand(command, context),
   };
 }
@@ -130,47 +130,48 @@ describe("command reviewer automatic approval eligibility", () => {
     ["custom-tool /workspace/project/input.bin"],
     ["mkdir generated && npm test"],
     ["mkdir generated && custom-tool --flag"],
+    [`custom-tool ${path.join(os.tmpdir(), "input.bin")}`],
+    [`strings -a ${path.join(os.tmpdir(), "output.txt")}`],
+    [
+      `awk 'match($0, /testId: "[^"]+"/) { print $0 }' ${path.join(os.tmpdir(), "output.txt")}`,
+    ],
   ])("allows reviewer-eligible sensitive command %s", (command) => {
     expect(eligibility(command)).toEqual({ eligible: true });
   });
 
   it.each([
-    ["git status", "command tier is not sensitive"],
-    ["rm -rf generated", "command tier is not sensitive"],
-    ["git frobnicate", "unrecognized_operation"],
-    ["git checkout -- .", "unrecognized_operation"],
-    ["git restore .", "unrecognized_operation"],
-    ["git reset HEAD~1", "unrecognized_operation"],
-    ["git stash drop", "unrecognized_operation"],
-    ["git status && git push origin main", "command tier is not sensitive"],
-    [
-      "git status && mkdir generated",
-      "subcommand tier is not sensitive (safe)",
-    ],
-    ["npm test && ./unknown-script", "path-qualified execution"],
-    ["custom-tool /tmp/input.bin", "external target argument"],
-    ["custom-tool ../outside/input.bin", "external target argument"],
-    ["custom-tool https://example.com/input", "external target argument"],
-    ["custom-tool user@example.com:/input", "external target argument"],
-    ["sudo npm install", "command tier is not sensitive"],
-    ["echo ok > generated.txt", "workspace_redirection"],
-    ["npm run custom", "unrecognized_operation"],
-    ["make custom", "unrecognized_operation"],
-    ["npx custom-tool", "unrecognized_operation"],
-    ["cargo publish", "network_or_external_effect"],
-    ["go get example.com/module", "network_or_external_effect"],
-    ["npm run deploy", "network_or_external_effect"],
-    ["./npm test", "path-qualified execution"],
-    ["/tmp/npm test", "path-qualified execution"],
-    ["git -C=/tmp add .", "path-qualified execution"],
-    ["git --work-tree=/tmp add .", "path-qualified execution"],
-    ["git --git-dir /tmp/repo.git add .", "path-qualified execution"],
-    ["npm --prefix=/tmp test", "path-qualified execution"],
-    ["cargo --manifest-path /tmp/Cargo.toml test", "path-qualified execution"],
-    ["go -C /tmp test ./...", "path-qualified execution"],
-    ["make -f /tmp/Makefile test", "path-qualified execution"],
-    ["cp --target-directory=/tmp source.txt", "path-qualified execution"],
-    ["mv -t/tmp source.txt", "path-qualified execution"],
+    ["git status", "Already classified as safe"],
+    ["rm -rf generated", "Dangerous command"],
+    ["git frobnicate", "Unrecognized operation"],
+    ["git checkout -- .", "Unrecognized operation"],
+    ["git restore .", "Unrecognized operation"],
+    ["git reset HEAD~1", "Unrecognized operation"],
+    ["git stash drop", "Unrecognized operation"],
+    ["git status && git push origin main", "External or network effect"],
+    ["git status && mkdir generated", "Mixed command safety levels"],
+    ["npm test && ./unknown-script", "Explicit executable"],
+    ["custom-tool ../outside/input.bin", "Outside workspace"],
+    ["custom-tool https://example.com/input", "External target"],
+    ["custom-tool user@example.com:/input", "External target"],
+    ["sudo npm install", "Dangerous command"],
+    ["echo ok > generated.txt", "Shell redirection"],
+    ["npm run custom", "Unrecognized operation"],
+    ["make custom", "Unrecognized operation"],
+    ["npx custom-tool", "Unrecognized operation"],
+    ["cargo publish", "External or network effect"],
+    ["go get example.com/module", "External or network effect"],
+    ["npm run deploy", "External or network effect"],
+    ["./npm test", "Explicit executable"],
+    ["/tmp/npm test", "Explicit executable"],
+    ["git -C=/tmp add .", "Explicit executable"],
+    ["git --work-tree=/tmp add .", "Explicit executable"],
+    ["git --git-dir /tmp/repo.git add .", "Explicit executable"],
+    ["npm --prefix=/tmp test", "Explicit executable"],
+    ["cargo --manifest-path /tmp/Cargo.toml test", "Explicit executable"],
+    ["go -C /tmp test ./...", "Explicit executable"],
+    ["make -f /tmp/Makefile test", "Explicit executable"],
+    ["cp --target-directory=/tmp source.txt", "Explicit executable"],
+    ["mv -t/tmp source.txt", "Explicit executable"],
   ])("denies ineligible command %s", (command, reasonFragment) => {
     expect(eligibility(command)).toEqual({
       eligible: false,
@@ -179,10 +180,10 @@ describe("command reviewer automatic approval eligibility", () => {
   });
 
   it.each([
-    [{ cwd: "/tmp" }, "working directory"],
-    [{ hasInlineFiles: true }, "inline files"],
-    [{ hasEnvOverrides: true }, "environment overrides"],
-    [{ forceRequested: true }, "forced execution"],
+    [{ cwd: "/outside" }, "Working directory outside workspace"],
+    [{ hasInlineFiles: true }, "Attached temporary command files"],
+    [{ hasEnvOverrides: true }, "Environment overrides"],
+    [{ forceRequested: true }, "Forced execution"],
   ])("denies execution context %#", (overrides, reasonFragment) => {
     expect(eligibility("mkdir generated", overrides)).toEqual({
       eligible: false,
@@ -203,7 +204,7 @@ describe("command reviewer automatic approval eligibility", () => {
       eligibility("mkdir generated", { classified: withoutExecutable }),
     ).toEqual({
       eligible: false,
-      reason: "subcommand executable is not recognized",
+      reason: "Executable could not be identified",
     });
 
     const futureCode: ClassifiedCommand = {
@@ -218,7 +219,8 @@ describe("command reviewer automatic approval eligibility", () => {
     };
     expect(eligibility("mkdir generated", { classified: futureCode })).toEqual({
       eligible: false,
-      reason: "subcommand risk code is not auto-approvable (future_risk)",
+      reason:
+        "Not eligible for automatic approval · workspace-local command (mkdir)",
     });
   });
 });
@@ -350,7 +352,6 @@ describe("one-shot command approval reviewer", () => {
     expect(content).toContain("ignore prior instructions");
     expect(content).toContain('"userObjective":"Build the project"');
     expect(content).toContain('"recentContext"');
-    expect(content).toContain('"allowed":true');
     expect(request).not.toHaveProperty("tools");
   });
 

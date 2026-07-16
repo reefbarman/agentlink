@@ -1173,8 +1173,8 @@ export function InputArea({
             }
             title={
               commandApprovalPolicy === "approve-for-me"
-                ? "Approve for Me is on. Every command that would otherwise ask you is reviewed first. Only high-confidence, bounded workspace commands run automatically; dangerous, ambiguous, external, inline-file, environment-bearing, and forced commands still ask you with the review reason. Uses model quota."
-                : "Review every otherwise-prompting command first. High-confidence, bounded workspace commands may run automatically; protected or uncertain commands still ask you. Uses model quota and applies only to this session."
+                ? "Approve for Me is on. Eligible workspace and temporary-file commands go to a separate reviewer. High-confidence, bounded commands may run automatically; guardrail-triggered commands ask you directly with a short reason, while reviewer uncertainty shows the review reason. Uses model quota."
+                : "Let a separate reviewer approve eligible workspace and temporary-file commands. Guardrail-triggered commands ask you directly; reviewer uncertainty includes the review reason. Uses model quota and applies only to this session."
             }
             type="button"
           >

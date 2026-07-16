@@ -36,8 +36,6 @@ export interface CommandReviewSummary {
   risk: "low" | "medium" | "high";
   reason: string;
   model: string;
-  autoApproveAllowed: boolean;
-  guardrailReason?: string;
 }
 
 export type MemoryTier = "instructions" | "skill" | "command" | "memory";
@@ -85,6 +83,8 @@ export interface ApprovalRequest {
   cwd?: string;
   /** For commands: why Approve for Me handed the decision to the user. */
   commandReview?: CommandReviewSummary;
+  /** For commands: concise non-reviewer reason automatic approval was skipped. */
+  humanOnlyReason?: string;
   /** For MCP: detail text (input preview) */
   mcpDetail?: string;
   /** For MCP: approval choices */

@@ -361,6 +361,7 @@ export function CommandCard({
 
   const reason = request.reason;
   const commandReview = request.commandReview;
+  const humanOnlyReason = request.humanOnlyReason;
   const inlineFiles = request.inlineFiles ?? [];
 
   return (
@@ -388,16 +389,19 @@ export function CommandCard({
           <span class="codicon codicon-shield" />
           <div>
             <div class="command-review-heading">
-              Approve for Me asked you
+              Reviewer requested approval
               {commandReview.status === "reviewed"
                 ? ` · ${commandReview.confidence} confidence · ${commandReview.risk} risk`
                 : ` · ${commandReview.status.replace("_", " ")}`}
             </div>
             <div>{commandReview.reason}</div>
-            {commandReview.guardrailReason && (
-              <div>Human-only guardrail: {commandReview.guardrailReason}</div>
-            )}
           </div>
+        </div>
+      )}
+      {humanOnlyReason && (
+        <div class="command-guardrail">
+          <span class="codicon codicon-lock" />
+          <span>{humanOnlyReason}</span>
         </div>
       )}
       {inlineFiles.length > 0 && (

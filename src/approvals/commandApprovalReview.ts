@@ -53,8 +53,6 @@ export interface CommandApprovalReviewInput {
   reason?: string;
   userObjective?: string;
   context?: CommandReviewContextEntry[];
-  autoApproveAllowed: boolean;
-  guardrailReason?: string;
   classified: ClassifiedCommand;
   signal?: AbortSignal;
 }
@@ -107,32 +105,38 @@ export interface CommandApprovalReviewerFactoryOptions {
 export function getCommandAutoApprovalEligibility(
   input: CommandAutoApprovalEligibilityInput,
 ): CommandAutoApprovalEligibility {
-  if (input.classified.tier !== "sensitive") {
-    return { eligible: false, reason: "command tier is not sensitive" };
-  }
   if (input.hasInlineFiles) {
-    return { eligible: false, reason: "inline files require human approval" };
+    return { eligible: false, reason: "Attached temporary command files" };
   }
   if (input.hasEnvOverrides) {
-    return {
-      eligible: false,
-      reason: "environment overrides require human approval",
-    };
+    return { eligible: false, reason: "Environment overrides" };
   }
   if (input.forceRequested) {
-    return {
-      eligible: false,
-      reason: "forced execution requires human approval",
-    };
+    return { eligible: false, reason: "Forced execution" };
   }
-  if (!isInsideAnyRoot(input.cwd, input.workspaceRoots)) {
-    return {
-      eligible: false,
-      reason: "working directory is outside the workspace",
-    };
+  if (!isInsideReviewScope(input.cwd, input.workspaceRoots)) {
+    return { eligible: false, reason: "Working directory outside workspace" };
   }
   if (input.classified.perSubCommand.length === 0) {
-    return { eligible: false, reason: "command has no classified subcommands" };
+    return { eligible: false, reason: "No command to review" };
+  }
+  if (input.classified.tier === "safe") {
+    return { eligible: false, reason: "Already classified as safe" };
+  }
+
+  for (const { command, result } of input.classified.perSubCommand) {
+    if (result.tier !== "dangerous") continue;
+    const words = scanShellLexWords(command).words.map(({ raw }) => raw);
+    const externalTargetReason = getExternalTargetReason(
+      words.slice(1).map(stripQuotes),
+      input,
+    );
+    if (externalTargetReason) {
+      return { eligible: false, reason: externalTargetReason };
+    }
+    if (result.code !== "external_path") {
+      return { eligible: false, reason: getRiskGuardrailReason(result) };
+    }
   }
 
   for (const { command, result } of input.classified.perSubCommand) {
@@ -145,39 +149,67 @@ export function getCommandAutoApprovalEligibility(
     ) {
       return {
         eligible: false,
-        reason: "path-qualified execution requires human approval",
+        reason: "Explicit executable or path override",
       };
     }
-    if (result.tier !== "sensitive") {
+    const externalTargetReason = getExternalTargetReason(
+      words.slice(1).map(stripQuotes),
+      input,
+    );
+    if (externalTargetReason) {
+      return { eligible: false, reason: externalTargetReason };
+    }
+    const tempScopedExternalPath =
+      result.tier === "dangerous" && result.code === "external_path";
+    if (result.tier !== "sensitive" && !tempScopedExternalPath) {
       return {
         eligible: false,
-        reason: `subcommand tier is not sensitive (${result.tier})`,
+        reason:
+          result.tier === "dangerous"
+            ? `Dangerous command · ${result.reason}`
+            : "Mixed command safety levels",
       };
     }
     if (!result.executable) {
-      return {
-        eligible: false,
-        reason: "subcommand executable is not recognized",
-      };
+      return { eligible: false, reason: "Executable could not be identified" };
     }
     if (
-      result.code === "unrecognized_executable" &&
-      hasExternalTargetArgument(words.slice(1).map(stripQuotes), input)
+      !tempScopedExternalPath &&
+      !AUTO_APPROVABLE_RISK_CODES.has(result.code)
     ) {
       return {
         eligible: false,
-        reason: "unknown executable has an external target argument",
-      };
-    }
-    if (!AUTO_APPROVABLE_RISK_CODES.has(result.code)) {
-      return {
-        eligible: false,
-        reason: `subcommand risk code is not auto-approvable (${result.code})`,
+        reason: getRiskGuardrailReason(result),
       };
     }
   }
 
   return { eligible: true };
+}
+
+function getRiskGuardrailReason(
+  result: ClassifiedCommand["perSubCommand"][number]["result"],
+): string {
+  switch (result.code) {
+    case "external_path":
+      return "Outside workspace";
+    case "secret_path":
+      return "Sensitive path";
+    case "network_or_external_effect":
+      return "External or network effect";
+    case "workspace_redirection":
+      return "Shell redirection";
+    case "unrecognized_operation":
+      return "Unrecognized operation";
+    case "destructive":
+    case "privileged":
+    case "opaque_shell":
+    case "inline_interpreter":
+    case "other_dangerous":
+      return `Dangerous command · ${result.reason}`;
+    default:
+      return `Not eligible for automatic approval · ${result.reason}`;
+  }
 }
 
 export function parseCommandApprovalReviewResponse(
@@ -299,10 +331,6 @@ function serializeReviewData(input: CommandApprovalReviewInput): string {
       reason: input.reason ?? null,
       userObjective: input.userObjective ?? null,
       recentContext: input.context ?? [],
-      automaticApproval: {
-        allowed: input.autoApproveAllowed,
-        guardrailReason: input.guardrailReason ?? null,
-      },
       classification: {
         tier: input.classified.tier,
         subcommands: input.classified.perSubCommand.map(
@@ -522,15 +550,15 @@ function hasPathScopeOverride(args: string[]): boolean {
   });
 }
 
-function hasExternalTargetArgument(
+function getExternalTargetReason(
   args: string[],
   scope: Pick<CommandAutoApprovalEligibilityInput, "cwd" | "workspaceRoots">,
-): boolean {
-  return args.some((arg) => {
+): string | undefined {
+  for (const arg of args) {
     const value = optionValue(arg);
-    if (!value) return false;
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return true;
-    if (/^[^/\s]+@[^:\s]+:.+/.test(value)) return true;
+    if (!value) continue;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return "External target";
+    if (/^[^/\s]+@[^:\s]+:.+/.test(value)) return "External target";
 
     const pathValue = value.startsWith(`~${path.sep}`)
       ? path.join(os.homedir(), value.slice(2))
@@ -541,13 +569,18 @@ function hasExternalTargetArgument(
       !pathValue.startsWith(`..${path.sep}`) &&
       !pathValue.includes(path.sep)
     ) {
-      return false;
+      continue;
     }
-    return !isInsideAnyRoot(
-      path.resolve(scope.cwd, pathValue),
-      scope.workspaceRoots,
-    );
-  });
+    if (
+      !isInsideReviewScope(
+        path.resolve(scope.cwd, pathValue),
+        scope.workspaceRoots,
+      )
+    ) {
+      return "Outside workspace";
+    }
+  }
+  return undefined;
 }
 
 function optionValue(arg: string): string {
@@ -574,6 +607,17 @@ function isInsideAnyRoot(candidate: string, roots: string[]): boolean {
       resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)
     );
   });
+}
+
+function isInsideReviewScope(
+  candidate: string,
+  workspaceRoots: string[],
+): boolean {
+  const tempRoots =
+    process.platform === "win32"
+      ? [os.tmpdir()]
+      : [os.tmpdir(), "/tmp", "/var/tmp"];
+  return isInsideAnyRoot(candidate, [...workspaceRoots, ...tempRoots]);
 }
 
 function resolvePhysicalPath(value: string): string {

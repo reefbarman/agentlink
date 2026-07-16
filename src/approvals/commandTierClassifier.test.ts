@@ -144,6 +144,15 @@ describe("command tier classifier", () => {
     expect(tier("bash -c 'git status'")).toBe("dangerous");
   });
 
+  it("does not treat syntax inside single-quoted arguments as shell syntax", () => {
+    const command = `awk 'match($0, /testId: "[^"]+"/) { print $0 }' input.txt`;
+    expect(classify(command).perSubCommand[0]?.result).toMatchObject({
+      tier: "sensitive",
+      code: "unrecognized_executable",
+      executable: "awk",
+    });
+  });
+
   it("escalates read and write paths outside the workspace", () => {
     expect(tier("rg token /tmp/outside")).toBe("dangerous");
     expect(tier("rg token ~/.ssh")).toBe("dangerous");

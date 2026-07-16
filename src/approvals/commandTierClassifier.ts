@@ -899,8 +899,24 @@ function classifyMutationPathGuard(
 function detectOpaqueShellSyntax(command: string): string | null {
   if (ENV_ASSIGNMENT_RE.test(command.trim()))
     return "environment assignment prefix";
-  if (OPAQUE_SHELL_RE.test(command)) return "opaque shell syntax";
+  if (OPAQUE_SHELL_RE.test(maskSingleQuotedShellContent(command))) {
+    return "opaque shell syntax";
+  }
   return null;
+}
+
+function maskSingleQuotedShellContent(command: string): string {
+  let masked = "";
+  let inSingleQuote = false;
+  for (const char of command) {
+    if (char === "'") {
+      inSingleQuote = !inSingleQuote;
+      masked += " ";
+    } else {
+      masked += inSingleQuote ? " " : char;
+    }
+  }
+  return masked;
 }
 
 function isOpaqueCommandToken(token: string): boolean {

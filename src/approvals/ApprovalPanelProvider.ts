@@ -109,6 +109,8 @@ interface InternalRequest {
   cwd?: string;
   /** Automatic review result shown when the command still needs a human. */
   commandReview?: CommandReviewSummary;
+  /** Concise guardrail reason shown instead of reviewer output. */
+  humanOnlyReason?: string;
   writeOperation?: "create" | "modify";
   outsideWorkspace?: boolean;
   oldName?: string;
@@ -210,6 +212,7 @@ export class ApprovalPanelProvider
       reason?: string;
       cwd?: string;
       commandReview?: CommandReviewSummary;
+      humanOnlyReason?: string;
     },
   ): { promise: Promise<CommandApprovalResponse>; id: string } {
     const id = randomUUID();
@@ -223,6 +226,7 @@ export class ApprovalPanelProvider
       reason: options?.reason,
       cwd: options?.cwd,
       commandReview: options?.commandReview,
+      humanOnlyReason: options?.humanOnlyReason,
     }) as Promise<CommandApprovalResponse>;
     return { promise, id };
   }
@@ -405,6 +409,7 @@ export class ApprovalPanelProvider
         reason: request.reason,
         cwd: request.cwd,
         commandReview: request.commandReview,
+        humanOnlyReason: request.humanOnlyReason,
         filePath: request.filePath,
         writeOperation: request.writeOperation,
         outsideWorkspace: request.outsideWorkspace,
@@ -477,6 +482,7 @@ export class ApprovalPanelProvider
       reason: request.reason,
       cwd: request.cwd,
       commandReview: request.commandReview,
+      humanOnlyReason: request.humanOnlyReason,
       filePath: request.filePath,
       writeOperation: request.writeOperation,
       outsideWorkspace: request.outsideWorkspace,

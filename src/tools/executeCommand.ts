@@ -690,6 +690,7 @@ async function approveSubCommands(
   const hasEnvOverrides = Boolean(options?.hasEnvOverrides);
   const forceRequested = Boolean(options?.forceRequested);
   let commandReview: CommandReviewSummary | undefined;
+  let humanOnlyReason: string | undefined;
   if (policy === "approve-for-me" && reviewProviders?.commandApprovalReviewer) {
     const eligibility = getCommandAutoApprovalEligibility({
       classified: tierInfo,
@@ -699,57 +700,62 @@ async function approveSubCommands(
       hasEnvOverrides,
       forceRequested,
     });
-    const reviewedCommand = fullCommand;
-    const review = await reviewProviders.commandApprovalReviewer.review({
-      sessionId,
-      command: reviewedCommand,
-      cwd,
-      workspaceRoots,
-      reason,
-      userObjective: reviewProviders.getUserObjective?.(sessionId),
-      context: reviewProviders.getReviewContext?.(sessionId),
-      autoApproveAllowed: eligibility.eligible,
-      guardrailReason: eligibility.eligible ? undefined : eligibility.reason,
-      classified: tierInfo,
-      signal: reviewProviders.toolAbortSignal,
-    });
-    commandReview = {
-      status: review.status,
-      decision: review.decision,
-      confidence: review.confidence,
-      risk: review.risk,
-      reason: review.reason.slice(0, 500),
-      model: review.model,
-      autoApproveAllowed: eligibility.eligible,
-      guardrailReason: eligibility.eligible ? undefined : eligibility.reason,
-    };
-    const currentPolicy =
-      reviewProviders.getCommandApprovalPolicy?.(sessionId) ?? "safe";
-    const sessionActive =
-      reviewProviders.isSessionActive?.(sessionId) ??
-      !reviewProviders.toolAbortSignal?.aborted;
-    if (
-      eligibility.eligible &&
-      review.status === "reviewed" &&
-      review.decision === "approve" &&
-      review.confidence === "high" &&
-      review.risk !== "high" &&
-      currentPolicy === "approve-for-me" &&
-      sessionActive &&
-      !reviewProviders.toolAbortSignal?.aborted &&
-      reviewedCommand === fullCommand
-    ) {
-      return {
-        approved: true,
-        approval: {
-          by: "model_reviewer",
-          model: review.model,
-          tier: "sensitive",
-          confidence: "high",
+    if (!eligibility.eligible) {
+      humanOnlyReason = eligibility.reason;
+    } else {
+      const reviewedCommand = fullCommand;
+      const review = await reviewProviders.commandApprovalReviewer.review({
+        sessionId,
+        command: reviewedCommand,
+        cwd,
+        workspaceRoots,
+        reason,
+        userObjective: reviewProviders.getUserObjective?.(sessionId),
+        context: reviewProviders.getReviewContext?.(sessionId),
+        classified: tierInfo,
+        signal: reviewProviders.toolAbortSignal,
+      });
+      const currentPolicy =
+        reviewProviders.getCommandApprovalPolicy?.(sessionId) ?? "safe";
+      const sessionActive =
+        reviewProviders.isSessionActive?.(sessionId) ??
+        !reviewProviders.toolAbortSignal?.aborted;
+      const reviewerApproved =
+        review.status === "reviewed" &&
+        review.decision === "approve" &&
+        review.confidence === "high" &&
+        review.risk !== "high";
+      if (
+        reviewerApproved &&
+        currentPolicy === "approve-for-me" &&
+        sessionActive &&
+        !reviewProviders.toolAbortSignal?.aborted &&
+        reviewedCommand === fullCommand
+      ) {
+        return {
+          approved: true,
+          approval: {
+            by: "model_reviewer",
+            model: review.model,
+            tier: "sensitive",
+            confidence: "high",
+            risk: review.risk === "low" ? "low" : "medium",
+            reason: review.reason.slice(0, 500),
+          },
+        };
+      }
+      if (!reviewerApproved) {
+        commandReview = {
+          status: review.status,
+          decision: review.decision,
+          confidence: review.confidence,
           risk: review.risk,
           reason: review.reason.slice(0, 500),
-        },
-      };
+          model: review.model,
+        };
+      } else if (currentPolicy !== "approve-for-me") {
+        humanOnlyReason = "Approve for Me was turned off during review";
+      }
     }
   }
   if (isCommandApprovalCancelled(sessionId, reviewProviders)) {
@@ -787,6 +793,7 @@ async function approveSubCommands(
       reason,
       cwd,
       commandReview,
+      humanOnlyReason,
     },
   );
   const response = await promise;
