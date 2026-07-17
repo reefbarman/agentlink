@@ -39,13 +39,17 @@ export function BgAgentResultBlock({
         ? "failed"
         : "cancelled";
 
-  const visibleSummary =
-    summary?.trim() ||
-    summarizeTextForPreview(resultText, {
-      maxLength: 220,
-      minSentenceLength: 20,
-    }) ||
-    null;
+  const trimmedResultText = resultText?.trim();
+  const trimmedSummary = summary?.trim();
+  const visibleSummary = trimmedResultText
+    ? trimmedSummary ||
+      summarizeTextForPreview(trimmedResultText, {
+        maxLength: 220,
+        minSentenceLength: 20,
+      }) ||
+      null
+    : null;
+  const visibleResult = trimmedResultText || trimmedSummary;
 
   return (
     <div class={`bg-agent-result-block ${statusClass}`}>
@@ -60,8 +64,8 @@ export function BgAgentResultBlock({
       {visibleSummary && <div class="bg-result-preview">{visibleSummary}</div>}
 
       <div class="bg-result-content">
-        {resultText ? (
-          <StreamingText text={resultText} streaming={false} />
+        {visibleResult ? (
+          <StreamingText text={visibleResult} streaming={false} />
         ) : (
           <div class="bg-result-empty">No output available.</div>
         )}

@@ -1370,6 +1370,42 @@ describe("AgentSessionManager background agents", () => {
       resultText: "full structured report",
       summary: "one-line summary",
     });
+    expect(mgr.getBackgroundResultSummary(spawned.sessionId)).toBe(
+      "one-line summary",
+    );
+  });
+
+  it("uses the set_task_status summary when a background turn has no other output", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground({
+      task: "summary-only result",
+      message: "work",
+    });
+    await waitFor(
+      () =>
+        (mgr as any).sessions.get(spawned.sessionId).fleetMetadata.lifecycle,
+      (lifecycle) => lifecycle === "completed",
+    );
+
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    session.getLastAssistantText.mockReturnValue(undefined);
+    session.getLastFinalMarker.mockReturnValue({
+      status: "completed",
+      summary: "Summary supplied by set_task_status.",
+      source: "tool",
+    });
+    (mgr as any).bgFinalResults.delete(spawned.sessionId);
+    session.fleetMetadata.finalResult = undefined;
+
+    expect(mgr.getBackgroundResult(spawned.sessionId)).toEqual({
+      resultText: undefined,
+      summary: "Summary supplied by set_task_status.",
+    });
+    expect(mgr.getBackgroundResultSummary(spawned.sessionId)).toBe(
+      "Summary supplied by set_task_status.",
+    );
   });
 
   it("wraps background questions with context, session id, and task attribution", async () => {

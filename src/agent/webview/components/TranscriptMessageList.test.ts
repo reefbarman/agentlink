@@ -424,6 +424,38 @@ describe("TranscriptMessageList background result rendering", () => {
     expect(activeRow?.textContent).not.toContain("Background Result");
     expect(rows[1].textContent).toContain("Background Result");
   });
+
+  it("renders a set_task_status summary as the result when no prose is available", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "assistant-with-summary-only-bg-result",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [
+          {
+            type: "bg_agent_result",
+            sessionId: "bg-summary-only",
+            task: "Audit project parity",
+            status: "completed",
+            summary: "The audit found no parity gaps.",
+          },
+        ],
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    const result = container.querySelector(".bg-agent-result-block");
+    expect(result?.textContent).toContain("The audit found no parity gaps.");
+    expect(result?.textContent).not.toContain("No output available.");
+    expect(result?.querySelector(".bg-result-preview")).toBeNull();
+    expect(result?.querySelector(".bg-result-content")?.textContent).toContain(
+      "The audit found no parity gaps.",
+    );
+  });
 });
 
 describe("TranscriptMessageList retry error rendering", () => {

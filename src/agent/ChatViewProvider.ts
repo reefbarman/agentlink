@@ -6242,6 +6242,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const parentSessionId = isBackground
           ? this.sessionManager?.getBackgroundParentSessionId(sessionId)
           : undefined;
+        const backgroundResult = isBackground
+          ? this.sessionManager?.getBackgroundResult(sessionId)
+          : undefined;
         this.postMessage({
           type: isBackground ? "agentBgDone" : "agentDone",
           sessionId,
@@ -6253,9 +6256,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           totalCacheReadTokens: event.totalCacheReadTokens,
           totalCacheCreationTokens: event.totalCacheCreationTokens,
           ...(isBackground && {
-            resultText:
-              this.sessionManager?.getBackgroundResult(sessionId).resultText,
+            resultText: backgroundResult?.resultText,
             resultSummary:
+              backgroundResult?.summary ??
               bgInfo?.resultSummary ??
               this.sessionManager?.getBackgroundResultSummary(sessionId),
           }),

@@ -1561,7 +1561,7 @@ describe("ChatViewProvider session state sync", () => {
         sessionId: "bg-1",
         parentSessionId: "foreground-1",
         resultText: "full structured report",
-        resultSummary: "Reviewed the plan",
+        resultSummary: "one-line summary",
       }),
     );
   });

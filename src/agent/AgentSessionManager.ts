@@ -5351,6 +5351,9 @@ export class AgentSessionManager {
   }
 
   getBackgroundResultSummary(sessionId: string): string | undefined {
+    const finalSummary = this.getBackgroundResult(sessionId).summary?.trim();
+    if (finalSummary) return finalSummary;
+
     const summary = this.bgSummary.get(sessionId)?.shortStatus?.trim();
     if (summary) return summary;
 
