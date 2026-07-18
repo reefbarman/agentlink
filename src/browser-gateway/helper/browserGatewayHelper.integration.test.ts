@@ -4466,10 +4466,18 @@ describe("BrowserGatewayHelper proxy routing", () => {
     await fs.mkdir(grantedDir);
     await fs.mkdir(deniedDir);
     const grantedFile = path.join(grantedDir, "notes.txt");
+    const settingsDir = path.join(grantedDir, ".vscode");
+    const settingsFile = path.join(settingsDir, "settings.json");
     const deniedFile = path.join(deniedDir, "secret.txt");
     const symlinkEscape = path.join(grantedDir, "escape-secret.txt");
     const symlinkDirEscape = path.join(grantedDir, "escape-dir");
     await fs.writeFile(grantedFile, "alpha\nbeta target\ngamma", "utf-8");
+    await fs.mkdir(settingsDir);
+    await fs.writeFile(
+      settingsFile,
+      '{"theme":"dark","apiKey":"browser-secret"}',
+      "utf-8",
+    );
     await fs.writeFile(deniedFile, "do not read target", "utf-8");
     await fs.symlink(deniedFile, symlinkEscape);
     await fs.symlink(deniedDir, symlinkDirEscape);
@@ -4501,6 +4509,11 @@ describe("BrowserGatewayHelper proxy routing", () => {
               id: "call_read",
               name: "read_file",
               input: { path: grantedFile, offset: 2, limit: 1 },
+            },
+            {
+              id: "call_settings_read",
+              name: "read_file",
+              input: { path: settingsFile },
             },
             {
               id: "call_list",
@@ -4571,11 +4584,15 @@ describe("BrowserGatewayHelper proxy routing", () => {
     });
     expect(allowed.ok).toBe(true);
     const latestToolResults = JSON.stringify(
-      toolResults.find((messages) => messages.length === 7),
+      toolResults.find((messages) => messages.length === 8),
     );
     expect(latestToolResults).toContain("2 | beta target");
     expect(latestToolResults).toContain("notes.txt");
     expect(latestToolResults).toContain("target");
+    expect(latestToolResults).toContain("structured_secret_values");
+    expect(latestToolResults).toContain("[REDACTED]");
+    expect(latestToolResults).toContain("dark");
+    expect(latestToolResults).not.toContain("browser-secret");
     expect(latestToolResults).toContain("path_not_granted");
     expect(latestToolResults).not.toContain("do not read");
 

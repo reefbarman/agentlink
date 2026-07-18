@@ -2,7 +2,8 @@ import {
   CODEX_DEFAULT_MODEL,
   CODEX_OAUTH_CHEAP_MODEL,
   getCodexModelCapabilities,
-  getCodexPreviewModelFallback,
+  getCodexUnavailableModelFallback,
+  listCodexModels,
   resolveCodexEffectiveModel,
   resolveCodexReasoningEffort,
 } from "./models.js";
@@ -23,10 +24,25 @@ describe("Codex model resolution", () => {
     });
   });
 
-  it("maps limited-preview models to stable equivalents", () => {
-    expect(getCodexPreviewModelFallback("gpt-5.6-sol")).toBe("gpt-5.5");
-    expect(getCodexPreviewModelFallback("gpt-5.6-terra")).toBe("gpt-5.4");
-    expect(getCodexPreviewModelFallback("gpt-5.6-luna")).toBe("gpt-5.4-mini");
+  it("lists GPT-5.6 models without preview labels", () => {
+    const models = listCodexModels("codex");
+    expect(models.find(({ id }) => id === "gpt-5.6-sol")?.displayName).toBe(
+      "GPT-5.6 Sol",
+    );
+    expect(models.find(({ id }) => id === "gpt-5.6-terra")?.displayName).toBe(
+      "GPT-5.6 Terra",
+    );
+    expect(models.find(({ id }) => id === "gpt-5.6-luna")?.displayName).toBe(
+      "GPT-5.6 Luna",
+    );
+  });
+
+  it("maps unavailable GPT-5.6 models to older equivalents", () => {
+    expect(getCodexUnavailableModelFallback("gpt-5.6-sol")).toBe("gpt-5.5");
+    expect(getCodexUnavailableModelFallback("gpt-5.6-terra")).toBe("gpt-5.4");
+    expect(getCodexUnavailableModelFallback("gpt-5.6-luna")).toBe(
+      "gpt-5.4-mini",
+    );
   });
 
   it("remaps unavailable OAuth mini/nano models to the cheap OAuth model", () => {

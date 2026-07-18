@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getCodexModelCapabilities } from "./models.js";
 
 describe("codex model capabilities", () => {
-  it("uses preview 1M context limits and max reasoning for GPT-5.6", () => {
+  it("uses 1M context limits and max reasoning for GPT-5.6", () => {
     for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
       const model = getCodexModelCapabilities(id);
       expect(model.contextWindow).toBe(1_050_000);

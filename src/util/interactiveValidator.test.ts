@@ -267,6 +267,10 @@ describe("validateInteractiveCommand", () => {
       expect(result!.message).toContain("git cherry-pick");
     });
 
+    it("allows git cherry-pick --abort", () => {
+      expect(validateInteractiveCommand("git cherry-pick --abort")).toBeNull();
+    });
+
     it("rejects git notes edit", () => {
       const result = validateInteractiveCommand("git notes edit HEAD");
       expect(result).not.toBeNull();
@@ -291,6 +295,19 @@ describe("validateInteractiveCommand", () => {
       const result = validateInteractiveCommand("ssh user@host");
       expect(result).not.toBeNull();
       expect(result!.message).toContain("interactive remote connection");
+    });
+
+    it("allows ssh -G local configuration inspection", () => {
+      expect(validateInteractiveCommand("ssh -G github.com")).toBeNull();
+    });
+
+    it.each([
+      "ssh github.com -G",
+      "ssh -G github.com uptime",
+      "ssh -v -G github.com",
+      "ssh -vG github.com",
+    ])("rejects ordinary or expanded SSH usage: %s", (command) => {
+      expect(validateInteractiveCommand(command)).not.toBeNull();
     });
 
     it("rejects telnet", () => {
@@ -331,6 +348,52 @@ describe("validateInteractiveCommand", () => {
 
     it("allows zsh -c", () => {
       expect(validateInteractiveCommand('zsh -c "ls"')).toBeNull();
+    });
+
+    it.each(["bash --version", "zsh --help", "pwsh --help"])(
+      "allows shell information mode: %s",
+      (command) => {
+        expect(validateInteractiveCommand(command)).toBeNull();
+      },
+    );
+
+    it.each(["sh -v", "bash --help -i", "zsh --version -i"])(
+      "keeps non-exact information flags blocked: %s",
+      (command) => {
+        expect(validateInteractiveCommand(command)).not.toBeNull();
+      },
+    );
+  });
+
+  describe("VSCE packaging", () => {
+    it.each([
+      "vsce package",
+      "npx --no-install @vscode/vsce package --out extension.vsix",
+      "npx @vscode/vsce@latest package",
+    ])(
+      "rejects packaging that can prompt for star activation: %s",
+      (command) => {
+        const result = validateInteractiveCommand(command);
+        expect(result?.message).toContain("--allow-star-activation");
+      },
+    );
+
+    it.each([
+      "vsce package --allow-star-activation",
+      "npx --no-install @vscode/vsce package --allow-star-activation",
+    ])("allows explicit star activation acknowledgement: %s", (command) => {
+      expect(validateInteractiveCommand(command)).toBeNull();
+    });
+
+    it.each([
+      "npm run package",
+      "npx echo @vscode/vsce package",
+      "npx --no-install unrelated-package package",
+      "npx @vscode/vsce",
+      "npx @vscode/vsce ls",
+      "vsce ls",
+    ])("does not reject unrelated package commands: %s", (command) => {
+      expect(validateInteractiveCommand(command)).toBeNull();
     });
   });
 

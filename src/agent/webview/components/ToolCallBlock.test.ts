@@ -42,6 +42,66 @@ describe("ToolCallBlock", () => {
     expect(preview.getAttribute("src")).toBe("data:image/png;base64,YWJjZA==");
     expect(screen.queryByText("[image]")).toBeNull();
   });
+
+  it("marks the collapsed header with an image badge when the result contains images", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "read-image",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "assets/pixel.ppm" }),
+          result: "[image]",
+          resultImages: [
+            { mimeType: "image/png", data: "YWJjZA==" },
+            { mimeType: "image/jpeg", data: "ZWZnaA==" },
+          ],
+          complete: true,
+        },
+      }),
+    );
+
+    const badge = screen.getByRole("img", { name: "2 image results" });
+    expect(badge.getAttribute("title")).toBe(
+      "2 image results — expand to view",
+    );
+    expect(badge.textContent).toContain("2");
+  });
+
+  it("does not show an image badge while the tool call is still running", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "read-image",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "assets/pixel.ppm" }),
+          result: "",
+          resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+          complete: false,
+        },
+      }),
+    );
+
+    expect(screen.queryByRole("img", { name: "1 image result" })).toBeNull();
+  });
+
+  it("does not show an image badge for text-only results", () => {
+    render(
+      h(ToolCallBlock, {
+        toolCall: {
+          type: "tool_call",
+          id: "read-text",
+          name: "read_file",
+          inputJson: JSON.stringify({ path: "src/index.ts" }),
+          result: JSON.stringify({ ok: true }),
+          complete: true,
+        },
+      }),
+    );
+
+    expect(document.querySelector(".tool-image-badge")).toBeNull();
+  });
 });
 
 describe("formatToolFileDisplayPath", () => {

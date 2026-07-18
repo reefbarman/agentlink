@@ -81,6 +81,22 @@ vi.mock("vscode", () => {
 vi.mock("../../integrations/DiffViewProvider.js", () => ({
   DiffViewProvider: vi.fn(),
   createFormatOnSaveReport: vi.fn(() => undefined),
+  diagnoseEditSaveFailure: vi.fn(
+    async (params: { documentDirty: boolean; reviewState: string }) => ({
+      save_failure: {
+        document_dirty: params.documentDirty,
+        disk_state: "unchanged",
+        concurrent_change: false,
+        review_state: params.reviewState,
+        vscode_error_detail: "unavailable",
+        retryable: true,
+      },
+      next_steps: [
+        "The dirty editor is preserved. Inspect the file/editor state before retrying.",
+        "The file still matches the pre-edit disk baseline; VS Code returned false without exposing an underlying save exception.",
+      ],
+    }),
+  ),
   snapshotDiagnostics: vi.fn(() => ({
     collectNewErrors: vi.fn(async () => undefined),
   })),
@@ -208,6 +224,58 @@ describe("createVscodeEditReviewProvider", () => {
     workspaceEditInstances.length = 0;
   });
 
+  it("returns actionable recovery diagnostics when auto-save returns false", async () => {
+    const tempDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
+    );
+    const filePath = path.join(tempDir, "file.ts");
+    fs.writeFileSync(filePath, "old", "utf-8");
+    const doc = {
+      getText: vi.fn(() => "old"),
+      positionAt: vi.fn((offset: number) => ({ line: 0, character: offset })),
+      uri: { fsPath: filePath },
+      isDirty: true,
+      save: vi.fn(async () => false),
+    };
+    openTextDocument.mockResolvedValue(doc);
+
+    try {
+      const provider = createVscodeEditReviewProvider();
+      const result = await provider.reviewAndApply({
+        mode: "auto",
+        absolutePath: filePath,
+        relativePath: "file.ts",
+        content: "new",
+        outsideWorkspace: false,
+        diagnosticDelay: 0,
+        sessionId: "session-1",
+        operation: "modified",
+      });
+
+      expect(result).toMatchObject({
+        error: "File save failed",
+        path: "file.ts",
+        reason: "save_failed",
+        save_failure: {
+          document_dirty: true,
+          disk_state: "unchanged",
+          concurrent_change: false,
+          review_state: "dirty_document_preserved",
+          vscode_error_detail: "unavailable",
+          retryable: true,
+        },
+        next_steps: [
+          expect.stringContaining("dirty editor is preserved"),
+          expect.stringContaining("pre-edit disk baseline"),
+        ],
+      });
+      expect(doc.save).toHaveBeenCalledOnce();
+      expect(fs.readFileSync(filePath, "utf-8")).toBe("old");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("runs prepareContent inside the provider before auto-approved writes", async () => {
     const tempDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "agentlink-edit-review-")),
@@ -245,6 +313,7 @@ describe("createVscodeEditReviewProvider", () => {
         status: "accepted",
         path: "file.ts",
         operation: "modified",
+        finalContent: "old",
       });
       expect(prepareContent).toHaveBeenCalledWith("old");
       expect(showTextDocument).toHaveBeenCalledWith(doc, {
@@ -561,23 +630,83 @@ describe("createVscodeRenameSymbolProvider", () => {
     expect(applyEdit).toHaveBeenCalledWith(renameEdit);
   });
 
+  it("returns actionable context when the language service rejects the rename", async () => {
+    const filePath =
+      "/workspace/Assets/Scripts/Presentation/CartridgeVisual.cs";
+    openTextDocument.mockResolvedValue({
+      uri: { fsPath: filePath },
+      languageId: "csharp",
+      getWordRangeAtPosition: vi.fn(() => ({ start: 0, end: 3 })),
+      getText: vi.fn(() => "Overrides"),
+      lineAt: vi.fn(() => ({ text: "Overrides.Clear();" })),
+    });
+    executeCommand.mockRejectedValue(
+      new Error("The element can't be renamed."),
+    );
+    const provider = createVscodeRenameSymbolProvider({
+      isPathTrusted: vi.fn(() => true),
+      isAgentWriteApproved: vi.fn(() => true),
+    } as never);
+
+    const result = await provider.rename({
+      path: filePath,
+      line: 75,
+      column: 21,
+      newName: "ClearOverrides",
+      sessionId: "session-1",
+      approvalPanel: {} as never,
+    });
+
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(JSON.parse(text)).toEqual({
+      error: "Rename request was rejected by the csharp language service",
+      reason: "The element can't be renamed.",
+      path: "Assets/Scripts/Presentation/CartridgeVisual.cs",
+      line: 75,
+      column: 21,
+      old_name: "Overrides",
+      new_name: "ClearOverrides",
+      language_id: "csharp",
+      next_steps: [
+        "Verify that line and column point to the intended symbol; both are 1-indexed.",
+        "If the position is correct, inspect the symbol with get_hover or go_to_definition. When the language service cannot rename this element, use get_references and reviewed edits as a fallback.",
+      ],
+    });
+    expect(result.isError).toBe(true);
+  });
+
   it.each([
     {
       name: "cannot rename",
       edit: undefined,
       applyResult: true,
       expected: {
-        error: "Symbol at this position cannot be renamed",
+        error: "The active language service returned no rename edits",
+        reason:
+          "The selected element may not support language-aware rename at this position.",
         path: "src/example.ts",
         line: 1,
         column: 7,
+        old_name: "oldName",
+        new_name: "newName",
+        next_steps: expect.any(Array),
       },
     },
     {
       name: "no changes",
       edit: { entries: vi.fn(() => []) },
       applyResult: true,
-      expected: { error: "Rename produced no changes", path: "src/example.ts" },
+      expected: {
+        error: "Rename produced no changes",
+        reason:
+          "The language service accepted the request but returned an empty workspace edit.",
+        path: "src/example.ts",
+        line: 1,
+        column: 7,
+        old_name: "oldName",
+        new_name: "newName",
+        next_steps: expect.any(Array),
+      },
     },
     {
       name: "apply failure",
@@ -591,7 +720,7 @@ describe("createVscodeRenameSymbolProvider", () => {
       },
     },
   ])(
-    "returns the legacy $name error shape",
+    "returns the structured $name error shape",
     async ({ edit, applyResult, expected }) => {
       const filePath = "/workspace/src/example.ts";
       openTextDocument.mockResolvedValue({

@@ -6,6 +6,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkingSetStore } from "./WorkingSetStore.js";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -180,6 +181,7 @@ describe("handleGetContext", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    vscodeMock.workspaceFolders = [];
     vscodeMock.textDocuments = [];
     vscodeMock.executeCommand.mockResolvedValue([
       {
@@ -239,6 +241,169 @@ describe("handleGetContext", () => {
     });
   });
 
+  it("returns a valid first-line range for an empty file", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "empty.ts");
+    fs.writeFileSync(filePath, "");
+
+    const { handleGetContext } = await import("./getContext.js");
+    const result = await handleGetContext(
+      { path: "empty.ts" },
+      "session-empty",
+      makeProviders(filePath, "empty.ts", ""),
+    );
+
+    const payload = JSON.parse(getText(result));
+    expect(payload).toMatchObject({
+      total_lines: 1,
+      showing: "1-1",
+      working_set: { range: { startLine: 1, endLine: 1 } },
+      content: "1 | ",
+    });
+  });
+
+  it("returns the exact EOF line when requested", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "eof.ts");
+    const content = "first\nsecond";
+    fs.writeFileSync(filePath, content);
+
+    const { handleGetContext } = await import("./getContext.js");
+    const result = await handleGetContext(
+      { path: "eof.ts", offset: 2, limit: 10 },
+      "session-eof",
+      makeProviders(filePath, "eof.ts", content),
+    );
+
+    const payload = JSON.parse(getText(result));
+    expect(payload).toMatchObject({
+      total_lines: 2,
+      showing: "2-2",
+      working_set: { range: { startLine: 2, endLine: 2 } },
+      content: "2 | second",
+    });
+  });
+
+  it("returns an explicit non-inverted state beyond EOF", async () => {
+    const workspace = makeTempWorkspace();
+    const filePath = path.join(workspace, "short.ts");
+    const content = "first\nsecond";
+    fs.writeFileSync(filePath, content);
+
+    const { handleGetContext } = await import("./getContext.js");
+    const result = await handleGetContext(
+      { path: "short.ts", offset: 3, limit: 10 },
+      "session-out-of-range",
+      makeProviders(filePath, "short.ts", content),
+    );
+
+    const payload = JSON.parse(getText(result));
+    expect(payload).toMatchObject({
+      status: "offset_out_of_range",
+      requested_offset: 3,
+      valid_offset_range: { start: 1, end: 2 },
+      total_lines: 2,
+      showing: "0-0",
+      working_set: { range: { startLine: 0, endLine: 0 } },
+    });
+    expect(payload.content).toBeUndefined();
+  });
+
+  it("suggests a uniquely named sibling when document resolution fails", async () => {
+    const workspace = makeTempWorkspace();
+    const sourceDir = path.join(workspace, "src", "actual");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "Target.ts"), "target");
+    vscodeMock.workspaceFolders = [
+      { uri: { fsPath: workspace }, name: "workspace" },
+    ];
+    const missing = Object.assign(new Error("missing"), {
+      code: "FileNotFound",
+    });
+
+    const { handleGetContext } = await import("./getContext.js");
+    const result = await handleGetContext(
+      { path: "src/typo/Target.ts" },
+      "session-missing",
+      {
+        ...makeProviders(
+          path.join(sourceDir, "Target.ts"),
+          "src/actual/Target.ts",
+          "target",
+        ),
+        documentProvider: {
+          async resolveDocument() {
+            throw missing;
+          },
+        },
+      },
+    );
+
+    expect(JSON.parse(getText(result))).toMatchObject({
+      path: "src/typo/Target.ts",
+      suggestions: ["src/actual/Target.ts"],
+    });
+  });
+
+  it("searches every workspace root for missing-path suggestions", async () => {
+    const firstRoot = makeTempWorkspace();
+    const secondRoot = makeTempWorkspace();
+    const targetPath = path.join(secondRoot, "src", "Target.ts");
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, "target");
+    vscodeMock.workspaceFolders = [
+      { uri: { fsPath: firstRoot }, name: "first" },
+      { uri: { fsPath: secondRoot }, name: "second" },
+    ];
+    const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
+
+    const { handleGetContext } = await import("./getContext.js");
+    const result = await handleGetContext(
+      { path: "src/Target.ts" },
+      "session-multi-root-missing",
+      {
+        ...makeProviders(targetPath, "src/Target.ts", "target"),
+        documentProvider: {
+          async resolveDocument() {
+            throw missing;
+          },
+        },
+      },
+    );
+
+    expect(JSON.parse(getText(result))).toMatchObject({
+      suggestions: [targetPath],
+    });
+  });
+
+  it("redacts settings content while hashing the original disk bytes", async () => {
+    const workspace = makeTempWorkspace();
+    const configDir = path.join(workspace, ".vscode");
+    fs.mkdirSync(configDir);
+    const filePath = path.join(configDir, "settings.jsonc");
+    const content = '{\n  "theme": "dark",\n  "apiKey": "secret-value"\n}\n';
+    fs.writeFileSync(filePath, content);
+
+    const { handleGetContext } = await import("./getContext.js");
+    const result = await handleGetContext(
+      { path: ".vscode/settings.jsonc" },
+      "session-redaction",
+      makeProviders(filePath, ".vscode/settings.jsonc", content, undefined),
+    );
+
+    const payload = JSON.parse(getText(result));
+    expect(payload.content).toContain('"theme": "dark"');
+    expect(payload.content).toContain('"apiKey": "[REDACTED]"');
+    expect(payload.content).not.toContain("secret-value");
+    expect(payload.redaction).toEqual({
+      type: "structured_secret_values",
+      count: 1,
+    });
+    expect(payload.working_set.content_hash).toBe(
+      createHash("sha256").update(content).digest("hex"),
+    );
+  });
+
   it("groups VS Code document symbols in the context enrichment helper", async () => {
     const workspace = makeTempWorkspace();
     const filePath = path.join(workspace, "example.ts");
@@ -292,6 +457,48 @@ describe("handleGetContext", () => {
       }),
     ).resolves.toBeUndefined();
     expect(vscodeMock.executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("uses the deepest containing Git repository and normalized change paths", async () => {
+    const workspace = makeTempWorkspace();
+    const nestedRoot = path.join(workspace, "nested");
+    const filePath = path.join(nestedRoot, "src", "example.ts");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "example");
+    vscodeMock.getExtension.mockReturnValue({
+      isActive: true,
+      exports: {
+        getAPI: () => ({
+          repositories: [
+            {
+              rootUri: { fsPath: workspace },
+              state: {
+                indexChanges: [],
+                workingTreeChanges: [],
+                untrackedChanges: [],
+              },
+            },
+            {
+              rootUri: { fsPath: path.join(nestedRoot, ".") },
+              state: {
+                indexChanges: [],
+                workingTreeChanges: [
+                  {
+                    uri: {
+                      fsPath: `${nestedRoot}${path.sep}src${path.sep}.${path.sep}example.ts`,
+                    },
+                  },
+                ],
+                untrackedChanges: [],
+              },
+            },
+          ],
+        }),
+      },
+    });
+
+    const { getContextGitStatus } = await import("./getContext.js");
+    expect(getContextGitStatus(filePath)).toBe("modified");
   });
 
   it("summarizes diagnostics in the context enrichment helper", async () => {

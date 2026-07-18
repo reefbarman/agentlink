@@ -126,6 +126,9 @@ export async function handleGetTerminalOutput(
       terminal_id: t.id,
       terminal_name: t.name,
       closed_at: new Date(t.closedAt).toISOString(),
+      state: t.state,
+      exit_code: t.exit_code,
+      output_captured: t.output_captured,
     }));
 
     return {
@@ -145,6 +148,7 @@ export async function handleGetTerminalOutput(
   const result: Record<string, unknown> = {
     terminal_id: params.terminal_id,
     is_running: state.is_running,
+    state: state.state,
     exit_code: state.exit_code,
     output_captured: state.output_captured,
     ...(params.kill && { killed: true }),

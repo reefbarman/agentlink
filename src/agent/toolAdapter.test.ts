@@ -1,3 +1,7 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import { describe, it, expect, vi } from "vitest";
 import {
   getAgentTools,
@@ -68,6 +72,11 @@ vi.mock("../tools/writeFile.js", () => ({
   handleWriteFile: vi
     .fn()
     .mockResolvedValue({ content: [{ type: "text", text: "written" }] }),
+}));
+vi.mock("../tools/generateImage.js", () => ({
+  handleGenerateImage: vi
+    .fn()
+    .mockResolvedValue({ content: [{ type: "text", text: "generated" }] }),
 }));
 vi.mock("../tools/applyDiff.js", () => ({
   handleApplyDiff: vi
@@ -475,6 +484,24 @@ describe("getAgentTools", () => {
     expect(names).toContain("search_session_history");
     expect(names).toContain("read_session_excerpt");
     expect(names).toContain("set_task_status");
+  });
+
+  it("exposes per-block occurrence and replace-all controls for apply_diff", () => {
+    const tool = getAgentTools().find(
+      (candidate) => candidate.name === "apply_diff",
+    );
+    const blockOptions = tool?.input_schema.properties?.block_options as
+      | {
+          type?: string;
+          items?: { properties?: Record<string, unknown> };
+        }
+      | undefined;
+
+    expect(tool?.input_schema.properties).toHaveProperty("atomic");
+    expect(blockOptions?.type).toBe("array");
+    expect(blockOptions?.items?.properties).toHaveProperty("index");
+    expect(blockOptions?.items?.properties).toHaveProperty("occurrence");
+    expect(blockOptions?.items?.properties).toHaveProperty("replace_all");
   });
 
   it("guides set_task_status continuations for concrete follow-up work", () => {
@@ -897,6 +924,119 @@ describe("spawn_background_agent tool", () => {
     );
   });
 
+  it("matches absolute delegated paths against relative scopes across workspace roots", async () => {
+    const onDecision = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/tmp/project-a",
+      workspaceProjectRoots: ["/tmp/project-a", "/tmp/project-b"],
+      delegationPolicy: {
+        ownedPaths: ["src/agent"],
+        forbiddenPaths: ["src/agent/secrets"],
+        onDecision,
+      },
+    });
+
+    await expect(
+      runtime.executeTool({
+        name: "write_file",
+        input: {
+          path: "/tmp/project-b/src/agent/allowed.ts",
+          content: "allowed",
+        },
+        context: { sessionId: "test-session", mode: "code" },
+      }),
+    ).resolves.toBeDefined();
+    await expect(
+      runtime.executeTool({
+        name: "write_file",
+        input: {
+          path: "/tmp/project-b/src/agent/secrets/key.ts",
+          content: "denied",
+        },
+        context: { sessionId: "test-session", mode: "code" },
+      }),
+    ).rejects.toThrow(/forbidden path/);
+
+    expect(onDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "allowed",
+        path: expect.stringMatching(/\/project-b\/src\/agent\/allowed\.ts$/),
+      }),
+    );
+    expect(onDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "denied",
+        reason: "forbidden_path",
+        path: expect.stringMatching(
+          /\/project-b\/src\/agent\/secrets\/key\.ts$/,
+        ),
+      }),
+    );
+  });
+
+  it("canonicalizes relative forbidden scopes through symlinked directories", async () => {
+    const projectRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "delegated-symlink-root-"),
+    );
+    try {
+      const realSecrets = path.join(projectRoot, "real-secrets");
+      const delegatedRoot = path.join(projectRoot, "src", "agent");
+      fs.mkdirSync(realSecrets, { recursive: true });
+      fs.mkdirSync(delegatedRoot, { recursive: true });
+      fs.symlinkSync(realSecrets, path.join(delegatedRoot, "secrets"));
+      const runtime = createAgentToolRuntime({
+        ...mockCtx,
+        projectRoot,
+        workspaceProjectRoots: [projectRoot],
+        delegationPolicy: {
+          ownedPaths: ["src/agent"],
+          forbiddenPaths: ["src/agent/secrets"],
+        },
+      });
+
+      await expect(
+        runtime.executeTool({
+          name: "write_file",
+          input: {
+            path: path.join(delegatedRoot, "secrets", "key.ts"),
+            content: "denied",
+          },
+          context: { sessionId: "test-session", mode: "code" },
+        }),
+      ).rejects.toThrow(/forbidden path/);
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("denies and audits delegated writes outside workspace roots", async () => {
+    const onDecision = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/tmp/project-a",
+      workspaceProjectRoots: ["/tmp/project-a", "/tmp/project-b"],
+      delegationPolicy: {
+        forbiddenPaths: ["blocked"],
+        onDecision,
+      },
+    });
+
+    await expect(
+      runtime.executeTool({
+        name: "write_file",
+        input: { path: "/tmp/outside/file.ts", content: "denied" },
+        context: { sessionId: "test-session", mode: "code" },
+      }),
+    ).rejects.toThrow(/outside workspace roots/);
+    expect(onDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "denied",
+        reason: "outside_workspace_roots",
+      }),
+    );
+  });
+
   it("schema includes routing, delegation, and budget params", () => {
     const spawnTool = getAgentTools().find(
       (t) => t.name === "spawn_background_agent",
@@ -1149,6 +1289,7 @@ describe("spawn_background_agent tool", () => {
       displayStatus: "Reading code",
       streamingPreview: "inspecting tests",
       progressSummary: "Reading code",
+      resultState: "running",
       taskClass: "readonly-research",
       toolCalls: 1,
       tokenUsage: 100,
@@ -1176,6 +1317,7 @@ describe("spawn_background_agent tool", () => {
       currentTool: "read_file",
       done: false,
       streamingPreview: "inspecting tests",
+      resultState: "running",
       taskClass: "readonly-research",
       toolCalls: 1,
       tokenUsage: 100,
@@ -1207,6 +1349,56 @@ describe("spawn_background_agent tool", () => {
       type: "text",
       text: "done output",
     });
+  });
+
+  it("returns background images as tool result content", async () => {
+    const onGetBackgroundResult = vi.fn().mockResolvedValue({
+      text: "Generated two images",
+      images: [
+        { data: "YWJjZA==", mimeType: "image/png" },
+        { data: "RUZH", mimeType: "image/webp" },
+      ],
+    });
+
+    const result = await dispatchToolCall(
+      "get_background_result",
+      { sessionId: "bg-images" },
+      { ...mockCtx, onGetBackgroundResult },
+    );
+
+    expect(onGetBackgroundResult).toHaveBeenCalledWith(
+      "test-session",
+      "bg-images",
+    );
+    expect(result.content).toEqual([
+      { type: "text", text: "Generated two images" },
+      { type: "image", data: "YWJjZA==", mimeType: "image/png" },
+      { type: "image", data: "RUZH", mimeType: "image/webp" },
+    ]);
+  });
+
+  it("preserves structured background terminal failure payloads", async () => {
+    const failure = JSON.stringify({
+      status: "failed",
+      terminalReason: "provider disconnected",
+      retrySafe: true,
+      agentRetryable: true,
+      partialOutput: "partial findings",
+    });
+    const backgroundAgentProvider = {
+      spawn: vi.fn(),
+      getStatus: vi.fn(),
+      getResult: vi.fn().mockResolvedValue(failure),
+      kill: vi.fn(),
+    };
+
+    const result = await dispatchToolCall(
+      "get_background_result",
+      { sessionId: "bg-failed" },
+      { ...mockCtx, backgroundAgentProvider },
+    );
+
+    expect(result.content[0]).toEqual({ type: "text", text: failure });
   });
 
   it("dispatches kill_background_agent to onKillBackground callback", async () => {
@@ -1307,8 +1499,10 @@ describe("dispatchToolCall", () => {
 
   it("dispatches sibling-root mutations with workspace-wide checkpoint preparation", async () => {
     const { handleWriteFile } = await import("../tools/writeFile.js");
+    const { handleGenerateImage } = await import("../tools/generateImage.js");
     const { handleExecuteCommand } = await import("../tools/executeCommand.js");
     vi.mocked(handleWriteFile).mockClear();
+    vi.mocked(handleGenerateImage).mockClear();
     vi.mocked(handleExecuteCommand).mockClear();
     const prepareWorkspaceMutation = vi.fn().mockResolvedValue(undefined);
     const runtime = createAgentToolRuntime({
@@ -1327,13 +1521,22 @@ describe("dispatchToolCall", () => {
       context: { sessionId: "session-a", mode: "code" },
     });
     await runtime.executeTool({
+      name: "generate_image",
+      input: {
+        prompt: "Generate a test image",
+        output_path: "/workspace/project-b/media/output.png",
+      },
+      context: { sessionId: "session-a", mode: "code" },
+    });
+    await runtime.executeTool({
       name: "execute_command",
       input: { command: "touch output.txt", cwd: "/workspace/project-b" },
       context: { sessionId: "session-a", mode: "code" },
     });
 
-    expect(prepareWorkspaceMutation).toHaveBeenCalledTimes(2);
+    expect(prepareWorkspaceMutation).toHaveBeenCalledTimes(3);
     expect(handleWriteFile).toHaveBeenCalledTimes(1);
+    expect(handleGenerateImage).toHaveBeenCalledTimes(1);
     expect(handleExecuteCommand).toHaveBeenCalledTimes(1);
   });
 
@@ -2148,6 +2351,38 @@ describe("dispatchToolCall", () => {
     );
   });
 
+  it("dispatches apply_diff block options unchanged", async () => {
+    const { handleApplyDiff } = await import("../tools/applyDiff.js");
+    const params = {
+      path: "foo.ts",
+      diff: "diff",
+      block_options: [
+        { index: 0, occurrence: 2 },
+        { index: 1, replace_all: true },
+      ],
+    };
+
+    await dispatchToolCall("apply_diff", params, mockCtx);
+
+    expect(handleApplyDiff).toHaveBeenCalledWith(
+      params,
+      mockCtx.approvalManager,
+      mockCtx.approvalPanel,
+      mockCtx.sessionId,
+      mockCtx.onApprovalRequest,
+      mockCtx.mode,
+      expect.objectContaining({
+        editReviewProvider: expect.objectContaining({
+          reviewAndApply: expect.any(Function),
+        }),
+        writeApprovalPolicyProvider: expect.objectContaining({
+          canAutoApprove: expect.any(Function),
+          recordDecision: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
   it("dispatches open_file with editor reveal providers", async () => {
     const { handleOpenFile } = await import("../tools/openFile.js");
     const editorRevealProvider = {
@@ -2245,6 +2480,15 @@ describe("dispatchToolCall", () => {
     );
     expect(handleGetTerminalOutput).toHaveBeenCalledWith(
       { terminal_id: "t1" },
+      { terminalProvider: mockCtx.terminalProvider },
+    );
+  });
+
+  it("dispatches close_terminals with a terminal provider", async () => {
+    const { handleCloseTerminals } = await import("../tools/closeTerminals.js");
+    await dispatchToolCall("close_terminals", { names: ["Server"] }, mockCtx);
+    expect(handleCloseTerminals).toHaveBeenCalledWith(
+      { names: ["Server"] },
       { terminalProvider: mockCtx.terminalProvider },
     );
   });

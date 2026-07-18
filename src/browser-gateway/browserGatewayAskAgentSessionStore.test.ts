@@ -224,6 +224,56 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     );
   });
 
+  it("keeps read_file images scoped to the tool result", () => {
+    const store = createStore();
+    const credentialStatus: BrowserGatewayModelCredentialStatus = {
+      state: "ready",
+      providerId: "openai-codex",
+      method: "oauth",
+      modelScopes: ["chat"],
+      grantedByOwnerId: "vscode-owner",
+      grantedAt: 100,
+    };
+
+    const assistant = store.startAssistantMessage({ now: 100 });
+    store.startAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "read-image-live",
+      toolName: "read_file",
+      input: { path: "Captures/layout-check.png" },
+    });
+    store.completeAssistantToolCall({
+      messageId: assistant.id,
+      toolCallId: "read-image-live",
+      toolName: "read_file",
+      input: { path: "Captures/layout-check.png" },
+      result: "[image]",
+      resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      durationMs: 42,
+    });
+
+    const response = store.getOrCreate({
+      now: 200,
+      theme,
+      modelCredentialStatus: credentialStatus,
+    });
+    const assistantMessage =
+      response.snapshot.session.foreground.projectedMessages.find(
+        (message) => message.id === assistant.id,
+      );
+
+    expect(assistantMessage?.displayMedia).toBeUndefined();
+    expect(assistantMessage?.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          id: "read-image-live",
+          resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+        }),
+      ]),
+    );
+  });
+
   it("marks assistant model failures with structured error metadata", () => {
     const store = createStore();
     const credentialStatus: BrowserGatewayModelCredentialStatus = {

@@ -1,13 +1,13 @@
-import { describe, it, expect } from "vitest";
 import {
+  applyBlocks,
+  isUnifiedDiff,
+  normalizeForComparison,
   parseSearchReplaceBlocks,
   parseUnifiedDiff,
-  isUnifiedDiff,
-  applyBlocks,
-  normalizeForComparison,
-  tryFlexibleMatch,
   tryEscapeNormalizedMatch,
+  tryFlexibleMatch,
 } from "./applyDiff.js";
+import { describe, expect, it } from "vitest";
 
 // Helper to build a diff string with the new delimiter format
 function diff(...blocks: Array<{ search: string; replace: string }>): string {
@@ -193,12 +193,30 @@ describe("applyBlocks", () => {
     expect(failedBlocks).toEqual([0]);
   });
 
-  it("reports failed block when search is ambiguous (multiple matches)", () => {
-    const { result, failedBlocks } = applyBlocks("aa bb aa", [
-      { search: "aa", replace: "cc", index: 0 },
+  it("reports bounded line and snippet locations for ambiguous matches", () => {
+    const content = Array.from({ length: 14 }, (_, index) =>
+      index === 4 ? "different" : `prefix ${index}\ntarget`,
+    ).join("\n");
+    const { result, failedBlocks, blockResults } = applyBlocks(content, [
+      { search: "target", replace: "replacement", index: 0 },
     ]);
-    expect(result).toBe("aa bb aa");
+
+    expect(result).toBe(content);
     expect(failedBlocks).toEqual([0]);
+    expect(blockResults[0]).toMatchObject({
+      status: "failed",
+      reason: "ambiguous_exact",
+      exactOccurrences: 13,
+      candidateLocationsOmitted: 1,
+    });
+    if (blockResults[0]?.status === "failed") {
+      expect(blockResults[0].candidateLocations).toHaveLength(12);
+      expect(blockResults[0].candidateLocations?.[0]).toMatchObject({
+        startLine: 2,
+        endLine: 2,
+        snippet: "target",
+      });
+    }
   });
 
   it("handles empty search string (always fails)", () => {
@@ -216,7 +234,21 @@ describe("applyBlocks", () => {
     expect(result).toBe("hi world");
     expect(failedBlocks).toEqual([1]);
     expect(blockResults).toEqual([
-      { index: 0, status: "applied", matchType: "exact" },
+      {
+        index: 0,
+        status: "applied",
+        matchType: "exact",
+        selection: "unique",
+        replacementCount: 1,
+        postEditSpans: [
+          {
+            start: 0,
+            end: 2,
+            valid: true,
+            range: { startLine: 1, endLine: 1 },
+          },
+        ],
+      },
       {
         index: 1,
         status: "failed",
@@ -224,6 +256,185 @@ describe("applyBlocks", () => {
         exactOccurrences: 0,
       },
     ]);
+  });
+
+  it("drops ambiguous candidates overwritten by a later applied block", () => {
+    const { result, blockResults } = applyBlocks("target one\ntarget two", [
+      { search: "target", replace: "replacement", index: 0 },
+      { search: "target one", replace: "changed one", index: 1 },
+    ]);
+
+    expect(result).toBe("changed one\ntarget two");
+    expect(blockResults[0]).toMatchObject({
+      status: "failed",
+      reason: "ambiguous_exact",
+      candidateLocations: [
+        expect.objectContaining({
+          startLine: 2,
+          endLine: 2,
+          snippet: "target two",
+        }),
+      ],
+    });
+  });
+
+  it("omits an applied range overwritten by a later applied block", () => {
+    const { result, blockResults } = applyBlocks("target one", [
+      { search: "target", replace: "updated", index: 0 },
+      { search: "updated one", replace: "final", index: 1 },
+    ]);
+
+    expect(result).toBe("final");
+    expect(blockResults).toMatchObject([
+      {
+        index: 0,
+        status: "applied",
+        postEditSpans: [expect.objectContaining({ valid: false })],
+      },
+      {
+        index: 1,
+        status: "applied",
+        postEditSpans: [
+          expect.objectContaining({
+            valid: true,
+            range: { startLine: 1, endLine: 1 },
+          }),
+        ],
+      },
+    ]);
+  });
+
+  it("reports applied ranges in the final content after later shifts", () => {
+    const { result, blockResults } = applyBlocks("first\nsecond", [
+      { search: "second", replace: "updated", index: 0 },
+      { search: "first", replace: "header\nfirst", index: 1 },
+    ]);
+
+    expect(result).toBe("header\nfirst\nupdated");
+    expect(blockResults).toMatchObject([
+      {
+        index: 0,
+        postEditSpans: [
+          expect.objectContaining({ range: { startLine: 3, endLine: 3 } }),
+        ],
+      },
+      {
+        index: 1,
+        postEditSpans: [
+          expect.objectContaining({ range: { startLine: 1, endLine: 2 } }),
+        ],
+      },
+    ]);
+  });
+
+  it("selects a 1-based exact occurrence without weakening other blocks", () => {
+    const { result, failedBlocks, blockResults } = applyBlocks(
+      "target one\ntarget two\ntarget three",
+      [{ search: "target", replace: "selected", index: 0 }],
+      new Map([[0, { index: 0, occurrence: 2 }]]),
+    );
+
+    expect(result).toBe("target one\nselected two\ntarget three");
+    expect(failedBlocks).toEqual([]);
+    expect(blockResults[0]).toMatchObject({
+      status: "applied",
+      selection: "occurrence",
+      selectedOccurrence: 2,
+      replacementCount: 1,
+      postEditSpans: [
+        expect.objectContaining({ range: { startLine: 2, endLine: 2 } }),
+      ],
+    });
+  });
+
+  it("replaces every exact occurrence when explicitly requested", () => {
+    const { result, failedBlocks, blockResults } = applyBlocks(
+      "target one\ntarget two\ntarget three",
+      [{ search: "target", replace: "all", index: 0 }],
+      new Map([[0, { index: 0, replace_all: true }]]),
+    );
+
+    expect(result).toBe("all one\nall two\nall three");
+    expect(failedBlocks).toEqual([]);
+    expect(blockResults[0]).toMatchObject({
+      status: "applied",
+      selection: "replace_all",
+      replacementCount: 3,
+    });
+    if (blockResults[0]?.status === "applied") {
+      expect(
+        blockResults[0].postEditSpans.map((span) => span.range?.startLine),
+      ).toEqual([3, 2, 1]);
+    }
+  });
+
+  it("tracks expanding replace-all ranges in final file order", () => {
+    const { result, blockResults } = applyBlocks(
+      "x\nx\nx",
+      [{ search: "x", replace: "expanded", index: 0 }],
+      new Map([[0, { index: 0, replace_all: true }]]),
+    );
+
+    expect(result).toBe("expanded\nexpanded\nexpanded");
+    if (blockResults[0]?.status === "applied") {
+      expect(
+        blockResults[0].postEditSpans
+          .map((span) => span.range?.startLine)
+          .sort((left, right) => (left ?? 0) - (right ?? 0)),
+      ).toEqual([1, 2, 3]);
+    }
+  });
+
+  it("selects whitespace-flexible occurrences in file order", () => {
+    const { result, failedBlocks, blockResults } = applyBlocks(
+      "\treturn 1;\n  return 1;",
+      [{ search: "    return 1;", replace: "    return 2;", index: 0 }],
+      new Map([[0, { index: 0, occurrence: 2 }]]),
+    );
+
+    expect(result).toBe("\treturn 1;\n    return 2;");
+    expect(failedBlocks).toEqual([]);
+    expect(blockResults[0]).toMatchObject({
+      matchType: "flexible",
+      selection: "occurrence",
+      selectedOccurrence: 2,
+    });
+  });
+
+  it("counts exact occurrences before flexible candidates", () => {
+    const { result, failedBlocks, blockResults } = applyBlocks(
+      "    return 1;\n\treturn 1;",
+      [{ search: "    return 1;", replace: "    return 2;", index: 0 }],
+      new Map([[0, { index: 0, occurrence: 2 }]]),
+    );
+
+    expect(result).toBe("    return 1;\n\treturn 1;");
+    expect(failedBlocks).toEqual([0]);
+    expect(blockResults[0]).toMatchObject({
+      status: "failed",
+      reason: "occurrence_out_of_range",
+      availableOccurrences: 1,
+    });
+  });
+
+  it("reports an out-of-range occurrence with available candidates", () => {
+    const { result, failedBlocks, blockResults } = applyBlocks(
+      "target one\ntarget two",
+      [{ search: "target", replace: "selected", index: 0 }],
+      new Map([[0, { index: 0, occurrence: 3 }]]),
+    );
+
+    expect(result).toBe("target one\ntarget two");
+    expect(failedBlocks).toEqual([0]);
+    expect(blockResults[0]).toMatchObject({
+      status: "failed",
+      reason: "occurrence_out_of_range",
+      availableOccurrences: 2,
+      candidateLocations: [
+        expect.objectContaining({ startLine: 1 }),
+        expect.objectContaining({ startLine: 2 }),
+      ],
+    });
   });
 
   it("handles multi-line content", () => {
@@ -244,7 +455,21 @@ describe("applyBlocks", () => {
     expect(result).toBe("function foo() {\n    return 42;\n}");
     expect(failedBlocks).toEqual([]);
     expect(blockResults).toEqual([
-      { index: 0, status: "applied", matchType: "flexible" },
+      {
+        index: 0,
+        status: "applied",
+        matchType: "flexible",
+        selection: "unique",
+        replacementCount: 1,
+        postEditSpans: [
+          {
+            start: 17,
+            end: 31,
+            valid: true,
+            range: { startLine: 2, endLine: 2 },
+          },
+        ],
+      },
     ]);
   });
 
@@ -653,6 +878,68 @@ describe("applyBlocks — escape-normalized fallback", () => {
     ]);
     expect(result).toBe('cols = "X\\tY\\tZ"');
     expect(failedBlocks).toEqual([]);
+  });
+
+  it("selects an escape-normalized occurrence with its matching escape style", () => {
+    const content = "Hello\\nWorld and Hello\\nWorld";
+    const { result, failedBlocks, blockResults } = applyBlocks(
+      content,
+      [
+        {
+          search: "Hello\nWorld",
+          replace: "Goodbye\nWorld",
+          index: 0,
+        },
+      ],
+      new Map([[0, { index: 0, occurrence: 2 }]]),
+    );
+
+    expect(result).toBe("Hello\\nWorld and Goodbye\\nWorld");
+    expect(failedBlocks).toEqual([]);
+    expect(blockResults[0]).toMatchObject({
+      matchType: "escape_normalized",
+      selection: "occurrence",
+      selectedOccurrence: 2,
+    });
+  });
+
+  it("selects across unique and ambiguous escape variants in file order", () => {
+    const content = "Hello\\nWorld | Hello\\\\nWorld | Hello\\\\nWorld";
+    const { result, failedBlocks, blockResults } = applyBlocks(
+      content,
+      [
+        {
+          search: "Hello\nWorld",
+          replace: "Goodbye\nWorld",
+          index: 0,
+        },
+      ],
+      new Map([[0, { index: 0, occurrence: 2 }]]),
+    );
+
+    expect(result).toBe("Hello\\nWorld | Goodbye\\\\nWorld | Hello\\\\nWorld");
+    expect(failedBlocks).toEqual([]);
+    expect(blockResults[0]).toMatchObject({
+      matchType: "escape_normalized",
+      selection: "occurrence",
+      selectedOccurrence: 2,
+    });
+  });
+
+  it("keeps replace_all exact-only", () => {
+    const content = "Hello\\nWorld and Hello\\nWorld";
+    const { result, failedBlocks, blockResults } = applyBlocks(
+      content,
+      [{ search: "Hello\nWorld", replace: "Goodbye\nWorld", index: 0 }],
+      new Map([[0, { index: 0, replace_all: true }]]),
+    );
+
+    expect(result).toBe(content);
+    expect(failedBlocks).toEqual([0]);
+    expect(blockResults[0]).toMatchObject({
+      status: "failed",
+      reason: "not_found",
+    });
   });
 
   it("prefers exact match over escape-normalized match", () => {

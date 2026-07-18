@@ -90,11 +90,11 @@ const ALLOWLIST: Record<string, InventoryEntry> = {
       "Direct callers retain the legacy fallback; agent runtime project proposals resolve through the request-bound project root.",
   },
   "src/tools/readFile.ts": {
-    counts: { tryGetFirstWorkspaceRoot: 3 },
+    counts: { tryGetFirstWorkspaceRoot: 2 },
     classification: "compatibility_only",
     ownerSlices: ["G"],
     rationale:
-      "Direct callers retain legacy path suggestions; agent runtime reads execute inside the request-bound project scope.",
+      "Direct callers retain legacy error-path context; path suggestions now search every request-bound workspace root.",
   },
   "src/util/paths.ts": {
     counts: {
@@ -134,7 +134,7 @@ describe("project scope first-root source contract", () => {
     );
 
     expect(Object.keys(ALLOWLIST)).toHaveLength(9);
-    expect(counts.reduce((total, count) => total + count, 0)).toBe(24);
+    expect(counts.reduce((total, count) => total + count, 0)).toBe(23);
   });
 });
 

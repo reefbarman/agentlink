@@ -32,7 +32,7 @@ import {
 } from "./OpenAiCodexAuthManager.js";
 import {
   CODEX_CONDENSE_MODEL,
-  getCodexPreviewModelFallback,
+  getCodexUnavailableModelFallback,
   getCodexModelCapabilities,
   getEndpointCaps,
   isCodexModelServedOnChatgptBackend,
@@ -268,7 +268,7 @@ export class CodexProvider implements ModelProvider {
 
     const attemptedOAuthAccountIds = new Set<string>();
     const refreshedOAuthAccountIds = new Set<string>();
-    let previewFallbackAttempted = false;
+    let unavailableModelFallbackAttempted = false;
     if (auth.method === "oauth" && auth.oauthAccountPoolId) {
       attemptedOAuthAccountIds.add(auth.oauthAccountPoolId);
     }
@@ -312,23 +312,24 @@ export class CodexProvider implements ModelProvider {
       } catch (err) {
         const sdkErr = toCodexRequestError(err);
 
-        const previewFallback = getCodexPreviewModelFallback(effectiveModel);
+        const unavailableModelFallback =
+          getCodexUnavailableModelFallback(effectiveModel);
         if (
-          !previewFallbackAttempted &&
+          !unavailableModelFallbackAttempted &&
           !streamState.outputStarted &&
-          previewFallback &&
+          unavailableModelFallback &&
           isCodexModelNotFoundError(sdkErr)
         ) {
-          previewFallbackAttempted = true;
+          unavailableModelFallbackAttempted = true;
           this.log(
-            `[codex] stream(): preview model "${effectiveModel}" is unavailable; retrying with "${previewFallback}"`,
+            `[codex] stream(): model "${effectiveModel}" is unavailable; retrying with "${unavailableModelFallback}"`,
           );
           yield {
             type: "model_fallback",
             requestedModel: effectiveModel,
-            effectiveModel: previewFallback,
+            effectiveModel: unavailableModelFallback,
           };
-          effectiveModel = previewFallback;
+          effectiveModel = unavailableModelFallback;
           reasoningEffort = resolveCodexReasoningEffort({
             modelId: effectiveModel,
             requestedEffort,
@@ -422,7 +423,7 @@ export class CodexProvider implements ModelProvider {
 
     const attemptedOAuthAccountIds = new Set<string>();
     const refreshedOAuthAccountIds = new Set<string>();
-    let previewFallbackAttempted = false;
+    let unavailableModelFallbackAttempted = false;
     if (auth.method === "oauth" && auth.oauthAccountPoolId) {
       attemptedOAuthAccountIds.add(auth.oauthAccountPoolId);
     }
@@ -464,17 +465,18 @@ export class CodexProvider implements ModelProvider {
           `[codex] complete() error: status=${sdkErr.status ?? "none"} message=${sdkErr.message} rawCode=${sdkErr.rawCode ?? "none"} body=${JSON.stringify(sdkErr.body ?? null)}`,
         );
 
-        const previewFallback = getCodexPreviewModelFallback(effectiveModel);
+        const unavailableModelFallback =
+          getCodexUnavailableModelFallback(effectiveModel);
         if (
-          !previewFallbackAttempted &&
-          previewFallback &&
+          !unavailableModelFallbackAttempted &&
+          unavailableModelFallback &&
           isCodexModelNotFoundError(sdkErr)
         ) {
-          previewFallbackAttempted = true;
+          unavailableModelFallbackAttempted = true;
           this.log(
-            `[codex] complete(): preview model "${effectiveModel}" is unavailable; retrying with "${previewFallback}"`,
+            `[codex] complete(): model "${effectiveModel}" is unavailable; retrying with "${unavailableModelFallback}"`,
           );
-          effectiveModel = previewFallback;
+          effectiveModel = unavailableModelFallback;
           reasoningEffort = resolveCodexReasoningEffort({
             modelId: effectiveModel,
             requestedEffort,

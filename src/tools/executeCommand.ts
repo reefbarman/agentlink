@@ -93,6 +93,7 @@ function unavailableExecuteCommandResult(command: string): ToolResult {
           error:
             "Command execution is unavailable in this runtime. Provide a TerminalProvider to enable execute_command.",
           command,
+          command_sent: false,
         }),
       },
     ],
@@ -131,7 +132,10 @@ export async function handleExecuteCommand(
         content: [
           {
             type: "text",
-            text: JSON.stringify({ error: "Command cannot be empty" }),
+            text: JSON.stringify({
+              error: "Command cannot be empty",
+              command_sent: false,
+            }),
           },
         ],
       };
@@ -241,6 +245,7 @@ export async function handleExecuteCommand(
                 }),
                 reason: protectedWriteViolation.message,
                 protected_path: protectedWriteViolation.protectedPath,
+                command_sent: false,
               }),
             },
           ],
@@ -278,6 +283,7 @@ export async function handleExecuteCommand(
                     command_template: params.command,
                   }),
                   reason,
+                  command_sent: false,
                 }),
               },
             ],
@@ -299,6 +305,7 @@ export async function handleExecuteCommand(
                   command_template: params.command,
                 }),
                 reason: interactiveViolation.message,
+                command_sent: false,
               }),
             },
           ],
@@ -347,6 +354,7 @@ export async function handleExecuteCommand(
                     ...(approvalResult.reason && {
                       reason: approvalResult.reason,
                     }),
+                    command_sent: false,
                   }),
                 },
               ],
@@ -555,6 +563,7 @@ function cancelledCommandResult(command: string): ToolResult {
           status: "cancelled",
           command,
           reason: "Command approval was cancelled before execution",
+          command_sent: false,
         }),
       },
     ],
@@ -566,7 +575,12 @@ function rejectedCommandResult(command: string, reason: string): ToolResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify({ status: "rejected", command, reason }),
+        text: JSON.stringify({
+          status: "rejected",
+          command,
+          reason,
+          command_sent: false,
+        }),
       },
     ],
   };
@@ -610,6 +624,7 @@ function malformedCommandResult(
             original_command: extra.originalCommand,
           }),
           reason,
+          command_sent: false,
         }),
       },
     ],
@@ -870,6 +885,7 @@ function validateCommandBeforeExecution(
             ...(originalCommand && { original_command: originalCommand }),
             reason: protectedWriteViolation.message,
             protected_path: protectedWriteViolation.protectedPath,
+            command_sent: false,
           }),
         },
       ],
@@ -887,6 +903,7 @@ function validateCommandBeforeExecution(
             command,
             ...(originalCommand && { original_command: originalCommand }),
             reason: commandViolation.message,
+            command_sent: false,
           }),
         },
       ],
@@ -904,6 +921,7 @@ function validateCommandBeforeExecution(
             command,
             ...(originalCommand && { original_command: originalCommand }),
             reason: interactiveViolation.message,
+            command_sent: false,
           }),
         },
       ],

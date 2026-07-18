@@ -131,8 +131,8 @@ export function remapToChatgptBackendModel(modelId: string): string {
   return CODEX_DEFAULT_MODEL;
 }
 
-/** Stable equivalents used when a limited-preview GPT-5.6 model is unavailable. */
-export function getCodexPreviewModelFallback(
+/** Older equivalents used when a GPT-5.6 model is unavailable to the account. */
+export function getCodexUnavailableModelFallback(
   modelId: string,
 ): string | undefined {
   switch (modelId) {
@@ -202,7 +202,7 @@ const CODEX_OAUTH_GPT_5_6_CONTEXT_TOKENS =
 export const CODEX_MODELS: CodexModelDef[] = [
   {
     id: "gpt-5.6-sol",
-    displayName: "GPT-5.6 Sol (Preview)",
+    displayName: "GPT-5.6 Sol",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -212,7 +212,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
   },
   {
     id: "gpt-5.6-terra",
-    displayName: "GPT-5.6 Terra (Preview)",
+    displayName: "GPT-5.6 Terra",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,
@@ -222,7 +222,7 @@ export const CODEX_MODELS: CodexModelDef[] = [
   },
   {
     id: "gpt-5.6-luna",
-    displayName: "GPT-5.6 Luna (Preview)",
+    displayName: "GPT-5.6 Luna",
     contextWindow: CODEX_1M_CONTEXT_TOKENS,
     maxOutputTokens: 128_000,
     supportsImages: true,

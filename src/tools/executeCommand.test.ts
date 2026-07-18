@@ -84,6 +84,7 @@ describe("handleExecuteCommand", () => {
       output: "ok",
       output_captured: true,
       terminal_id: "term_1",
+      command_sent: true,
     });
   });
 
@@ -112,6 +113,7 @@ describe("handleExecuteCommand", () => {
       error:
         "Command execution is unavailable in this runtime. Provide a TerminalProvider to enable execute_command.",
       command: "go test ./...",
+      command_sent: false,
     });
   });
 
@@ -135,7 +137,10 @@ describe("handleExecuteCommand", () => {
       { terminalProvider },
     );
 
-    expect(textPayload(result)).toMatchObject({ exit_code: 0 });
+    expect(textPayload(result)).toMatchObject({
+      exit_code: 0,
+      command_sent: true,
+    });
     expect(executeCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         command: "touch output.txt",
@@ -416,6 +421,7 @@ describe("handleExecuteCommand", () => {
       status: "rejected",
       command,
       reason: expect.stringContaining("malformed shell syntax"),
+      command_sent: false,
     });
   });
 
@@ -533,6 +539,54 @@ describe("handleExecuteCommand", () => {
     expect(payload.status).toBe("rejected");
     expect(payload.reason).toContain("protected instructions or memory");
     expect(payload.reason).toContain("force=true cannot bypass");
+    expect(payload.command_sent).toBe(false);
+  });
+
+  it("reports pipe-validator rejection before terminal dispatch", async () => {
+    validateCommand.mockReturnValueOnce({
+      type: "pipe",
+      message: "Use output_grep instead",
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "npm test | grep failed" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-pipe-rejected",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      reason: "Use output_grep instead",
+      command_sent: false,
+    });
+  });
+
+  it("reports interactive-validator rejection before terminal dispatch", async () => {
+    validateInteractiveCommand.mockReturnValueOnce({
+      message: "Command rejected: interactive shell",
+    });
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "bash" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-interactive-rejected",
+      undefined,
+      { terminalProvider },
+    );
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      reason: "Command rejected: interactive shell",
+      command_sent: false,
+    });
   });
 
   it("auto-approves safe commands when the safe threshold is enabled", async () => {
@@ -957,6 +1011,7 @@ describe("handleExecuteCommand", () => {
       status: "cancelled",
       command: "mkdir generated",
       reason: "Command approval was cancelled before execution",
+      command_sent: false,
     });
     expect(terminalProvider.executeCommand).not.toHaveBeenCalled();
   });
@@ -1371,6 +1426,7 @@ describe("handleExecuteCommand", () => {
       command: `echo "unterminated`,
       original_command: "echo ok",
       reason: expect.stringContaining("malformed shell syntax"),
+      command_sent: false,
     });
   });
 
@@ -1413,6 +1469,7 @@ describe("handleExecuteCommand", () => {
     expect(payload.command).toBe("echo remember >> .agentlink/memory.md");
     expect(payload.original_command).toBe("echo ok");
     expect(payload.reason).toContain("protected instructions or memory");
+    expect(payload.command_sent).toBe(false);
   });
 
   it("rejects pipe validation violations introduced by approval command edits", async () => {
@@ -1457,6 +1514,7 @@ describe("handleExecuteCommand", () => {
     expect(payload.command).toBe("npm test | grep failed");
     expect(payload.original_command).toBe("npm test");
     expect(payload.reason).toBe("Use output_grep instead");
+    expect(payload.command_sent).toBe(false);
   });
 
   describe("read-only execution policy", () => {
@@ -1642,6 +1700,7 @@ describe("handleExecuteCommand", () => {
         expect(textPayload(result)).toMatchObject({
           status: "rejected",
           reason: expect.stringContaining(reason),
+          command_sent: false,
         });
       },
     );

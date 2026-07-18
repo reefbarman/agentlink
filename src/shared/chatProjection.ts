@@ -820,7 +820,9 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         toolResults,
       );
       const finalMarkerToolId = finalMarker?.toolCall?.id;
-      const messageResultImages: Array<{ mimeType: string; data: string }> = [];
+      const messageGeneratedImages: Array<{ mimeType: string; data: string }> =
+        [];
+      const messageDirectImages: Array<{ mimeType: string; data: string }> = [];
       for (const block of contentArr as Array<{
         type: string;
         text?: string;
@@ -830,6 +832,11 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
         name?: string;
         input?: unknown;
         thinking?: string;
+        source?: {
+          type?: string;
+          media_type?: string;
+          data?: string;
+        };
       }>) {
         if (block.type === "text" && block.text) {
           if (block.text.includes("<system-reminder>")) {
@@ -883,12 +890,24 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
             text: block.thinking,
             complete: true,
           });
+        } else if (
+          block.type === "image" &&
+          block.source?.type === "base64" &&
+          typeof block.source.media_type === "string" &&
+          typeof block.source.data === "string"
+        ) {
+          messageDirectImages.push({
+            mimeType: block.source.media_type,
+            data: block.source.data,
+          });
         } else if (block.type === "tool_use") {
           const toolId = block.id ?? randomId();
           const toolName = normalizeProjectedToolName(block.name ?? "");
           const toolResult = toolResults.get(toolId) ?? "";
           const resultImages = toolResultImages.get(toolId);
-          if (resultImages) messageResultImages.push(...resultImages);
+          if (toolName === "generate_image" && resultImages) {
+            messageGeneratedImages.push(...resultImages);
+          }
           const resultImageProps = resultImages ? { resultImages } : {};
           const inputJson = JSON.stringify(block.input ?? {});
           if (toolName === "set_task_status" && toolId === finalMarkerToolId) {
@@ -1086,9 +1105,15 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
                 ),
             )
           : blocks;
-      if (visibleBlocks.length > 0 || hasRuntimeError || finalMarker) {
+      const displayImages = [...messageDirectImages, ...messageGeneratedImages];
+      if (
+        visibleBlocks.length > 0 ||
+        displayImages.length > 0 ||
+        hasRuntimeError ||
+        finalMarker
+      ) {
         const generatedDisplayMedia =
-          generatedImagesToDisplayMedia(messageResultImages);
+          generatedImagesToDisplayMedia(displayImages);
         result.push({
           id: randomId(),
           role: "assistant",
@@ -1727,10 +1752,13 @@ export function reducer(state: AppState, action: AppAction): AppState {
         return b;
       });
       msgs[targetIdx] = target;
-      const generatedDisplayMedia = generatedImagesToDisplayMedia(
-        action.resultImages,
-        target.displayMedia?.images.length ?? 0,
-      );
+      const generatedDisplayMedia =
+        action.toolName === "generate_image"
+          ? generatedImagesToDisplayMedia(
+              action.resultImages,
+              target.displayMedia?.images.length ?? 0,
+            )
+          : undefined;
       if (generatedDisplayMedia) {
         target.displayMedia = {
           images: [

@@ -1247,7 +1247,7 @@ export function activate(context: vscode.ExtensionContext): void {
         sessionId,
       ),
     onGetBackgroundResult: (callerSessionId, sessionId) =>
-      agentSessionManager.waitForAuthorizedBackground(
+      agentSessionManager.waitForAuthorizedBackgroundContent(
         callerSessionId,
         sessionId,
       ),

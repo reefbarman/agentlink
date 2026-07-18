@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import {
   DiffViewProvider,
   createFormatOnSaveReport,
+  diagnoseEditSaveFailure,
   snapshotDiagnostics,
 } from "../../integrations/DiffViewProvider.js";
 import type {
@@ -45,6 +46,32 @@ import { getRelativePath } from "../../util/paths.js";
 import { resolveAndValidatePath } from "../../util/paths.js";
 import { withFileLock } from "../../util/fileLock.js";
 import { withPrimaryEditorColumn } from "../../util/editorPlacement.js";
+import { errorResult, type ToolResult } from "../../shared/types.js";
+
+function renameFailureResult(params: {
+  error: string;
+  reason?: string;
+  path: string;
+  line: number;
+  column: number;
+  oldName: string;
+  newName: string;
+  languageId?: string;
+}): ToolResult {
+  return errorResult(params.error, {
+    ...(params.reason ? { reason: params.reason } : {}),
+    path: params.path,
+    line: params.line,
+    column: params.column,
+    old_name: params.oldName,
+    new_name: params.newName,
+    ...(params.languageId ? { language_id: params.languageId } : {}),
+    next_steps: [
+      "Verify that line and column point to the intended symbol; both are 1-indexed.",
+      "If the position is correct, inspect the symbol with get_hover or go_to_definition. When the language service cannot rename this element, use get_references and reviewed edits as a fallback.",
+    ],
+  });
+}
 
 export function createVscodeEditorRevealProvider(): EditorRevealProvider {
   return {
@@ -134,16 +161,16 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             await fs.writeFile(params.absolutePath, "", "utf-8");
           }
 
+          let baselineContent = "";
+          try {
+            baselineContent = await fs.readFile(params.absolutePath, "utf-8");
+          } catch {
+            // Missing files are represented as empty content after the
+            // allowCreate branch above, matching the write_file behavior.
+          }
           let content = params.content;
           if (params.prepareContent) {
-            let currentContent = "";
-            try {
-              currentContent = await fs.readFile(params.absolutePath, "utf-8");
-            } catch {
-              // Missing files are represented as empty content after the
-              // allowCreate branch above, matching the write_file behavior.
-            }
-            const prepared = await params.prepareContent(currentContent);
+            const prepared = await params.prepareContent(baselineContent);
             if (prepared.status === "abort") {
               return prepared.result;
             }
@@ -187,6 +214,12 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
                 error: "File save failed",
                 path: params.relativePath,
                 reason: "save_failed",
+                ...(await diagnoseEditSaveFailure({
+                  absolutePath: params.absolutePath,
+                  baselineContent,
+                  documentDirty: doc.isDirty,
+                  reviewState: "dirty_document_preserved",
+                })),
               };
             }
           }
@@ -199,6 +232,7 @@ export function createVscodeEditReviewProvider(): EditReviewProvider {
             status: "accepted",
             path: params.relativePath,
             operation: params.operation ?? "auto-approved",
+            finalContent,
           };
           const formatOnSaveReport = createFormatOnSaveReport(
             params.relativePath,
@@ -560,42 +594,57 @@ export function createVscodeRenameSymbolProvider(
         oldName = before + after || `symbol at ${params.line}:${params.column}`;
       }
 
-      const edit = await vscode.commands.executeCommand<vscode.WorkspaceEdit>(
-        "vscode.executeDocumentRenameProvider",
-        uri,
-        position,
-        params.newName,
-      );
+      let edit: vscode.WorkspaceEdit | undefined;
+      try {
+        edit = await vscode.commands.executeCommand<vscode.WorkspaceEdit>(
+          "vscode.executeDocumentRenameProvider",
+          uri,
+          position,
+          params.newName,
+        );
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return renameFailureResult({
+          error: `Rename request was rejected by the ${document.languageId || "active"} language service`,
+          reason,
+          path: relPath,
+          line: params.line,
+          column: params.column,
+          oldName,
+          newName: params.newName,
+          languageId: document.languageId,
+        });
+      }
 
       if (!edit) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error: "Symbol at this position cannot be renamed",
-                path: relPath,
-                line: params.line,
-                column: params.column,
-              }),
-            },
-          ],
-        };
+        return renameFailureResult({
+          error: `The ${document.languageId || "active"} language service returned no rename edits`,
+          reason:
+            "The selected element may not support language-aware rename at this position.",
+          path: relPath,
+          line: params.line,
+          column: params.column,
+          oldName,
+          newName: params.newName,
+          languageId: document.languageId,
+        });
       }
 
       const entries = edit.entries();
       if (entries.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error: "Rename produced no changes",
-                path: relPath,
-              }),
-            },
-          ],
-        };
+        return renameFailureResult({
+          error: "Rename produced no changes",
+          reason:
+            oldName === params.newName
+              ? "The requested name is the same as the current symbol name."
+              : "The language service accepted the request but returned an empty workspace edit.",
+          path: relPath,
+          line: params.line,
+          column: params.column,
+          oldName,
+          newName: params.newName,
+          languageId: document.languageId,
+        });
       }
 
       const filesPreview: Array<{ path: string; changes: number }> = [];

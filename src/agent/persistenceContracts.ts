@@ -1,4 +1,5 @@
 import type { AgentMessage } from "./types.js";
+import type { BackgroundResultState } from "../core/capabilities/background.js";
 import type { Checkpoint } from "./CheckpointManager.js";
 import type { FleetResultEnvelope } from "./FleetWorkflows.js";
 import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
@@ -98,6 +99,12 @@ export interface PersistedFleetMetadata {
   terminalReason?: string;
   completedAt?: number;
   finalResult?: string;
+  /** Durable classification of the final result or active run. */
+  resultState?: BackgroundResultState;
+  /** Bounded useful output retained when final structured output is unavailable. */
+  partialResult?: string;
+  /** Whether the provider/engine classified a failed run as retryable. */
+  agentRetryable?: boolean;
   goalId?: string;
   workflowId?: string;
   delegation?: {

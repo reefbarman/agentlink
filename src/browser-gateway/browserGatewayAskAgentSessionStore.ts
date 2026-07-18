@@ -1049,10 +1049,13 @@ export class BrowserGatewayAskAgentSessionStore {
         durationMs: params.durationMs,
       });
     }
-    const generatedDisplayMedia = generatedResultImagesToDisplayMedia(
-      params.resultImages,
-      message.displayMedia?.images.length ?? 0,
-    );
+    const generatedDisplayMedia =
+      params.toolName === "generate_image"
+        ? generatedResultImagesToDisplayMedia(
+            params.resultImages,
+            message.displayMedia?.images.length ?? 0,
+          )
+        : undefined;
     if (generatedDisplayMedia) {
       message.displayMedia = {
         images: [

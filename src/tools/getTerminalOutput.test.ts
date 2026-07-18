@@ -42,7 +42,16 @@ describe("handleGetTerminalOutput", () => {
   it("returns terminal recovery metadata when terminal id is missing", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue(undefined);
     vi.mocked(terminalProvider.getRecentlyClosedTerminals).mockReturnValue([
-      { id: "term_5", name: "snapshot-run", closedAt: Date.now() - 1000 },
+      {
+        id: "term_5",
+        name: "snapshot-run",
+        closedAt: Date.now() - 1000,
+        is_running: false,
+        state: "unknown_termination",
+        exit_code: null,
+        output: "",
+        output_captured: false,
+      },
     ]);
 
     const result = await handleGetTerminalOutput(
@@ -60,9 +69,34 @@ describe("handleGetTerminalOutput", () => {
     );
   });
 
+  it("retrieves retained output and status after the terminal closes", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: false,
+      state: "completed",
+      exit_code: 7,
+      output: "partial output before close",
+      output_captured: true,
+    });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_closed" },
+      { terminalProvider },
+    );
+
+    expect(textPayload(result)).toMatchObject({
+      terminal_id: "term_closed",
+      is_running: false,
+      state: "completed",
+      exit_code: 7,
+      output: "partial output before close",
+      output_captured: true,
+    });
+  });
+
   it("returns verification_hint when output capture is unavailable", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
       is_running: true,
+      state: "running",
       exit_code: null,
       output: "",
       output_captured: false,
@@ -83,6 +117,7 @@ describe("handleGetTerminalOutput", () => {
   it("omits duplicate terminal raw output from the model-facing result", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
       is_running: false,
+      state: "completed",
       exit_code: 0,
       output: "one\ntwo\nthree",
       terminal_raw_output:
@@ -103,6 +138,7 @@ describe("handleGetTerminalOutput", () => {
   it("interrupts the terminal when kill is requested", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
       is_running: false,
+      state: "completed",
       exit_code: 130,
       output: "stopped",
       output_captured: true,

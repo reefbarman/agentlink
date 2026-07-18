@@ -338,6 +338,60 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("returns structured failure when a worktree omits its expected envelope", async () => {
+    const globalStoragePath = await mkdtemp(
+      path.join(os.tmpdir(), "fleet-worktree-incomplete-test-"),
+    );
+    const start = vi.fn().mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            status: "opened",
+            worktreePath: "/tmp/repo-worktrees/review",
+          }),
+        },
+      ],
+    });
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext({
+      ...toolCtx,
+      globalStorageUri: { fsPath: globalStoragePath } as any,
+      worktreeAgentLaunchProvider: { start },
+    });
+    const spawned = await mgr.spawnBackground({
+      task: "isolated review",
+      message: "review safely",
+      worktree: "isolated",
+      expectedResult: "review_findings",
+    });
+    const fleet = (mgr as any).sessions.get(spawned.sessionId).fleetMetadata;
+    const resultPromise = mgr.waitForBackground(spawned.sessionId);
+
+    await new WorktreeFleetExchangeStore(globalStoragePath).update(
+      fleet.worktreeExchangeId,
+      {
+        status: "completed",
+        resultText: "I reviewed the change but did not finalize the envelope.",
+      },
+    );
+
+    const result = JSON.parse(await resultPromise);
+    expect(result).toEqual({
+      status: "incomplete_expected_result",
+      terminalReason: "incomplete_expected_result",
+      retrySafe: true,
+      agentRetryable: false,
+      partialOutput: "I reviewed the change but did not finalize the envelope.",
+    });
+    expect((mgr as any).sessions.get(spawned.sessionId).fleetMetadata).toEqual(
+      expect.objectContaining({
+        lifecycle: "failed",
+        resultState: "incomplete_expected_result",
+      }),
+    );
+  });
+
   it("rejects overlapping shared-workspace ownership", async () => {
     mocks.runBehavior.mockImplementation(() =>
       (async function* () {
@@ -486,6 +540,112 @@ describe("AgentSessionManager background agents", () => {
       spawned.sessionId,
     );
     expect(mocks.resolveBackgroundRoute).not.toHaveBeenCalled();
+  });
+
+  it("preserves ACP message and tool images for the caller", async () => {
+    configHost.getBackgroundAgentSettings.mockReturnValue({
+      acpAgents: [{ id: "image-agent", command: "image-agent-acp" }],
+    });
+    const acpBackgroundRunner = {
+      run: vi.fn(async (request: any) => {
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Here are the images." },
+          },
+        });
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "image",
+              mimeType: "image/png",
+              data: "YWJjZA==",
+            },
+          },
+        });
+        request.onEvent({
+          type: "update",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "generate-1",
+            status: "completed",
+            content: [
+              {
+                type: "content",
+                content: {
+                  type: "image",
+                  mimeType: "image/webp",
+                  data: "RUZH",
+                },
+              },
+            ],
+          },
+        });
+        request.onEvent({
+          type: "stop",
+          response: { stopReason: "end_turn" },
+        });
+      }),
+    };
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { maxConcurrent: 3 },
+      { host: { config: configHost, acpBackgroundRunner } },
+    );
+    const parent = await mgr.createSession("code");
+    mgr.setToolContext(toolCtx);
+
+    const spawned = await mgr.spawnBackground(
+      {
+        task: "generate images",
+        message: "make two images",
+        provider: "acp:image-agent",
+      },
+      parent.id,
+    );
+    await mgr.waitForBackground(spawned.sessionId);
+
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    const assistantContent = session.appendAssistantTurn.mock.calls[0]?.[0];
+    expect(assistantContent).toEqual([
+      { type: "text", text: "Here are the images." },
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: "YWJjZA==",
+        },
+      },
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/webp",
+          data: "RUZH",
+        },
+      },
+    ]);
+    session.getAllMessages.mockReturnValue([
+      { role: "assistant", content: assistantContent },
+    ]);
+    await expect(
+      mgr.waitForAuthorizedBackgroundContent(parent.id, spawned.sessionId),
+    ).resolves.toEqual({
+      text: "Here are the images.",
+      images: [
+        { data: "YWJjZA==", mimeType: "image/png" },
+        { data: "RUZH", mimeType: "image/webp" },
+      ],
+    });
   });
 
   it("publishes ACP stop usage before terminal finalization", async () => {
@@ -699,7 +859,10 @@ describe("AgentSessionManager background agents", () => {
     expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
       status: "error",
       done: true,
-      partialOutput: result,
+      resultState: "failed",
+      retrySafe: true,
+      agentRetryable: false,
+      partialOutput: expect.stringContaining("Partial ACP result"),
     });
   });
 
@@ -1949,6 +2112,81 @@ describe("AgentSessionManager background agents", () => {
     );
   });
 
+  it("preserves a valid final marker across a later provider failure", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const structuredResult = {
+      type: "review_findings" as const,
+      findings: [],
+      reviewedScope: "src/agent",
+      emptyDiff: false,
+    };
+    const session = {
+      id: "bg-final-marker",
+      status: "error",
+      getLastFinalMarker: () => ({ result: structuredResult }),
+      getLastAssistantText: () => "trailing progress prose",
+      fleetMetadata: { delegation: { expectedResult: "review_findings" } },
+    };
+    (mgr as any).bgErrors.set(session.id, "transport disconnected");
+
+    expect((mgr as any).resolveBackgroundResult(session, "fallback")).toEqual(
+      expect.objectContaining({
+        structuredResult,
+        resultState: "completed",
+      }),
+    );
+  });
+
+  it("preserves a parsed expected envelope across a later provider failure", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const envelope = {
+      type: "review_findings" as const,
+      findings: [],
+      reviewedScope: "src/agent",
+      emptyDiff: false,
+    };
+    const session = {
+      id: "bg-parsed-envelope",
+      status: "error",
+      getLastFinalMarker: () => undefined,
+      getLastAssistantText: () => JSON.stringify(envelope),
+      fleetMetadata: { delegation: { expectedResult: "review_findings" } },
+    };
+    (mgr as any).bgErrors.set(session.id, "transport disconnected");
+
+    expect((mgr as any).resolveBackgroundResult(session, "fallback")).toEqual(
+      expect.objectContaining({
+        structuredResult: envelope,
+        resultState: "completed",
+      }),
+    );
+  });
+
+  it("marks missing expected envelopes incomplete and preserves prose", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const session = {
+      id: "bg-incomplete",
+      status: "idle",
+      getLastFinalMarker: () => undefined,
+      getLastAssistantText: () =>
+        "I inspected the change but did not finalize.",
+      fleetMetadata: { delegation: { expectedResult: "review_findings" } },
+    };
+
+    const resolved = (mgr as any).resolveBackgroundResult(session, "fallback");
+    expect(resolved).toMatchObject({
+      resultState: "incomplete_expected_result",
+      partialResult: "I inspected the change but did not finalize.",
+    });
+    expect(JSON.parse(resolved.resultText)).toEqual({
+      status: "incomplete_expected_result",
+      terminalReason: "incomplete_expected_result",
+      retrySafe: true,
+      agentRetryable: false,
+      partialOutput: "I inspected the change but did not finalize.",
+    });
+  });
+
   it("renders structured final-marker results for the foreground", () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     const structuredResult = {
@@ -1980,6 +2218,65 @@ describe("AgentSessionManager background agents", () => {
     expect(resolved.resultText).not.toContain('"type":"review_findings"');
   });
 
+  it("persists partial evidence and retryability for provider failures", async () => {
+    let releaseFailure: () => void = () => {};
+    mocks.runBehavior.mockReturnValue(
+      (async function* () {
+        yield { type: "text_delta", text: "Recovered partial findings" };
+        await new Promise<void>((resolve) => {
+          releaseFailure = resolve;
+        });
+        yield {
+          type: "error",
+          error: "Provider connection closed",
+          retryable: true,
+        };
+        yield { type: "done" };
+      })(),
+    );
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    await mgr.createSession("code");
+    const spawned = await mgr.spawnBackground({
+      task: "transport failure",
+      message: "inspect",
+      expectedResult: "text",
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+    session.getLastAssistantText.mockReturnValue(undefined);
+    await waitFor(
+      () => session.fleetMetadata.partialResult,
+      (partial) => partial === "Recovered partial findings",
+    );
+    releaseFailure();
+
+    const result = JSON.parse(await mgr.waitForBackground(spawned.sessionId));
+    expect(result).toEqual({
+      status: "failed",
+      terminalReason: "Provider connection closed",
+      retrySafe: true,
+      agentRetryable: true,
+      partialOutput: "Recovered partial findings",
+    });
+    expect(session.fleetMetadata).toEqual(
+      expect.objectContaining({
+        lifecycle: "failed",
+        resultState: "failed",
+        terminalReason: "Provider connection closed",
+        partialResult: "Recovered partial findings",
+        agentRetryable: true,
+      }),
+    );
+    expect(mgr.getBackgroundStatus(spawned.sessionId)).toMatchObject({
+      done: true,
+      resultState: "failed",
+      terminalReason: "Provider connection closed",
+      retrySafe: true,
+      agentRetryable: true,
+      partialOutput: "Recovered partial findings",
+    });
+  });
+
   it("records durable native fleet identity and completion", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
@@ -1989,6 +2286,7 @@ describe("AgentSessionManager background agents", () => {
       task: "review task",
       message: "review thoroughly",
       taskClass: "review_code",
+      expectedResult: "text",
     });
     const session = (mgr as any).sessions.get(spawned.sessionId);
 
@@ -2013,6 +2311,7 @@ describe("AgentSessionManager background agents", () => {
         lifecycle: "completed",
         completedAt: expect.any(Number),
         finalResult: "background result",
+        resultState: "completed",
       }),
     );
   });
@@ -2151,11 +2450,16 @@ describe("AgentSessionManager background agents", () => {
       expect.objectContaining({
         parentSessionId: "foreground-1",
         lifecycle: "interrupted",
+        resultState: "interrupted",
         terminalReason: "extension_reloaded_during_run",
       }),
     );
     expect(mgr.getBackgroundStatus("persisted-bg")).toEqual(
-      expect.objectContaining({ status: "error", done: true }),
+      expect.objectContaining({
+        status: "error",
+        done: true,
+        resultState: "interrupted",
+      }),
     );
     expect(mgr.listPersistedFleetSessions().map((item) => item.id)).toEqual([
       "persisted-bg",
@@ -2163,6 +2467,105 @@ describe("AgentSessionManager background agents", () => {
     expect(saveSession).toHaveBeenCalledWith(
       expect.objectContaining({ expectedRevision: "1" }),
     );
+  });
+
+  it("restores and authorizes a persisted child when its foreground is loaded", async () => {
+    const now = Date.now();
+    const foregroundSummary = {
+      schemaVersion: 1,
+      id: "foreground-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      title: "Foreground",
+      messageCount: 1,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      createdAt: now - 2,
+      lastActiveAt: now,
+      background: false,
+    };
+    const childSummary = {
+      ...foregroundSummary,
+      id: "persisted-child",
+      title: "Persisted child",
+      lastActiveAt: now - 1,
+      background: true,
+    };
+    const store = {
+      list: vi.fn(() => [foregroundSummary]),
+      listAll: vi.fn(() => [foregroundSummary, childSummary]),
+      readSession: vi.fn(async (id: string) => ({
+        ok: true,
+        revision: "1",
+        value: {
+          summary:
+            id === foregroundSummary.id ? foregroundSummary : childSummary,
+          messages: [{ role: "user", content: "work" }],
+          metadata: {
+            mode: "code",
+            model: "claude-sonnet-4-6",
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            ...(id === childSummary.id
+              ? {
+                  fleet: {
+                    schemaVersion: 1,
+                    placement: "background",
+                    parentSessionId: foregroundSummary.id,
+                    rootSessionId: foregroundSummary.id,
+                    task: childSummary.title,
+                    depth: 1,
+                    backend: "native",
+                    resolvedMode: "review",
+                    resolvedModel: "claude-sonnet-4-6",
+                    resolvedProvider: "anthropic",
+                    taskClass: "review_code",
+                    routingReason: "persisted",
+                    fallbackUsed: false,
+                    lifecycle: "completed",
+                    resultState: "completed",
+                    completedAt: now - 1,
+                    finalResult: "durable child result",
+                  },
+                }
+              : {}),
+          },
+        },
+      })),
+      saveSession: vi.fn().mockResolvedValue({ ok: true, revision: "2" }),
+    } as any;
+    const mgr = new AgentSessionManager(
+      config,
+      "/tmp",
+      undefined,
+      false,
+      store,
+    );
+
+    const foreground = await mgr.loadPersistedSession(foregroundSummary.id);
+
+    expect(foreground?.id).toBe(foregroundSummary.id);
+    expect(mgr.getBgSessionInfos().map((session) => session.id)).toEqual([
+      childSummary.id,
+    ]);
+    expect(
+      mgr.getBgSessionInfos().find((session) => session.id === childSummary.id),
+    ).toEqual(
+      expect.objectContaining({
+        resultState: "completed",
+        displayStatus: "Done",
+      }),
+    );
+    expect(
+      mgr.getAuthorizedBackgroundStatus(foregroundSummary.id, childSummary.id),
+    ).toMatchObject({
+      done: true,
+      resultState: "completed",
+      retrySafe: true,
+    });
+    await expect(
+      mgr.waitForAuthorizedBackground(foregroundSummary.id, childSummary.id),
+    ).resolves.toBe("durable child result");
   });
 
   it("only restores background sessions from the current foreground tree", async () => {
@@ -2227,6 +2630,44 @@ describe("AgentSessionManager background agents", () => {
     expect(mgr.getBgSessionInfos().map((session) => session.id)).toEqual([
       "current-bg",
     ]);
+
+    await mgr.restorePersistedBackgroundSessions("foreground-old");
+
+    expect(mgr.getBackgroundStatus("current-bg")).toEqual(
+      expect.objectContaining({
+        status: "error",
+        partialOutput: "Session not found",
+      }),
+    );
+    expect(mgr.getBgSessionInfos().map((session) => session.id)).toEqual([
+      "historical-bg",
+    ]);
+  });
+
+  it("derives result state for legacy terminal fleet records", () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    const session = {
+      id: "legacy-failed-bg",
+      status: "error",
+      currentTool: undefined,
+      createdAt: 1,
+      lastActiveAt: 2,
+      getLastAssistantText: () => undefined,
+      fleetMetadata: {
+        lifecycle: "failed",
+        terminalReason: "legacy_failure",
+      },
+    };
+    (mgr as any).sessions.set(session.id, session);
+
+    expect(mgr.getBackgroundStatus(session.id)).toEqual(
+      expect.objectContaining({
+        done: true,
+        resultState: "failed",
+        terminalReason: "legacy_failure",
+        retrySafe: true,
+      }),
+    );
   });
 
   it("disables reasoning effort and restricts commands when the background route disables thinking", async () => {

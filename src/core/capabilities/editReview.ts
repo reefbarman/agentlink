@@ -26,6 +26,16 @@ export type EditReviewPrepareResult =
   | { status: "continue"; content: string }
   | { status: "abort"; result: EditReviewResult };
 
+export interface EditSaveFailureRecovery {
+  document_dirty: boolean;
+  disk_state: "unchanged" | "changed" | "missing" | "unreadable";
+  concurrent_change: boolean | "unknown";
+  review_state: "diff_snapshot_preserved" | "dirty_document_preserved";
+  vscode_error_detail: "unavailable";
+  retryable: true;
+  disk_error_code?: string;
+}
+
 export interface EditReviewParams {
   mode: EditReviewMode;
   absolutePath: string;
@@ -67,9 +77,13 @@ export interface EditReviewResult {
   failed_block_details?: unknown[];
   block_results?: unknown[];
   malformed_blocks?: number;
+  atomic?: boolean;
+  no_changes_applied?: boolean;
   reason?: string;
   follow_up?: string;
   error?: string;
+  save_failure?: EditSaveFailureRecovery;
+  next_steps?: string[];
   warnings?: string[];
   decision?: EditReviewDecision;
   writeApprovalResponse?: unknown;

@@ -38,12 +38,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   read_file: {
     label: "Read with line numbers",
     description:
-      "Read the contents of a file with line numbers. Use get_context first for orientation on a known source/config file; use read_file when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via query. Returns content in 'line_number | content' format with metadata, git status, and diagnostics summary when available.",
+      "Read the contents of a file with line numbers. Use get_context first for orientation on a known source/config file; use read_file when you need exact file content, local images/PDFs, complete temp outputs, a specific large line slice, or semantic in-file jumping via query. Returns content in 'line_number | content' format with metadata, git status, and diagnostics summary when available. High-confidence secret values in eligible settings/config JSON/JSONC are automatically redacted; malformed eligible content is withheld.",
   },
   get_context: {
     label: "Context pack",
     description:
-      "Build a compact read-only context pack for an explicit file: metadata, git status, diagnostics summary, symbol outline, bounded numbered content, and working-set status. Prefer this over read_file for first-pass orientation when the file path is already known. Supports opt-in unchanged-content omission via per-session content hashes.",
+      "Build a compact read-only context pack for an explicit file: metadata, git status, diagnostics summary, symbol outline, bounded numbered content, and working-set status. Prefer this over read_file for first-pass orientation when the file path is already known. Supports opt-in unchanged-content omission via per-session content hashes. High-confidence secret values in eligible settings/config JSON/JSONC are automatically redacted; malformed eligible content is withheld.",
   },
   get_module_neighbors: {
     label: "Module neighbors",
@@ -103,7 +103,7 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   apply_diff: {
     label: "Search/replace with diff review",
     description:
-      "Edit an existing file with exact SEARCH/REPLACE blocks. Opens a diff view for review. Each SEARCH block must match exactly one location. If format_on_save_edits is returned, update your model or re-read before composing more diffs. Format:\n<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE",
+      "Edit an existing file with SEARCH/REPLACE blocks. Opens a diff view for review. Each block requires a unique match by default; block_options can select a 1-based occurrence or intentionally replace all exact matches, and atomic=true requires every block to validate before review/write. Ambiguous failures include bounded candidate line ranges/snippets, and accepted multi-block results include recovery ranges plus a post-edit content hash when available. If format_on_save_edits is returned, update your model or re-read before composing more diffs. Format:\n<<<<<<< SEARCH\nexact content to find\n======= DIVIDER =======\nreplacement content\n>>>>>>> REPLACE",
   },
   find_and_replace: {
     label: "Bulk find-and-replace across files",
@@ -194,12 +194,12 @@ export const TOOL_REGISTRY: Record<string, ToolMeta> = {
   get_terminal_output: {
     label: "Read background terminal output",
     description:
-      "Read output from a background or timed-out terminal command. Supports the same filtering params as execute_command; use `kill` to send Ctrl+C.",
+      "Read retained output and lifecycle state from a background, timed-out, completed, or recently closed terminal command. Supports the same filtering params as execute_command; use `kill` to send Ctrl+C.",
   },
   close_terminals: {
     label: "Clean up terminals",
     description:
-      "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal).",
+      "Close managed terminals to clean up clutter. With no arguments, closes all terminals created by agentlink. Pass specific names to close only those (e.g. ['Server'] to close a background dev server terminal). Recently closed output and final status remain retrievable by terminal ID.",
   },
   start_worktree_agent: {
     label: "Start worktree agent",

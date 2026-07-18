@@ -18,7 +18,9 @@ import {
 } from "../core/nativeWebTools.js";
 import type {
   BackgroundAgentBudgetUsage,
+  BackgroundAgentResultContent,
   BackgroundAgentRuntimePhase,
+  BackgroundResultState,
 } from "../core/capabilities/background.js";
 import type { NativeWebToolExecutionRequest } from "../core/capabilities/web.js";
 import type {
@@ -37,7 +39,11 @@ import type { AgentEvent } from "./types.js";
 import { resolveMode, type AgentMode } from "./modes.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
-import type { ReasoningEffort } from "./providers/types.js";
+import type {
+  ContentBlock,
+  ImageBlock,
+  ReasoningEffort,
+} from "./providers/types.js";
 import type { Question } from "./webview/types.js";
 import {
   buildAskUserToolResult,
@@ -50,7 +56,6 @@ import type { SessionStore, SessionSummary } from "./SessionStore.js";
 import type { BgSessionInfo } from "../shared/types.js";
 import type { Checkpoint, RevertPreview } from "./CheckpointManager.js";
 import type {
-  ContentBlock as AcpContentBlock,
   PromptResponse,
   RequestPermissionRequest,
   RequestPermissionResponse,
@@ -116,10 +121,20 @@ import {
 } from "./FleetWorkflows.js";
 import { WorktreeFleetExchangeStore } from "../worktree/WorktreeFleetExchangeStore.js";
 import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.js";
+import { convertAcpContentBlock } from "./acpContent.js";
 
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_BACKGROUND_HANDOFF_IMAGES = 8;
+const MAX_BACKGROUND_PARTIAL_RESULT_CHARS = 40 * 1024;
+const MAX_ACP_OUTPUT_IMAGES = 8;
+
+interface AcpOutputState {
+  assistantTextParts: string[];
+  directImages: ImageBlock[];
+  toolImages: Map<string, ImageBlock[]>;
+  warnings: Set<string>;
+}
 
 /**
  * Per-turn budget for auto-continuing after a mode switch. Kept separate from
@@ -314,6 +329,12 @@ export class AgentSessionManager {
   private bgBudgetWrapUps = new Map<string, { kind: string }>();
   /** Accumulated streaming text for background sessions (for UI preview). */
   private bgStreamingText = new Map<string, string>();
+  /** Bounded substantive output retained for terminal failure and reload recovery. */
+  private bgPartialResults = new Map<string, string>();
+  /** Provider/engine retryability for terminal background failures. */
+  private bgAgentRetryable = new Map<string, boolean>();
+  /** Background sessions loaded from persistence rather than launched in this process. */
+  private restoredBackgroundSessionIds = new Set<string>();
   /** Completion timestamps for background sessions (for auto-dismiss). */
   private bgCompletedAt = new Map<string, number>();
   /** Error messages for background sessions. */
@@ -1125,16 +1146,68 @@ export class AgentSessionManager {
       .filter((folderPath) => folderPath && folderPath !== projectRoot);
   }
 
-  private acpTextFromContentBlock(block: AcpContentBlock): string {
-    if (block.type === "text") return block.text;
-    if (block.type === "resource_link") return block.uri;
-    if (block.type === "resource") {
-      const resource = block.resource;
-      if ("text" in resource && typeof resource.text === "string") {
-        return resource.text;
-      }
+  private acpOutputImageCount(
+    state: AcpOutputState,
+    excludingToolCallId?: string,
+  ): number {
+    let count = state.directImages.length;
+    for (const [toolCallId, images] of state.toolImages) {
+      if (toolCallId !== excludingToolCallId) count += images.length;
     }
-    return "";
+    return count;
+  }
+
+  private setAcpToolImages(
+    state: AcpOutputState,
+    update: Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>,
+  ): void {
+    if (!update.content) return;
+    const images: ImageBlock[] = [];
+    const available = Math.max(
+      0,
+      MAX_ACP_OUTPUT_IMAGES -
+        this.acpOutputImageCount(state, update.toolCallId),
+    );
+    let validImageCount = 0;
+    for (const item of update.content) {
+      if (item.type !== "content" || item.content.type !== "image") continue;
+      const converted = convertAcpContentBlock(item.content);
+      if (converted.warning) state.warnings.add(converted.warning);
+      if (converted.content?.type !== "image") continue;
+      validImageCount += 1;
+      if (images.length < available) images.push(converted.content);
+    }
+    if (validImageCount > images.length) {
+      state.warnings.add(
+        `[ACP images truncated: showing at most ${MAX_ACP_OUTPUT_IMAGES} images]`,
+      );
+    }
+    state.toolImages.set(update.toolCallId, images);
+  }
+
+  private buildAcpAssistantContent(
+    state: AcpOutputState,
+    extraText?: string,
+  ): ContentBlock[] {
+    const responseText = state.assistantTextParts.join("").trim();
+    const warningText = Array.from(state.warnings).join("\n").trim();
+    const toolImages = Array.from(state.toolImages.values()).flat();
+    const imageCount = state.directImages.length + toolImages.length;
+    const text = [
+      responseText ||
+        (imageCount > 0
+          ? `ACP agent returned ${imageCount} image${imageCount === 1 ? "" : "s"}.`
+          : ""),
+      warningText,
+      extraText?.trim(),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    return [
+      ...(text ? ([{ type: "text", text }] as ContentBlock[]) : []),
+      ...state.directImages,
+      ...toolImages,
+    ];
   }
 
   private applyAcpPromptResponseUsage(
@@ -1264,17 +1337,29 @@ export class AgentSessionManager {
 
   private applyAcpSessionUpdate(args: {
     session: AgentSession;
-    assistantTextParts: string[];
+    output: AcpOutputState;
     update: SessionUpdate;
   }): void {
     const { session, update } = args;
     if (update.sessionUpdate === "agent_message_chunk") {
       this.noteBackgroundProgress(session.id, "responding");
-      const text = this.acpTextFromContentBlock(update.content);
-      if (text) {
-        args.assistantTextParts.push(text);
-        this.appendBgStreamingText(session.id, text);
-        this.recordAndEmitEvent(session.id, { type: "text_delta", text });
+      const converted = convertAcpContentBlock(update.content);
+      if (converted.warning) args.output.warnings.add(converted.warning);
+      if (converted.content?.type === "text") {
+        args.output.assistantTextParts.push(converted.content.text);
+        this.appendBgStreamingText(session.id, converted.content.text);
+        this.recordAndEmitEvent(session.id, {
+          type: "text_delta",
+          text: converted.content.text,
+        });
+      } else if (converted.content?.type === "image") {
+        if (this.acpOutputImageCount(args.output) < MAX_ACP_OUTPUT_IMAGES) {
+          args.output.directImages.push(converted.content);
+        } else {
+          args.output.warnings.add(
+            `[ACP images truncated: showing at most ${MAX_ACP_OUTPUT_IMAGES} images]`,
+          );
+        }
       }
       return;
     }
@@ -1296,6 +1381,7 @@ export class AgentSessionManager {
     }
 
     if (update.sessionUpdate === "tool_call_update") {
+      this.setAcpToolImages(args.output, update);
       this.noteBackgroundProgress(
         session.id,
         update.status === "completed" || update.status === "failed"
@@ -3631,6 +3717,7 @@ export class AgentSessionManager {
       }
       if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
       this.foregroundId = sessionId;
+      await this.restorePersistedBackgroundSessions(sessionId);
       this.notifySessionsChanged();
       return this.sessions.get(sessionId)!;
     }
@@ -3683,6 +3770,7 @@ export class AgentSessionManager {
     if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
     this.sessions.set(sessionId, session);
     this.foregroundId = sessionId;
+    await this.restorePersistedBackgroundSessions(sessionId);
     this.notifySessionsChanged();
     return session;
   }
@@ -3710,11 +3798,50 @@ export class AgentSessionManager {
     return session;
   }
 
+  /** Remove inactive restored trees before loading another foreground's children. */
+  private pruneRestoredBackgroundSessions(rootSessionId?: string): void {
+    if (!rootSessionId) return;
+    for (const sessionId of this.restoredBackgroundSessionIds) {
+      const session = this.sessions.get(sessionId);
+      if (!session) {
+        this.restoredBackgroundSessionIds.delete(sessionId);
+        continue;
+      }
+      const fleet = session.fleetMetadata;
+      if (
+        fleet?.rootSessionId === rootSessionId ||
+        fleet?.parentSessionId === rootSessionId ||
+        !this.getProjectedBgStatus(session).done
+      ) {
+        continue;
+      }
+      this.sessions.delete(sessionId);
+      this.sessionRevisions.delete(sessionId);
+      this.sessionSaveQueues.delete(sessionId);
+      this.commandApprovalPolicies.delete(sessionId);
+      this.bgFinalResults.delete(sessionId);
+      this.bgStreamingText.delete(sessionId);
+      this.bgPartialResults.delete(sessionId);
+      this.bgAgentRetryable.delete(sessionId);
+      this.bgCompletedAt.delete(sessionId);
+      this.bgErrors.delete(sessionId);
+      this.bgStatusDetail.delete(sessionId);
+      this.bgCancelled.delete(sessionId);
+      this.bgParents.delete(sessionId);
+      this.bgMeta.delete(sessionId);
+      this.bgSummary.delete(sessionId);
+      this.restoredBackgroundSessionIds.delete(sessionId);
+    }
+  }
+
   /** Restore durable background records belonging to one foreground session. */
   async restorePersistedBackgroundSessions(
     rootSessionId?: string,
   ): Promise<AgentSession[]> {
-    if (!this.persistence) return [];
+    if (!this.persistence || typeof this.persistence.listAll !== "function") {
+      return [];
+    }
+    this.pruneRestoredBackgroundSessions(rootSessionId);
     const restored: AgentSession[] = [];
     for (const summary of this.persistence
       .listAll()
@@ -3755,6 +3882,7 @@ export class AgentSessionManager {
       const fleet = session.fleetMetadata;
       if (fleet?.lifecycle === "running") {
         fleet.lifecycle = "interrupted";
+        fleet.resultState = "interrupted";
         fleet.terminalReason = "extension_reloaded_during_run";
         fleet.completedAt = Date.now();
       }
@@ -3809,8 +3937,16 @@ export class AgentSessionManager {
         if (fleet.finalResult) {
           this.bgFinalResults.set(session.id, fleet.finalResult);
         }
+        if (fleet.partialResult) {
+          this.bgPartialResults.set(session.id, fleet.partialResult);
+          this.bgStreamingText.set(session.id, fleet.partialResult.slice(-500));
+        }
+        if (fleet.agentRetryable !== undefined) {
+          this.bgAgentRetryable.set(session.id, fleet.agentRetryable);
+        }
       }
       this.sessions.set(session.id, session);
+      this.restoredBackgroundSessionIds.add(session.id);
       this.sessionRevisions.set(session.id, readResult.revision);
       restored.push(session);
       if (fleet?.lifecycle === "interrupted") {
@@ -4205,7 +4341,15 @@ export class AgentSessionManager {
     this.ensureChildBudgetAdmission(parent, request);
     this.ensureSharedWorkspaceScopeAvailable(request);
     const executionMessage = request.reviewScope
-      ? `${message}\n\n${await captureReviewScope(executionRoot, request.reviewScope)}`
+      ? `${message}\n\n${await captureReviewScope(
+          executionRoot,
+          request.reviewScope,
+          {
+            workspaceRoots: this.getWorkspaceFolders().map(
+              (folder) => folder.path,
+            ),
+          },
+        )}`
       : message;
 
     if (request.worktree === "isolated") {
@@ -4321,9 +4465,25 @@ export class AgentSessionManager {
       if (acpRequestContext) {
         this.activeRequestToolContexts.set(session.id, acpRequestContext);
       }
-      const assistantTextParts: string[] = [];
+      const acpOutput: AcpOutputState = {
+        assistantTextParts: [],
+        directImages: [],
+        toolImages: new Map(),
+        warnings: new Set(),
+      };
       let promptResponse: PromptResponse | undefined;
       const runAcpBackground = async () => {
+        let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
+        const persistPartialResult = () => {
+          const partialResult = session.fleetMetadata?.partialResult;
+          if (partialResult === lastPersistedPartialResult) return;
+          this.saveSession(session.id);
+          lastPersistedPartialResult = partialResult;
+        };
+        const inFlightPersistTimer = this.host.timers.setInterval(
+          persistPartialResult,
+          1000,
+        );
         try {
           await this.host.acpBackgroundRunner.run({
             agent: backendRoute.agent,
@@ -4349,7 +4509,7 @@ export class AgentSessionManager {
               }
               this.applyAcpSessionUpdate({
                 session,
-                assistantTextParts,
+                output: acpOutput,
                 update: event.update,
               });
               const { status } = this.getProjectedBgStatus(session);
@@ -4376,21 +4536,19 @@ export class AgentSessionManager {
               }),
           });
           if (!this.bgCancelled.has(session.id)) {
-            const finalText = assistantTextParts.join("").trim();
             const stopReasonMessage = promptResponse
               ? this.acpStopReasonMessage(promptResponse)
               : undefined;
-            const assistantText = [finalText, stopReasonMessage]
-              .filter(Boolean)
-              .join("\n\n");
-            if (assistantText) {
-              session.appendAssistantTurn([
-                { type: "text", text: assistantText },
-              ]);
+            const assistantContent = this.buildAcpAssistantContent(
+              acpOutput,
+              stopReasonMessage,
+            );
+            if (assistantContent.length > 0) {
+              session.appendAssistantTurn(assistantContent);
             }
             if (stopReasonMessage) {
               session.status = "error";
-              this.setBgError(session.id, stopReasonMessage);
+              this.setBgError(session.id, stopReasonMessage, false);
               this.recordAndEmitEvent(session.id, {
                 type: "error",
                 error: stopReasonMessage,
@@ -4412,14 +4570,12 @@ export class AgentSessionManager {
           if (this.bgCancelled.has(session.id) || session.isAborted) {
             this.bgCancelled.add(session.id);
           } else {
-            const partialText = assistantTextParts.join("").trim();
-            if (partialText) {
-              session.appendAssistantTurn([
-                { type: "text", text: partialText },
-              ]);
+            const partialContent = this.buildAcpAssistantContent(acpOutput);
+            if (partialContent.length > 0) {
+              session.appendAssistantTurn(partialContent);
             }
             session.status = "error";
-            this.setBgError(session.id, error);
+            this.setBgError(session.id, error, false);
             this.recordAndEmitEvent(session.id, {
               type: "error",
               error,
@@ -4427,6 +4583,8 @@ export class AgentSessionManager {
             });
           }
         } finally {
+          this.host.timers.clearInterval(inFlightPersistTimer);
+          persistPartialResult();
           this.releaseSessionToolContext(session.id, acpRequestContext);
           if (session.fleetMetadata?.lifecycle === "paused") {
             this.saveSession(session.id);
@@ -4437,18 +4595,20 @@ export class AgentSessionManager {
             const fallbackMsg = this.bgErrors.get(session.id)
               ? `ACP background agent stopped: ${this.bgErrors.get(session.id)}`
               : "(ACP background agent completed without output)";
-            const { resultText, structuredResult } =
-              this.resolveBackgroundResult(session, fallbackMsg);
+            const resolution = this.resolveBackgroundResult(
+              session,
+              fallbackMsg,
+            );
             this.cancelOwnedChildrenOnCompletion(session.id);
-            this.finalizeFleetMetadata(session, resultText, structuredResult);
-            this.saveSession(session.id);
-            this.bgFinalResults.set(session.id, resultText);
+            this.finalizeFleetMetadata(session, resolution);
+            await this.saveSessionNow(session.id);
+            this.bgFinalResults.set(session.id, resolution.resultText);
             for (const t of this.bgSafetyTimers.get(session.id) ?? []) {
               this.host.timers.clearTimeout(t);
             }
             this.bgSafetyTimers.delete(session.id);
             for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
-              resolve(resultText);
+              resolve(resolution.resultText);
             }
             this.bgResultWaiters.delete(session.id);
             this.notifySessionsChanged();
@@ -4645,11 +4805,17 @@ export class AgentSessionManager {
     // one; other task classes retain foreground-style open-ended execution.
     const runNativeBackground = async () => {
       let lastPersistedActiveAt = session.lastActiveAt;
-      let terminalEngineError: string | undefined;
+      let lastPersistedPartialResult = session.fleetMetadata?.partialResult;
+      let terminalEngineError: (AgentEvent & { type: "error" }) | undefined;
       const persistIfHistoryChanged = () => {
-        if (session.lastActiveAt !== lastPersistedActiveAt) {
+        const partialResult = session.fleetMetadata?.partialResult;
+        if (
+          session.lastActiveAt !== lastPersistedActiveAt ||
+          partialResult !== lastPersistedPartialResult
+        ) {
           this.saveSession(session.id);
           lastPersistedActiveAt = session.lastActiveAt;
+          lastPersistedPartialResult = partialResult;
         }
       };
       const inFlightPersistTimer = this.host.timers.setInterval(
@@ -4696,7 +4862,7 @@ export class AgentSessionManager {
             session.currentTool = undefined;
           }
           if (event.type === "error") {
-            terminalEngineError = event.error;
+            terminalEngineError = event;
           }
 
           // Track tool calls and token usage for observability
@@ -4736,14 +4902,18 @@ export class AgentSessionManager {
         }
         if (terminalEngineError) {
           session.status = "error";
-          this.setBgError(session.id, terminalEngineError);
+          this.setBgError(
+            session.id,
+            terminalEngineError.error,
+            terminalEngineError.retryable,
+          );
         } else if (session.status === "streaming") {
           session.status = "idle";
         }
       } catch (err: unknown) {
         const error = err instanceof Error ? err.message : String(err);
         session.status = "error";
-        this.setBgError(session.id, error);
+        this.setBgError(session.id, error, false);
         this.recordAndEmitEvent(session.id, {
           type: "error",
           error,
@@ -4778,16 +4948,13 @@ export class AgentSessionManager {
       const fallbackMsg = this.bgErrors.get(session.id)
         ? `Background agent stopped: ${this.bgErrors.get(session.id)}`
         : "(background agent completed without output)";
-      const { resultText, structuredResult } = this.resolveBackgroundResult(
-        session,
-        fallbackMsg,
-      );
+      const resolution = this.resolveBackgroundResult(session, fallbackMsg);
       this.cancelOwnedChildrenOnCompletion(session.id);
-      this.finalizeFleetMetadata(session, resultText, structuredResult);
-      this.saveSession(session.id);
+      this.finalizeFleetMetadata(session, resolution);
+      await this.saveSessionNow(session.id);
 
       // Store result BEFORE resolving waiters to close the race window
-      this.bgFinalResults.set(session.id, resultText);
+      this.bgFinalResults.set(session.id, resolution.resultText);
 
       // Clear all safety timers for this session
       for (const t of this.bgSafetyTimers.get(session.id) ?? [])
@@ -4795,7 +4962,7 @@ export class AgentSessionManager {
       this.bgSafetyTimers.delete(session.id);
 
       for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
-        resolve(resultText);
+        resolve(resolution.resultText);
       }
       this.bgResultWaiters.delete(session.id);
       this.notifySessionsChanged();
@@ -5222,6 +5389,29 @@ export class AgentSessionManager {
     });
   }
 
+  private getBackgroundResultState(
+    session: AgentSession,
+    done: boolean,
+  ): BackgroundResultState | undefined {
+    const fleet = session.fleetMetadata;
+    if (fleet?.resultState) return fleet.resultState;
+    if (!done) return "running";
+    switch (fleet?.lifecycle) {
+      case "completed":
+        return "completed";
+      case "failed":
+        return "failed";
+      case "cancelled":
+        return "cancelled";
+      case "budget_exhausted":
+        return "budget_exhausted";
+      case "interrupted":
+        return "interrupted";
+      default:
+        return session.status === "error" ? "failed" : "completed";
+    }
+  }
+
   private getProjectedBgStatus(session: AgentSession): {
     status: BgSessionInfo["status"];
     done: boolean;
@@ -5396,7 +5586,12 @@ export class AgentSessionManager {
       status: status as BgSessionInfo["status"],
       currentTool: session.currentTool,
       streamingText,
-      resultText: done ? session.getLastAssistantText() : undefined,
+      resultText: done
+        ? (session.getLastAssistantText() ??
+          session.fleetMetadata?.finalResult ??
+          session.fleetMetadata?.partialResult ??
+          this.bgPartialResults.get(sessionId))
+        : undefined,
       errorMessage: this.bgErrors.get(sessionId),
       statusDetail: this.bgStatusDetail.get(sessionId),
     });
@@ -5410,12 +5605,18 @@ export class AgentSessionManager {
     const meta = this.bgMeta.get(sessionId);
     const telemetry = this.getBackgroundRuntimeTelemetry(session);
     const progressSummary = summary.shortStatus?.trim() || picked.displayStatus;
+    const fleet = session.fleetMetadata;
+    const partialOutput = done
+      ? (fleet?.partialResult ??
+        this.bgPartialResults.get(sessionId) ??
+        session.getLastAssistantText())
+      : undefined;
 
     return {
       status,
       currentTool: session.currentTool,
       done,
-      partialOutput: done ? session.getLastAssistantText() : undefined,
+      partialOutput,
       displayStatus: picked.displayStatus,
       streamingPreview: streamingText,
       progressSummary,
@@ -5426,6 +5627,10 @@ export class AgentSessionManager {
       toolCalls: meta?.toolCalls,
       tokenUsage: meta?.tokenUsage,
       apiTurns: meta?.apiTurns,
+      resultState: this.getBackgroundResultState(session, done),
+      terminalReason: fleet?.terminalReason,
+      retrySafe: done ? true : undefined,
+      agentRetryable: fleet?.agentRetryable,
       phase: telemetry.phase,
       startedAt: telemetry.startedAt,
       lastProgressAt: telemetry.lastProgressAt,
@@ -5468,6 +5673,9 @@ export class AgentSessionManager {
         done: true,
         partialOutput: "Background session is outside the caller's subtree",
         displayStatus: "Unauthorized",
+        resultState: "authorization_lost",
+        terminalReason: "outside_caller_subtree",
+        retrySafe: false,
         phase: "failed",
         canSteer: false,
         canKill: false,
@@ -5483,11 +5691,43 @@ export class AgentSessionManager {
     if (!this.canManageBackground(callerSessionId, sessionId)) {
       return Promise.resolve(
         JSON.stringify({
+          status: "authorization_lost",
+          terminalReason: "outside_caller_subtree",
+          retrySafe: false,
+          agentRetryable: false,
           error: "Background session is outside the caller's subtree",
         }),
       );
     }
     return this.waitForBackground(sessionId);
+  }
+
+  async waitForAuthorizedBackgroundContent(
+    callerSessionId: string,
+    sessionId: string,
+  ): Promise<string | BackgroundAgentResultContent> {
+    const text = await this.waitForAuthorizedBackground(
+      callerSessionId,
+      sessionId,
+    );
+    if (!this.canManageBackground(callerSessionId, sessionId)) return text;
+
+    const session = this.sessions.get(sessionId);
+    if (!session) return text;
+    const images = session
+      .getAllMessages()
+      .flatMap((message) =>
+        message.role === "assistant" && Array.isArray(message.content)
+          ? message.content
+              .filter((block): block is ImageBlock => block.type === "image")
+              .map((block) => ({
+                data: block.source.data,
+                mimeType: block.source.media_type,
+              }))
+          : [],
+      )
+      .slice(0, MAX_ACP_OUTPUT_IMAGES);
+    return images.length > 0 ? { text, images } : text;
   }
 
   killAuthorizedBackground(
@@ -5709,8 +5949,10 @@ export class AgentSessionManager {
     if (this.getProjectedBgStatus(session).done) {
       return Promise.resolve(
         session.fleetMetadata?.finalResult ??
-          session.getLastAssistantText() ??
-          "(no result)",
+          this.resolveBackgroundResult(
+            session,
+            "(background agent completed without output)",
+          ).resultText,
       );
     }
 
@@ -5744,23 +5986,26 @@ export class AgentSessionManager {
     });
   }
 
-  /**
-   * Append streaming text from a background agent (for UI preview).
-   * Only keeps the last ~500 characters to avoid unbounded growth.
-   */
+  /** Append bounded streaming evidence while keeping a compact UI preview. */
   appendBgStreamingText(sessionId: string, text: string): void {
-    const existing = this.bgStreamingText.get(sessionId) ?? "";
+    const existing = this.bgPartialResults.get(sessionId) ?? "";
     const updated = existing + text;
-    // Keep last 500 chars
-    this.bgStreamingText.set(
-      sessionId,
-      updated.length > 500 ? updated.slice(-500) : updated,
-    );
+    const partialResult =
+      updated.length > MAX_BACKGROUND_PARTIAL_RESULT_CHARS
+        ? updated.slice(-MAX_BACKGROUND_PARTIAL_RESULT_CHARS)
+        : updated;
+    this.bgPartialResults.set(sessionId, partialResult);
+    this.bgStreamingText.set(sessionId, partialResult.slice(-500));
+    const fleet = this.sessions.get(sessionId)?.fleetMetadata;
+    if (fleet) fleet.partialResult = partialResult;
   }
 
-  /** Record a bg session error message. */
-  setBgError(sessionId: string, error: string): void {
+  /** Record a bg session error message and provider retryability. */
+  setBgError(sessionId: string, error: string, retryable = false): void {
     this.bgErrors.set(sessionId, error);
+    this.bgAgentRetryable.set(sessionId, retryable);
+    const fleet = this.sessions.get(sessionId)?.fleetMetadata;
+    if (fleet) fleet.agentRetryable = retryable;
   }
 
   /** Mark a bg session as completed with a timestamp. */
@@ -5871,26 +6116,28 @@ export class AgentSessionManager {
         session.id,
       depth: parent?.fleetMetadata ? parent.fleetMetadata.depth + 1 : 1,
       lifecycle: "running",
+      resultState: "running",
     };
   }
 
   private finalizeFleetMetadata(
     session: AgentSession,
-    resultText: string,
-    structuredResult?: import("./FleetWorkflows.js").FleetResultEnvelope,
+    resolution: {
+      resultText: string;
+      structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
+      resultState: BackgroundResultState;
+      partialResult?: string;
+    },
   ): void {
     const fleet = session.fleetMetadata;
     if (!fleet) return;
     this.bgBudgetWrapUps.delete(session.id);
     fleet.completedAt = this.bgCompletedAt.get(session.id) ?? Date.now();
-    fleet.finalResult = resultText;
-    fleet.structuredResult =
-      structuredResult ??
-      parseFleetResultEnvelope(
-        fleet.delegation
-          ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
-        resultText,
-      );
+    fleet.finalResult = resolution.resultText;
+    fleet.structuredResult = resolution.structuredResult;
+    fleet.resultState = resolution.resultState;
+    fleet.partialResult = resolution.partialResult;
+    fleet.agentRetryable = this.bgAgentRetryable.get(session.id);
     const meta = this.bgMeta.get(session.id);
     if (meta) {
       fleet.budgetUsage = {
@@ -5904,21 +6151,36 @@ export class AgentSessionManager {
           : undefined,
       };
     }
-    if (this.bgCancelled.has(session.id)) {
+    if (resolution.resultState === "completed") {
+      fleet.lifecycle = "completed";
+      fleet.terminalReason = undefined;
+      fleet.agentRetryable = undefined;
+      session.status = "idle";
+      this.bgErrors.delete(session.id);
+      this.bgAgentRetryable.delete(session.id);
+      this.appendFleetEvent(session, "completed", "Agent completed");
+    } else if (resolution.resultState === "cancelled") {
       fleet.lifecycle = "cancelled";
       fleet.terminalReason ??= "cancelled_by_user";
       this.appendFleetEvent(session, "cancelled", "Agent cancelled");
-    } else if (fleet.terminalReason?.startsWith("budget_exhausted:")) {
+    } else if (resolution.resultState === "budget_exhausted") {
       fleet.lifecycle = "budget_exhausted";
-      this.appendFleetEvent(session, "failed", fleet.terminalReason);
-    } else if (session.status === "error") {
-      fleet.lifecycle = "failed";
-      fleet.terminalReason = this.bgErrors.get(session.id) ?? "agent_error";
+      this.appendFleetEvent(
+        session,
+        "failed",
+        fleet.terminalReason ?? "budget_exhausted",
+      );
+    } else if (resolution.resultState === "interrupted") {
+      fleet.lifecycle = "interrupted";
+      fleet.terminalReason ??= "background_agent_interrupted";
       this.appendFleetEvent(session, "failed", fleet.terminalReason);
     } else {
-      fleet.lifecycle = "completed";
-      fleet.terminalReason = undefined;
-      this.appendFleetEvent(session, "completed", "Agent completed");
+      fleet.lifecycle = "failed";
+      fleet.terminalReason =
+        resolution.resultState === "incomplete_expected_result"
+          ? "incomplete_expected_result"
+          : (this.bgErrors.get(session.id) ?? "agent_error");
+      this.appendFleetEvent(session, "failed", fleet.terminalReason);
     }
   }
 
@@ -5928,30 +6190,91 @@ export class AgentSessionManager {
   ): {
     resultText: string;
     structuredResult: import("./FleetWorkflows.js").FleetResultEnvelope;
+    resultState: BackgroundResultState;
+    partialResult?: string;
   } {
-    // Some host/test session adapters predate getLastFinalMarker; keep text
-    // completion compatible while native AgentSession exposes structured data.
+    // A valid final marker is authoritative even if the provider disconnects
+    // immediately afterward. The marker is already persisted in session history.
     const marker = session.getLastFinalMarker?.();
     if (marker?.result) {
       return {
         resultText: formatFleetResultEnvelope(marker.result),
         structuredResult: marker.result,
+        resultState: "completed",
       };
     }
 
-    const rawText =
-      session.getLastAssistantText() ?? marker?.summary ?? fallbackText;
-    const structuredResult = parseFleetResultEnvelope(
-      session.fleetMetadata?.delegation
-        ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
-      rawText,
-    );
+    const durablePartialResult =
+      this.bgPartialResults.get(session.id) ??
+      session.fleetMetadata?.partialResult;
+    const partialResult =
+      session.fleetMetadata?.placement === "worktree"
+        ? (durablePartialResult ??
+          session.getLastAssistantText() ??
+          marker?.summary)
+        : (session.getLastAssistantText() ??
+          marker?.summary ??
+          durablePartialResult);
+    const rawText = partialResult ?? fallbackText;
+    const expected = session.fleetMetadata?.delegation
+      ?.expectedResult as SpawnBackgroundRequest["expectedResult"];
+    const structuredResult = parseFleetResultEnvelope(expected, rawText);
+    let resultState: BackgroundResultState = "completed";
+    if (this.bgCancelled.has(session.id)) {
+      resultState = "cancelled";
+    } else if (
+      session.fleetMetadata?.terminalReason?.startsWith("budget_exhausted:")
+    ) {
+      resultState = "budget_exhausted";
+    } else if (session.fleetMetadata?.lifecycle === "interrupted") {
+      resultState = "interrupted";
+    } else if (
+      expected &&
+      expected !== "text" &&
+      structuredResult.type === expected
+    ) {
+      // A valid expected envelope is authoritative even if a late provider error
+      // changed the transport status after the response was captured.
+      resultState = "completed";
+    } else if (session.status === "error") {
+      resultState = "failed";
+    } else if (
+      expected &&
+      expected !== "text" &&
+      structuredResult.type !== expected
+    ) {
+      resultState = "incomplete_expected_result";
+    }
+
+    if (resultState === "completed") {
+      return {
+        resultText:
+          structuredResult.type === "text"
+            ? structuredResult.text
+            : formatFleetResultEnvelope(structuredResult),
+        structuredResult,
+        resultState,
+      };
+    }
+
+    const terminalReason =
+      resultState === "incomplete_expected_result"
+        ? "incomplete_expected_result"
+        : (this.bgErrors.get(session.id) ??
+          session.fleetMetadata?.terminalReason ??
+          resultState);
+    const failureResult = JSON.stringify({
+      status: resultState,
+      terminalReason,
+      retrySafe: true,
+      agentRetryable: this.bgAgentRetryable.get(session.id) ?? false,
+      ...(partialResult ? { partialOutput: partialResult } : {}),
+    });
     return {
-      resultText:
-        structuredResult.type === "text"
-          ? structuredResult.text
-          : formatFleetResultEnvelope(structuredResult),
-      structuredResult,
+      resultText: failureResult,
+      structuredResult: { type: "text", text: failureResult },
+      resultState,
+      partialResult,
     };
   }
 
@@ -6227,42 +6550,36 @@ export class AgentSessionManager {
           record.status === "completed"
             ? undefined
             : (record.error ?? `worktree_${record.status}`);
+        if (record.status === "cancelled") {
+          this.bgCancelled.add(session.id);
+        } else if (record.status === "failed") {
+          this.setBgError(
+            session.id,
+            record.error ?? "Worktree background agent failed",
+            false,
+          );
+        }
         const rawResult =
           record.resultText ??
           record.error ??
           "Worktree agent ended without output";
-        const structuredResult = parseFleetResultEnvelope(
-          session.fleetMetadata.delegation
-            ?.expectedResult as SpawnBackgroundRequest["expectedResult"],
-          rawResult,
-        );
-        session.fleetMetadata.structuredResult = structuredResult;
-        session.fleetMetadata.finalResult =
-          structuredResult.type === "text"
-            ? structuredResult.text
-            : formatFleetResultEnvelope(structuredResult);
-        session.fleetMetadata.completedAt = Date.now();
+        this.bgPartialResults.set(session.id, rawResult);
+        const resolution = this.resolveBackgroundResult(session, rawResult);
         const meta = this.bgMeta.get(session.id);
         if (meta && record.usage) {
           meta.tokenUsage =
             record.usage.inputTokens + record.usage.outputTokens;
         }
-        this.bgFinalResults.set(session.id, session.fleetMetadata.finalResult);
+        this.finalizeFleetMetadata(session, resolution);
+        await this.saveSessionNow(session.id);
+        this.bgFinalResults.set(session.id, resolution.resultText);
         for (const resolve of this.bgResultWaiters.get(session.id) ?? []) {
-          resolve(session.fleetMetadata.finalResult);
+          resolve(resolution.resultText);
         }
         this.bgResultWaiters.delete(session.id);
-        this.appendFleetEvent(
-          session,
-          record.status === "completed"
-            ? "completed"
-            : record.status === "cancelled"
-              ? "cancelled"
-              : "failed",
-          session.fleetMetadata.finalResult,
-        );
+      } else {
+        this.saveSession(session.id);
       }
-      this.saveSession(session.id);
       this.notifySessionsChanged();
     };
     const timer = this.host.timers.setInterval(() => {
@@ -6545,7 +6862,12 @@ export class AgentSessionManager {
         const meta = this.bgMeta.get(s.id);
         const telemetry = this.getBackgroundRuntimeTelemetry(s);
         const streamingText = this.bgStreamingText.get(s.id);
-        const resultText = isDone ? s.getLastAssistantText() : undefined;
+        const resultText = isDone
+          ? (s.getLastAssistantText() ??
+            s.fleetMetadata?.finalResult ??
+            s.fleetMetadata?.partialResult ??
+            this.bgPartialResults.get(s.id))
+          : undefined;
         const errorMessage = this.bgErrors.get(s.id);
         const heuristicStatus = inferBackgroundDisplayStatus({
           status,
@@ -6678,6 +7000,9 @@ export class AgentSessionManager {
           events,
           policyAuditCount: s.fleetMetadata?.policyAudit?.length ?? 0,
           structuredResult: s.fleetMetadata?.structuredResult,
+          resultState: this.getBackgroundResultState(s, isDone),
+          partialResult: s.fleetMetadata?.partialResult,
+          agentRetryable: s.fleetMetadata?.agentRetryable,
           streamingText,
           errorMessage,
           completedAt:

@@ -1,12 +1,12 @@
-import { execFile } from "child_process";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import { promisify } from "util";
 
 import { describe, expect, it } from "vitest";
 
 import { captureReviewScope } from "./reviewScopeSnapshot.js";
+import { execFile } from "child_process";
+import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
@@ -97,12 +97,108 @@ describe("captureReviewScope", () => {
     expect(snapshot).toContain("export const ok = true;");
   });
 
-  it("rejects file scopes outside the workspace", async () => {
+  it("captures absolute files across open workspace roots", async () => {
+    const firstRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "review-files-first-"),
+    );
+    const secondRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "review-files-second-"),
+    );
+    const firstFile = path.join(firstRoot, "README.md");
+    const secondFile = path.join(secondRoot, "README.md");
+    await fs.writeFile(firstFile, "first root\n");
+    await fs.writeFile(secondFile, "second root\n");
+
+    const snapshot = await captureReviewScope(
+      firstRoot,
+      { kind: "files", paths: [firstFile, secondFile] },
+      { workspaceRoots: [firstRoot, secondRoot] },
+    );
+
+    expect(snapshot).toContain(`File: ${await fs.realpath(firstFile)}`);
+    expect(snapshot).toContain(`File: ${await fs.realpath(secondFile)}`);
+    expect(snapshot).toContain("first root");
+    expect(snapshot).toContain("second root");
+  });
+
+  it("captures an absolute working-tree path from its sibling Git root", async () => {
+    const firstRoot = await createRepository();
+    const secondRoot = await createRepository();
+    const secondFile = path.join(secondRoot, "tracked.ts");
+    await fs.writeFile(secondFile, "export const value = 2;\n");
+
+    const snapshot = await captureReviewScope(
+      firstRoot,
+      { kind: "working_tree", paths: [secondFile] },
+      { workspaceRoots: [firstRoot, secondRoot] },
+    );
+
+    expect(snapshot).toContain("Unstaged tracked changes");
+    expect(snapshot).toContain("+export const value = 2;");
+    expect(snapshot).toContain("Paths: tracked.ts");
+  });
+
+  it("rejects Git path filters spanning workspace roots with a files hint", async () => {
+    const firstRoot = await createRepository();
+    const secondRoot = await createRepository();
+
+    await expect(
+      captureReviewScope(
+        firstRoot,
+        {
+          kind: "working_tree",
+          paths: [
+            path.join(firstRoot, "tracked.ts"),
+            path.join(secondRoot, "tracked.ts"),
+          ],
+        },
+        { workspaceRoots: [firstRoot, secondRoot] },
+      ),
+    ).rejects.toThrow(/cannot span multiple workspace roots.*kind "files"/);
+  });
+
+  it("accepts missing files beneath a symlinked workspace root", async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "review-symlink-root-"),
+    );
+    const realRoot = path.join(parent, "real");
+    const linkedRoot = path.join(parent, "linked");
+    await fs.mkdir(realRoot);
+    await fs.symlink(realRoot, linkedRoot);
+    const missingPath = path.join(linkedRoot, "src", "missing.ts");
+
+    const snapshot = await captureReviewScope(
+      linkedRoot,
+      { kind: "files", paths: [missingPath] },
+      { workspaceRoots: [linkedRoot] },
+    );
+
+    expect(snapshot).toContain('File "src/missing.ts" is missing.');
+  });
+
+  it("rejects file scopes outside open roots with accepted guidance", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-path-test-"));
 
     await expect(
-      captureReviewScope(cwd, { kind: "files", paths: ["../outside.ts"] }),
-    ).rejects.toThrow(/outside the workspace/);
+      captureReviewScope(
+        cwd,
+        { kind: "files", paths: ["../outside.ts"] },
+        { workspaceRoots: [cwd] },
+      ),
+    ).rejects.toThrow(/outside the open workspace roots.*Accepted example/);
+  });
+
+  it("recommends file snapshots when working_tree has no Git repository", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "review-no-git-test-"));
+    const filePath = path.join(cwd, "standalone.ts");
+    await fs.writeFile(filePath, "export const value = 1;\n");
+
+    await expect(
+      captureReviewScope(cwd, {
+        kind: "working_tree",
+        paths: [filePath],
+      }),
+    ).rejects.toThrow(/not a Git repository.*kind "files"/);
   });
 
   it("resolves commit ranges into diff snapshots", async () => {

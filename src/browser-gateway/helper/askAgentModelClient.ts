@@ -219,7 +219,7 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   {
     name: "read_file",
     description:
-      "Read text from a local file only when the browser user has explicitly granted Ask Agent access to a containing root/path. This is read-only and cannot edit files.",
+      "Read text from a local file only when the browser user has explicitly granted Ask Agent access to a containing root/path. This is read-only and cannot edit files. High-confidence secret values in eligible settings/config JSON/JSONC are automatically redacted; malformed eligible content is withheld.",
     input_schema: {
       type: "object",
       properties: {

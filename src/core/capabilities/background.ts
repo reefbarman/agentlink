@@ -14,19 +14,19 @@ export type ReviewScope =
       kind: "working_tree";
       /** Defaults to unstaged tracked changes plus untracked files. */
       include?: Array<"staged" | "unstaged" | "untracked">;
-      /** Optional repository-relative path filter. */
+      /** Optional root-relative or absolute path filter inside an open workspace root. */
       paths?: string[];
     }
   | {
       kind: "files";
-      /** Repository-relative files whose current contents should be captured. */
+      /** Root-relative or absolute files inside open workspace roots. May span roots. */
       paths: string[];
     }
   | {
       kind: "commit_range";
       /** Git revision or range accepted by `git diff`, such as `abc123..HEAD`. */
       range: string;
-      /** Optional repository-relative path filter. */
+      /** Optional root-relative or absolute path filter inside one open Git root. */
       paths?: string[];
     }
   | {
@@ -69,6 +69,16 @@ export interface SpawnBackgroundResult {
   fallbackUsed: boolean;
 }
 
+export type BackgroundResultState =
+  | "running"
+  | "completed"
+  | "incomplete_expected_result"
+  | "failed"
+  | "cancelled"
+  | "budget_exhausted"
+  | "interrupted"
+  | "authorization_lost";
+
 export type BackgroundAgentRuntimePhase =
   | "queued"
   | "waiting_for_provider"
@@ -108,6 +118,14 @@ export interface BackgroundAgentStatusResult {
   toolCalls?: number;
   tokenUsage?: number;
   apiTurns?: number;
+  /** Durable terminal/result state; `running` while work is active. */
+  resultState?: BackgroundResultState;
+  /** Stable terminal reason for failed, interrupted, or incomplete work. */
+  terminalReason?: string;
+  /** Safe to call get_background_result again without restarting work. */
+  retrySafe?: boolean;
+  /** Whether the provider/engine classified the failed run itself as retryable. */
+  agentRetryable?: boolean;
   /** Current execution phase, including provider waits and retries. */
   phase?: BackgroundAgentRuntimePhase;
   /** Timestamp when execution left the queue. */
@@ -139,9 +157,14 @@ export interface BackgroundAgentKillResult {
   partialOutput?: string;
 }
 
+export interface BackgroundAgentResultContent {
+  text: string;
+  images: Array<{ data: string; mimeType: string }>;
+}
+
 export interface BackgroundAgentProvider {
   spawn(request: SpawnBackgroundRequest): Promise<SpawnBackgroundResult>;
   getStatus(sessionId: string): BackgroundAgentStatusResult;
-  getResult(sessionId: string): Promise<string>;
+  getResult(sessionId: string): Promise<string | BackgroundAgentResultContent>;
   kill(sessionId: string, reason?: string): BackgroundAgentKillResult;
 }

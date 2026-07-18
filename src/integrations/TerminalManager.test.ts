@@ -33,6 +33,12 @@ type MockManagedTerminal = {
   outputBuffer: string;
   backgroundExitCode: number | null;
   backgroundOutputCaptured: boolean;
+  backgroundState?:
+    | "running"
+    | "detached"
+    | "timed_out"
+    | "completed"
+    | "unknown_termination";
   backgroundDisposables: Array<{ dispose(): void }>;
   terminal: {
     show: ReturnType<typeof vi.fn>;
@@ -742,6 +748,196 @@ describe("TerminalManager terminal selection", () => {
     });
   });
 
+  it("prefers an exact shell end status over an earlier code-less marker", async () => {
+    const manager = new TerminalManager();
+    const endListeners: Array<
+      Parameters<typeof vscode.window.onDidEndTerminalShellExecution>[0]
+    > = [];
+    vi.spyOn(
+      vscode.window,
+      "onDidEndTerminalShellExecution",
+    ).mockImplementation((listener) => {
+      endListeners.push(listener);
+      return { dispose: vi.fn() };
+    });
+    const execution = {
+      read: async function* () {
+        yield "done\r\n\x1B]633;D\x07";
+      },
+    };
+    const executeCommand = vi.fn(() => execution);
+    let terminal!: MockManagedTerminal["terminal"];
+
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => {
+      terminal = {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+        shellIntegration: {
+          cwd: { fsPath: cwd },
+          executeCommand,
+        },
+      };
+      const managed = {
+        id: "term_unknown_marker",
+        name,
+        cwd,
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal,
+      } satisfies MockManagedTerminal;
+      (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+        managed,
+      ];
+      return managed;
+    });
+
+    const resultPromise = manager.executeCommand({
+      command: "exit 7",
+      cwd: "/workspace",
+    });
+    await waitForCondition(() => endListeners.length === 1);
+    endListeners[0]({
+      terminal: terminal as never,
+      shellIntegration: terminal.shellIntegration as never,
+      execution: execution as never,
+      exitCode: 7,
+    });
+
+    await expect(resultPromise).resolves.toMatchObject({
+      exit_code: 7,
+      output: "done",
+    });
+  });
+
+  it("returns promptly after a code-less marker when no exact end event arrives", async () => {
+    const manager = new TerminalManager();
+    const executeCommand = vi.fn(() => ({
+      read: async function* () {
+        yield "done\r\n\x1B]633;D\x07";
+      },
+    }));
+
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => {
+      const managed = {
+        id: "term_unknown_marker_no_end",
+        name,
+        cwd,
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal: {
+          show: vi.fn(),
+          sendText: vi.fn(),
+          dispose: vi.fn(),
+          shellIntegration: {
+            cwd: { fsPath: cwd },
+            executeCommand,
+          },
+        },
+      } satisfies MockManagedTerminal;
+      (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+        managed,
+      ];
+      return managed;
+    });
+
+    const startedAt = Date.now();
+    const result = await manager.executeCommand({
+      command: "echo done",
+      cwd: "/workspace",
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(result).toMatchObject({
+      exit_code: null,
+      output: "done",
+    });
+    expect(
+      manager.getBackgroundState("term_unknown_marker_no_end"),
+    ).toMatchObject({
+      state: "unknown_termination",
+      exit_code: null,
+    });
+  });
+
+  it("preserves a marker exit code when the output stream wins the completion race", async () => {
+    const manager = new TerminalManager();
+    const executeCommand = vi.fn(() => ({
+      read: async function* () {
+        yield "failed output\r\n\x1B]633;D;7\x07";
+      },
+    }));
+
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => {
+      const managed = {
+        id: "term_marker_exit",
+        name,
+        cwd,
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal: {
+          show: vi.fn(),
+          sendText: vi.fn(),
+          dispose: vi.fn(),
+          shellIntegration: {
+            cwd: { fsPath: cwd },
+            executeCommand,
+          },
+        },
+      } satisfies MockManagedTerminal;
+      (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+        managed,
+      ];
+      return managed;
+    });
+
+    const result = await manager.executeCommand({
+      command: "exit 7",
+      cwd: "/workspace",
+    });
+
+    expect(result).toMatchObject({
+      exit_code: 7,
+      output: "failed output",
+      output_captured: true,
+    });
+    expect(manager.getBackgroundState("term_marker_exit")).toMatchObject({
+      state: "completed",
+      exit_code: 7,
+      output: "failed output",
+    });
+  });
+
   it("ignores stale shell end events from a prior execution", async () => {
     const manager = new TerminalManager();
     const onCommandFinalizationDeferred = vi.fn();
@@ -830,6 +1026,91 @@ describe("TerminalManager terminal selection", () => {
     expect(manager.getBackgroundState("term_exact_execution")?.is_running).toBe(
       false,
     );
+  });
+
+  it("keeps background tracking alive after a code-less marker until exact completion", async () => {
+    const manager = new TerminalManager();
+    const endListeners: Array<
+      Parameters<typeof vscode.window.onDidEndTerminalShellExecution>[0]
+    > = [];
+    vi.spyOn(
+      vscode.window,
+      "onDidEndTerminalShellExecution",
+    ).mockImplementation((listener) => {
+      endListeners.push(listener);
+      return { dispose: vi.fn() };
+    });
+    const execution = {
+      read: async function* () {
+        yield "background done\r\n\x1B]633;D\x07";
+      },
+    };
+    const executeCommand = vi.fn(() => execution);
+    let terminal!: MockManagedTerminal["terminal"];
+
+    vi.spyOn(
+      manager as unknown as {
+        createTerminal: (cwd: string, name: string) => MockManagedTerminal;
+      },
+      "createTerminal",
+    ).mockImplementation((cwd: string, name: string) => {
+      terminal = {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+        shellIntegration: {
+          cwd: { fsPath: cwd },
+          executeCommand,
+        },
+      };
+      const managed = {
+        id: "term_bg_unknown_marker",
+        name,
+        cwd,
+        busy: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundRunning: false,
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal,
+      } satisfies MockManagedTerminal;
+      (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+        managed,
+      ];
+      return managed;
+    });
+
+    await manager.executeCommand({
+      command: "exit 7",
+      cwd: "/workspace",
+      background: true,
+    });
+    await waitForCondition(
+      () =>
+        manager.getBackgroundState("term_bg_unknown_marker")?.output ===
+        "background done",
+    );
+    expect(manager.getBackgroundState("term_bg_unknown_marker")).toMatchObject({
+      is_running: true,
+      state: "detached",
+      exit_code: null,
+    });
+
+    endListeners[0]({
+      terminal: terminal as never,
+      shellIntegration: terminal.shellIntegration as never,
+      execution: execution as never,
+      exitCode: 7,
+    });
+
+    expect(manager.getBackgroundState("term_bg_unknown_marker")).toMatchObject({
+      is_running: false,
+      state: "completed",
+      exit_code: 7,
+      output: "background done",
+    });
   });
 
   it("retroactively marks sendText background output as captured on completion", async () => {
@@ -1171,6 +1452,110 @@ describe("TerminalManager terminal selection", () => {
     ]);
     expect(manager.getRecentlyClosedTerminals()).toHaveLength(1);
     expect(manager.getRecentlyClosedTerminals()[0]?.id).toBe("term_closed");
+  });
+
+  it("retains bounded output and status after a managed terminal closes", () => {
+    const manager = new TerminalManager();
+    const terminal = {
+      name: "AgentLink",
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies MockVscodeTerminal;
+    const oversized = `${"x".repeat(45 * 1024)}\nfinal output`;
+    const managed = {
+      id: "term_closed_output",
+      name: "AgentLink",
+      cwd: "/workspace",
+      busy: false,
+      backgroundRunning: false,
+      lastCommandEndedAt: 0,
+      outputBuffer: oversized,
+      backgroundExitCode: 9,
+      backgroundOutputCaptured: true,
+      backgroundDisposables: [],
+      terminal,
+    } satisfies MockManagedTerminal;
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      managed,
+    ];
+
+    manager.closeTerminals();
+
+    expect(manager.getBackgroundState(managed.id)).toMatchObject({
+      is_running: false,
+      state: "completed",
+      exit_code: 9,
+      output_captured: true,
+    });
+    const snapshot = manager.getBackgroundState(managed.id)!;
+    expect(snapshot.output).toContain("final output");
+    expect(snapshot.output.length).toBeLessThanOrEqual(40 * 1024);
+  });
+
+  it("does not re-adopt terminals while VS Code still reports pending disposal", () => {
+    const manager = new TerminalManager();
+    const terminal = {
+      name: "AgentLink",
+      shellIntegration: {
+        cwd: { fsPath: "/workspace" },
+        executeCommand: vi.fn(),
+      },
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies MockVscodeTerminal;
+    (vscode.window as unknown as MockVscodeWindow).terminals = [terminal];
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      {
+        id: "term_pending_close",
+        name: "AgentLink",
+        cwd: "/workspace",
+        busy: false,
+        backgroundRunning: false,
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: 0,
+        backgroundOutputCaptured: true,
+        backgroundDisposables: [],
+        terminal,
+      },
+    ];
+
+    expect(manager.closeTerminals()).toEqual({ closed: 1 });
+    expect(manager.listTerminals()).toEqual([]);
+  });
+
+  it("reports a never-run managed terminal as completed rather than unknown", () => {
+    const manager = new TerminalManager();
+    const terminal = {
+      name: "AgentLink",
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies MockVscodeTerminal;
+    (manager as unknown as { terminals: MockManagedTerminal[] }).terminals = [
+      {
+        id: "term_idle",
+        name: "AgentLink",
+        cwd: "/workspace",
+        busy: false,
+        backgroundRunning: false,
+        backgroundState: "completed",
+        lastCommandEndedAt: 0,
+        outputBuffer: "",
+        backgroundExitCode: null,
+        backgroundOutputCaptured: false,
+        backgroundDisposables: [],
+        terminal,
+      },
+    ];
+
+    expect(manager.getBackgroundState("term_idle")).toMatchObject({
+      is_running: false,
+      state: "completed",
+      exit_code: null,
+    });
   });
 
   it("adopts currently open AgentLink terminals before listing", () => {

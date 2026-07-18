@@ -24,6 +24,15 @@ export function fmtDuration(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** Number of viewable images in a completed tool call's result. */
+export function countResultImages(toolCall: ToolCallData): number {
+  return toolCall.complete ? (toolCall.resultImages?.length ?? 0) : 0;
+}
+
+export function formatResultImageLabel(count: number): string {
+  return count === 1 ? "1 image result" : `${count} image results`;
+}
+
 /** Parse partial/full JSON safely. */
 function tryParseJson(json: string): Record<string, unknown> | null {
   try {
@@ -673,6 +682,17 @@ export function ToolCallBlock({
                     <span key={i}>{part.text}</span>
                   ),
                 )}
+            </span>
+          )}
+          {resultImages.length > 0 && (
+            <span
+              class="tool-image-badge"
+              role="img"
+              aria-label={formatResultImageLabel(resultImages.length)}
+              title={`${formatResultImageLabel(resultImages.length)} — expand to view`}
+            >
+              <i class="codicon codicon-file-media" aria-hidden="true" />
+              {resultImages.length > 1 && resultImages.length}
             </span>
           )}
           {complete && toolCall.durationMs != null && (

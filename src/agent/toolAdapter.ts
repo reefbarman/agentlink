@@ -148,7 +148,10 @@ import type {
 import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js";
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { WorktreeAgentLaunchProvider } from "../core/capabilities/worktree.js";
-import type { BackgroundAgentProvider } from "../core/capabilities/background.js";
+import type {
+  BackgroundAgentProvider,
+  BackgroundAgentResultContent,
+} from "../core/capabilities/background.js";
 import type { NativeWebToolExecutionProvider } from "../core/capabilities/web.js";
 import type {
   ModeSwitchProvider,
@@ -179,7 +182,8 @@ import {
 } from "../util/paths.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import { createComposeExecutionScope } from "./compose/composeScope.js";
-import { handleCompose, type ComposeParams } from "./compose/composeRuntime.js";
+import type { ComposeParams } from "./compose/composeRuntime.js";
+import { loadComposeRuntime } from "./compose/composeRuntimeLoader.js";
 
 // --- Read-only tools (safe to execute in parallel) ---
 
@@ -768,7 +772,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
         },
         reviewScope: {
           description:
-            "Structured review target captured into an immutable snapshot when the background agent is spawned. working_tree defaults to unstaged tracked changes plus untracked files; use paths to narrow it. files captures the current contents of exact files. commit_range resolves Git diff output immediately. diff accepts already captured content.",
+            "Structured review target captured into an immutable snapshot when the background agent is spawned. Relative paths resolve from the executing project; absolute paths inside any open workspace root are accepted. working_tree defaults to unstaged tracked changes plus untracked files; Git scopes must stay within one root. files captures exact current files and may span roots, including non-Git workspaces. commit_range resolves Git diff output immediately. diff accepts already captured content.",
           oneOf: [
             {
               type: "object",
@@ -832,7 +836,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_status",
     description:
-      "Non-blocking health and progress snapshot for a background agent. Returns its phase, total elapsedMs, idleMs since the last real progress event, budget usage, and canSteer/canKill controls as well as current output. Use it while continuing independent work; do not poll tightly or infer a hang from elapsed time alone because a provider request or long tool can be quiet. If progress has gone quiet and the partial result is sufficient, steer it to stop using tools and return now. If steering cannot be delivered at a safe boundary, the idle time keeps growing, and the result is no longer worth waiting for, kill it. Call get_background_result only when ready to block for integration.",
+      "Non-blocking health and progress snapshot for a background agent. Returns phase/runtime telemetry, durable resultState/terminalReason/retry guidance when terminal, budget usage, canSteer/canKill controls, and preserved output. Use it while continuing independent work; do not poll tightly or infer a hang from elapsed time alone because a provider request or long tool can be quiet. If progress has gone quiet and the partial result is sufficient, steer it to stop using tools and return now. If steering cannot be delivered at a safe boundary, the idle time keeps growing, and the result is no longer worth waiting for, kill it. Call get_background_result only when ready to block for integration.",
     input_schema: {
       type: "object",
       properties: {
@@ -847,7 +851,7 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
     name: "get_background_result",
     description:
-      "Wait for a background agent to finish and return its final response. Use this for explicit pull/wait flows; skip it when a completion result was already pushed into context.",
+      "Wait for a background agent to finish and return its final response. Successful runs return the expected response; failed, interrupted, cancelled, unauthorized, or incomplete expected-result runs return structured JSON with status, terminalReason, retrySafe, agentRetryable, and preserved partialOutput when available. Use this for explicit pull/wait flows; skip it when a completion result was already pushed into context.",
     input_schema: {
       type: "object",
       properties: {
@@ -1681,7 +1685,7 @@ export interface ToolDispatchContext {
   onGetBackgroundResult?: (
     callerSessionId: string,
     sessionId: string,
-  ) => Promise<string>;
+  ) => Promise<string | BackgroundAgentResultContent>;
   /** Kill a running background agent and return its partial output. */
   onKillBackground?: (
     callerSessionId: string,
@@ -1806,11 +1810,7 @@ export function createAgentToolRuntime(
     async executeTool(request: AgentToolExecutionRequest) {
       const startedAt = Date.now();
       try {
-        enforceDelegatedPathPolicy(
-          request.name,
-          request.input,
-          ctx.delegationPolicy,
-        );
+        enforceDelegatedPathPolicy(request.name, request.input, ctx);
         const mutationTarget = resolveWorkspaceMutationTarget(
           request.name,
           request.input,
@@ -1845,7 +1845,9 @@ export function createAgentToolRuntime(
         const execute = async () =>
           request.name === "compose"
             ? __DEV_BUILD__
-              ? await handleCompose({
+              ? await (
+                  await loadComposeRuntime(ctx.extensionUri.fsPath)
+                ).handleCompose({
                   params: request.input as unknown as ComposeParams,
                   scope: createComposeExecutionScope({
                     runtime: this,
@@ -2029,58 +2031,118 @@ function resolveWorkspaceMutationTarget(
 function enforceDelegatedPathPolicy(
   toolName: string,
   input: Record<string, unknown>,
-  policy?: ToolDispatchContext["delegationPolicy"],
+  ctx: ToolDispatchContext,
 ): void {
+  const policy = ctx.delegationPolicy;
   if (!policy || !PATH_MUTATING_TOOLS.has(toolName)) return;
-  const normalize = (value: string) =>
-    value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  const rawExecutionRoot = path.resolve(ctx.projectRoot ?? process.cwd());
+  const rootKey = (value: string): string =>
+    process.platform === "win32" ? value.toLowerCase() : value;
+  const seenRoots = new Set<string>();
+  const workspaceRoots = [
+    rawExecutionRoot,
+    ...(ctx.workspaceProjectRoots ?? []).map((root) => path.resolve(root)),
+  ]
+    .map((rawRoot) => ({ rawRoot, canonicalRoot: canonicalizePath(rawRoot) }))
+    .filter(({ canonicalRoot }) => {
+      const key = rootKey(canonicalRoot);
+      if (seenRoots.has(key)) return false;
+      seenRoots.add(key);
+      return true;
+    })
+    .sort((left, right) => right.rawRoot.length - left.rawRoot.length);
+  const canonicalizeWorkspacePath = (value: string): string => {
+    const absolutePath = path.resolve(value);
+    const canonicalPath = canonicalizePath(absolutePath);
+    const canonicalOwner = workspaceRoots.find(({ canonicalRoot }) =>
+      isPathWithinRoot(canonicalPath, canonicalRoot),
+    );
+    if (canonicalOwner) return canonicalPath;
+    const lexicalOwner = workspaceRoots.find(({ rawRoot }) =>
+      isPathWithinRoot(absolutePath, rawRoot),
+    );
+    return lexicalOwner
+      ? path.resolve(
+          lexicalOwner.canonicalRoot,
+          path.relative(lexicalOwner.rawRoot, absolutePath),
+        )
+      : canonicalPath;
+  };
+  const canonicalExecutionRoot = canonicalizeWorkspacePath(rawExecutionRoot);
+  const resolveInputPath = (value: string): string =>
+    canonicalizeWorkspacePath(
+      path.isAbsolute(value)
+        ? value
+        : path.resolve(canonicalExecutionRoot, value),
+    );
+  const resolveScopePaths = (value: string): string[] =>
+    path.isAbsolute(value)
+      ? [canonicalizeWorkspacePath(value)]
+      : workspaceRoots.map(({ canonicalRoot }) =>
+          canonicalizeWorkspacePath(path.resolve(canonicalRoot, value)),
+        );
   const paths = Object.entries(input)
     .filter(([key]) => /(^|_)(path|file|directory)$/i.test(key))
     .flatMap(([, value]) =>
       typeof value === "string"
-        ? [normalize(value)]
+        ? [resolveInputPath(value)]
         : Array.isArray(value)
           ? value
               .filter((item): item is string => typeof item === "string")
-              .map(normalize)
+              .map(resolveInputPath)
           : [],
     );
   if (paths.length === 0) return;
-  const contains = (scope: string, path: string) => {
-    const normalizedScope = normalize(scope);
-    return path === normalizedScope || path.startsWith(`${normalizedScope}/`);
-  };
-  for (const path of paths) {
-    if (policy.forbiddenPaths?.some((scope) => contains(scope, path))) {
+  const contains = (scope: string, targetPath: string) =>
+    resolveScopePaths(scope).some((scopePath) =>
+      isPathWithinRoot(targetPath, scopePath),
+    );
+  for (const targetPath of paths) {
+    if (policy.forbiddenPaths?.some((scope) => contains(scope, targetPath))) {
       policy.onDecision?.({
         decision: "denied",
         operation: toolName,
         reason: "forbidden_path",
-        path,
+        path: targetPath,
       });
       throw new Error(
-        `Delegation policy denied ${toolName} for forbidden path: ${path}`,
+        `Delegation policy denied ${toolName} for forbidden path: ${targetPath}`,
+      );
+    }
+    if (
+      !workspaceRoots.some(({ canonicalRoot }) =>
+        isPathWithinRoot(targetPath, canonicalRoot),
+      )
+    ) {
+      policy.onDecision?.({
+        decision: "denied",
+        operation: toolName,
+        reason: "outside_workspace_roots",
+        path: targetPath,
+      });
+      throw new Error(
+        `Delegation policy denied ${toolName} outside workspace roots: ${targetPath}`,
       );
     }
     if (
       policy.ownedPaths?.length &&
-      !policy.ownedPaths.some((scope) => contains(scope, path))
+      !policy.ownedPaths.some((scope) => contains(scope, targetPath))
     ) {
       policy.onDecision?.({
         decision: "denied",
         operation: toolName,
         reason: "outside_owned_paths",
-        path,
+        path: targetPath,
       });
       throw new Error(
-        `Delegation policy denied ${toolName} outside owned paths: ${path}`,
+        `Delegation policy denied ${toolName} outside owned paths: ${targetPath}`,
       );
     }
     policy.onDecision?.({
       decision: "allowed",
       operation: toolName,
       reason: "delegated_path_allowed",
-      path,
+      path: targetPath,
     });
   }
 }
@@ -3393,6 +3455,18 @@ export async function dispatchToolCall(
       const bgResult = await getBackgroundResult(
         String(params.sessionId ?? ""),
       );
+      if (typeof bgResult !== "string") {
+        return {
+          content: [
+            { type: "text", text: bgResult.text },
+            ...bgResult.images.map((image) => ({
+              type: "image" as const,
+              data: image.data,
+              mimeType: image.mimeType,
+            })),
+          ],
+        };
+      }
       return {
         content: [{ type: "text", text: bgResult }],
       };

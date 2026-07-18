@@ -523,8 +523,11 @@ Read file contents with line numbers. Returns rich metadata that built-in read t
 - `diagnostics` — `{ errors: N, warnings: N }` summary from language services
 - `symbols` — top-level symbols grouped by kind (e.g. `{ "function": ["foo (line 1)"], "class": ["Bar (line 20)"] }`). Automatically skipped for JSON/JSONC files.
 - `content` — numbered lines in `line_number | content` format
-- `semantic_match` — when `query` is used: `{ query, startLine, endLine }` showing the matched chunk
+- `semantic_match` — when an eligible `query` is used: successful `{ query, startLine, endLine }` metadata, `status: "not_found"` with default-offset and literal-anchor guidance when lookup produces no match, or `status: "not_run_structured_redaction"` for protected config files
 - `anchor_match` — when `anchor`/`anchor_regex` is used: match metadata (or `status: "not_found"`)
+- `redaction` — present when automatic structured-secret protection redacts values or withholds malformed eligible JSON/JSONC; reports only a count or status, never matched key names
+
+For conservative settings/config paths such as `.vscode/settings.json`, `.agentlink/*.json`, `mcp.json`, and `*.config.json`, high-confidence secret values are replaced before pagination and literal/regex anchor matching. Semantic `query` lookup is not run for these eligible files. Comments, formatting, line positions, and newline sequences are preserved; malformed eligible JSON/JSONC is withheld. Ordinary JSON data, fixtures, and source files are not scanned. File `size` and `modified` metadata still describe the original file bytes. This protection is specific to these read surfaces and does not imply redaction in shell or search-tool output.
 
 Fields like `git_status`, `diagnostics`, and `symbols` are omitted when not available rather than returned as null.
 
@@ -554,6 +557,9 @@ Build a compact read-only context pack for an explicit file. Prefer this over `r
 - `symbols` — compact document symbol outline when language services provide one
 - `working_set` — `status`, `content_hash`, optional `previous_content_hash`, `range`, `should_include_content`, and `last_read_at`
 - `content` — numbered lines, omitted only when `working_set.should_include_content` is false
+- `redaction` — the same targeted settings/config JSON/JSONC protection metadata as `read_file`, when applicable
+
+Structured-secret redaction is applied before content ranges are returned. The working-set hash, file size, and modification metadata remain based on the original bytes, so dedupe and change detection are not weakened by redaction.
 
 Working-set statuses are `new`, `unchanged`, `changed`, and `omitted_unchanged`. Omission is opt-in and exact-range only; overlapping ranges and full-file reads are tracked independently so callers do not lose content they have not explicitly received.
 
@@ -786,10 +792,12 @@ Responses include `status`, `path`, `tier`, `scope`, `operation`, and any new di
 
 Edit an existing file using search/replace blocks. Opens a diff view for review. Supports **multiple hunks** in a single call. Responses include per-block diagnostics for partial matches/failures, format-on-save edits, and pending-edit lock conflicts return a structured recovery hint instead of a bare timeout string.
 
-| Parameter | Type   | Description                              |
-| --------- | ------ | ---------------------------------------- |
-| `path`    | string | File path                                |
-| `diff`    | string | Search/replace blocks (see format below) |
+| Parameter       | Type      | Description                                                                                                                                                                                                                                                                                                          |
+| --------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`          | string    | File path                                                                                                                                                                                                                                                                                                            |
+| `diff`          | string    | Search/replace blocks (see format below)                                                                                                                                                                                                                                                                             |
+| `block_options` | object[]? | Optional per-block controls keyed by zero-based positional block `index` (malformed block slots before the target still count). Specify exactly one of `occurrence` (1-based matching occurrence) or `replace_all: true`. `replace_all` applies only to exact matches; unlisted blocks still require a unique match. |
+| `atomic`        | boolean?  | When true, require every block to succeed and no malformed blocks before review/write. The same all-block requirement is revalidated after re-reading under the write lock. Defaults to false.                                                                                                                       |
 
 ```text
 <<<<<<< SEARCH
@@ -799,7 +807,11 @@ replacement content
 >>>>>>> REPLACE
 ```
 
-Include multiple SEARCH/REPLACE blocks for multiple edits in one call. If a response includes both `user_edits` and `format_on_save_edits`, compose them in order: proposed content → `user_edits` → `format_on_save_edits`. If the format patch is omitted due to size, re-read the file before the next edit.
+Include multiple SEARCH/REPLACE blocks for multiple edits in one call. Without `block_options`, every block retains the safe unique-match requirement. Use `occurrence` to select one reported exact, whitespace-flexible, or escape-normalized candidate in file order. Use `replace_all: true` only for intentional exact bulk replacement; it never bulk-applies fuzzy matches. Set `atomic: true` for dependent edits that must not proceed unless every block validates; failures return `atomic: true` and `no_changes_applied: true` without opening review or writing content.
+
+If a SEARCH is ambiguous, `failed_block_details[].candidate_locations` includes up to 12 candidate 1-based line ranges and compact matching-line snippets; `candidate_locations_omitted` reports additional candidates. Accepted multi-block or partial results include `block_results`; applied blocks report `selection`, `replacement_count`, and `post_edit_range`/`post_edit_ranges` when they still describe the accepted content. Accepted results include `post_edit_content_hash` (SHA-256). If user edits or formatting change the accepted content, the hash follows the final content and stale proposed ranges are omitted.
+
+If a response includes both `user_edits` and `format_on_save_edits`, compose them in order: proposed content → `user_edits` → `format_on_save_edits`. If the format patch is omitted due to size, re-read the file before the next edit.
 
 ### go_to_definition
 
@@ -964,6 +976,8 @@ Rename a symbol across the workspace using VS Code's language server. Updates al
 | `column`   | number | Column number of the symbol (1-indexed) |
 | `new_name` | string | The new name for the symbol             |
 
+On success, the result reports the old and new names, every modified file, and the total number of changes. If the language service rejects the rename, the error includes its original reason plus the targeted symbol, language, path, line, column, requested name, and suggested next steps. This makes wrong-position errors distinguishable from elements that the active language service cannot rename.
+
 ### find_and_replace
 
 Bulk find-and-replace across **multiple files**. Opens a rich preview panel showing each match in context with inline diffs — users can toggle individual matches on/off before accepting.
@@ -1036,7 +1050,7 @@ Example:
 
 Close managed terminals. With no arguments, closes all terminals created by AgentLink.
 
-Use this proactively to clean up dedicated terminals you created for background/parallel work once they are no longer needed.
+Use this proactively to clean up dedicated terminals you created for background/parallel work once they are no longer needed. Recently closed terminals retain bounded output, capture metadata, and final exit status for retrieval through `get_terminal_output`; close results exclude terminals whose disposal is still pending.
 
 | Parameter | Type      | Description                                                                      |
 | --------- | --------- | -------------------------------------------------------------------------------- |
@@ -1097,9 +1111,9 @@ Good examples:
 - foreground edits the core change while a background agent checks docs/browser parity/downstream call chains
 - foreground coordinates multiple independent lanes, then integrates completed results
 
-For writable background work, include explicit ownership boundaries in `message`: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts.
+For writable background work, include explicit ownership boundaries in `message`: owned files/directories, files to avoid, allowed commands/tests, and what to do on conflicts. Delegated relative `ownedPaths`/`forbiddenPaths` are compared canonically across all open workspace roots; absolute tool paths inside those scopes are accepted, and forbidden scopes retain precedence.
 
-For review delegations, use `reviewScope` to describe the target. AgentLink captures it into an immutable snapshot when the agent is spawned, so queued reviews are not affected by later edits or commits. `working_tree` captures unstaged tracked changes and untracked files by default, with optional state and path filters; `files` captures exact current file contents; `commit_range` resolves a Git range immediately; and `diff` accepts content already captured by the caller. The `review_findings` envelope includes `reviewedScope` (what was actually reviewed) and `emptyDiff` (true when the requested scope was empty or missing).
+For review delegations, use `reviewScope` to describe the target. AgentLink captures it into an immutable snapshot when the agent is spawned, so queued reviews are not affected by later edits or commits. Relative paths resolve from the executing project, while absolute paths inside any open workspace root are accepted. `working_tree` captures unstaged tracked changes and untracked files by default, with optional state and path filters; `commit_range` resolves a Git range immediately. These Git scopes must stay within one workspace/Git root. `files` captures exact current file contents, can span roots, and is the appropriate choice for non-Git workspaces. `diff` accepts content already captured by the caller. Outside-root errors identify allowed roots and show an accepted example. The `review_findings` envelope includes `reviewedScope` (what was actually reviewed) and `emptyDiff` (true when the requested scope was empty or missing).
 
 | Parameter         | Type         | Description                                                                                                                       |
 | ----------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -1142,16 +1156,28 @@ Returns JSON with:
 - `streamingPreview` and `progressSummary` for running sessions when available
 - `resolvedMode`, `resolvedModel`, `resolvedProvider`, `taskClass`
 - `phase`, `phaseStartedAt`, `startedAt`, `lastProgressAt`, `elapsedMs`, `idleMs`
+- `resultState` (`running`, `completed`, `incomplete_expected_result`, `failed`, `cancelled`, `budget_exhausted`, `interrupted`, or `authorization_lost`)
+- `terminalReason`, `retrySafe`, and `agentRetryable` for terminal sessions
 - `requestStartedAt`, `requestElapsedMs`, and `retryAt` while a provider request or retry is active
 - `toolCalls`, `tokenUsage`, `apiTurns`, `budget`, and `budgetUsage`
 - `canSteer` and `canKill`, so a coordinator knows which control is currently valid
-- `partialOutput` only when `done=true`
+- durable `partialOutput` when `done=true` and useful output was captured
 
 `elapsedMs` is total runtime after leaving the queue; `idleMs` is the time since the latest provider, text, or tool progress event. A high elapsed time alone is not a hang. When progress has gone quiet and the partial result is already useful, steer the agent to stop using tools and return its best findings. Steering is delivered only at a safe boundary, so kill the agent if the instruction cannot be delivered and waiting is no longer worthwhile.
 
 ### get_background_result
 
-Block until a background session finishes and return its final assistant output text.
+Block until a background session finishes. Successful runs return the expected final response. Terminal runs that failed, were interrupted/cancelled, lost authorization, or omitted a required structured envelope return JSON containing:
+
+- `status`
+- `terminalReason`
+- `retrySafe` — whether calling `get_background_result` again is safe and stable
+- `agentRetryable` — whether the provider/engine classified the run itself as retryable
+- `partialOutput` when substantive output was captured before termination
+
+A valid `set_task_status` result or parsed expected-result envelope remains authoritative even if the provider disconnects immediately afterward. Required structured output such as `review_findings` cannot be reported as a clean completion when only progress prose was produced. Persisted foreground sessions automatically restore their background tree so the original parent can retrieve durable child results after reload; inactive restored trees are pruned when another foreground is selected.
+
+When a background agent returns images, `get_background_result` includes image content blocks alongside the text result. Generated images render inline in the calling chat and remain available in the background transcript. ACP image output accepts PNG, JPEG, GIF, and WebP payloads up to 10 MB each, with at most 8 images retained per result.
 
 | Parameter   | Type   | Description                             |
 | ----------- | ------ | --------------------------------------- |
@@ -1347,7 +1373,7 @@ Runtime behavior:
 - Additional VS Code workspace folders are passed as ACP `additionalDirectories`.
 - Client capabilities are read-only in this first implementation (`fs.readTextFile=false`, `fs.writeTextFile=false`, `terminal=false`).
 - With `readonlyOnly: true` (default), write/move/delete/execute/unknown permission requests are rejected before showing approval UI.
-- ACP text, tool status, stop reason, and final usage are mapped into AgentLink's existing background status/result UI.
+- ACP text, image content (including tool-result images), tool status, stop reason, and final usage are mapped into AgentLink's existing background status/result UI. Images are persisted in the background transcript and returned to the foreground through `get_background_result`.
 - `kill_background_agent` aborts the ACP request and terminates the subprocess.
 
 #### ACP smoke-test checklist
@@ -1407,7 +1433,7 @@ AgentLink automatically suppresses common `.agentlink` runtime artifacts from se
 
 ### get_terminal_output
 
-Get the output and status of a background or timed-out command. Use after `execute_command` with `background: true`, or after a foreground command that timed out (`timed_out: true` in the response).
+Get retained output and status for a background, detached, timed-out, completed, or recently closed command. Use after `execute_command` with `background: true`, after a foreground command that timed out (`timed_out: true`), or after the terminal UI was closed before you retrieved its final result.
 
 If you pass `kill: true`, AgentLink sends Ctrl+C to the terminal and reports whether the process was killed or had already exited.
 
@@ -1421,6 +1447,8 @@ If you pass `kill: true`, AgentLink sends Ctrl+C to the terminal and reports whe
 | `output_offset`       | number?  | Skip first N lines before applying head/tail                              |
 | `output_grep`         | string?  | Filter output to lines matching this regex                                |
 | `output_grep_context` | number?  | Context lines around each grep match                                      |
+
+Responses include `state` as `running`, `detached`, `timed_out`, `completed`, or `unknown_termination`. `exit_code: null` is reserved for commands still running or cases where VS Code never exposed a final status; numeric shell-end events and completion markers are preserved. Recently closed snapshots retain at most 40 KiB of cleaned and raw output each across the 20 most recent managed terminals.
 
 When a command is still running and the captured tail appears to include an interactive prompt, responses include `blocked_on_prompt: true` with a `prompt_hint` to distinguish likely prompt stalls from active progress.
 

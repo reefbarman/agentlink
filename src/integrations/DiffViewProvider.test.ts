@@ -1,7 +1,12 @@
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFormatOnSaveReport,
   createUserEditsPatch,
+  diagnoseEditSaveFailure,
   isIgnorableTabCloseError,
 } from "./DiffViewProvider.js";
 
@@ -113,6 +118,95 @@ describe("createUserEditsPatch", () => {
     expect(patch).toContain("+++ src/example.ts\tuser-edited");
     expect(patch).toContain("-const value = 1;");
     expect(patch).toContain("+const value = 2;");
+  });
+});
+
+describe("diagnoseEditSaveFailure", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+    tempDirs.length = 0;
+  });
+
+  async function makeFile(content: string): Promise<string> {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-save-failure-"),
+    );
+    tempDirs.push(dir);
+    const filePath = path.join(dir, "file.ts");
+    await fs.writeFile(filePath, content, "utf-8");
+    return filePath;
+  }
+
+  it("reports an unchanged disk baseline and preserved diff snapshot", async () => {
+    const filePath = await makeFile("old");
+
+    await expect(
+      diagnoseEditSaveFailure({
+        absolutePath: filePath,
+        baselineContent: "old",
+        documentDirty: true,
+        reviewState: "diff_snapshot_preserved",
+      }),
+    ).resolves.toEqual({
+      save_failure: {
+        document_dirty: true,
+        disk_state: "unchanged",
+        concurrent_change: false,
+        review_state: "diff_snapshot_preserved",
+        vscode_error_detail: "unavailable",
+        retryable: true,
+      },
+      next_steps: [
+        expect.stringContaining("review snapshot"),
+        expect.stringContaining("pre-edit disk baseline"),
+      ],
+    });
+  });
+
+  it("detects a concurrent disk change", async () => {
+    const filePath = await makeFile("changed elsewhere");
+
+    await expect(
+      diagnoseEditSaveFailure({
+        absolutePath: filePath,
+        baselineContent: "old",
+        documentDirty: true,
+        reviewState: "dirty_document_preserved",
+      }),
+    ).resolves.toMatchObject({
+      save_failure: {
+        disk_state: "changed",
+        concurrent_change: true,
+        review_state: "dirty_document_preserved",
+      },
+      next_steps: [expect.any(String), expect.stringContaining("re-read")],
+    });
+  });
+
+  it("reports a missing disk target without guessing concurrency", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "agentlink-save-failure-"),
+    );
+    tempDirs.push(dir);
+
+    await expect(
+      diagnoseEditSaveFailure({
+        absolutePath: path.join(dir, "missing.ts"),
+        baselineContent: "old",
+        documentDirty: true,
+        reviewState: "dirty_document_preserved",
+      }),
+    ).resolves.toMatchObject({
+      save_failure: {
+        disk_state: "missing",
+        concurrent_change: "unknown",
+        disk_error_code: "ENOENT",
+      },
+    });
   });
 });
 

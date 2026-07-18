@@ -107,19 +107,31 @@ export function createVscodeContextDocumentProvider(
 ): ContextDocumentProvider {
   return {
     async resolveDocument(inputPath, sessionId) {
-      const { uri, document, absolutePath, relPath } =
-        await resolveAndOpenDocument(
-          inputPath,
-          approvalManager,
-          approvalPanel,
-          sessionId,
-        );
-      return {
-        absolutePath,
-        relPath,
-        languageId: document.languageId,
-        hostDocument: { uri, document },
-      };
+      try {
+        const { uri, document, absolutePath, relPath } =
+          await resolveAndOpenDocument(
+            inputPath,
+            approvalManager,
+            approvalPanel,
+            sessionId,
+          );
+        return {
+          absolutePath,
+          relPath,
+          languageId: document.languageId,
+          hostDocument: { uri, document },
+        };
+      } catch (err) {
+        // VS Code's openTextDocument missing-file error has no stable error code.
+        // Keep this host-specific message coupling at the adapter boundary.
+        if (
+          err instanceof Error &&
+          err.message.includes("Unable to resolve nonexistent file")
+        ) {
+          throw Object.assign(new Error(err.message), { code: "FileNotFound" });
+        }
+        throw err;
+      }
     },
   };
 }

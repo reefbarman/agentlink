@@ -30,11 +30,13 @@ vi.mock("unpdf", () => ({
 
 const resolveAndValidatePathMock = vi.fn();
 const tryGetFirstWorkspaceRootMock = vi.fn(() => "/workspace");
+const getWorkspaceRootsMock = vi.fn(() => ["/workspace"]);
 const isBinaryFileMock = vi.fn(() => false);
 
 vi.mock("../util/paths.js", () => ({
   resolveAndValidatePath: resolveAndValidatePathMock,
   tryGetFirstWorkspaceRoot: tryGetFirstWorkspaceRootMock,
+  getWorkspaceRoots: getWorkspaceRootsMock,
   isBinaryFile: isBinaryFileMock,
 }));
 

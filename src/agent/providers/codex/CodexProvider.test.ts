@@ -1212,7 +1212,7 @@ describe("CodexProvider ChatGPT-backend model gating", () => {
     expect(apiKeyIds).toContain("gpt-5.2-codex");
   });
 
-  it("retries an unavailable preview model with its stable equivalent", async () => {
+  it("retries an unavailable GPT-5.6 model with its older equivalent", async () => {
     const attemptedModels: unknown[] = [];
     createMock
       .mockImplementationOnce(async (body: Record<string, unknown>) => {

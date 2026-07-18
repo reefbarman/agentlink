@@ -272,7 +272,7 @@ describe("webview App reducer background agent launch blocks", () => {
     ]);
   });
 
-  it("promotes non-generate_image result images while retaining them on the tool call", () => {
+  it("keeps non-generate_image result images scoped to the tool call", () => {
     const toolCallId = "tool-read-image";
     let state = reducer(initialState, {
       type: "ADD_USER_MESSAGE",
@@ -297,16 +297,7 @@ describe("webview App reducer background agent launch blocks", () => {
 
     const assistant = state.messages[state.messages.length - 1];
     expect(assistant?.role).toBe("assistant");
-    expect(assistant?.displayMedia).toEqual({
-      images: [
-        {
-          name: "generated-image-1.png",
-          mimeType: "image/png",
-          src: "data:image/png;base64,YWJjZA==",
-        },
-      ],
-      documents: [],
-    });
+    expect(assistant?.displayMedia).toBeUndefined();
     expect(assistant?.blocks).toEqual([
       expect.objectContaining({
         type: "tool_call",
@@ -1958,7 +1949,7 @@ describe("webview App reducer background agent launch blocks", () => {
     });
   });
 
-  it("restores non-generate_image result images onto the tool call and display media", async () => {
+  it("restores non-generate_image result images only onto the tool call", async () => {
     const { agentMessagesToChatMessages } = await import("./App");
 
     const restored = agentMessagesToChatMessages([
@@ -1996,16 +1987,7 @@ describe("webview App reducer background agent launch blocks", () => {
         resultImages: [{ data: "YWJjZA==", mimeType: "image/png" }],
       }),
     ]);
-    expect(restored[1]?.displayMedia).toEqual({
-      images: [
-        {
-          name: "generated-image-1.png",
-          mimeType: "image/png",
-          src: "data:image/png;base64,YWJjZA==",
-        },
-      ],
-      documents: [],
-    });
+    expect(restored[1]?.displayMedia).toBeUndefined();
   });
 
   it("restores persisted MCP approval promotion metadata onto tool call blocks", async () => {

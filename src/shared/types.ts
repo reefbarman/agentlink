@@ -1,4 +1,7 @@
-import type { BackgroundAgentRuntimePhase } from "../core/capabilities/background.js";
+import type {
+  BackgroundAgentRuntimePhase,
+  BackgroundResultState,
+} from "../core/capabilities/background.js";
 
 /**
  * Inline approval request — passed as a callback through the tool dispatch
@@ -253,6 +256,9 @@ export interface BgSessionInfo {
     | "paused"
     | "interrupted";
   terminalReason?: string;
+  resultState?: BackgroundResultState;
+  partialResult?: string;
+  agentRetryable?: boolean;
   createdAt?: number;
   lastActiveAt?: number;
   /** Timestamp when execution left the fleet queue. */

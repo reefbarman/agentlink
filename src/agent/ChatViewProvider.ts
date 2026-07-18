@@ -60,6 +60,7 @@ import { getLatestTodoState, type TodoItem } from "./todoTool.js";
 import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
 import { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
 import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
+import { cleanupOrphanedMcpOAuthState } from "./McpOAuthProvider.js";
 import { dispatchToolCall, getAgentTools } from "./toolAdapter.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../shared/mcpToolDefinitions.js";
 import {
@@ -1082,7 +1083,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         Boolean(this.sessionManager?.getSession(sessionId)?.background),
     });
     this.mcpHub = new McpClientHub(globalState);
-    this.askAgentMcpHub = new McpClientHub(globalState, "ask-agent");
+    this.askAgentMcpHub = new McpClientHub(globalState);
+    void cleanupOrphanedMcpOAuthState(globalState);
 
     const handleMcpSampling: McpClientHub["onSampling"] = async ({
       messages,
@@ -1182,11 +1184,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.askAgentMcpHub.onUrlElicitationComplete =
       handleMcpUrlElicitationComplete;
     this.projectMcpHubRegistry = new ProjectMcpHubRegistry({
-      createHub: (scope, generation) =>
-        new McpClientHub(
-          globalState,
-          `project-${scope.projectId}-${generation}`,
-        ),
+      createHub: () => new McpClientHub(globalState),
       configureHub: (hub, scope) => {
         hub.onSampling = handleMcpSampling;
         hub.onElicitation = handleMcpElicitation;

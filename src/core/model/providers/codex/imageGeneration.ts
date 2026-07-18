@@ -41,12 +41,36 @@ interface StreamImageEvent {
   quality?: string;
   background?: string;
   output_format?: string;
+  [key: string]: unknown;
+}
+
+export type CodexImageGenerationFailureCategory =
+  | "refusal"
+  | "provider_error"
+  | "incomplete"
+  | "no_image";
+
+export interface CodexImageGenerationFailure {
+  category: CodexImageGenerationFailureCategory;
+  eventType?: string;
+  code?: string;
+  message?: string;
+  retryable: boolean;
+  quotaConsumed: boolean | "unknown";
+  eventTypes: string[];
+}
+
+export interface CodexImageGenerationSseResult {
+  images: CodexGeneratedImage[];
+  eventTypes: string[];
+  terminalFailure?: Omit<CodexImageGenerationFailure, "eventTypes">;
 }
 
 export class CodexImageGenerationError extends Error {
   constructor(
     message: string,
     readonly status?: number,
+    readonly failure?: CodexImageGenerationFailure,
   ) {
     super(message);
     this.name = "CodexImageGenerationError";
@@ -117,7 +141,7 @@ export async function parseCodexImageGenerationSse(params: {
   response: Response;
   maxImages: number;
   generatedImages?: CodexGeneratedImage[];
-}): Promise<{ images: CodexGeneratedImage[]; eventTypes: string[] }> {
+}): Promise<CodexImageGenerationSseResult> {
   if (!params.response.body) {
     throw new Error(
       "Codex image generation response did not include a stream body",
@@ -129,6 +153,10 @@ export async function parseCodexImageGenerationSse(params: {
   const imageSlots = new Map<string, number>();
   const images = params.generatedImages ?? [];
   const eventTypes: string[] = [];
+  let terminalFailure:
+    | Omit<CodexImageGenerationFailure, "eventTypes">
+    | undefined;
+  let observedQuotaConsumed: boolean | "unknown" = "unknown";
   let fallbackImageEventIndex = 0;
 
   function handleLine(line: string): void {
@@ -144,6 +172,17 @@ export async function parseCodexImageGenerationSse(params: {
     }
 
     if (event.type) eventTypes.push(event.type);
+    const response = isRecord(event.response) ? event.response : undefined;
+    const explicitQuota = explicitQuotaConsumed(event, response);
+    if (explicitQuota !== "unknown") observedQuotaConsumed = explicitQuota;
+    const classifiedFailure = classifyImageGenerationTerminalEvent(event);
+    if (
+      classifiedFailure &&
+      (terminalFailure?.category !== "refusal" ||
+        classifiedFailure.category === "refusal")
+    ) {
+      terminalFailure = classifiedFailure;
+    }
     if (
       event.type !== "response.image_generation_call.partial_image" ||
       typeof event.partial_image_b64 !== "string"
@@ -196,7 +235,186 @@ export async function parseCodexImageGenerationSse(params: {
     }
   }
   if (buffer.trim()) handleLine(buffer.trim());
-  return { images, eventTypes };
+  return {
+    images,
+    eventTypes,
+    terminalFailure:
+      terminalFailure && observedQuotaConsumed !== "unknown"
+        ? { ...terminalFailure, quotaConsumed: observedQuotaConsumed }
+        : terminalFailure,
+  };
+}
+
+export function createCodexImageGenerationResultError(
+  result: CodexImageGenerationSseResult,
+): CodexImageGenerationError {
+  const terminal = result.terminalFailure ?? {
+    category: "no_image" as const,
+    retryable: false,
+    quotaConsumed: "unknown" as const,
+  };
+  const failure: CodexImageGenerationFailure = {
+    ...terminal,
+    eventTypes: Array.from(new Set(result.eventTypes)),
+  };
+  const detail = failure.message ? `: ${failure.message}` : "";
+  const outcome =
+    result.images.length > 0
+      ? `ended with ${failure.category} after partial image output`
+      : `returned no image (${failure.category})`;
+  return new CodexImageGenerationError(
+    `Codex image generation ${outcome}${detail}`,
+    undefined,
+    failure,
+  );
+}
+
+export function codexImageGenerationErrorMetadata(
+  error: unknown,
+): Record<string, unknown> | undefined {
+  if (!(error instanceof CodexImageGenerationError) || !error.failure) {
+    return undefined;
+  }
+  return {
+    failure_category: error.failure.category,
+    retryable: error.failure.retryable,
+    quota_consumed: error.failure.quotaConsumed,
+    generated_count: 0,
+    event_types: error.failure.eventTypes,
+    ...(error.failure.eventType
+      ? { provider_event_type: error.failure.eventType }
+      : {}),
+    ...(error.failure.code ? { provider_code: error.failure.code } : {}),
+    ...(error.failure.message
+      ? { provider_message: error.failure.message }
+      : {}),
+  };
+}
+
+function classifyImageGenerationTerminalEvent(
+  event: StreamImageEvent,
+): Omit<CodexImageGenerationFailure, "eventTypes"> | undefined {
+  const eventType = event.type;
+  if (!eventType) return undefined;
+
+  const response = isRecord(event.response) ? event.response : undefined;
+  const error = isRecord(event.error)
+    ? event.error
+    : isRecord(response?.error)
+      ? response.error
+      : undefined;
+  const quotaConsumed = explicitQuotaConsumed(event, response);
+
+  if (eventType.includes("refusal")) {
+    return {
+      category: "refusal",
+      eventType,
+      message: firstString(event.delta, event.refusal, event.message),
+      retryable: false,
+      quotaConsumed,
+    };
+  }
+
+  const outputRefusal = findResponseRefusal(response?.output);
+  if (outputRefusal) {
+    return {
+      category: "refusal",
+      eventType,
+      message: outputRefusal,
+      retryable: false,
+      quotaConsumed,
+    };
+  }
+
+  if (eventType === "response.error" || eventType === "error") {
+    const code = firstString(error?.code, error?.type, event.code);
+    return {
+      category: "provider_error",
+      eventType,
+      code,
+      message: firstString(error?.message, event.message),
+      retryable: isRetryableProviderCode(code),
+      quotaConsumed,
+    };
+  }
+
+  if (eventType === "response.failed") {
+    const code = firstString(error?.code, error?.type, response?.status);
+    return {
+      category: "provider_error",
+      eventType,
+      code,
+      message: firstString(error?.message, event.message),
+      retryable: isRetryableProviderCode(code),
+      quotaConsumed,
+    };
+  }
+
+  if (
+    eventType === "response.incomplete" ||
+    response?.status === "incomplete"
+  ) {
+    const details = isRecord(response?.incomplete_details)
+      ? response.incomplete_details
+      : undefined;
+    return {
+      category: "incomplete",
+      eventType,
+      code: firstString(details?.reason, response?.status),
+      message: firstString(details?.message, event.message),
+      retryable: true,
+      quotaConsumed,
+    };
+  }
+
+  return undefined;
+}
+
+function explicitQuotaConsumed(
+  event: StreamImageEvent,
+  response?: Record<string, unknown>,
+): boolean | "unknown" {
+  const explicit =
+    typeof event.quota_consumed === "boolean"
+      ? event.quota_consumed
+      : typeof response?.quota_consumed === "boolean"
+        ? response.quota_consumed
+        : undefined;
+  return explicit ?? "unknown";
+}
+
+function findResponseRefusal(output: unknown): string | undefined {
+  if (!Array.isArray(output)) return undefined;
+  for (const item of output) {
+    if (!isRecord(item) || !Array.isArray(item.content)) continue;
+    for (const content of item.content) {
+      if (!isRecord(content) || content.type !== "refusal") continue;
+      return firstString(content.refusal, content.text) ?? "Provider refused";
+    }
+  }
+  return undefined;
+}
+
+function isRetryableProviderCode(code: string | undefined): boolean {
+  return Boolean(
+    code &&
+    /rate|limit|quota|timeout|overload|server|unavailable|internal|network/i.test(
+      code,
+    ),
+  );
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim().slice(0, 500);
+    }
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function callCodexImageGeneration(params: {
@@ -261,10 +479,8 @@ async function callCodexImageGeneration(params: {
       maxImages: params.count,
       generatedImages: params.generatedImages,
     });
-    if (parsed.images.length === 0) {
-      throw new Error(
-        "Codex image generation completed without an image payload",
-      );
+    if (parsed.terminalFailure || parsed.images.length === 0) {
+      throw createCodexImageGenerationResultError(parsed);
     }
     return { ...parsed, model };
   } finally {

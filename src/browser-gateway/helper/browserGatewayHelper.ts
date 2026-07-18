@@ -63,6 +63,11 @@ import type {
   ToolResult,
 } from "../../shared/types.js";
 import {
+  getStructuredSecretRedactionMetadata,
+  isStructuredConfigPath,
+  redactStructuredSecrets,
+} from "../../shared/structuredSecretRedaction.js";
+import {
   clearBrowserGatewayHelperDiscovery,
   writeBrowserGatewayHelperDiscovery,
 } from "../browserGatewayHelperDiscovery.js";
@@ -98,7 +103,9 @@ import {
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
   CODEX_IMAGE_GENERATION_MAX_COUNT,
   codexGeneratedImageMetadata,
+  codexImageGenerationErrorMetadata,
   generateCodexImages,
+  type CodexGeneratedImage,
 } from "../../core/model/providers/codex/imageGeneration.js";
 import {
   toCoreModelImageMediaType,
@@ -3658,6 +3665,7 @@ export class BrowserGatewayHelper {
     _target: BrowserGatewayInstanceRecord | null,
     signal: AbortSignal,
   ): Promise<AskAgentToolExecutionResult> {
+    const generatedImages: CodexGeneratedImage[] = [];
     try {
       const input = this.normalizeAskAgentImageInput(toolCall.input);
       const credential = this.modelCredentialCache.getCredential({
@@ -3706,6 +3714,7 @@ export class BrowserGatewayHelper {
         count: input.count,
         size: input.size,
         timeoutMs: input.timeoutMs,
+        generatedImages,
         sessionId: this.askAgentSessionStore.getActiveSessionId(),
         signal,
       });
@@ -3762,6 +3771,13 @@ export class BrowserGatewayHelper {
     } catch (err) {
       const content = JSON.stringify({
         error: err instanceof Error ? err.message : String(err),
+        ...codexImageGenerationErrorMetadata(err),
+        ...(generatedImages.length > 0
+          ? {
+              generated_count: generatedImages.length,
+              partial_images: codexGeneratedImageMetadata(generatedImages),
+            }
+          : {}),
       });
       this.logAskAgentEvent("ask-agent.tool.generate_image", {
         ok: false,
@@ -4105,6 +4121,10 @@ export class BrowserGatewayHelper {
       };
     }
     const raw = await fs.readFile(resolved.path, "utf-8");
+    const structuredRedaction = isStructuredConfigPath(resolved.path)
+      ? redactStructuredSecrets(raw)
+      : undefined;
+    const visibleRaw = structuredRedaction?.content ?? raw;
     const offset = Math.max(
       1,
       Math.floor(Number(toolCall.input.offset ?? 1)) || 1,
@@ -4113,7 +4133,7 @@ export class BrowserGatewayHelper {
       1,
       Math.min(200, Math.floor(Number(toolCall.input.limit ?? 120)) || 120),
     );
-    const lines = raw.split(/\r?\n/);
+    const lines = visibleRaw.split("\n");
     const selected = lines.slice(offset - 1, offset - 1 + limit);
     const content = JSON.stringify({
       path: resolved.path,
@@ -4124,6 +4144,12 @@ export class BrowserGatewayHelper {
         .map((line, index) => `${offset + index} | ${line}`)
         .join("\n")
         .slice(0, 100_000),
+      ...(getStructuredSecretRedactionMetadata(structuredRedaction)
+        ? {
+            redaction:
+              getStructuredSecretRedactionMetadata(structuredRedaction),
+          }
+        : {}),
     });
     this.logAskAgentEvent("ask-agent.tool.read_file", {
       ok: true,

@@ -105,6 +105,31 @@ interface ConnectedServer {
 }
 
 /**
+ * OAuth credentials are stored per server identity and shared by every hub in
+ * this extension host, so concurrent connects to the same server (e.g. the Ask
+ * Agent hub and a project hub both hosting a global server) must not race:
+ * a token refresh rotates the refresh token, and a parallel refresh with the
+ * superseded token fails and falls back to interactive auth. Serializing the
+ * connect (which embeds any SDK-driven refresh) per server URL lets the second
+ * connect reuse the tokens the first one just saved.
+ */
+const httpConnectQueues = new Map<string, Promise<unknown>>();
+
+async function withHttpConnectLock<T>(
+  url: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = httpConnectQueues.get(url) ?? Promise.resolve();
+  const run = previous.then(fn);
+  const tail = run.catch(() => {});
+  httpConnectQueues.set(url, tail);
+  void tail.finally(() => {
+    if (httpConnectQueues.get(url) === tail) httpConnectQueues.delete(url);
+  });
+  return run;
+}
+
+/**
  * McpClientHub manages connections to external MCP servers.
  *
  * Tool names are prefixed with the server name to avoid collisions: `servername__toolname`
@@ -121,10 +146,7 @@ export class McpClientHub {
   private interactiveAuthUseCounts = new Map<string, number>();
   private static readonly MAX_AUTH_RETRIES = 3;
 
-  constructor(
-    globalState?: vscode.Memento,
-    private readonly storageNamespace?: string,
-  ) {
+  constructor(globalState?: vscode.Memento) {
     this.globalState = globalState;
   }
 
@@ -367,7 +389,6 @@ export class McpClientHub {
           cfg.name,
           cfg.url,
           this.globalState,
-          this.storageNamespace,
         );
         oauthProvider.onLog = (message) => this.log(message);
         oauthProvider.onBeforeAuthorizationOpen = () =>
@@ -579,7 +600,13 @@ export class McpClientHub {
       this.log(
         `[mcp:${cfg.name}] connect start type=${cfg.type ?? "stdio"} retryCount=${retryCount} afterAuth=${afterAuth} authMode=${authMode} allowInteractiveAuth=${oauthProvider?.allowInteractiveAuth ?? false}`,
       );
-      await entry.client.connect(transport);
+      if (isHttpServer && cfg.url) {
+        await withHttpConnectLock(cfg.url, () =>
+          entry.client.connect(transport),
+        );
+      } else {
+        await entry.client.connect(transport);
+      }
       this.log(`[mcp:${cfg.name}] connect succeeded`);
       entry.retryCount = 0;
       this.authFailureCounts.delete(cfg.name);
@@ -1043,14 +1070,13 @@ export class McpClientHub {
         cfg.name,
         cfg.url,
         this.globalState,
-        this.storageNamespace,
       );
       provider.onLog = (message) => this.log(message);
       provider.onBeforeAuthorizationOpen = () =>
         this.onBeforeAuthorizationOpen(cfg.name);
       await provider.start();
       try {
-        await provider.forceReauth();
+        await withHttpConnectLock(cfg.url, () => provider.forceReauth());
       } catch (err) {
         provider.stop();
         throw err;

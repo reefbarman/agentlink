@@ -234,6 +234,45 @@ describe("ToolCallGroup", () => {
     expect(screen.getByText("1 failed")).toBeTruthy();
   });
 
+  it("marks collapsed groups containing image results with an image badge", () => {
+    render(
+      <ToolCallGroup
+        blocks={[
+          tool("tool-1", "read_file", {
+            result: "[image]",
+            resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+          }),
+          tool("tool-2", "read_file", {
+            result: "[image]",
+            resultImages: [{ mimeType: "image/jpeg", data: "ZWZnaA==" }],
+          }),
+          tool("tool-3", "search_files"),
+        ]}
+      />,
+    );
+
+    const groupButton = screen.getByRole("button", {
+      name: /2 image results/i,
+    });
+    expect(groupButton.getAttribute("aria-expanded")).toBe("false");
+
+    const badge = groupButton.querySelector(".tool-image-badge");
+    expect(badge?.getAttribute("title")).toBe(
+      "2 image results — expand to view",
+    );
+    expect(badge?.textContent).toContain("2");
+  });
+
+  it("omits the image badge from groups without image results", () => {
+    const { container } = render(
+      <ToolCallGroup
+        blocks={[tool("tool-1", "read_file"), tool("tool-2", "search_files")]}
+      />,
+    );
+
+    expect(container.querySelector(".tool-image-badge")).toBeNull();
+  });
+
   it("renders get_context summaries with the same clickable file link as read_file", () => {
     const onOpenFile = vi.fn();
     const path = "src/agent/webview/components/ToolCallGroup.test.tsx";

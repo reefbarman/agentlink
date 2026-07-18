@@ -79,11 +79,7 @@ export class ProjectMcpHubRegistry<
   ) {
     this.createHub =
       options.createHub ??
-      (((_scope: Readonly<SessionProjectScope>, generation: number) =>
-        new McpClientHub(
-          undefined,
-          `project-mcp-${generation}`,
-        )) as unknown as NonNullable<
+      ((() => new McpClientHub()) as unknown as NonNullable<
         ProjectMcpHubRegistryOptions<THub>["createHub"]
       >);
     this.loadConfigs =

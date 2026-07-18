@@ -31,6 +31,18 @@ const extensionOptions = {
 };
 
 /** @type {esbuild.BuildOptions} */
+const composeRuntimeOptions = {
+  entryPoints: ["src/agent/compose/composeRuntime.ts"],
+  bundle: true,
+  outfile: "dist/compose-runtime.mjs",
+  format: "esm",
+  platform: "node",
+  target: "node22",
+  sourcemap: true,
+  minify: false,
+};
+
+/** @type {esbuild.BuildOptions} */
 const webviewBase = {
   bundle: true,
   outdir: "dist",
@@ -162,6 +174,7 @@ copyFileSync(
 if (watch) {
   const [
     extCtx,
+    composeRuntimeCtx,
     sideCtx,
     appCtx,
     frCtx,
@@ -172,6 +185,7 @@ if (watch) {
     helperCtx,
   ] = await Promise.all([
     esbuild.context(extensionOptions),
+    esbuild.context(composeRuntimeOptions),
     esbuild.context(sidebarOptions),
     esbuild.context(approvalOptions),
     esbuild.context(frPreviewOptions),
@@ -183,6 +197,7 @@ if (watch) {
   ]);
   await Promise.all([
     extCtx.watch(),
+    composeRuntimeCtx.watch(),
     sideCtx.watch(),
     appCtx.watch(),
     frCtx.watch(),
@@ -196,6 +211,7 @@ if (watch) {
 } else {
   await Promise.all([
     esbuild.build(extensionOptions),
+    esbuild.build(composeRuntimeOptions),
     esbuild.build(sidebarOptions),
     esbuild.build(approvalOptions),
     esbuild.build(frPreviewOptions),

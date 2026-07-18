@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "fs/promises";
 
 import { resolveAndValidatePath, getRelativePath } from "../util/paths.js";
@@ -24,11 +25,34 @@ interface SearchReplaceBlock {
   index: number;
 }
 
+interface TrackedSpan {
+  start: number;
+  end: number;
+  valid: boolean;
+  range?: { startLine: number; endLine: number };
+}
+
+interface MatchCandidate extends TrackedSpan {
+  startLine: number;
+  endLine: number;
+  snippet: string;
+}
+
+export interface ApplyDiffBlockOption {
+  index: number;
+  occurrence?: number;
+  replace_all?: true;
+}
+
 export type BlockApplyResult =
   | {
       index: number;
       status: "applied";
       matchType: "exact" | "flexible" | "escape_normalized";
+      selection: "unique" | "occurrence" | "replace_all";
+      selectedOccurrence?: number;
+      replacementCount: number;
+      postEditSpans: TrackedSpan[];
     }
   | {
       index: number;
@@ -38,9 +62,15 @@ export type BlockApplyResult =
         | "not_found"
         | "ambiguous_exact"
         | "ambiguous_flexible"
-        | "ambiguous_escape";
+        | "ambiguous_escape"
+        | "occurrence_out_of_range";
       exactOccurrences: number;
+      availableOccurrences?: number;
+      candidateLocations?: MatchCandidate[];
+      candidateLocationsOmitted?: number;
     };
+
+const MAX_AMBIGUOUS_CANDIDATES = 12;
 
 const SEARCH_MARKER = "<<<<<<< SEARCH";
 const DIVIDER_MARKER = "======= DIVIDER =======";
@@ -231,6 +261,7 @@ export function parseSearchReplaceBlocks(diff: string): ParseResult {
 export function applyBlocks(
   content: string,
   blocks: SearchReplaceBlock[],
+  blockOptions: ReadonlyMap<number, ApplyDiffBlockOption> = new Map(),
 ): {
   result: string;
   failedBlocks: number[];
@@ -239,6 +270,64 @@ export function applyBlocks(
   let result = content;
   const failedBlocks: number[] = [];
   const blockResults: BlockApplyResult[] = [];
+
+  const shiftTrackedSpans = (
+    start: number,
+    end: number,
+    delta: number,
+  ): void => {
+    for (const prior of blockResults) {
+      const spans =
+        prior.status === "applied"
+          ? prior.postEditSpans
+          : (prior.candidateLocations ?? []);
+      for (const span of spans) {
+        if (span.start >= end) {
+          span.start += delta;
+          span.end += delta;
+        } else if (span.end > start) {
+          span.valid = false;
+        }
+      }
+    }
+  };
+
+  const recordApplied = (
+    block: SearchReplaceBlock,
+    matchType: "exact" | "flexible" | "escape_normalized",
+    replacements: Array<{ start: number; end: number; replacement: string }>,
+    selection: "unique" | "occurrence" | "replace_all",
+    selectedOccurrence?: number,
+  ): void => {
+    const postEditSpans: TrackedSpan[] = [];
+    for (const replacement of replacements) {
+      const delta =
+        replacement.replacement.length - (replacement.end - replacement.start);
+      shiftTrackedSpans(replacement.start, replacement.end, delta);
+      for (const span of postEditSpans) {
+        if (span.start >= replacement.end) {
+          span.start += delta;
+          span.end += delta;
+        } else if (span.end > replacement.start) {
+          span.valid = false;
+        }
+      }
+      postEditSpans.push({
+        start: replacement.start,
+        end: replacement.start + replacement.replacement.length,
+        valid: true,
+      });
+    }
+    blockResults.push({
+      index: block.index,
+      status: "applied",
+      matchType,
+      selection,
+      ...(selectedOccurrence !== undefined && { selectedOccurrence }),
+      replacementCount: replacements.length,
+      postEditSpans,
+    });
+  };
 
   for (const block of blocks) {
     if (block.search.length === 0) {
@@ -252,80 +341,174 @@ export function applyBlocks(
       continue;
     }
 
-    const occurrences = countOccurrences(result, block.search);
+    const option = blockOptions.get(block.index);
+    const exactOffsets = findExactMatchOffsets(result, block.search);
+    const occurrences = exactOffsets.length;
 
-    if (occurrences === 0) {
-      const flexAnalysis = analyzeFlexibleMatch(result, block.search);
-      if (flexAnalysis.match) {
-        result =
-          result.slice(0, flexAnalysis.match.start) +
-          block.replace +
-          result.slice(flexAnalysis.match.end);
+    if (option?.replace_all) {
+      if (occurrences === 0) {
+        failedBlocks.push(block.index);
         blockResults.push({
           index: block.index,
-          status: "applied",
-          matchType: "flexible",
+          status: "failed",
+          reason: "not_found",
+          exactOccurrences: 0,
         });
         continue;
       }
-
-      const escAnalysis = analyzeEscapeNormalizedMatch(result, block.search);
-      if (escAnalysis.match) {
-        const transformedReplace = escAnalysis.match.transformReplace(
-          block.replace,
-        );
+      const replacements = exactOffsets
+        .map(({ start, end }) => ({ start, end, replacement: block.replace }))
+        .sort((left, right) => right.start - left.start);
+      for (const replacement of replacements) {
         result =
-          result.slice(0, escAnalysis.match.start) +
-          transformedReplace +
-          result.slice(escAnalysis.match.end);
+          result.slice(0, replacement.start) +
+          replacement.replacement +
+          result.slice(replacement.end);
+      }
+      recordApplied(block, "exact", replacements, "replace_all");
+      continue;
+    }
+
+    if (occurrences > 0) {
+      const selectedOccurrence = option?.occurrence;
+      if (
+        selectedOccurrence !== undefined &&
+        selectedOccurrence > occurrences
+      ) {
+        const candidates = describeMatchCandidates(result, exactOffsets);
+        failedBlocks.push(block.index);
         blockResults.push({
           index: block.index,
-          status: "applied",
-          matchType: "escape_normalized",
+          status: "failed",
+          reason: "occurrence_out_of_range",
+          exactOccurrences: occurrences,
+          availableOccurrences: occurrences,
+          candidateLocations: candidates.locations,
+          ...(candidates.omitted > 0 && {
+            candidateLocationsOmitted: candidates.omitted,
+          }),
         });
         continue;
       }
-
-      failedBlocks.push(block.index);
-      blockResults.push({
-        index: block.index,
-        status: "failed",
-        reason:
-          flexAnalysis.matchCount > 1
-            ? "ambiguous_flexible"
-            : escAnalysis.ambiguousVariantCount > 0
-              ? "ambiguous_escape"
-              : "not_found",
-        exactOccurrences: 0,
-      });
+      if (occurrences > 1 && selectedOccurrence === undefined) {
+        failedBlocks.push(block.index);
+        const candidates = describeMatchCandidates(result, exactOffsets);
+        blockResults.push({
+          index: block.index,
+          status: "failed",
+          reason: "ambiguous_exact",
+          exactOccurrences: occurrences,
+          candidateLocations: candidates.locations,
+          ...(candidates.omitted > 0 && {
+            candidateLocationsOmitted: candidates.omitted,
+          }),
+        });
+        continue;
+      }
+      const selected = exactOffsets[(selectedOccurrence ?? 1) - 1];
+      result =
+        result.slice(0, selected.start) +
+        block.replace +
+        result.slice(selected.end);
+      recordApplied(
+        block,
+        "exact",
+        [{ ...selected, replacement: block.replace }],
+        selectedOccurrence === undefined ? "unique" : "occurrence",
+        selectedOccurrence,
+      );
       continue;
     }
 
-    if (occurrences > 1) {
-      failedBlocks.push(block.index);
-      blockResults.push({
-        index: block.index,
-        status: "failed",
-        reason: "ambiguous_exact",
-        exactOccurrences: occurrences,
-      });
+    const flexAnalysis = analyzeFlexibleMatch(result, block.search);
+    const escAnalysis = flexAnalysis.match
+      ? undefined
+      : analyzeEscapeNormalizedMatch(result, block.search);
+    const matchType =
+      flexAnalysis.matchCount > 0 ? "flexible" : "escape_normalized";
+    const selectedOccurrence = option?.occurrence;
+    const candidateOffsets =
+      flexAnalysis.matchCount > 0
+        ? flexAnalysis.candidateOffsets
+        : selectedOccurrence === undefined && escAnalysis?.match
+          ? [escAnalysis.match]
+          : normalizeEscapeCandidates(escAnalysis?.candidateOffsets ?? []);
+    const selectedCandidate =
+      selectedOccurrence === undefined
+        ? candidateOffsets.length === 1
+          ? candidateOffsets[0]
+          : undefined
+        : candidateOffsets[selectedOccurrence - 1];
+
+    if (selectedCandidate) {
+      const replacement = isEscapeMatch(selectedCandidate)
+        ? selectedCandidate.transformReplace(block.replace)
+        : block.replace;
+      result =
+        result.slice(0, selectedCandidate.start) +
+        replacement +
+        result.slice(selectedCandidate.end);
+      recordApplied(
+        block,
+        matchType,
+        [{ ...selectedCandidate, replacement }],
+        selectedOccurrence === undefined ? "unique" : "occurrence",
+        selectedOccurrence,
+      );
       continue;
     }
 
-    // Exactly one match — apply replacement using indexOf + slice.
-    // Do NOT use String.prototype.replace here — it interprets $& $` $'
-    // and $$ as special patterns in the replacement string, which silently
-    // corrupts source code that contains those character sequences.
-    const idx = result.indexOf(block.search);
-    result =
-      result.slice(0, idx) +
-      block.replace +
-      result.slice(idx + block.search.length);
+    const candidates = describeMatchCandidates(result, candidateOffsets);
+    failedBlocks.push(block.index);
     blockResults.push({
       index: block.index,
-      status: "applied",
-      matchType: "exact",
+      status: "failed",
+      reason:
+        selectedOccurrence !== undefined &&
+        selectedOccurrence > candidateOffsets.length
+          ? "occurrence_out_of_range"
+          : flexAnalysis.matchCount > 1
+            ? "ambiguous_flexible"
+            : (escAnalysis?.ambiguousVariantCount ?? 0) > 0
+              ? "ambiguous_escape"
+              : "not_found",
+      exactOccurrences: 0,
+      ...(selectedOccurrence !== undefined && {
+        availableOccurrences: candidateOffsets.length,
+      }),
+      ...(candidates.locations.length > 0 && {
+        candidateLocations: candidates.locations,
+      }),
+      ...(candidates.omitted > 0 && {
+        candidateLocationsOmitted: candidates.omitted,
+      }),
     });
+  }
+
+  for (const blockResult of blockResults) {
+    if (blockResult.status === "applied") {
+      for (const span of blockResult.postEditSpans) {
+        if (span.valid) {
+          span.range = offsetRangeToLines(result, span.start, span.end);
+        }
+      }
+      continue;
+    }
+    if (blockResult.candidateLocations) {
+      blockResult.candidateLocations = blockResult.candidateLocations.filter(
+        (candidate) => candidate.valid,
+      );
+      for (const candidate of blockResult.candidateLocations) {
+        const range = offsetRangeToLines(
+          result,
+          candidate.start,
+          candidate.end,
+        );
+        candidate.startLine = range.startLine;
+        candidate.endLine = range.endLine;
+        candidate.snippet = snippetAtOffset(result, candidate.start);
+      }
+    }
   }
 
   return { result, failedBlocks, blockResults };
@@ -360,17 +543,22 @@ export function normalizeForComparison(line: string): string {
 function analyzeFlexibleMatch(
   content: string,
   search: string,
-): { match: { start: number; end: number } | null; matchCount: number } {
+): {
+  match: { start: number; end: number } | null;
+  matchCount: number;
+  candidateOffsets: Array<{ start: number; end: number }>;
+} {
   const contentLines = content.split("\n");
   const searchLines = search.split("\n");
 
-  if (searchLines.length === 0) return { match: null, matchCount: 0 };
+  if (searchLines.length === 0) {
+    return { match: null, matchCount: 0, candidateOffsets: [] };
+  }
 
   const normSearch = searchLines.map(normalizeForComparison);
   const normContent = contentLines.map(normalizeForComparison);
 
-  let matchCount = 0;
-  let matchLineStart = -1;
+  const candidateLineStarts: number[] = [];
 
   for (let i = 0; i <= normContent.length - normSearch.length; i++) {
     let isMatch = true;
@@ -380,27 +568,28 @@ function analyzeFlexibleMatch(
         break;
       }
     }
-    if (isMatch) {
-      matchCount++;
-      matchLineStart = i;
-      if (matchCount > 1) return { match: null, matchCount };
+    if (isMatch) candidateLineStarts.push(i);
+  }
+
+  const lineOffsets: number[] = [0];
+  for (let i = 0; i < contentLines.length - 1; i++) {
+    lineOffsets.push(lineOffsets[i] + contentLines[i].length + 1);
+  }
+  const candidateOffsets = candidateLineStarts.map((lineStart) => {
+    const start = lineOffsets[lineStart];
+    let end = start;
+    for (let i = 0; i < searchLines.length; i++) {
+      end += contentLines[lineStart + i].length;
+      if (i < searchLines.length - 1) end += 1;
     }
-  }
-
-  if (matchCount !== 1) return { match: null, matchCount };
-
-  let start = 0;
-  for (let i = 0; i < matchLineStart; i++) {
-    start += contentLines[i].length + 1;
-  }
-
-  let end = start;
-  for (let i = 0; i < searchLines.length; i++) {
-    end += contentLines[matchLineStart + i].length;
-    if (i < searchLines.length - 1) end += 1;
-  }
-
-  return { match: { start, end }, matchCount };
+    return { start, end };
+  });
+  const matchCount = candidateOffsets.length;
+  return {
+    match: matchCount === 1 ? candidateOffsets[0] : null,
+    matchCount,
+    candidateOffsets,
+  };
 }
 
 export function tryFlexibleMatch(
@@ -454,49 +643,49 @@ type EscapeMatch = {
 function analyzeEscapeNormalizedMatch(
   content: string,
   search: string,
-): { match: EscapeMatch | null; ambiguousVariantCount: number } {
+): {
+  match: EscapeMatch | null;
+  ambiguousVariantCount: number;
+  candidateOffsets: EscapeMatch[];
+} {
   const relevantPairs = ESCAPE_PAIRS.filter((p) =>
     search.includes(p.interpreted),
   );
   if (relevantPairs.length === 0) {
-    return { match: null, ambiguousVariantCount: 0 };
+    return { match: null, ambiguousVariantCount: 0, candidateOffsets: [] };
   }
 
   const seenVariants = new Set<string>();
+  const candidateOffsets: EscapeMatch[] = [];
+  let match: EscapeMatch | null = null;
   let ambiguousVariantCount = 0;
 
   const tryVariant = (
     variant: string,
     transformReplace: (replace: string) => string,
-  ): EscapeMatch | null => {
-    if (variant === search || seenVariants.has(variant)) return null;
+  ): void => {
+    if (variant === search || seenVariants.has(variant)) return;
     seenVariants.add(variant);
 
-    const count = countOccurrences(content, variant);
-    if (count === 1) {
-      const start = content.indexOf(variant);
-      return {
-        start,
-        end: start + variant.length,
-        transformReplace,
-      };
-    }
-    if (count > 1) {
+    const offsets = findExactMatchOffsets(content, variant).map((offset) => ({
+      ...offset,
+      transformReplace,
+    }));
+    candidateOffsets.push(...offsets);
+    if (offsets.length === 1 && match === null) {
+      match = offsets[0];
+    } else if (offsets.length > 1) {
       ambiguousVariantCount++;
     }
-    return null;
   };
 
   for (const pair of relevantPairs) {
     for (const lit of pair.literal) {
       const interpreted = pair.interpreted;
       const variant = search.replaceAll(interpreted, lit);
-      const match = tryVariant(variant, (replace: string) =>
+      tryVariant(variant, (replace: string) =>
         replace.replaceAll(interpreted, lit),
       );
-      if (match) {
-        return { match, ambiguousVariantCount };
-      }
     }
   }
 
@@ -508,19 +697,16 @@ function analyzeEscapeNormalizedMatch(
       variant = variant.replaceAll(pair.interpreted, lit);
       transforms.push({ interpreted: pair.interpreted, literal: lit });
     }
-    const match = tryVariant(variant, (replace: string) => {
+    tryVariant(variant, (replace: string) => {
       let transformed = replace;
       for (const t of transforms) {
         transformed = transformed.replaceAll(t.interpreted, t.literal);
       }
       return transformed;
     });
-    if (match) {
-      return { match, ambiguousVariantCount };
-    }
   }
 
-  return { match: null, ambiguousVariantCount };
+  return { match, ambiguousVariantCount, candidateOffsets };
 }
 
 export function tryEscapeNormalizedMatch(
@@ -534,15 +720,87 @@ export function tryEscapeNormalizedMatch(
   return analyzeEscapeNormalizedMatch(content, search).match;
 }
 
-function countOccurrences(text: string, search: string): number {
-  if (search.length === 0) return 0;
-  let count = 0;
+function findExactMatchOffsets(
+  text: string,
+  search: string,
+): Array<{ start: number; end: number }> {
+  if (search.length === 0) return [];
+  const offsets: Array<{ start: number; end: number }> = [];
   let pos = 0;
   while ((pos = text.indexOf(search, pos)) !== -1) {
-    count++;
+    offsets.push({ start: pos, end: pos + search.length });
     pos += search.length;
   }
-  return count;
+  return offsets;
+}
+
+function lineAtOffset(content: string, offset: number): number {
+  let line = 1;
+  for (let i = 0; i < Math.min(offset, content.length); i++) {
+    if (content[i] === "\n") line++;
+  }
+  return line;
+}
+
+function offsetRangeToLines(
+  content: string,
+  start: number,
+  end: number,
+): { startLine: number; endLine: number } {
+  return {
+    startLine: lineAtOffset(content, start),
+    endLine: lineAtOffset(content, Math.max(start, end - 1)),
+  };
+}
+
+function snippetAtOffset(content: string, offset: number): string {
+  const lineStart = content.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const nextBreak = content.indexOf("\n", offset);
+  const lineEnd = nextBreak < 0 ? content.length : nextBreak;
+  return previewSearch(content.slice(lineStart, lineEnd));
+}
+
+function describeMatchCandidates(
+  content: string,
+  offsets: Array<{ start: number; end: number }>,
+): { locations: MatchCandidate[]; omitted: number } {
+  const unique = new Map<string, { start: number; end: number }>();
+  for (const offset of offsets) {
+    unique.set(`${offset.start}:${offset.end}`, offset);
+  }
+  const sorted = [...unique.values()].sort(
+    (left, right) => left.start - right.start,
+  );
+  return {
+    locations: sorted
+      .slice(0, MAX_AMBIGUOUS_CANDIDATES)
+      .map(({ start, end }) => ({
+        start,
+        end,
+        ...offsetRangeToLines(content, start, end),
+        snippet: snippetAtOffset(content, start),
+        valid: true,
+      })),
+    omitted: Math.max(0, sorted.length - MAX_AMBIGUOUS_CANDIDATES),
+  };
+}
+
+function isEscapeMatch(
+  candidate: { start: number; end: number } | EscapeMatch,
+): candidate is EscapeMatch {
+  return "transformReplace" in candidate;
+}
+
+function normalizeEscapeCandidates(candidates: EscapeMatch[]): EscapeMatch[] {
+  const unique = new Map<string, EscapeMatch>();
+  for (const candidate of candidates) {
+    unique.set(`${candidate.start}:${candidate.end}`, candidate);
+  }
+  return [...unique.values()].sort((left, right) => left.start - right.start);
+}
+
+function contentHash(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 function previewSearch(text: string): string {
@@ -555,10 +813,29 @@ function describeBlockResult(
   result: BlockApplyResult,
 ): Record<string, unknown> {
   if (result.status === "applied") {
+    const ranges = result.postEditSpans
+      .flatMap((span) =>
+        span.range
+          ? [
+              {
+                start_line: span.range.startLine,
+                end_line: span.range.endLine,
+              },
+            ]
+          : [],
+      )
+      .sort((left, right) => left.start_line - right.start_line);
     return {
       index: result.index,
       status: result.status,
       match_type: result.matchType,
+      selection: result.selection,
+      replacement_count: result.replacementCount,
+      ...(result.selectedOccurrence !== undefined
+        ? { selected_occurrence: result.selectedOccurrence }
+        : {}),
+      ...(ranges.length === 1 ? { post_edit_range: ranges[0] } : {}),
+      ...(ranges.length > 1 ? { post_edit_ranges: ranges } : {}),
     };
   }
   return {
@@ -566,6 +843,21 @@ function describeBlockResult(
     status: result.status,
     reason: result.reason,
     exact_occurrences: result.exactOccurrences,
+    ...(result.availableOccurrences !== undefined
+      ? { available_occurrences: result.availableOccurrences }
+      : {}),
+    ...(result.candidateLocations?.length
+      ? {
+          candidate_locations: result.candidateLocations.map((candidate) => ({
+            start_line: candidate.startLine,
+            end_line: candidate.endLine,
+            snippet: candidate.snippet,
+          })),
+        }
+      : {}),
+    ...(result.candidateLocationsOmitted
+      ? { candidate_locations_omitted: result.candidateLocationsOmitted }
+      : {}),
   };
 }
 
@@ -582,13 +874,15 @@ function formatFailedBlockMessage(
   const reason =
     result.reason === "empty_search"
       ? "Search content was empty"
-      : result.reason === "ambiguous_exact"
-        ? `Ambiguous exact match (${result.exactOccurrences} occurrences found)`
-        : result.reason === "ambiguous_flexible"
-          ? "No exact match, and whitespace-normalized search matched multiple locations"
-          : result.reason === "ambiguous_escape"
-            ? "No exact match, and escape-normalized search matched multiple locations"
-            : "Search content not found (including whitespace/escape-normalized matching)";
+      : result.reason === "occurrence_out_of_range"
+        ? `Requested occurrence is out of range (${result.availableOccurrences ?? 0} available)`
+        : result.reason === "ambiguous_exact"
+          ? `Ambiguous exact match (${result.exactOccurrences} occurrences found)`
+          : result.reason === "ambiguous_flexible"
+            ? "No exact match, and whitespace-normalized search matched multiple locations"
+            : result.reason === "ambiguous_escape"
+              ? "No exact match, and escape-normalized search matched multiple locations"
+              : "Search content not found (including whitespace/escape-normalized matching)";
 
   return preview
     ? `Block ${result.index}: ${reason} — search preview: ${preview}`
@@ -616,6 +910,24 @@ function buildFailedBlocksPayload(
   };
 }
 
+function buildAtomicFailurePayload(
+  paramsPath: string,
+  blocks: SearchReplaceBlock[],
+  blockResults: BlockApplyResult[],
+  malformedBlocks: number,
+  error: string,
+): EditReviewResult {
+  const failedResults = blockResults.filter(
+    (result) => result.status === "failed",
+  );
+  return {
+    ...buildFailedBlocksPayload(paramsPath, blocks, failedResults, error),
+    atomic: true,
+    no_changes_applied: true,
+    ...(malformedBlocks > 0 ? { malformed_blocks: malformedBlocks } : {}),
+  };
+}
+
 export interface ApplyDiffProviders {
   editReviewProvider?: EditReviewProvider;
   writeApprovalPolicyProvider?: WriteApprovalPolicyProvider;
@@ -623,7 +935,12 @@ export interface ApplyDiffProviders {
 }
 
 export async function handleApplyDiff(
-  params: { path: string; diff: string },
+  params: {
+    path: string;
+    diff: string;
+    block_options?: ApplyDiffBlockOption[];
+    atomic?: boolean;
+  },
   _approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
   sessionId: string,
@@ -708,12 +1025,72 @@ export async function handleApplyDiff(
       };
     }
 
+    const parsedBlockIndices = new Set(blocks.map((block) => block.index));
+    const blockOptions = new Map<number, ApplyDiffBlockOption>();
+    for (const option of params.block_options ?? []) {
+      if (blockOptions.has(option.index)) {
+        return errorResult("Duplicate block option index", {
+          path: params.path,
+          block_index: option.index,
+        });
+      }
+      if (!parsedBlockIndices.has(option.index)) {
+        return errorResult(
+          "Block option index does not identify a valid block",
+          {
+            path: params.path,
+            block_index: option.index,
+            valid_block_indices: [...parsedBlockIndices],
+          },
+        );
+      }
+      if (
+        (option.occurrence === undefined) ===
+        (option.replace_all === undefined)
+      ) {
+        return errorResult(
+          "Each block option must specify exactly one of occurrence or replace_all",
+          { path: params.path, block_index: option.index },
+        );
+      }
+      if (
+        option.occurrence !== undefined &&
+        (!Number.isInteger(option.occurrence) || option.occurrence < 1)
+      ) {
+        return errorResult("Block occurrence must be a positive integer", {
+          path: params.path,
+          block_index: option.index,
+          occurrence: option.occurrence,
+        });
+      }
+      blockOptions.set(option.index, option);
+    }
+
     // Apply blocks
     const {
       result: newContent,
       failedBlocks,
       blockResults,
-    } = applyBlocks(originalContent, blocks);
+    } = applyBlocks(originalContent, blocks, blockOptions);
+
+    if (params.atomic && (failedBlocks.length > 0 || malformedBlocks > 0)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              buildAtomicFailurePayload(
+                params.path,
+                blocks,
+                blockResults,
+                malformedBlocks,
+                "Atomic apply_diff validation failed",
+              ),
+            ),
+          },
+        ],
+      };
+    }
 
     // Safety check: reject if the diff would introduce marker syntax into
     // the file. This prevents cascading corruption where a misparsed block
@@ -730,6 +1107,10 @@ export async function handleApplyDiff(
                   "Diff would introduce search/replace marker syntax into the file — aborting to prevent corruption",
                 hint: "The replacement content contains SEARCH/REPLACE markers that would corrupt the file. Use write_file instead.",
                 path: params.path,
+                ...(params.atomic && {
+                  atomic: true,
+                  no_changes_applied: true,
+                }),
               }),
             },
           ],
@@ -762,6 +1143,7 @@ export async function handleApplyDiff(
               path: relPath,
               operation: "modified",
               note: "No changes resulted from the diff application",
+              post_edit_content_hash: contentHash(originalContent),
             }),
           },
         ],
@@ -787,6 +1169,7 @@ export async function handleApplyDiff(
 
     let lockedFailedBlocks = failedBlocks;
     let lockedBlockResults = blockResults;
+    let lockedProposedContent = newContent;
     const result = await providers.editReviewProvider.reviewAndApply({
       mode: canAutoApprove ? "auto" : "interactive",
       absolutePath: filePath,
@@ -804,9 +1187,29 @@ export async function handleApplyDiff(
           return { status: "continue", content: newContent };
         }
 
-        const reapplied = applyBlocks(lockedOriginalContent, blocks);
+        const reapplied = applyBlocks(
+          lockedOriginalContent,
+          blocks,
+          blockOptions,
+        );
         lockedFailedBlocks = reapplied.failedBlocks;
         lockedBlockResults = reapplied.blockResults;
+        lockedProposedContent = reapplied.result;
+        if (
+          params.atomic &&
+          (lockedFailedBlocks.length > 0 || malformedBlocks > 0)
+        ) {
+          return {
+            status: "abort",
+            result: buildAtomicFailurePayload(
+              params.path,
+              blocks,
+              lockedBlockResults,
+              malformedBlocks,
+              "Atomic apply_diff validation failed after re-reading the file under lock",
+            ),
+          };
+        }
         if (lockedFailedBlocks.length === blocks.length) {
           return {
             status: "abort",
@@ -840,6 +1243,16 @@ export async function handleApplyDiff(
       ...response
     } = result;
     const responseObj = response as Record<string, unknown>;
+    const acceptedContent =
+      result.status === "accepted"
+        ? (result.finalContent ??
+          (await fs.readFile(filePath, "utf-8").catch(() => undefined)))
+        : undefined;
+    if (acceptedContent !== undefined) {
+      responseObj.post_edit_content_hash = contentHash(acceptedContent);
+    }
+    const rangesDescribeAcceptedContent =
+      acceptedContent === lockedProposedContent;
 
     // Add partial failure info if applicable
     if (
@@ -867,7 +1280,17 @@ export async function handleApplyDiff(
         ))
     ) {
       responseObj.block_results = lockedBlockResults.map((blockResult) =>
-        describeBlockResult(blockResult),
+        describeBlockResult(
+          blockResult.status === "applied" && !rangesDescribeAcceptedContent
+            ? {
+                ...blockResult,
+                postEditSpans: blockResult.postEditSpans.map((span) => ({
+                  ...span,
+                  range: undefined,
+                })),
+              }
+            : blockResult,
+        ),
       );
     }
 

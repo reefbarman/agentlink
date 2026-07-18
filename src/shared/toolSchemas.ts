@@ -464,6 +464,32 @@ export const proposeMemorySchema = {
     ),
 };
 
+const applyDiffBlockOptionSchema = z
+  .object({
+    index: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .describe(
+        "Zero-based positional SEARCH/REPLACE block index, counting malformed block slots before the target",
+      ),
+    occurrence: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe("Select this 1-based matching occurrence for the block"),
+    replace_all: z
+      .literal(true)
+      .optional()
+      .describe("Replace every exact occurrence for this block"),
+  })
+  .refine(
+    (option) =>
+      (option.occurrence === undefined) !== (option.replace_all === undefined),
+    "Each block option must specify exactly one of occurrence or replace_all",
+  );
+
 export const applyDiffSchema = {
   path: z
     .string()
@@ -472,6 +498,19 @@ export const applyDiffSchema = {
     .string()
     .describe(
       "Search/replace blocks in <<<<<<< SEARCH / ======= DIVIDER ======= / >>>>>>> REPLACE format",
+    ),
+  block_options: z
+    .array(applyDiffBlockOptionSchema)
+    .max(64)
+    .optional()
+    .describe(
+      "Optional per-block controls. Use occurrence to select a 1-based exact/flexible/escape-normalized match, or replace_all to replace every exact match. Unlisted blocks retain unique-match safety.",
+    ),
+  atomic: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, require every parsed block to succeed and no malformed blocks before opening review or applying any change. The same requirement is revalidated under the write lock.",
     ),
 };
 

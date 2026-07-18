@@ -8,7 +8,10 @@ import type {
   WriteApprovalResponse,
 } from "../approvals/ApprovalPanelProvider.js";
 
-import { DEFAULT_DIAGNOSTIC_DELAY_MS } from "../core/capabilities/editReview.js";
+import {
+  DEFAULT_DIAGNOSTIC_DELAY_MS,
+  type EditSaveFailureRecovery,
+} from "../core/capabilities/editReview.js";
 import { DIFF_VIEW_URI_SCHEME } from "./diffViewContentProvider.js";
 import type { OnApprovalRequest } from "../shared/types.js";
 import { diffSnapshotHub } from "../browser-gateway/DiffSnapshotHub.js";
@@ -138,6 +141,62 @@ export interface DiffResult {
   finalContent?: string;
   reason?: string;
   follow_up?: string;
+  save_failure?: EditSaveFailureRecovery;
+  next_steps?: string[];
+}
+
+export async function diagnoseEditSaveFailure(params: {
+  absolutePath: string;
+  baselineContent: string;
+  documentDirty: boolean;
+  reviewState: EditSaveFailureRecovery["review_state"];
+}): Promise<{
+  save_failure: EditSaveFailureRecovery;
+  next_steps: string[];
+}> {
+  let diskState: EditSaveFailureRecovery["disk_state"];
+  let diskErrorCode: string | undefined;
+  try {
+    const diskContent = await fs.readFile(params.absolutePath, "utf-8");
+    diskState =
+      diskContent === params.baselineContent ? "unchanged" : "changed";
+  } catch (error) {
+    diskErrorCode =
+      typeof error === "object" &&
+      error !== null &&
+      typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : undefined;
+    diskState = diskErrorCode === "ENOENT" ? "missing" : "unreadable";
+  }
+
+  const concurrentChange =
+    diskState === "changed"
+      ? true
+      : diskState === "unchanged"
+        ? false
+        : "unknown";
+  return {
+    save_failure: {
+      document_dirty: params.documentDirty,
+      disk_state: diskState,
+      concurrent_change: concurrentChange,
+      review_state: params.reviewState,
+      vscode_error_detail: "unavailable",
+      retryable: true,
+      ...(diskErrorCode ? { disk_error_code: diskErrorCode } : {}),
+    },
+    next_steps: [
+      params.reviewState === "diff_snapshot_preserved"
+        ? "The review snapshot and dirty editor are preserved. Inspect the file/editor state, then retry the edit after resolving any save participant, permission, or disk issue."
+        : "The dirty editor is preserved. Inspect the file/editor state, then retry after resolving any save participant, permission, or disk issue.",
+      concurrentChange === true
+        ? "The file changed on disk after the edit baseline was captured; re-read it before composing another diff."
+        : concurrentChange === false
+          ? "The file still matches the pre-edit disk baseline; VS Code returned false without exposing an underlying save exception."
+          : "Disk state could not be compared with the pre-edit baseline; use read_file before retrying.",
+    ],
+  };
 }
 
 function detectEol(content: string): "\r\n" | "\n" | undefined {
@@ -548,11 +607,16 @@ export class DiffViewProvider {
     if (document.isDirty) {
       const saved = await document.save();
       if (!saved) {
-        diffSnapshotHub.remove(this.requestId);
         return {
           status: "rejected",
           path: this.relPath,
           reason: "save_failed",
+          ...(await diagnoseEditSaveFailure({
+            absolutePath: this.absolutePath!,
+            baselineContent: this.originalContent ?? "",
+            documentDirty: document.isDirty,
+            reviewState: "diff_snapshot_preserved",
+          })),
         };
       }
     }

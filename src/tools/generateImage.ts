@@ -5,12 +5,14 @@ import type { ApprovalManager } from "../approvals/ApprovalManager.js";
 import { openAiCodexAuthManager } from "../agent/providers/codex/OpenAiCodexAuthManager.js";
 import {
   codexGeneratedImageMetadata,
+  codexImageGenerationErrorMetadata,
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
   CODEX_IMAGE_GENERATION_MAX_COUNT,
   CodexImageGenerationError,
   generateCodexImages,
   parseCodexImageGenerationSse,
   type CodexGeneratedImage,
+  type CodexImageGenerationSseResult,
   type CodexImageReferenceImage,
 } from "../core/model/providers/codex/imageGeneration.js";
 import type { SessionImageReference } from "../agent/toolAdapter.js";
@@ -365,7 +367,9 @@ export async function parseCodexImageSseForTest(params: {
   targets?: Array<{ absolutePath: string; relPath: string }>;
   maxImages: number;
   generatedImages: GeneratedImage[];
-}): Promise<{ images: GeneratedImage[]; eventTypes: string[] }> {
+}): Promise<
+  Omit<CodexImageGenerationSseResult, "images"> & { images: GeneratedImage[] }
+> {
   const parsed = await parseCodexImageGenerationSse({
     response: params.response,
     maxImages: params.maxImages,
@@ -382,7 +386,7 @@ export async function parseCodexImageSseForTest(params: {
     );
     images[index] = { ...image, path: target.relPath };
   }
-  return { images, eventTypes: parsed.eventTypes };
+  return { ...parsed, images };
 }
 
 async function writeGeneratedImageTargets(params: {
@@ -402,6 +406,26 @@ async function writeGeneratedImageTargets(params: {
     images[index] = { ...image, path: target.relPath };
   }
   return images;
+}
+
+function buildGenerateImageErrorResult(params: {
+  error: unknown;
+  generatedImages: GeneratedImage[];
+  followUp?: string;
+}): ToolResult {
+  const message =
+    params.error instanceof Error ? params.error.message : String(params.error);
+  const failureMetadata = codexImageGenerationErrorMetadata(params.error);
+  return errorResult(message, {
+    ...failureMetadata,
+    ...(params.generatedImages.length > 0
+      ? {
+          generated_count: params.generatedImages.length,
+          partial_images: codexGeneratedImageMetadata(params.generatedImages),
+        }
+      : {}),
+    ...(params.followUp ? { follow_up: params.followUp } : {}),
+  });
 }
 
 function buildGenerateImageSuccessResult(params: {
@@ -552,42 +576,45 @@ export async function handleGenerateImage(
           throw new Error("Codex OAuth refresh failed after 401 response");
         }
         auth = refreshed;
-        const rawResult = await generateCodexImages({
-          auth,
-          prompt,
-          count,
-          size,
-          referenceImages,
-          timeoutMs,
-          generatedImages,
-          sessionId,
-        });
-        const result = {
-          ...rawResult,
-          images: await writeGeneratedImageTargets({
-            images: rawResult.images,
-            targets,
-          }),
-        };
-        return buildGenerateImageSuccessResult({
-          result,
-          billing,
-          refreshedAuth: true,
-          requestedCount: count,
-          referenceImages,
-          followUp: approval.followUp,
-        });
+        try {
+          const rawResult = await generateCodexImages({
+            auth,
+            prompt,
+            count,
+            size,
+            referenceImages,
+            timeoutMs,
+            generatedImages,
+            sessionId,
+          });
+          const result = {
+            ...rawResult,
+            images: await writeGeneratedImageTargets({
+              images: rawResult.images,
+              targets,
+            }),
+          };
+          return buildGenerateImageSuccessResult({
+            result,
+            billing,
+            refreshedAuth: true,
+            requestedCount: count,
+            referenceImages,
+            followUp: approval.followUp,
+          });
+        } catch (refreshError) {
+          return buildGenerateImageErrorResult({
+            error: refreshError,
+            generatedImages,
+            followUp: approval.followUp,
+          });
+        }
       }
-      if (generatedImages.length > 0 && error instanceof Error) {
-        return errorResult(error.message, {
-          partial_images: codexGeneratedImageMetadata(generatedImages),
-          ...(approval.followUp ? { follow_up: approval.followUp } : {}),
-        });
-      }
-      return errorResult(
-        error instanceof Error ? error.message : String(error),
-        approval.followUp ? { follow_up: approval.followUp } : undefined,
-      );
+      return buildGenerateImageErrorResult({
+        error,
+        generatedImages,
+        followUp: approval.followUp,
+      });
     }
   } catch (error) {
     return errorResult(error instanceof Error ? error.message : String(error));

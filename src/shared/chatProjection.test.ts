@@ -101,3 +101,39 @@ describe("legacy web activity chat projection", () => {
     expect(messages[0]?.blocks[1]).toEqual({ type: "text", text: "Result" });
   });
 });
+
+describe("assistant image chat projection", () => {
+  it("projects direct assistant images into shared display media", () => {
+    const messages = agentMessagesToChatMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Generated result" },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "YWJjZA==",
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.blocks).toEqual([
+      { type: "text", text: "Generated result" },
+    ]);
+    expect(messages[0]?.displayMedia).toEqual({
+      images: [
+        {
+          name: "generated-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,YWJjZA==",
+        },
+      ],
+      documents: [],
+    });
+  });
+});
