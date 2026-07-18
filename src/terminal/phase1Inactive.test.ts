@@ -46,6 +46,7 @@ describe("Phase 1 inactive boundary", () => {
       "shellIntegration",
       "hostTerminalBlocks",
       "alternateScreenTracker",
+      "terminalOutputPolicy",
       "TerminalSessionService",
       "AgentTerminalViewProvider",
       "agentTerminalProvider",
