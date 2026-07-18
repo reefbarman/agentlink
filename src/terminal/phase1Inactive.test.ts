@@ -44,6 +44,7 @@ describe("Phase 1 inactive boundary", () => {
       "node-pty",
       "nodePtyFactory",
       "shellIntegration",
+      "hostShellLaunchPolicy",
       "hostTerminalBlocks",
       "hostTerminalPresentation",
       "alternateScreenTracker",
