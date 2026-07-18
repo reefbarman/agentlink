@@ -1002,7 +1002,8 @@ Returns JSON with:
 - `status`, `currentTool`, `displayStatus`, `done`
 - `streamingPreview` and `progressSummary` for running sessions when available
 - `resolvedMode`, `resolvedModel`, `resolvedProvider`, `taskClass`
-- `phase`, `startedAt`, `lastProgressAt`, `elapsedMs`, `idleMs`
+- `phase`, `phaseStartedAt`, `startedAt`, `lastProgressAt`, `elapsedMs`, `idleMs`
+- `requestStartedAt`, `requestElapsedMs`, and `retryAt` while a provider request or retry is active
 - `toolCalls`, `tokenUsage`, `apiTurns`, `budget`, and `budgetUsage`
 - `canSteer` and `canKill`, so a coordinator knows which control is currently valid
 - `partialOutput` only when `done=true`
@@ -1157,6 +1158,8 @@ Fetch a specific prompt template from an MCP server.
 AgentLink includes static routing policy for background agents (`src/agent/backgroundModelRouting.config.json`) with explainable outcomes.
 
 - **Default behavior**: non-review tasks stay on the foreground model when policy says `useForegroundModelByDefault`.
+- **Provider admission**: streaming agent turns share a provider-aware scheduler with two active request slots per provider. Foreground requests have queue priority over background requests; status-summary requests run only when that provider is otherwise idle. Active requests are not preempted.
+- **Status summaries**: heuristic summaries are the default and make no model call. The optional `agent` and `openai` modes are traced as background-summary activity; same-provider `agent` summaries use maintenance-priority admission.
 - **Coordinator behavior**: background agents are intended for parallel lanes. Use `get_background_status` for non-blocking progress and health telemetry while continuing foreground work. Judge quiet runs by `phase` and `idleMs`, not elapsed time alone; steer a useful run to return early or kill one that is no longer worth waiting for. Use `get_background_result` only when ready to block and integrate.
 - **Writable lanes**: background agents may write code/tests/docs when delegated a non-conflicting scope and remain subject to normal approval gates. Use explicit owned/forbidden paths in the spawn message.
 - **Read-only lanes**: `readonly-research` routes to ask mode with the `readonly-research` tool profile for pure lookup/exploration. Both `readonly-research` and `review` profiles can run classifier-approved, non-mutating shell commands for workspace inspection.
@@ -1402,45 +1405,45 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 
 ## Settings
 
-| Setting                                        | Default                    | Description                                                                                                      |
-| ---------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `agentlink.browserGatewayPort`                 | `47137`                    | Stable port for the shared browser gateway helper                                                                |
-| `agentlink.browserGatewayLanAccess`            | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                      |
-| `agentlink.browserGatewayMdnsName`             | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                            |
-| `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                     |
-| `agentlink.agentModel`                         | `claude-sonnet-4-6`        | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`            |
-| `agentlink.modeModelPreferences`               | per-mode defaults          | Default model by mode slug; changing the picker in a mode updates that mode's preference                         |
-| `agentlink.modeReasoningEffortPreferences`     | `{}`                       | Default thinking level by mode slug; changing the picker in a mode updates that mode's preference                |
-| `agentlink.agentMaxTokens`                     | `8192`                     | Maximum output tokens per built-in agent response                                                                |
-| `agentlink.thinkingBudget`                     | `10000`                    | Extended thinking budget for thinking-capable models                                                             |
-| `agentlink.showThinking`                       | `true`                     | Show thinking blocks in the built-in agent chat UI                                                               |
-| `agentlink.anthropic.dynamicModelCapabilities` | `true`                     | Lazily refresh Anthropic model capabilities and merge them over built-in defaults                                |
-| `agentlink.autoCondense`                       | `true`                     | Automatically condense built-in agent conversation context when it fills up                                      |
-| `agentlink.autoCondenseThreshold`              | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`              |
-| `agentlink.modelCondenseThresholds`            | `{}`                       | Per-model condense thresholds for the built-in agent                                                             |
-| `agentlink.codexStatefulResponses`             | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                |
-| `agentlink.codexStoreResponses`                | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                 |
-| `agentlink.openaiCompatible.baseUrl`           | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                           |
-| `agentlink.openaiCompatible.model`             | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                             |
-| `agentlink.openaiCompatible.apiKey`            | `""`                       | Optional helper endpoint Bearer token                                                                            |
-| `agentlink.openaiCompatible.timeoutMs`         | `5000`                     | Timeout for helper endpoint calls before falling back                                                            |
-| `agentlink.questionDetection.mode`             | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)         |
-| `agentlink.bgSummary.mode`                     | `agent`                    | How background-agent status snippets are summarized (`agent`, `openai`, `heuristic`)                             |
-| `agentlink.background.defaultAgent`            | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                      |
-| `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                    |
-| `agentlink.background.maxConcurrent`           | `3`                        | Max background agents running at once (also caps per-root and per-provider concurrency); extra launches queue    |
-| `agentlink.semanticSearchEnabled`              | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                      |
-| `agentlink.qdrantUrl`                          | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                 |
-| `agentlink.autoIndex`                          | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                     |
-| `agentlink.chunkGranularity`                   | `fine`                     | Index chunking mode: `standard` or `fine`                                                                        |
-| `agentlink.indexExclusions`                    | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                         |
-| `agentlink.masterBypass`                       | `false`                    | Skip all approval prompts                                                                                        |
-| `agentlink.approvalPosition`                   | `panel`                    | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                |
-| `agentlink.diagnosticDelay`                    | `1500`                     | Max ms to wait for diagnostics after save                                                                        |
-| `agentlink.recentApprovalTtl`                  | `60`                       | Seconds to remember single-use approvals. Repeat identical operations auto-approve within this window. `0` = off |
-| `agentlink.commandAutoApproveTier`             | `safe`                     | Static command safety tier auto-approved when no explicit rule applies (`off`, `safe`, or `sensitive`)           |
-| `agentlink.worktreeDirectorySuffix`            | `-worktrees`               | Suffix for sibling worktree containers used by `start_worktree_agent` default paths                              |
-| `agentlink.writeRules`                         | `[]`                       | Glob patterns for auto-approved file writes (settings-level)                                                     |
+| Setting                                        | Default                    | Description                                                                                                                                 |
+| ---------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agentlink.browserGatewayPort`                 | `47137`                    | Stable port for the shared browser gateway helper                                                                                           |
+| `agentlink.browserGatewayLanAccess`            | `false`                    | Expose the browser gateway on the LAN; non-loopback devices must pair first                                                                 |
+| `agentlink.browserGatewayMdnsName`             | `agentlink`                | mDNS hostname advertised as `<name>.local` when LAN access is enabled                                                                       |
+| `agentlink.defaultMode`                        | `code`                     | Default mode for new built-in agent sessions                                                                                                |
+| `agentlink.agentModel`                         | `claude-sonnet-4-6`        | Legacy fallback model for the built-in agent chat; mode defaults use `agentlink.modeModelPreferences`                                       |
+| `agentlink.modeModelPreferences`               | per-mode defaults          | Default model by mode slug; changing the picker in a mode updates that mode's preference                                                    |
+| `agentlink.modeReasoningEffortPreferences`     | `{}`                       | Default thinking level by mode slug; changing the picker in a mode updates that mode's preference                                           |
+| `agentlink.agentMaxTokens`                     | `8192`                     | Maximum output tokens per built-in agent response                                                                                           |
+| `agentlink.thinkingBudget`                     | `10000`                    | Extended thinking budget for thinking-capable models                                                                                        |
+| `agentlink.showThinking`                       | `true`                     | Show thinking blocks in the built-in agent chat UI                                                                                          |
+| `agentlink.anthropic.dynamicModelCapabilities` | `true`                     | Lazily refresh Anthropic model capabilities and merge them over built-in defaults                                                           |
+| `agentlink.autoCondense`                       | `true`                     | Automatically condense built-in agent conversation context when it fills up                                                                 |
+| `agentlink.autoCondenseThreshold`              | `0.9`                      | Legacy global condense threshold retained for migration; prefer `agentlink.modelCondenseThresholds`                                         |
+| `agentlink.modelCondenseThresholds`            | `{}`                       | Per-model condense thresholds for the built-in agent                                                                                        |
+| `agentlink.codexStatefulResponses`             | `true`                     | Chain OpenAI/Codex Responses API turns with `previous_response_id` when available                                                           |
+| `agentlink.codexStoreResponses`                | `false`                    | Opt into OpenAI server-side response storage for stateful Codex/API-key sessions                                                            |
+| `agentlink.openaiCompatible.baseUrl`           | `http://127.0.0.1:1234/v1` | OpenAI-compatible helper endpoint for optional question detection/background summaries                                                      |
+| `agentlink.openaiCompatible.model`             | `""`                       | Helper endpoint model id; empty lets compatible local servers choose                                                                        |
+| `agentlink.openaiCompatible.apiKey`            | `""`                       | Optional helper endpoint Bearer token                                                                                                       |
+| `agentlink.openaiCompatible.timeoutMs`         | `5000`                     | Timeout for helper endpoint calls before falling back                                                                                       |
+| `agentlink.questionDetection.mode`             | `heuristic`                | How AgentLink detects idle agent questions and generates answer buttons (`heuristic`, `agent`, `openai`)                                    |
+| `agentlink.bgSummary.mode`                     | `heuristic`                | How background-agent status snippets are summarized (`heuristic`, `agent`, `openai`); model-backed modes use low-priority provider requests |
+| `agentlink.background.defaultAgent`            | `native:auto`              | Background backend: native routing or a configured ACP backend (`acp:<id>`)                                                                 |
+| `agentlink.background.acpAgents`               | `[]`                       | ACP stdio subprocesses available as background-agent backends                                                                               |
+| `agentlink.background.maxConcurrent`           | `3`                        | Max background agents running at once (also caps per-root and per-provider concurrency); extra launches queue                               |
+| `agentlink.semanticSearchEnabled`              | `false`                    | Enable semantic codebase search via Qdrant. Requires Qdrant plus OpenAI auth for embeddings                                                 |
+| `agentlink.qdrantUrl`                          | `http://localhost:6333`    | Qdrant vector database URL used for semantic search and indexing                                                                            |
+| `agentlink.autoIndex`                          | `true`                     | Automatically index the workspace on startup when semantic search is enabled                                                                |
+| `agentlink.chunkGranularity`                   | `fine`                     | Index chunking mode: `standard` or `fine`                                                                                                   |
+| `agentlink.indexExclusions`                    | built-in defaults          | Extra glob patterns to exclude from indexing in addition to `.gitignore`                                                                    |
+| `agentlink.masterBypass`                       | `false`                    | Skip all approval prompts                                                                                                                   |
+| `agentlink.approvalPosition`                   | `panel`                    | Where to show approval dialogs: `beside` (split editor) or `panel` (bottom panel)                                                           |
+| `agentlink.diagnosticDelay`                    | `1500`                     | Max ms to wait for diagnostics after save                                                                                                   |
+| `agentlink.recentApprovalTtl`                  | `60`                       | Seconds to remember single-use approvals. Repeat identical operations auto-approve within this window. `0` = off                            |
+| `agentlink.commandAutoApproveTier`             | `safe`                     | Static command safety tier auto-approved when no explicit rule applies (`off`, `safe`, or `sensitive`)                                      |
+| `agentlink.worktreeDirectorySuffix`            | `-worktrees`               | Suffix for sibling worktree containers used by `start_worktree_agent` default paths                                                         |
+| `agentlink.writeRules`                         | `[]`                       | Glob patterns for auto-approved file writes (settings-level)                                                                                |
 
 ## Platform Notes
 

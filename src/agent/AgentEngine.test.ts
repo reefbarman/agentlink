@@ -1844,7 +1844,16 @@ describe("AgentEngine", () => {
       const engine = new AgentEngine(makeRegistry(provider));
 
       const events = await collectEvents(engine.run(session));
+      const apiRequestStart = events.find(
+        (event) => event.type === "api_request_start",
+      );
       const apiRequest = events.find((e) => e.type === "api_request");
+      expect(apiRequestStart).toMatchObject({
+        type: "api_request_start",
+        provider: "mock",
+        model: TEST_MODEL,
+        schedulerQueued: false,
+      });
       expect(apiRequest).toBeDefined();
       if (!apiRequest || apiRequest.type !== "api_request") return;
 
@@ -1853,6 +1862,7 @@ describe("AgentEngine", () => {
       expect(apiRequest.cacheReadTokens).toBe(9000);
       expect(apiRequest.cacheCreationTokens).toBe(1000);
       expect(apiRequest.reasoningEffort).toBe("none");
+      expect(apiRequest.providerQueueWaitMs).toBe(0);
       expect(session.lastInputTokens).toBe(10_050);
       expect(session.totalInputTokens).toBe(50);
       expect(session.totalCacheReadTokens).toBe(9000);

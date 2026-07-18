@@ -317,6 +317,9 @@ export class AgentSessionManager {
       startedAt: number;
       lastProgressAt: number;
       phase: BackgroundAgentRuntimePhase;
+      phaseStartedAt?: number;
+      requestStartedAt?: number;
+      retryAt?: number;
     }
   >();
   private readonly bgSummaryScheduler = new BackgroundSummaryScheduler();
@@ -3691,6 +3694,7 @@ export class AgentSessionManager {
         meta.startedAt = now;
         meta.lastProgressAt = now;
         meta.phase = "waiting_for_provider";
+        meta.phaseStartedAt = now;
       }
       const maxElapsedMs = session.fleetMetadata?.budget?.maxElapsedMs;
       if (maxElapsedMs !== undefined && maxElapsedMs > 0) {
@@ -3894,6 +3898,7 @@ export class AgentSessionManager {
         startedAt: Date.now(),
         lastProgressAt: Date.now(),
         phase: "queued",
+        phaseStartedAt: Date.now(),
       });
       session.fleetMetadata = this.createFleetMetadata(session, {
         task,
@@ -4165,6 +4170,7 @@ export class AgentSessionManager {
       startedAt: Date.now(),
       lastProgressAt: Date.now(),
       phase: "queued",
+      phaseStartedAt: Date.now(),
     });
     session.fleetMetadata = this.createFleetMetadata(session, {
       task,
@@ -4614,6 +4620,19 @@ export class AgentSessionManager {
 
       if (mode === "openai") {
         const endpoint = getOpenAiCompatibleEndpoint();
+        const model = endpoint.model || "openai-compatible";
+        const startedAt = Date.now();
+        this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+          session.id,
+          session.projectScope.projectId,
+          {
+            type: "start",
+            provider: "openai-compatible",
+            model,
+            startedAt,
+            schedulerQueued: false,
+          },
+        );
         try {
           const result = await callOpenAiCompatibleChat({
             endpoint,
@@ -4623,9 +4642,32 @@ export class AgentSessionManager {
             temperature: 0,
           });
           text = result.content;
-          selectedModel = endpoint.model || "openai-compatible";
+          selectedModel = model;
+          this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+            session.id,
+            session.projectScope.projectId,
+            {
+              type: "complete",
+              provider: "openai-compatible",
+              model,
+              startedAt,
+              durationMs: Date.now() - startedAt,
+            },
+          );
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
+          this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+            session.id,
+            session.projectScope.projectId,
+            {
+              type: "error",
+              provider: "openai-compatible",
+              model,
+              startedAt,
+              durationMs: Date.now() - startedAt,
+              error: lastError,
+            },
+          );
         }
       } else {
         const provider = this.host.providers.tryResolveProvider(session.model);
@@ -4644,7 +4686,34 @@ export class AgentSessionManager {
 
         for (let i = 0; i < uniqueModels.length; i++) {
           const model = uniqueModels[i];
+          const startedAt = Date.now();
+          const schedulerQueued =
+            !this.host.providers.requestScheduler.hasCapacity(
+              provider.id,
+              "maintenance",
+            );
+          this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+            session.id,
+            session.projectScope.projectId,
+            {
+              type: "start",
+              provider: provider.id,
+              model,
+              startedAt,
+              schedulerQueued,
+            },
+          );
+          let providerQueueWaitMs = 0;
+          let permit:
+            | import("../core/modelRequestScheduler.js").ModelRequestPermit
+            | undefined;
           try {
+            permit = await this.host.providers.requestScheduler.acquire(
+              provider.id,
+              "maintenance",
+              session.abortSignal,
+            );
+            providerQueueWaitMs = permit.waitMs;
             const result = await provider.complete({
               model,
               systemPrompt,
@@ -4655,9 +4724,38 @@ export class AgentSessionManager {
             selectedModel = model;
             fallbackUsed = i > 0;
             text = result.text;
+            this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+              session.id,
+              session.projectScope.projectId,
+              {
+                type: "complete",
+                provider: provider.id,
+                model,
+                startedAt,
+                schedulerQueued,
+                providerQueueWaitMs,
+                durationMs: Date.now() - startedAt,
+              },
+            );
             break;
           } catch (err) {
             lastError = err instanceof Error ? err.message : String(err);
+            this.activityTraceRecorder.appendBackgroundSummaryEvent?.(
+              session.id,
+              session.projectScope.projectId,
+              {
+                type: "error",
+                provider: provider.id,
+                model,
+                startedAt,
+                schedulerQueued,
+                providerQueueWaitMs,
+                durationMs: Date.now() - startedAt,
+                error: lastError,
+              },
+            );
+          } finally {
+            permit?.release();
           }
         }
       }
@@ -4762,13 +4860,26 @@ export class AgentSessionManager {
   ): void {
     const meta = this.bgMeta.get(sessionId);
     if (!meta) return;
-    meta.lastProgressAt = Date.now();
-    if (phase) meta.phase = phase;
+    const now = Date.now();
+    meta.lastProgressAt = now;
+    if (phase && phase !== meta.phase) {
+      meta.phase = phase;
+      meta.phaseStartedAt = now;
+    }
   }
 
   private noteBackgroundAgentEvent(sessionId: string, event: AgentEvent): void {
     let phase: BackgroundAgentRuntimePhase | undefined;
     switch (event.type) {
+      case "api_request_start": {
+        const meta = this.bgMeta.get(sessionId);
+        if (meta) {
+          meta.requestStartedAt = event.startedAt;
+          meta.retryAt = undefined;
+        }
+        phase = "waiting_for_provider";
+        break;
+      }
       case "thinking_start":
       case "thinking_delta":
       case "condense_start":
@@ -4783,8 +4894,20 @@ export class AgentSessionManager {
         phase = "executing_tool";
         break;
       case "warning":
-        phase = event.retryDelayMs ? "retrying_provider" : undefined;
+        if (event.retryDelayMs) {
+          const meta = this.bgMeta.get(sessionId);
+          if (meta) meta.retryAt = event.retryAt;
+          phase = "retrying_provider";
+        }
         break;
+      case "api_request": {
+        const meta = this.bgMeta.get(sessionId);
+        if (meta) {
+          meta.requestStartedAt = undefined;
+          meta.retryAt = undefined;
+        }
+        break;
+      }
       case "error":
       case "condense_error":
         phase = "failed";
@@ -4793,7 +4916,6 @@ export class AgentSessionManager {
         phase = "completed";
         break;
       default:
-        phase = "waiting_for_provider";
         break;
     }
     this.noteBackgroundProgress(sessionId, phase);
@@ -4803,6 +4925,10 @@ export class AgentSessionManager {
     phase: BackgroundAgentRuntimePhase;
     startedAt?: number;
     lastProgressAt?: number;
+    phaseStartedAt?: number;
+    requestStartedAt?: number;
+    requestElapsedMs?: number;
+    retryAt?: number;
     elapsedMs: number;
     idleMs?: number;
     budgetUsage: BackgroundAgentBudgetUsage;
@@ -4846,6 +4972,12 @@ export class AgentSessionManager {
       phase,
       startedAt,
       lastProgressAt,
+      phaseStartedAt: meta?.phaseStartedAt,
+      requestStartedAt: meta?.requestStartedAt,
+      requestElapsedMs: meta?.requestStartedAt
+        ? Math.max(0, now - meta.requestStartedAt)
+        : undefined,
+      retryAt: meta?.retryAt,
       elapsedMs,
       idleMs:
         !done && lastProgressAt ? Math.max(0, now - lastProgressAt) : undefined,
@@ -4915,6 +5047,10 @@ export class AgentSessionManager {
       phase: telemetry.phase,
       startedAt: telemetry.startedAt,
       lastProgressAt: telemetry.lastProgressAt,
+      phaseStartedAt: telemetry.phaseStartedAt,
+      requestStartedAt: telemetry.requestStartedAt,
+      requestElapsedMs: telemetry.requestElapsedMs,
+      retryAt: telemetry.retryAt,
       elapsedMs: telemetry.elapsedMs,
       idleMs: telemetry.idleMs,
       budget: session.fleetMetadata?.budget,
@@ -6156,6 +6292,10 @@ export class AgentSessionManager {
           lastActiveAt: s.lastActiveAt,
           startedAt: telemetry.startedAt,
           lastProgressAt: telemetry.lastProgressAt,
+          phaseStartedAt: telemetry.phaseStartedAt,
+          requestStartedAt: telemetry.requestStartedAt,
+          requestElapsedMs: telemetry.requestElapsedMs,
+          retryAt: telemetry.retryAt,
           elapsedMs: telemetry.elapsedMs,
           idleMs: telemetry.idleMs,
           phase: telemetry.phase,

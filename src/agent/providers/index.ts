@@ -50,6 +50,7 @@ export {
 } from "./codex/index.js";
 
 import type { ModelProvider, ModelInfo } from "./types.js";
+import { ModelRequestScheduler } from "../../core/modelRequestScheduler.js";
 
 export {
   queryProviderUsage,
@@ -62,6 +63,11 @@ export {
 export class ProviderRegistry {
   private providers = new Map<string, ModelProvider>();
   private modelIndex = new Map<string, string>(); // modelId → providerId
+  readonly requestScheduler: ModelRequestScheduler;
+
+  constructor(requestScheduler = new ModelRequestScheduler()) {
+    this.requestScheduler = requestScheduler;
+  }
 
   register(provider: ModelProvider): void {
     this.providers.set(provider.id, provider);

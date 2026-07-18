@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
 
 import { ActivityTraceRecorder } from "./ActivityTraceRecorder.js";
-import type { ActivityTraceRecorderOptions } from "./ActivityTraceRecorder.js";
+import type {
+  ActivityTraceRecorderOptions,
+  BackgroundSummaryTraceEvent,
+} from "./ActivityTraceRecorder.js";
 import { AgentEngine } from "./AgentEngine.js";
 import { AgentSession } from "./AgentSession.js";
 import {
@@ -90,6 +93,11 @@ export interface ActivityTraceRecorderLike {
     projectId: string,
     event: AgentEvent,
     source: "foreground_agent" | "background_agent",
+  ): void;
+  appendBackgroundSummaryEvent?(
+    sessionId: string,
+    projectId: string,
+    event: BackgroundSummaryTraceEvent,
   ): void;
 }
 
@@ -205,12 +213,12 @@ export function createDefaultAgentSessionManagerHost(args: {
       getBgSummaryMode: (scope) => {
         const value = configurationFor(scope).get<string>(
           "bgSummary.mode",
-          "agent",
+          "heuristic",
         );
         if (value === "agent" || value === "openai" || value === "heuristic") {
           return value;
         }
-        return "agent";
+        return "heuristic";
       },
       getBackgroundAgentSettings: (scope) => {
         const config = configurationFor(scope);

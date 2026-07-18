@@ -149,6 +149,14 @@ export type AgentEvent =
       actions?: AgentErrorActions;
     }
   | {
+      type: "api_request_start";
+      requestId: string;
+      provider: string;
+      model: string;
+      startedAt: number;
+      schedulerQueued: boolean;
+    }
+  | {
       type: "api_request";
       requestId: string;
       model: string;
@@ -160,6 +168,7 @@ export type AgentEvent =
       cacheCreationTokens: number;
       durationMs: number;
       timeToFirstToken: number;
+      providerQueueWaitMs?: number;
       usedPreviousResponseId?: boolean;
       previousResponseIdFallback?: boolean;
       promptCacheKey?: string;

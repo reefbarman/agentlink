@@ -3421,10 +3421,7 @@ export function BrowserGatewayApp({
           sessionId,
           task: body.transcript.task,
           messages: converted,
-          // Browser transcript opens from a gateway snapshot. Unlike the VS Code
-          // webview, it does not receive background-agent stream deltas, so avoid
-          // showing a live spinner for frozen content.
-          streaming: false,
+          streaming: true,
         });
         const assistantBlocks = converted
           .filter((message) => message.role === "assistant")
@@ -4201,8 +4198,18 @@ export function BrowserGatewayApp({
               {transcriptView && (
                 <TranscriptView
                   task={transcriptView.task}
+                  sessionId={transcriptView.sessionId}
                   messages={transcriptView.messages}
-                  streaming={transcriptView.streaming}
+                  streaming={background.some(
+                    (session) =>
+                      session.id === transcriptView.sessionId &&
+                      (session.status === "streaming" ||
+                        session.status === "tool_executing" ||
+                        session.status === "awaiting_approval"),
+                  )}
+                  runtimeStatus={background.find(
+                    (session) => session.id === transcriptView.sessionId,
+                  )}
                   onClose={() => setTranscriptView(null)}
                 />
               )}

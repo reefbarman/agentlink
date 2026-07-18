@@ -114,6 +114,14 @@ export interface BackgroundAgentStatusResult {
   startedAt?: number;
   /** Timestamp of the most recent provider, text, or tool progress event. */
   lastProgressAt?: number;
+  /** Timestamp when the current runtime phase began. */
+  phaseStartedAt?: number;
+  /** Timestamp when the current provider request began. */
+  requestStartedAt?: number;
+  /** Current provider-request wall time. */
+  requestElapsedMs?: number;
+  /** Scheduled provider retry time when retrying. */
+  retryAt?: number;
   /** Total wall-clock runtime since execution left the queue. */
   elapsedMs?: number;
   /** Time since the most recent progress event; meaningful while running. */

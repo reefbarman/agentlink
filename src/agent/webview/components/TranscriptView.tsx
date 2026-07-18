@@ -5,6 +5,7 @@ import type { BgSessionInfoProps } from "./BackgroundSessionStrip";
 import { ChatView } from "./ChatView";
 import { StreamingStatusBar } from "./StreamingStatusBar";
 import { TodoPanel } from "./TodoPanel";
+import type { BackgroundRuntimeStatus } from "./backgroundRuntimeStatus";
 
 interface TranscriptViewProps {
   task: string;
@@ -12,6 +13,7 @@ interface TranscriptViewProps {
   messages: ChatMessage[];
   streaming?: boolean;
   statusOverride?: string | null;
+  runtimeStatus?: BackgroundRuntimeStatus;
   todos?: TodoItem[];
   onOpenFile?: (path: string, line?: number) => void;
   onOpenSpecialBlockPanel?: (block: {
@@ -33,6 +35,7 @@ export function TranscriptView({
   messages,
   streaming = false,
   statusOverride,
+  runtimeStatus,
   todos = [],
   onOpenFile,
   onOpenSpecialBlockPanel,
@@ -86,6 +89,7 @@ export function TranscriptView({
         <StreamingStatusBar
           messages={messages}
           statusOverride={statusOverride ?? null}
+          runtimeStatus={runtimeStatus}
         />
       )}
     </div>

@@ -97,4 +97,28 @@ describe("BackgroundSessionStrip defaults", () => {
 
     expect(screen.getByText("1:00")).toBeTruthy();
   });
+
+  it("shows the provider phase and request elapsed time", () => {
+    vi.spyOn(Date, "now").mockReturnValue(75_000);
+    render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          {
+            id: "active",
+            task: "Provider wait",
+            status: "streaming",
+            phase: "waiting_for_provider",
+            requestStartedAt: 10_000,
+          },
+        ],
+        onStop: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+
+    expect(
+      screen.getByText("Waiting for provider · request 1:05"),
+    ).toBeTruthy();
+  });
 });

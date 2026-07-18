@@ -2398,6 +2398,9 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             messages={transcriptView.messages}
             streaming={transcriptView.streaming}
             statusOverride={transcriptView.statusOverride}
+            runtimeStatus={bgSessions.find(
+              (session) => session.id === transcriptView.sessionId,
+            )}
             todos={transcriptView.todos}
             onOpenFile={handleOpenFile}
             onOpenSpecialBlockPanel={handleOpenSpecialBlockPanel}

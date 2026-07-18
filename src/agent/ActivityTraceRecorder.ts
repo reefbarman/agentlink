@@ -16,7 +16,11 @@ export type ActivityTraceKind =
   | "user_interjection"
   | "tool_start"
   | "tool_result"
+  | "api_request_start"
   | "api_request"
+  | "background_summary_start"
+  | "background_summary_complete"
+  | "background_summary_error"
   | "condense_start"
   | "condense_complete"
   | "condense_error"
@@ -73,6 +77,17 @@ export interface ActivityTraceRecorderOptions {
   maxPayloadArrayItems?: number;
 }
 
+export interface BackgroundSummaryTraceEvent {
+  type: "start" | "complete" | "error";
+  provider: string;
+  model: string;
+  startedAt: number;
+  schedulerQueued?: boolean;
+  providerQueueWaitMs?: number;
+  durationMs?: number;
+  error?: string;
+}
+
 const DEFAULT_MAX_EVENTS_PER_SESSION = 2_000;
 const DEFAULT_MAX_SUMMARY_CHARS = 240;
 const DEFAULT_MAX_PAYLOAD_STRING_CHARS = 500;
@@ -111,6 +126,41 @@ export class ActivityTraceRecorder {
     const draft = this.convertAgentEvent(sessionId, event, source);
     if (!draft) return null;
     return this.append(projectId, draft);
+  }
+
+  appendBackgroundSummaryEvent(
+    sessionId: string,
+    projectId: string,
+    event: BackgroundSummaryTraceEvent,
+  ): ActivityTraceEvent | null {
+    const kind: ActivityTraceKind =
+      event.type === "start"
+        ? "background_summary_start"
+        : event.type === "complete"
+          ? "background_summary_complete"
+          : "background_summary_error";
+    const outcome =
+      event.type === "start"
+        ? "started"
+        : event.type === "complete"
+          ? "completed"
+          : "failed";
+    return this.append(projectId, {
+      sessionId,
+      kind,
+      source: "system",
+      timestamp: event.type === "start" ? event.startedAt : this.now(),
+      summary: `Background status summary ${outcome} with ${event.model}`,
+      payload: {
+        provider: event.provider,
+        model: event.model,
+        startedAt: event.startedAt,
+        schedulerQueued: event.schedulerQueued,
+        providerQueueWaitMs: event.providerQueueWaitMs,
+        durationMs: event.durationMs,
+        error: event.error,
+      },
+    });
   }
 
   append(
@@ -241,6 +291,20 @@ export class ActivityTraceRecorder {
             mcpServerName: event.mcpApprovalPromotion?.serverName,
           },
         };
+      case "api_request_start":
+        return {
+          sessionId,
+          kind: "api_request_start",
+          source,
+          summary: `API request started for ${event.model}`,
+          timestamp: event.startedAt,
+          payload: {
+            requestId: event.requestId,
+            provider: event.provider,
+            model: event.model,
+            schedulerQueued: event.schedulerQueued,
+          },
+        };
       case "api_request":
         return {
           sessionId,
@@ -258,6 +322,7 @@ export class ActivityTraceRecorder {
             cacheCreationTokens: event.cacheCreationTokens,
             durationMs: event.durationMs,
             timeToFirstToken: event.timeToFirstToken,
+            providerQueueWaitMs: event.providerQueueWaitMs,
             usedPreviousResponseId: event.usedPreviousResponseId,
             previousResponseIdFallback: event.previousResponseIdFallback,
             contextBreakdown: event.contextBreakdown,

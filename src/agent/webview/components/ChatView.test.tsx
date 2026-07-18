@@ -91,6 +91,7 @@ describe("ChatView message windowing", () => {
         sessionId: "background-1",
         messages: makeMessages(1),
         streaming: true,
+        runtimeStatus: { phase: "waiting_for_provider" },
         todos: [
           {
             id: "review",
@@ -108,7 +109,7 @@ describe("ChatView message windowing", () => {
     ).toBeTruthy();
     expect(screen.getByText("Tasks 0/1")).toBeTruthy();
     expect(screen.getAllByText("Reviewing implementation")).toHaveLength(2);
-    expect(screen.getByText("Waiting for response…")).toBeTruthy();
+    expect(screen.getByText("Waiting for provider")).toBeTruthy();
   });
 
   it("cancels pending bottom scrolling before revealing earlier history", () => {

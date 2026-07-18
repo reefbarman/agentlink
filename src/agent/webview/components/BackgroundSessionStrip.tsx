@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { formatBackgroundRuntimeStatus } from "./backgroundRuntimeStatus";
 
 export interface BgSessionInfoProps {
   id: string;
@@ -60,6 +61,10 @@ export interface BgSessionInfoProps {
   lastActiveAt?: number;
   startedAt?: number;
   lastProgressAt?: number;
+  phaseStartedAt?: number;
+  requestStartedAt?: number;
+  requestElapsedMs?: number;
+  retryAt?: number;
   elapsedMs?: number;
   idleMs?: number;
   phase?:
@@ -186,7 +191,19 @@ function statusText(
   status: BgSessionInfoProps["status"],
   currentTool?: string,
   displayStatus?: string,
+  runtime?: Pick<BgSessionInfoProps, "phase" | "requestStartedAt" | "retryAt">,
+  now = Date.now(),
 ): string {
+  if (
+    status === "streaming" &&
+    (runtime?.phase === "waiting_for_provider" ||
+      runtime?.phase === "thinking" ||
+      runtime?.phase === "responding" ||
+      runtime?.phase === "retrying_provider")
+  ) {
+    const runtimeStatus = formatBackgroundRuntimeStatus(runtime, now);
+    if (runtimeStatus) return runtimeStatus;
+  }
   switch (status) {
     case "queued":
       return "Queued";
@@ -479,7 +496,7 @@ export function BackgroundSessionStrip({
               <span
                 class="bg-session-status"
                 title={[
-                  statusText(s.status, s.currentTool, s.displayStatus),
+                  statusText(s.status, s.currentTool, s.displayStatus, s, now),
                   s.displayStatusSource
                     ? `source: ${s.displayStatusSource}`
                     : null,
@@ -496,7 +513,7 @@ export function BackgroundSessionStrip({
                   .filter((v): v is string => Boolean(v))
                   .join("\n")}
               >
-                {statusText(s.status, s.currentTool, s.displayStatus)}
+                {statusText(s.status, s.currentTool, s.displayStatus, s, now)}
                 {s.summaryMeta?.inFlight && (
                   <i
                     class="codicon codicon-sync codicon-modifier-spin"

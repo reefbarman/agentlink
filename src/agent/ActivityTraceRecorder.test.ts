@@ -176,6 +176,62 @@ describe("ActivityTraceRecorder", () => {
     });
   });
 
+  it("records provider admission and background status-summary requests", () => {
+    const workspace = makeTempWorkspace();
+    const recorder = new ActivityTraceRecorder({
+      workspaceDir: workspace,
+      now: () => 2_000,
+    });
+
+    recorder.appendAgentEvent(
+      "session-1",
+      "project-1",
+      {
+        type: "api_request_start",
+        requestId: "request-1",
+        provider: "codex",
+        model: "gpt-test",
+        startedAt: 1_000,
+        schedulerQueued: true,
+      },
+      "background_agent",
+    );
+    recorder.appendBackgroundSummaryEvent("session-1", "project-1", {
+      type: "start",
+      provider: "codex",
+      model: "gpt-mini",
+      startedAt: 1_500,
+      schedulerQueued: true,
+    });
+    recorder.appendBackgroundSummaryEvent("session-1", "project-1", {
+      type: "complete",
+      provider: "codex",
+      model: "gpt-mini",
+      startedAt: 1_500,
+      schedulerQueued: true,
+      providerQueueWaitMs: 250,
+      durationMs: 500,
+    });
+
+    expect(recorder.loadEvents("session-1")).toMatchObject([
+      {
+        kind: "api_request_start",
+        timestamp: 1_000,
+        payload: { schedulerQueued: true },
+      },
+      {
+        kind: "background_summary_start",
+        timestamp: 1_500,
+        source: "system",
+      },
+      {
+        kind: "background_summary_complete",
+        timestamp: 2_000,
+        payload: { providerQueueWaitMs: 250, durationMs: 500 },
+      },
+    ]);
+  });
+
   it("caps recorded events but keeps summary counters updated", () => {
     const workspace = makeTempWorkspace();
     const recorder = new ActivityTraceRecorder({

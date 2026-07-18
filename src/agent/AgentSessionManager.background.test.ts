@@ -2590,9 +2590,10 @@ describe("AgentSessionManager background agents", () => {
     meta.startedAt = 1_000;
     meta.lastProgressAt = 7_000;
     meta.phase = "waiting_for_provider";
+    meta.phaseStartedAt = 6_000;
+    meta.requestStartedAt = 8_000;
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(10_000);
     const status = mgr.getBackgroundStatus(spawned.sessionId);
-    nowSpy.mockRestore();
     expect(status.done).toBe(false);
     expect(status.streamingPreview).toContain("likely test files");
     expect(status.progressSummary).toBeDefined();
@@ -2606,6 +2607,9 @@ describe("AgentSessionManager background agents", () => {
     expect(status.phase).toBe("waiting_for_provider");
     expect(status.startedAt).toBe(1_000);
     expect(status.lastProgressAt).toBe(7_000);
+    expect(status.phaseStartedAt).toBe(6_000);
+    expect(status.requestStartedAt).toBe(8_000);
+    expect(status.requestElapsedMs).toBe(2_000);
     expect(status.elapsedMs).toBe(9_000);
     expect(status.idleMs).toBe(3_000);
     expect(status.budget).toEqual({ maxToolCalls: 12, maxApiTurns: 6 });
@@ -2637,9 +2641,13 @@ describe("AgentSessionManager background agents", () => {
       phase: "waiting_for_provider",
       startedAt: 1_000,
       lastProgressAt: 7_000,
+      phaseStartedAt: 6_000,
+      requestStartedAt: 8_000,
+      requestElapsedMs: 2_000,
       canSteer: true,
       canKill: true,
     });
+    nowSpy.mockRestore();
 
     release?.();
   });

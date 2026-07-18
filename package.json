@@ -324,7 +324,7 @@
             "Use the OpenAI-compatible endpoint configured under agentlink.openaiCompatible.*.",
             "Skip the LLM call and show only the inferred phase status."
           ],
-          "default": "agent",
+          "default": "heuristic",
           "description": "How the tiny status string shown for background agents is summarized."
         },
         "agentlink.background.defaultAgent": {

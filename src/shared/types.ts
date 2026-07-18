@@ -259,6 +259,14 @@ export interface BgSessionInfo {
   startedAt?: number;
   /** Timestamp of the latest provider, text, or tool progress event. */
   lastProgressAt?: number;
+  /** Timestamp when the current runtime phase began. */
+  phaseStartedAt?: number;
+  /** Timestamp when the current provider request began, including scheduler wait. */
+  requestStartedAt?: number;
+  /** Current provider-request wall time at snapshot creation. */
+  requestElapsedMs?: number;
+  /** Scheduled provider retry time when phase is retrying_provider. */
+  retryAt?: number;
   elapsedMs?: number;
   idleMs?: number;
   phase?: BackgroundAgentRuntimePhase;

@@ -64,6 +64,7 @@ import { truncateMiddle } from "../util/truncateMiddle.js";
 import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
 import { collectSessionImages } from "./sessionImages.js";
 import type { ProviderRegistry } from "./providers/index.js";
+import type { ModelRequestPermit } from "../core/modelRequestScheduler.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 export function buildSessionTranscriptSnapshot(
   messages: readonly AgentMessage[],
@@ -824,6 +825,7 @@ export class AgentEngine {
         const requestId = randomUUID();
         const startTime = Date.now();
         let timeToFirstToken = 0;
+        let providerQueueWaitMs = 0;
 
         const capabilities = provider.getCapabilities(session.model);
         const reasoningEffort = normalizeReasoningEffort(
@@ -877,6 +879,7 @@ export class AgentEngine {
         const retryTextPrefix = visibleTextFromRetriedStream;
         let retryTextOffset = 0;
         let retryTextDiverged = false;
+        let requestPermit: ModelRequestPermit | undefined;
 
         try {
           // Build a copy of messages for the API call, injecting any attached
@@ -1054,6 +1057,24 @@ export class AgentEngine {
             messageAssemblyStartedAt,
             `apiMessages=${apiMessages.length}`,
           );
+          const schedulerQueued = !this.registry.requestScheduler.hasCapacity(
+            provider.id,
+          );
+          const requestPermitPromise = this.registry.requestScheduler.acquire(
+            provider.id,
+            opts?.isBackground ? "background" : "interactive",
+            signal,
+          );
+          yield {
+            type: "api_request_start",
+            requestId,
+            provider: provider.id,
+            model: session.model,
+            startedAt: startTime,
+            schedulerQueued,
+          };
+          requestPermit = await requestPermitPromise;
+          providerQueueWaitMs += requestPermit.waitMs;
           const requestController = new AbortController();
           const abortRequest = () => requestController.abort();
           signal.addEventListener("abort", abortRequest, { once: true });
@@ -1369,6 +1390,9 @@ export class AgentEngine {
           }
 
           throw streamErr;
+        } finally {
+          requestPermit?.release();
+          requestPermit = undefined;
         }
 
         // Successful API response resets both independently budgeted layers.
@@ -1406,6 +1430,7 @@ export class AgentEngine {
           cacheCreationTokens,
           durationMs,
           timeToFirstToken,
+          providerQueueWaitMs,
           usedPreviousResponseId,
           previousResponseIdFallback,
           promptCacheKey,
