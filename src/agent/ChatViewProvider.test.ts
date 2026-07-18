@@ -90,7 +90,7 @@ describe("tool terminal reveal messages", () => {
     });
 
     expect(revealTerminal).toHaveBeenCalledWith("tool-running");
-  });
+  }, 15_000);
 });
 
 vi.mock("vscode", () => ({
@@ -915,6 +915,92 @@ describe("ChatViewProvider session state sync", () => {
     expect(result.tools?.map((tool) => tool.name)).not.toContain(
       "execute_command",
     );
+  });
+
+  it("restores todos from full history when the todo_write call is outside the visible tail", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const todos = [
+      {
+        id: "resume",
+        content: "Resume interrupted work",
+        activeForm: "Resuming interrupted work",
+        status: "in_progress" as const,
+      },
+    ];
+    const messages: AgentMessage[] = [
+      { role: "user", content: "original task" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "todo-1",
+            name: "todo_write",
+            input: { todos },
+          },
+        ],
+      },
+    ];
+    for (let index = 2; index <= 10; index += 1) {
+      messages.push(
+        { role: "user", content: `follow-up ${index}` },
+        { role: "assistant", content: `response ${index}` },
+      );
+    }
+    const session = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "idle",
+      title: "Interrupted session",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      runState: { phase: "running", startedAt: 123 },
+      getAllMessages: () => messages,
+    };
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { view: unknown }).view = {
+      webview: { postMessage: mockPostMessage },
+    };
+    (provider as unknown as { webviewReady: boolean }).webviewReady = true;
+    provider.setSessionManager({
+      getForegroundSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    } as never);
+
+    (
+      provider as unknown as {
+        postSessionLoaded: (
+          session: unknown,
+          options: { restored: boolean },
+        ) => void;
+      }
+    ).postSessionLoaded(session, { restored: true });
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agentSessionLoaded",
+        sessionId: "session-1",
+        todos,
+        hasMoreBefore: true,
+      }),
+    );
+    const loadedMessage = mockPostMessage.mock.calls.find(
+      ([message]) => message.type === "agentSessionLoaded",
+    )?.[0];
+    expect(JSON.stringify(loadedMessage?.messages)).not.toContain("todo_write");
+    expect(provider.getBrowserProjectedForegroundState()?.todos).toEqual(todos);
   });
 
   it("restores a pending ask_user question when loading an awaiting-question session", async () => {

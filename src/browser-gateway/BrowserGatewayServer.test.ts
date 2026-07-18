@@ -204,6 +204,20 @@ function makeChatViewProviderStub() {
     submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
     submitBrowserStopBackground: vi.fn(() => ({ ok: true })),
+    submitBrowserAskAgentWebPolicy: vi.fn(() => ({
+      ok: true,
+      settings: {
+        searchBackend: "native",
+        fetchBackend: "native",
+        allowedDomains: [],
+        blockedDomains: [],
+        maxSearchUsesPerTurn: 5,
+        maxFetchUsesPerTurn: 3,
+        maxFetchContentTokens: 25000,
+        maxReplayBytesPerTurn: 5242880,
+      },
+      revision: "web-policy-revision-1",
+    })),
     submitBrowserAskAgentMcpStatus: vi.fn(() => ({
       ok: true,
       infos: makeMcpConfigSnapshot().statusInfos,
@@ -748,6 +762,34 @@ describe("BrowserGatewayServer", () => {
       detail: "Awaiting response",
       sessionTitle: "Test Session",
     });
+
+    const unauthorizedAskWebPolicyResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/web-policy`,
+    );
+    expect(unauthorizedAskWebPolicyResponse.status).toBe(401);
+
+    const askWebPolicyResponse = await fetch(
+      `${baseUrl}/internal/ask-agent/web-policy`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(askWebPolicyResponse.ok).toBe(true);
+    expect(await askWebPolicyResponse.json()).toEqual({
+      ok: true,
+      settings: {
+        searchBackend: "native",
+        fetchBackend: "native",
+        allowedDomains: [],
+        blockedDomains: [],
+        maxSearchUsesPerTurn: 5,
+        maxFetchUsesPerTurn: 3,
+        maxFetchContentTokens: 25000,
+        maxReplayBytesPerTurn: 5242880,
+      },
+      revision: "web-policy-revision-1",
+    });
+    expect(
+      chatViewProvider.submitBrowserAskAgentWebPolicy,
+    ).toHaveBeenCalledOnce();
 
     const unauthorizedAskMcpStatusResponse = await fetch(
       `${baseUrl}/internal/ask-agent/mcp-status`,

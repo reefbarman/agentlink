@@ -651,17 +651,22 @@ function formatTranscriptTimestamp(timestamp: number): string {
 }
 
 function messageTextForExport(message: ChatMessage): string {
-  if (message.content.trim()) return message.content.trim();
-  return message.blocks
+  const content = message.content.trim();
+  const blockText = message.blocks
     .map((block) => {
       if (block.type === "text" || block.type === "thinking") {
-        return block.text;
+        return content ? "" : block.text;
       }
       if (block.type === "tool_call") {
-        return [`[Tool: ${block.name}]`, block.result]
+        return [
+          `[Tool: ${block.name}]`,
+          block.inputJson ? `Input:\n${block.inputJson}` : "",
+          block.result ? `Result:\n${block.result}` : "",
+        ]
           .filter(Boolean)
           .join("\n");
       }
+      if (content) return "";
       if (block.type === "skill_load") {
         return [
           `[Skill: ${block.skillName ?? block.path ?? "unknown"}]`,
@@ -683,6 +688,7 @@ function messageTextForExport(message: ChatMessage): string {
     .filter(Boolean)
     .join("\n\n")
     .trim();
+  return [content, blockText].filter(Boolean).join("\n\n");
 }
 
 function buildAskAgentTranscriptMarkdown(params: {
@@ -1126,6 +1132,67 @@ export function BrowserGatewayApp({
     () => dedupeBackgroundSessions(snapshotBackground ?? []),
     [snapshotBackground],
   );
+  const openTranscriptBackground = useMemo(
+    () =>
+      transcriptView
+        ? background.find((session) => session.id === transcriptView.sessionId)
+        : undefined,
+    [background, transcriptView],
+  );
+  useEffect(() => {
+    if (!transcriptView || !openTranscriptBackground) return;
+    let cancelled = false;
+    const sessionId = transcriptView.sessionId;
+    void (async () => {
+      try {
+        const response = await fetch(
+          buildApiPath("/api/background/open-transcript"),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({ sessionId }),
+          },
+        );
+        const body = (await response.json()) as {
+          ok?: boolean;
+          transcript?: {
+            sessionId: string;
+            task: string;
+            messages: unknown[];
+          };
+        };
+        if (cancelled || !body.ok || !body.transcript) return;
+        const converted = agentMessagesToChatMessages(body.transcript.messages);
+        setTranscriptView((current) =>
+          current?.sessionId === sessionId
+            ? {
+                ...current,
+                task: body.transcript!.task,
+                messages: converted,
+              }
+            : current,
+        );
+      } catch {
+        // Keep the last transcript snapshot; a later background update can retry.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authToken,
+    buildApiPath,
+    openTranscriptBackground?.completedAt,
+    openTranscriptBackground?.errorMessage,
+    openTranscriptBackground?.lastActiveAt,
+    openTranscriptBackground?.lastProgressAt,
+    openTranscriptBackground?.status,
+    openTranscriptBackground?.streamingText,
+    transcriptView?.sessionId,
+  ]);
   useEffect(() => {
     const currentIds = new Set(
       background.flatMap(

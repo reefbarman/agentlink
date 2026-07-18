@@ -35,7 +35,21 @@ vi.mock("vscode", async () => {
     ...actual,
     workspace: {
       ...actual.workspace,
-      getConfiguration: (...args: unknown[]) => mocks.getConfiguration(...args),
+      getConfiguration: (...args: unknown[]) => {
+        const config = mocks.getConfiguration(...args);
+        return {
+          ...config,
+          get: (key: string, ...getArgs: unknown[]) => {
+            if (
+              key === "webAccess.searchBackend" ||
+              key === "webAccess.fetchBackend"
+            ) {
+              return "disabled";
+            }
+            return config.get(key, ...getArgs);
+          },
+        };
+      },
     },
   };
 });

@@ -7,10 +7,13 @@ import {
   sanitizeSchemaForCodex,
   summarizeCodexInput,
   summarizeCodexRequestInput,
+  translateCodexHostedTools,
   translateCodexMessages,
   translateCodexTools,
 } from "./translation.js";
 import { describe, expect, it } from "vitest";
+
+import type { CoreJsonValue } from "../../../webAccess.js";
 
 const LONG_TOOL_CALL_ID = `tool call:${"x".repeat(80)}`;
 
@@ -95,6 +98,211 @@ describe("Codex translation", () => {
         output: "result text",
       },
     ]);
+  });
+
+  it("re-attaches tool result images as a user message after the function output", () => {
+    const input = translateCodexMessages([
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call_read_image",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: "abc123",
+                },
+              },
+            ],
+          },
+          {
+            type: "tool_result",
+            tool_use_id: "call_read_mixed",
+            content: [
+              { type: "text", text: "2 pages" },
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/webp",
+                  data: "def456",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_read_image",
+        output: "[Image attached in the following user message.]",
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "Image output of tool call call_read_image:",
+          },
+          {
+            type: "input_image",
+            image_url: "data:image/png;base64,abc123",
+            detail: "auto",
+          },
+        ],
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_read_mixed",
+        output: "2 pages\n[Image attached in the following user message.]",
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "Image output of tool call call_read_mixed:",
+          },
+          {
+            type: "input_image",
+            image_url: "data:image/webp;base64,def456",
+            detail: "auto",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("replays exact Codex output items from provider-private history", () => {
+    const output: CoreJsonValue[] = [
+      {
+        type: "web_search_call",
+        id: "ws_123",
+        status: "completed",
+        action: { type: "search", query: "latest AgentLink news" },
+      },
+      {
+        type: "message",
+        id: "msg_123",
+        status: "completed",
+        role: "assistant",
+        content: [
+          { type: "output_text", text: "Cited answer", annotations: [] },
+        ],
+      },
+    ];
+
+    expect(
+      translateCodexMessages([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "normalized fallback" }],
+          providerReplay: {
+            providerId: "openai-codex",
+            codecVersion: 1,
+            payload: { output },
+            serializedBytes: 1,
+          },
+        },
+      ]),
+    ).toEqual(output);
+  });
+
+  it("suppresses local replay while stateful continuation is active", () => {
+    expect(
+      translateCodexMessages(
+        [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "normalized fallback" }],
+            providerReplay: {
+              providerId: "openai-codex",
+              codecVersion: 1,
+              payload: {
+                output: [
+                  {
+                    type: "message",
+                    role: "assistant",
+                    content: [{ type: "output_text", text: "exact replay" }],
+                  },
+                ],
+              },
+              serializedBytes: 1,
+            },
+          },
+        ],
+        { useProviderReplay: false },
+      ),
+    ).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "normalized fallback" }],
+      },
+    ]);
+  });
+
+  it("falls back to normalized content for degraded or foreign replay", () => {
+    expect(
+      translateCodexMessages([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "fallback" }],
+          providerReplay: {
+            providerId: "anthropic",
+            codecVersion: 1,
+            payload: { output: [{ type: "message" }] },
+            serializedBytes: 1,
+          },
+        },
+      ]),
+    ).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "fallback" }],
+      },
+    ]);
+  });
+
+  it("translates hosted web search independently from function tools", () => {
+    expect(
+      translateCodexHostedTools([
+        {
+          type: "web_search",
+          allowedDomains: ["openai.com"],
+        },
+        {
+          type: "web_search",
+          blockedDomains: ["example.com"],
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "web_search",
+        filters: { allowed_domains: ["openai.com"] },
+      },
+      {
+        type: "web_search",
+        filters: { blocked_domains: ["example.com"] },
+      },
+    ]);
+  });
+
+  it("rejects standalone hosted fetch for Codex", () => {
+    expect(() =>
+      translateCodexHostedTools([
+        {
+          type: "web_fetch",
+          citationsEnabled: true,
+        },
+      ]),
+    ).toThrow(/does not support hosted tool type: web_fetch/);
   });
 
   it("summarizes translated input content and image previews", () => {
@@ -227,6 +435,7 @@ describe("Codex translation", () => {
           supportsPromptCacheKey: true,
           supportsPromptCacheRetention: true,
           supportsMaxOutputTokens: true,
+          supportsHostedWebSearch: true,
         },
       }),
     ).toMatchObject({
@@ -262,6 +471,7 @@ describe("Codex translation", () => {
           supportsPromptCacheKey: true,
           supportsPromptCacheRetention: true,
           supportsMaxOutputTokens: true,
+          supportsHostedWebSearch: true,
         },
       }),
     ).toEqual({
@@ -271,6 +481,62 @@ describe("Codex translation", () => {
       stream: true,
       store: false,
       prompt_cache_key: "cache-key",
+    });
+  });
+
+  it("includes hosted search and requested sources for supported API-key caps", () => {
+    expect(
+      buildCodexEndpointRequestBody({
+        model: "gpt-5.5",
+        input: [],
+        instructions: "system",
+        hostedTools: [
+          {
+            type: "web_search",
+            blockedDomains: ["example.com"],
+          },
+        ],
+        caps: {
+          supportsPreviousResponseId: true,
+          supportsPersistedReasoning: true,
+          supportsProMode: true,
+          supportsPromptCacheKey: true,
+          supportsPromptCacheRetention: true,
+          supportsMaxOutputTokens: true,
+          supportsHostedWebSearch: true,
+        },
+      }),
+    ).toMatchObject({
+      tools: [
+        {
+          type: "web_search",
+          filters: { blocked_domains: ["example.com"] },
+        },
+      ],
+      include: ["web_search_call.action.sources"],
+    });
+  });
+
+  it("includes hosted search for supported OAuth caps", () => {
+    expect(
+      buildCodexEndpointRequestBody({
+        model: "gpt-5.5",
+        input: [],
+        instructions: "system",
+        hostedTools: [{ type: "web_search" }],
+        caps: {
+          supportsPreviousResponseId: false,
+          supportsPersistedReasoning: false,
+          supportsProMode: false,
+          supportsPromptCacheKey: false,
+          supportsPromptCacheRetention: false,
+          supportsMaxOutputTokens: false,
+          supportsHostedWebSearch: true,
+        },
+      }),
+    ).toMatchObject({
+      tools: [{ type: "web_search" }],
+      include: ["web_search_call.action.sources"],
     });
   });
 
@@ -291,6 +557,7 @@ describe("Codex translation", () => {
           supportsPromptCacheKey: false,
           supportsPromptCacheRetention: false,
           supportsMaxOutputTokens: false,
+          supportsHostedWebSearch: true,
         },
       }),
     ).toEqual({

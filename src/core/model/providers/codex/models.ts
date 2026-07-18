@@ -63,8 +63,9 @@ const GPT_5_CODEX_MAX_REASONING_EFFORTS = [
  *
  * The public OpenAI API (api.openai.com/v1/responses) exposes the full
  * documented Responses feature set. The ChatGPT/Codex backend
- * (chatgpt.com/backend-api/codex/responses) is an internal surface that
- * rejects parameters the public docs describe — so we treat it conservatively.
+ * (chatgpt.com/backend-api/codex/responses) supports native web search but
+ * rejects some other parameters the public docs describe, so each capability
+ * remains explicit.
  */
 export interface ResponsesCaps {
   supportsPreviousResponseId: boolean;
@@ -73,6 +74,7 @@ export interface ResponsesCaps {
   supportsPromptCacheKey: boolean;
   supportsPromptCacheRetention: boolean;
   supportsMaxOutputTokens: boolean;
+  supportsHostedWebSearch: boolean;
 }
 
 /**
@@ -350,6 +352,7 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
       supportsPromptCacheKey: true,
       supportsPromptCacheRetention: true,
       supportsMaxOutputTokens: true,
+      supportsHostedWebSearch: true,
     };
   }
 
@@ -360,6 +363,7 @@ export function getEndpointCaps(auth: CodexResolvedAuthShape): ResponsesCaps {
     supportsPromptCacheKey: false,
     supportsPromptCacheRetention: false,
     supportsMaxOutputTokens: false,
+    supportsHostedWebSearch: true,
   };
 }
 
@@ -418,6 +422,18 @@ export function getCodexModelCapabilities(
     supportsCaching: true,
     supportsImages: def?.supportsImages ?? true,
     supportsToolUse: true,
+    hostedWeb: {
+      search: {
+        supported: true,
+        supportsDomainRestrictions: authMethod === "apiKey",
+        supportsCitations: true,
+        // OpenAI page open/find actions are part of web_search rather than a
+        // separately configurable hosted fetch tool. AgentLink can delegate a
+        // web_fetch wrapper call to this page-access mode.
+        supportsPageAccess: true,
+      },
+      fetch: { supported: false },
+    },
     contextWindow: def?.contextWindow ?? 400_000,
     ...(typeof maxInputTokens === "number" ? { maxInputTokens } : {}),
     maxOutputTokens: def?.maxOutputTokens ?? 128_000,

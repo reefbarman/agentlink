@@ -67,7 +67,21 @@ vi.mock("vscode", async () => {
     ...actual,
     workspace: {
       ...actual.workspace,
-      getConfiguration: (...args: unknown[]) => mocks.getConfiguration(...args),
+      getConfiguration: (...args: unknown[]) => {
+        const config = mocks.getConfiguration(...args);
+        return {
+          ...config,
+          get: (key: string, ...getArgs: unknown[]) => {
+            if (
+              key === "webAccess.searchBackend" ||
+              key === "webAccess.fetchBackend"
+            ) {
+              return "disabled";
+            }
+            return config.get(key, ...getArgs);
+          },
+        };
+      },
     },
   };
 });
@@ -873,6 +887,91 @@ describe("AgentSessionManager host injection", () => {
     expect(releaseParent).toHaveBeenCalledOnce();
   });
 
+  it("reports strict web policy failures without storing the rejected turn", async () => {
+    const createCheckpoint = vi.fn(async () => null);
+    const mgr = new AgentSessionManager(
+      makeConfig(),
+      "/tmp",
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        host: {
+          config: {
+            resolveModelForMode: (_mode, fallbackModel) => fallbackModel,
+            getCondenseThresholdForModel: () => 0.9,
+            getBgSummaryMode: () => "heuristic",
+            getBackgroundAgentSettings: () => ({}),
+            getWebAccessSettings: () => ({
+              searchBackend: "native",
+              fetchBackend: "native",
+            }),
+          },
+          createCheckpointManager: vi.fn(() => ({
+            baseCommit: null,
+            initialize: vi.fn(async () => undefined),
+            createCheckpoint,
+            previewRevert: vi.fn(async () => null),
+            revertToCheckpoint: vi.fn(async () => false),
+            getDiffBetween: vi.fn(async () => ""),
+          })),
+        },
+      },
+    );
+    mgr.setToolContext({
+      approvalManager: { bindSessionProject: vi.fn() } as any,
+      approvalPanel: {} as any,
+      sessionId: "agent",
+      extensionUri: {} as any,
+    });
+    const session = await mgr.createSession("code");
+    const onEvent = vi.fn();
+    mgr.onEvent = onEvent;
+    const saveSessionNow = vi.spyOn(mgr as any, "saveSessionNow");
+
+    await expect(
+      mgr.sendMessage(session.id, "must not be stored", session.mode),
+    ).rejects.toThrow("Native web search is unavailable (native_unsupported).");
+
+    expect(session.status).toBe("error");
+    expect(saveSessionNow).toHaveBeenCalledWith(session.id);
+    expect(onEvent.mock.calls.map(([, event]) => event.type)).toEqual([
+      "error",
+      "done",
+    ]);
+    expect(onEvent).toHaveBeenNthCalledWith(
+      1,
+      session.id,
+      expect.objectContaining({
+        type: "error",
+        error: expect.stringContaining(
+          "Native web search is unavailable (native_unsupported).",
+        ),
+      }),
+    );
+    expect(session.addUserMessage).not.toHaveBeenCalled();
+    expect(createCheckpoint).not.toHaveBeenCalled();
+
+    onEvent.mockClear();
+    saveSessionNow.mockClear();
+    session.status = "streaming";
+
+    await expect(mgr.retrySession(session.id)).rejects.toThrow(
+      "Native web search is unavailable (native_unsupported).",
+    );
+
+    expect(session.status).toBe("error");
+    expect(saveSessionNow).toHaveBeenCalledWith(session.id);
+    expect(onEvent.mock.calls.map(([, event]) => event.type)).toEqual([
+      "error",
+      "done",
+    ]);
+    expect(session.addUserMessage).not.toHaveBeenCalled();
+    expect(createCheckpoint).not.toHaveBeenCalled();
+  });
+
   it("blocks unavailable sessions at every local execution boundary", async () => {
     const run = vi.fn(async function* () {});
     const condenseSession = vi.fn(async function* () {});
@@ -1183,7 +1282,7 @@ describe("AgentSessionManager manual condense", () => {
     await expect(mgr.createSession("code")).rejects.toThrow(reason);
   });
 
-  it("continues the agent turn after a successful manual condense", async () => {
+  it("does not start an agent turn after a successful manual condense", async () => {
     const mgr = new AgentSessionManager(makeConfig(), "/tmp");
     const session = await mgr.createSession("code");
     session.status = "idle";
@@ -1221,14 +1320,14 @@ describe("AgentSessionManager manual condense", () => {
     await mgr.condenseCurrentSession();
 
     expect(engine.condenseSession).toHaveBeenCalledTimes(1);
-    expect(engine.run).toHaveBeenCalledTimes(1);
+    expect(engine.run).not.toHaveBeenCalled();
     expect(onEvent).toHaveBeenCalledWith(
       session.id,
       expect.objectContaining({ type: "condense" }),
     );
-    expect(onEvent).toHaveBeenCalledWith(
+    expect(onEvent).not.toHaveBeenCalledWith(
       session.id,
-      expect.objectContaining({ type: "text_delta", text: "continued" }),
+      expect.objectContaining({ type: "text_delta" }),
     );
     expect(session.status).toBe("idle");
   });

@@ -67,7 +67,24 @@ describe("ProjectSettingsAccessor", () => {
     };
     const properties = manifest.contributes.configuration.properties;
 
-    expect(classifications).toHaveLength(43);
+    expect(classifications).toHaveLength(51);
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
+      "webAccess.searchBackend",
+    );
+    expect(WINDOW_SCOPED_AGENTLINK_SETTINGS).toContain(
+      "webAccess.fetchBackend",
+    );
+    for (const removedSetting of [
+      "webAccess.strategy",
+      "webAccess.searchEnabled",
+      "webAccess.fetchEnabled",
+      "webAccess.mcpAdapter",
+      "webAccess.mcpSearchTool",
+      "webAccess.mcpFetchTool",
+    ]) {
+      expect(classifications).not.toContain(removedSetting);
+      expect(properties).not.toHaveProperty(`agentlink.${removedSetting}`);
+    }
     expect(new Set(classifications)).toHaveLength(classifications.length);
     expect(Object.keys(properties)).toHaveLength(classifications.length);
     for (const setting of PROJECT_SCOPED_AGENTLINK_SETTINGS) {

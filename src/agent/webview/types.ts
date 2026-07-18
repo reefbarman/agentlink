@@ -399,6 +399,7 @@ export type ExtensionMessage =
       mode: string;
       model: string;
       messages: unknown[];
+      todos: TodoItem[];
       lastInputTokens: number;
       lastOutputTokens: number;
       /** True when this came from automatic startup restore rather than explicit user action. */

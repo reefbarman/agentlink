@@ -85,6 +85,161 @@ describe("runAgentToolLoop", () => {
     expect(seenToolMessages[1]).toEqual([toolMessage("tool result")]);
   });
 
+  it("replays the full assistant message before a separate user tool result", async () => {
+    const call: AgentToolLoopCall = {
+      id: "call-1",
+      name: "search",
+      input: { query: "docs" },
+    };
+    const assistantMessage: CoreModelMessage = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "I will search." },
+        {
+          type: "tool_use",
+          id: call.id,
+          name: call.name,
+          input: call.input,
+        },
+      ],
+    };
+    const toolResult: CoreModelMessage = {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: "result",
+        },
+      ],
+    };
+    const seenIterationMessages: CoreModelMessage[][] = [];
+    let iteration = 0;
+
+    await runAgentToolLoop(
+      makeHandlers({
+        callModel: async ({ iterationMessages }) => {
+          seenIterationMessages.push(structuredClone(iterationMessages));
+          iteration += 1;
+          return iteration === 1
+            ? {
+                text: "I will search.",
+                toolCalls: [call],
+                assistantMessage,
+                stopReason: "tool_use",
+              }
+            : { text: "done", toolCalls: [], stopReason: "end_turn" };
+        },
+        runTool: async () => ({
+          stop: false,
+          content: "result",
+          toolMessage: toolResult,
+        }),
+      }),
+    );
+
+    expect(seenIterationMessages).toEqual([[], [assistantMessage, toolResult]]);
+  });
+
+  it("synthesizes an assistant tool-use message for legacy model clients", async () => {
+    const call: AgentToolLoopCall = { id: "1", name: "search", input: {} };
+    const seenIterationMessages: CoreModelMessage[][] = [];
+    let iteration = 0;
+
+    await runAgentToolLoop(
+      makeHandlers({
+        callModel: async ({ iterationMessages }) => {
+          seenIterationMessages.push(structuredClone(iterationMessages));
+          iteration += 1;
+          return iteration === 1
+            ? { text: "searching", toolCalls: [call] }
+            : { text: "done", toolCalls: [] };
+        },
+        runTool: async () => ({
+          stop: false,
+          content: "result",
+          toolMessage: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: call.id,
+                name: call.name,
+                input: call.input,
+              },
+              {
+                type: "tool_result",
+                tool_use_id: call.id,
+                content: "result",
+              },
+            ],
+          },
+        }),
+      }),
+    );
+
+    expect(seenIterationMessages[1]).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "searching" },
+          { type: "tool_use", id: "1", name: "search", input: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "1", content: "result" }],
+      },
+    ]);
+  });
+
+  it("continues pause_turn with the exact assistant message and no local dispatch", async () => {
+    const pausedMessage: CoreModelMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "web_activity",
+          activity: {
+            id: "web-1",
+            kind: "search",
+            status: "completed",
+            backend: "provider",
+          },
+        },
+      ],
+      providerReplay: {
+        providerId: "anthropic",
+        codecVersion: 1,
+        payload: { encrypted_content: "ciphertext" },
+        serializedBytes: 34,
+      },
+    };
+    const runTool = async () => ({ stop: false, content: "unexpected" });
+    const seenIterationMessages: CoreModelMessage[][] = [];
+    let iteration = 0;
+
+    const result = await runAgentToolLoop(
+      makeHandlers({
+        callModel: async ({ iterationMessages }) => {
+          seenIterationMessages.push(structuredClone(iterationMessages));
+          iteration += 1;
+          return iteration === 1
+            ? {
+                text: "",
+                toolCalls: [],
+                assistantMessage: pausedMessage,
+                stopReason: "pause_turn",
+              }
+            : { text: "complete", toolCalls: [], stopReason: "end_turn" };
+        },
+        runTool,
+      }),
+    );
+
+    expect(result).toEqual({ outcome: "model_success", text: "complete" });
+    expect(seenIterationMessages).toEqual([[], [pausedMessage]]);
+  });
+
   it("feeds initial tool messages to the first model call", async () => {
     const initialToolMessage = toolMessage("resumed tool result");
     const seenToolMessages: CoreModelMessage[][] = [];

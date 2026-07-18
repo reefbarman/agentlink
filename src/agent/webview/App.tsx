@@ -439,6 +439,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             toolCallId: msg.toolCallId,
             toolName: msg.toolName,
             result: msg.result,
+            resultImages: msg.resultImages,
             durationMs: msg.durationMs,
             input: msg.input,
             parentCallId: msg.parentCallId,
@@ -460,6 +461,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             badge: msg.badge,
           });
           break;
+
         case "agentTextDelta":
           if (dropIfNotStreaming()) break;
           streamingBaselineMetrics?.record({
@@ -786,6 +788,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             mode: msg.mode,
             model: msg.model,
             messages: agentMessagesToChatMessages(msg.messages as unknown[]),
+            todos: msg.todos,
             lastInputTokens: msg.lastInputTokens,
             lastOutputTokens: msg.lastOutputTokens,
             checkpoints: msg.checkpoints,
@@ -981,6 +984,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             ),
           );
           break;
+
         case "agentBgToolStart":
           setTranscriptView((prev) =>
             reduceOpenTranscript(

@@ -507,6 +507,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "GET",
+        rawExact("/internal/ask-agent/web-policy"),
+        ({ req, res }) => this.handleAskAgentWebPolicy(req, res),
+        internal("ask-agent web policy failed"),
+      ),
+      route(
+        "GET",
         rawExact("/internal/ask-agent/mcp-tools"),
         ({ req, res }) => this.handleAskAgentMcpTools(req, res),
         internal("ask-agent mcp tools failed"),
@@ -1716,6 +1722,21 @@ export class BrowserGatewayServer implements vscode.Disposable {
     }
     const result = await this.chatViewProvider.submitBrowserRefreshDebugInfo();
     this.writeJson(res, result.ok ? 200 : 500, result);
+  }
+
+  private async handleAskAgentWebPolicy(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+    this.writeJson(
+      res,
+      200,
+      this.chatViewProvider.submitBrowserAskAgentWebPolicy(),
+    );
   }
 
   private async handleAskAgentMcpTools(

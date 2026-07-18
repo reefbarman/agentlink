@@ -144,6 +144,11 @@ describe("executeCodexResolvedCompletion", () => {
         cacheCreationTokens: 0,
       },
       providerResponseId: "resp_123",
+      assistantMessage: {
+        role: "assistant",
+        content: [{ type: "text", text: " Hello " }],
+      },
+      stopReason: "end_turn",
     });
   });
 
@@ -164,6 +169,11 @@ describe("executeCodexResolvedCompletion", () => {
       toolCalls: [],
       usage: undefined,
       providerResponseId: undefined,
+      assistantMessage: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      stopReason: "end_turn",
     });
   });
 

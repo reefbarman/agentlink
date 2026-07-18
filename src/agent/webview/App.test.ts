@@ -272,6 +272,50 @@ describe("webview App reducer background agent launch blocks", () => {
     ]);
   });
 
+  it("promotes non-generate_image result images while retaining them on the tool call", () => {
+    const toolCallId = "tool-read-image";
+    let state = reducer(initialState, {
+      type: "ADD_USER_MESSAGE",
+      text: "read the screenshot",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_START",
+      toolCallId,
+      toolName: "read_file",
+    });
+
+    state = reducer(state, {
+      type: "TOOL_COMPLETE",
+      toolCallId,
+      toolName: "read_file",
+      result: "[image]",
+      resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      durationMs: 42,
+      input: { path: "Captures/layout-check.png" },
+    });
+
+    const assistant = state.messages[state.messages.length - 1];
+    expect(assistant?.role).toBe("assistant");
+    expect(assistant?.displayMedia).toEqual({
+      images: [
+        {
+          name: "generated-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,YWJjZA==",
+        },
+      ],
+      documents: [],
+    });
+    expect(assistant?.blocks).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        id: toolCallId,
+        resultImages: [{ mimeType: "image/png", data: "YWJjZA==" }],
+      }),
+    ]);
+  });
+
   it("promotes generated images when completing earlier tool messages and multiple image tools", () => {
     let state = reducer(initialState, {
       type: "ADD_USER_MESSAGE",
@@ -1049,6 +1093,7 @@ describe("webview App reducer background agent launch blocks", () => {
       messages: state.messages.map(
         ({ checkpointId: _checkpointId, ...message }) => message,
       ),
+      todos: [],
       checkpoints: [{ turnIndex: 1, checkpointId: "cp-restored" }],
       lastInputTokens: 0,
       lastOutputTokens: 0,
@@ -1109,6 +1154,7 @@ describe("webview App reducer background agent launch blocks", () => {
           blocks: [{ type: "text", text: "tail" }],
         },
       ],
+      todos: [],
       checkpoints: [{ turnIndex: 1, checkpointId: "cp-chunk" }],
       userTurnOffset: 1,
       hasMoreBefore: true,
@@ -1899,6 +1945,56 @@ describe("webview App reducer background agent launch blocks", () => {
         resultImages: [{ data: "YWJjZA==", mimeType: "image/png" }],
         complete: true,
       },
+    ]);
+    expect(restored[1]?.displayMedia).toEqual({
+      images: [
+        {
+          name: "generated-image-1.png",
+          mimeType: "image/png",
+          src: "data:image/png;base64,YWJjZA==",
+        },
+      ],
+      documents: [],
+    });
+  });
+
+  it("restores non-generate_image result images onto the tool call and display media", async () => {
+    const { agentMessagesToChatMessages } = await import("./App");
+
+    const restored = agentMessagesToChatMessages([
+      { role: "user", content: "read the screenshot" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "read-image-restore",
+            name: "read_file",
+            input: { path: "Captures/layout-check.png" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "read-image-restore",
+            content: [
+              { type: "image", data: "YWJjZA==", mimeType: "image/png" },
+            ],
+          },
+        ],
+      },
+    ] as unknown[]);
+
+    expect(restored[1]?.blocks).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        id: "read-image-restore",
+        name: "read_file",
+        resultImages: [{ data: "YWJjZA==", mimeType: "image/png" }],
+      }),
     ]);
     expect(restored[1]?.displayMedia).toEqual({
       images: [

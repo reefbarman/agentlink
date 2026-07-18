@@ -1,3 +1,4 @@
+import type { CoreWebActivity, CoreWebCitation } from "../core/webAccess.js";
 import type {
   ChatMessage,
   ChatState,
@@ -106,7 +107,85 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
+function sanitizeWebUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeWebCitations(
+  values: readonly CoreWebCitation[],
+): CoreWebCitation[] {
+  const citations: CoreWebCitation[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!value || typeof value !== "object") continue;
+    const url = sanitizeWebUrl(value.url);
+    if (!url) continue;
+    const startIndex =
+      typeof value.startIndex === "number" && Number.isFinite(value.startIndex)
+        ? value.startIndex
+        : undefined;
+    const endIndex =
+      typeof value.endIndex === "number" && Number.isFinite(value.endIndex)
+        ? value.endIndex
+        : undefined;
+    const key = `${url}:${startIndex ?? ""}:${endIndex ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    citations.push({
+      url,
+      ...(typeof value.title === "string" && value.title.trim()
+        ? { title: value.title.trim() }
+        : {}),
+      ...(typeof value.citedText === "string" && value.citedText.trim()
+        ? { citedText: value.citedText.trim() }
+        : {}),
+      ...(startIndex !== undefined ? { startIndex } : {}),
+      ...(endIndex !== undefined ? { endIndex } : {}),
+    });
+  }
+  return citations;
+}
+
+function sanitizeWebActivity(value: CoreWebActivity): CoreWebActivity {
+  const kind = value.kind === "fetch" ? "fetch" : "search";
+  const status =
+    value.status === "completed" || value.status === "failed"
+      ? value.status
+      : "started";
+  const backend = value.backend === "mcp" ? "mcp" : "provider";
+  const url = sanitizeWebUrl(value.url);
+  return {
+    id:
+      typeof value.id === "string" && value.id
+        ? value.id
+        : `web-activity-${randomId()}`,
+    kind,
+    status,
+    backend,
+    ...(typeof value.query === "string" && value.query.trim()
+      ? { query: value.query.trim() }
+      : {}),
+    ...(url ? { url } : {}),
+    ...(value.citations?.length
+      ? { citations: sanitizeWebCitations(value.citations) }
+      : {}),
+    ...(typeof value.error === "string" && value.error.trim()
+      ? { error: value.error.trim() }
+      : {}),
+  };
+}
+
 const BUILTIN_TOOL_NAMES = new Set([
+  "web_search",
+  "web_fetch",
   "read_file",
   "get_context",
   "open_file",
@@ -521,6 +600,7 @@ export type AppAction =
       mode: string;
       model: string;
       messages: ChatMessage[];
+      todos: TodoItem[];
       lastInputTokens?: number;
       lastOutputTokens?: number;
       /**
@@ -744,6 +824,8 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
       for (const block of contentArr as Array<{
         type: string;
         text?: string;
+        citations?: CoreWebCitation[];
+        activity?: CoreWebActivity;
         id?: string;
         name?: string;
         input?: unknown;
@@ -758,6 +840,42 @@ export function agentMessagesToChatMessages(raw: unknown[]): ChatMessage[] {
           } else {
             blocks.push({ type: "text", text: block.text });
           }
+          const citations = sanitizeWebCitations(block.citations ?? []);
+          if (citations.length > 0) {
+            for (let index = blocks.length - 1; index >= 0; index -= 1) {
+              const candidate = blocks[index];
+              if (
+                candidate?.type !== "tool_call" ||
+                (candidate.name !== "web_search" &&
+                  candidate.name !== "web_fetch")
+              ) {
+                continue;
+              }
+              const result = parseJsonObject(candidate.result) ?? {};
+              blocks[index] = {
+                ...candidate,
+                result: JSON.stringify({ ...result, citations }, null, 2),
+              };
+              break;
+            }
+          }
+        } else if (block.type === "web_activity" && block.activity) {
+          const activity = sanitizeWebActivity(block.activity);
+          const input =
+            activity.kind === "search"
+              ? { query: activity.query ?? "" }
+              : { url: activity.url ?? "" };
+          blocks.push({
+            type: "tool_call",
+            id: activity.id,
+            name: activity.kind === "search" ? "web_search" : "web_fetch",
+            inputJson: JSON.stringify(input),
+            result:
+              activity.status === "started"
+                ? ""
+                : JSON.stringify(activity, null, 2),
+            complete: activity.status !== "started",
+          });
         } else if (block.type === "thinking" && block.thinking?.trim()) {
           blocks.push({
             type: "thinking",
@@ -2440,7 +2558,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
         pendingFinalMarker: null,
         lastInputTokens: action.lastInputTokens ?? 0,
         lastOutputTokens: action.lastOutputTokens ?? 0,
-        todos: [],
+        todos: Array.isArray(action.todos) ? action.todos : [],
         messageQueue: [],
         questionRequest: null,
         detectedQuestion: null,

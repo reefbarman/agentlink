@@ -17,11 +17,13 @@ import type { BrowserGatewayAskAgentPreferencesSnapshot } from "./browserGateway
 import type { BrowserGatewayCoreOwnerRegistry } from "./coreOwnerRegistry.js";
 import type { BrowserGatewayModelCredentialStatus } from "./browserGatewayModelCredentialCache.js";
 import type { BrowserGatewayThemeSnapshot } from "../shared/types.js";
+import type { CoreModelMessage } from "../core/modelRuntime.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import type { MemoryCandidateKind } from "../shared/memoryCandidates.js";
 import { completeTodos } from "../agent/todoTool.js";
 import { normalizeBrowserGatewayModelCredentialProviderId } from "./browserGatewayModelProviderIds.js";
 import { randomUUID } from "crypto";
+import { surfaceMessagesToCoreModelMessages } from "../core/surfaceModelMessages.js";
 
 export const BROWSER_GATEWAY_ASK_AGENT_OWNER_ID = "browser-gateway:ask-agent";
 export const BROWSER_GATEWAY_ASK_AGENT_SESSION_ID =
@@ -200,6 +202,14 @@ export type BrowserGatewayAskAgentSessionSummary = SessionSummary & {
   mode: "ask";
 };
 
+export interface BrowserGatewayAskAgentPrivateModelHistory {
+  schemaVersion: 1;
+  assistantTurns: Array<{
+    messageId: string;
+    messages: CoreModelMessage[];
+  }>;
+}
+
 export interface BrowserGatewayAskAgentPersistedSession {
   id: string;
   title: string;
@@ -207,6 +217,8 @@ export interface BrowserGatewayAskAgentPersistedSession {
   lastActiveAt: number;
   messages: ChatMessage[];
   nextMessageSequence: number;
+  /** Server-only exact model replay. Never include this in browser snapshots. */
+  privateModelHistory?: BrowserGatewayAskAgentPrivateModelHistory;
 }
 
 export interface BrowserGatewayAskAgentHistorySnapshot {
@@ -566,6 +578,47 @@ export class BrowserGatewayAskAgentSessionStore {
 
   getTranscriptMessages(): ChatMessage[] {
     return [...this.getActiveSession().messages];
+  }
+
+  getModelTranscriptMessages(excludeMessageId?: string): CoreModelMessage[] {
+    const session = this.getActiveSession();
+    const privateTurns = new Map(
+      session.privateModelHistory?.assistantTurns.map((turn) => [
+        turn.messageId,
+        turn.messages,
+      ]) ?? [],
+    );
+    return session.messages.flatMap((message): CoreModelMessage[] => {
+      if (message.id === excludeMessageId) return [];
+      if (message.role === "assistant") {
+        const exact = privateTurns.get(message.id);
+        if (exact?.length) return structuredClone(exact);
+      }
+      return surfaceMessagesToCoreModelMessages([message]);
+    });
+  }
+
+  appendPrivateModelTurn(
+    messageId: string,
+    messages: readonly CoreModelMessage[],
+  ): void {
+    if (!messageId || messages.length === 0) return;
+    const session = this.getActiveSession();
+    const history = (session.privateModelHistory ??= {
+      schemaVersion: 1,
+      assistantTurns: [],
+    });
+    const existing = history.assistantTurns.find(
+      (turn) => turn.messageId === messageId,
+    );
+    if (existing) {
+      existing.messages.push(...structuredClone(messages));
+    } else {
+      history.assistantTurns.push({
+        messageId,
+        messages: [...structuredClone(messages)],
+      });
+    }
   }
 
   getProjectedMessages(): ChatMessage[] {

@@ -149,6 +149,7 @@ import type { SemanticSearchProvider } from "../core/capabilities/readSearch.js"
 import type { TerminalProvider } from "../core/capabilities/terminal.js";
 import type { WorktreeAgentLaunchProvider } from "../core/capabilities/worktree.js";
 import type { BackgroundAgentProvider } from "../core/capabilities/background.js";
+import type { NativeWebToolExecutionProvider } from "../core/capabilities/web.js";
 import type {
   ModeSwitchProvider,
   SessionStatusProvider,
@@ -216,6 +217,8 @@ function cachedJsonSchemaFor(
 // --- Tool name → zod schema mapping ---
 
 const TOOL_SCHEMAS: Record<string, Record<string, z.ZodTypeAny>> = {
+  web_search: schemas.webSearchSchema,
+  web_fetch: schemas.webFetchSchema,
   read_file: schemas.readFileSchema,
   get_context: schemas.getContextSchema,
   get_repo_map: schemas.getRepoMapSchema,
@@ -1087,6 +1090,7 @@ export function getAgentTools(
   skillAllowedTools?: string[],
   allMcpToolDefsForSkillAllowlist?: ToolDefinition[],
   backgroundExpectedResult?: ExpectedBackgroundResult,
+  nativeWebToolKinds: readonly import("../core/webAccess.js").CoreWebToolKind[] = [],
 ): ToolDefinition[] {
   const mcpToolNames = (mcpToolDefs ?? []).map((t) => t.name);
   const allowed = mode ? getToolsForMode(mode, mcpToolNames) : null;
@@ -1107,6 +1111,11 @@ export function getAgentTools(
     .sort(([a], [b]) => a.localeCompare(b))
     .filter(([name]) => !EXCLUDED_TOOLS.has(name))
     .filter(([name]) => !(isBackground && name === "compose"))
+    .filter(
+      ([name]) =>
+        (name !== "web_search" || nativeWebToolKinds.includes("search")) &&
+        (name !== "web_fetch" || nativeWebToolKinds.includes("fetch")),
+    )
     .filter(([name]) => __DEV_BUILD__ || !TOOL_REGISTRY[name]?.devOnly)
     .filter(
       ([name]) =>
@@ -1760,6 +1769,10 @@ export interface ToolDispatchContext {
   worktreeAgentLaunchProvider?: WorktreeAgentLaunchProvider;
   /** Background-agent lifecycle implementation for runtimes that can spawn/manage agent sessions. */
   backgroundAgentProvider?: BackgroundAgentProvider;
+  /** Provider-hosted implementation for request-scoped AgentLink native web tools. */
+  nativeWebToolProvider?: NativeWebToolExecutionProvider;
+  /** Native web tool kinds exposed by the immutable request policy snapshot. */
+  nativeWebToolKinds?: readonly import("../core/webAccess.js").CoreWebToolKind[];
   /** MCP tool discovery implementation for runtimes with connected MCP clients. */
   mcpToolDiscoveryProvider?: McpToolDiscoveryProvider;
   /** MCP resource/prompt implementation for runtimes with connected MCP clients. */
@@ -1785,6 +1798,7 @@ export function createAgentToolRuntime(
         request.skillAllowedTools,
         request.allMcpToolDefsForSkillAllowlist,
         request.backgroundExpectedResult,
+        request.nativeWebToolKinds ?? ctx.nativeWebToolKinds,
       );
     },
     async executeTool(request: AgentToolExecutionRequest) {
@@ -2072,6 +2086,25 @@ export async function dispatchToolCall(
   const skillAllowlist = ctx.skillAllowedTools
     ? new Set(ctx.skillAllowedTools)
     : undefined;
+
+  if (toolName === "web_search" || toolName === "web_fetch") {
+    const kind = toolName === "web_search" ? "search" : "fetch";
+    if (!ctx.nativeWebToolKinds?.includes(kind) || !ctx.nativeWebToolProvider) {
+      return errorResult(`Native ${kind} is not available for this request.`);
+    }
+    try {
+      return jsonResult(
+        await ctx.nativeWebToolProvider.execute({
+          kind,
+          input,
+          signal: toolAbortSignal,
+        }),
+        true,
+      );
+    } catch (error) {
+      return handleToolError(error, { tool: toolName, backend: "provider" });
+    }
+  }
 
   // Route MCP tools (prefixed with 'servername__') to the MCP hub
   if (McpClientHub.isMcpTool(toolName)) {

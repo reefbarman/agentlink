@@ -33,6 +33,24 @@ export interface ToolCapabilityMetadata {
 }
 
 const toolCapabilities = [
+  // External web
+  metadata(
+    "web_search",
+    "search",
+    ["web.search", "network.external"],
+    "external",
+    "never",
+    true,
+  ),
+  metadata(
+    "web_fetch",
+    "read",
+    ["web.fetch", "network.external"],
+    "external",
+    "never",
+    true,
+  ),
+
   // Read/search/context
   metadata(
     "read_file",

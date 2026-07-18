@@ -57,6 +57,14 @@ When adding a new tool or changing tool parameters:
 6. Update `README.md` — add a full tool section with parameter table and response details
 7. Run `npm run release -- --install` to rebuild and reinstall the extension. (Not when developing the agent, though)
 
+## Tool Usage and Feedback Review
+
+- Run `npm run telemetry:tools -- --top 60` to inspect the local aggregate tool-usage report before changing an existing tool because of anecdotal friction, apparent underuse, or a suspected failure pattern.
+- Use `npm run telemetry:tools:csv` when a sortable export is useful. Generated files under `telemetry-reports/` are ignored and must not be committed.
+- In dev builds, inspect relevant entries with `get_feedback` before changing tool behavior. Do not delete feedback until the issue has been addressed or deliberately declined; delete only the reviewed indices.
+- Treat raw call counts as directional, not as an availability-normalized adoption rate. The current telemetry does not yet say how often a tool was advertised, and legacy outcome aggregates may classify structured rejections as successful calls. See [plans/tool-usage-observability-and-adoption-plan.md](plans/tool-usage-observability-and-adoption-plan.md).
+- After adding or materially changing a tool, dogfood it and rerun the report to check that it appears under the expected name/mode, records the intended outcome, does not introduce unknown parameters, and has corresponding feedback reviewed.
+
 ## Project Structure Boundaries
 
 - `src/core/**` is for portable, surface-neutral runtime contracts and logic only. Do not put VS Code, browser gateway, webview, CLI, or product-surface-specific names/behavior there.

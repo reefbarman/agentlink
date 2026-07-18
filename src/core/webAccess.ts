@@ -1,0 +1,470 @@
+export const CORE_WEB_ACCESS_DEFAULT_MAX_SEARCH_USES_PER_TURN = 5;
+export const CORE_WEB_ACCESS_DEFAULT_MAX_FETCH_USES_PER_TURN = 3;
+export const CORE_WEB_ACCESS_DEFAULT_MAX_FETCH_CONTENT_TOKENS = 25_000;
+export const CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN = 5_242_880;
+
+export type CoreJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | CoreJsonValue[]
+  | { [key: string]: CoreJsonValue };
+
+export type CoreWebAccessSelection = "native" | "mcp" | "disabled";
+
+export type CoreWebAccessBackend = "provider" | "mcp" | "mixed" | "disabled";
+export type CoreWebToolKind = "search" | "fetch";
+
+export interface CoreWebAccessSettings {
+  searchBackend: CoreWebAccessSelection;
+  fetchBackend: CoreWebAccessSelection;
+  allowedDomains: string[];
+  blockedDomains: string[];
+  maxSearchUsesPerTurn: number;
+  maxFetchUsesPerTurn: number;
+  maxFetchContentTokens: number;
+  maxReplayBytesPerTurn: number;
+}
+
+export type CoreWebAccessSettingsInput = Partial<CoreWebAccessSettings>;
+
+export const DEFAULT_CORE_WEB_ACCESS_SETTINGS: Readonly<CoreWebAccessSettings> =
+  Object.freeze({
+    searchBackend: "native",
+    fetchBackend: "native",
+    allowedDomains: [],
+    blockedDomains: [],
+    maxSearchUsesPerTurn: CORE_WEB_ACCESS_DEFAULT_MAX_SEARCH_USES_PER_TURN,
+    maxFetchUsesPerTurn: CORE_WEB_ACCESS_DEFAULT_MAX_FETCH_USES_PER_TURN,
+    maxFetchContentTokens: CORE_WEB_ACCESS_DEFAULT_MAX_FETCH_CONTENT_TOKENS,
+    maxReplayBytesPerTurn: CORE_WEB_ACCESS_DEFAULT_MAX_REPLAY_BYTES_PER_TURN,
+  });
+
+export interface CoreHostedWebToolCapability {
+  supported: boolean;
+  supportsDomainRestrictions?: boolean;
+  supportsMaxUses?: boolean;
+  supportsContentTokenLimit?: boolean;
+  supportsCitations?: boolean;
+  /** The hosted search tool can open a caller-supplied URL for delegated fetch. */
+  supportsPageAccess?: boolean;
+}
+
+export interface CoreHostedWebCapabilities {
+  search?: CoreHostedWebToolCapability;
+  fetch?: CoreHostedWebToolCapability;
+}
+
+export interface CoreHostedWebSearchDefinition {
+  type: "web_search";
+  allowedDomains?: string[];
+  blockedDomains?: string[];
+  maxUses?: number;
+}
+
+export interface CoreHostedWebFetchDefinition {
+  type: "web_fetch";
+  allowedDomains?: string[];
+  blockedDomains?: string[];
+  maxUses?: number;
+  maxContentTokens?: number;
+  citationsEnabled: boolean;
+}
+
+export type CoreHostedToolDefinition =
+  | CoreHostedWebSearchDefinition
+  | CoreHostedWebFetchDefinition;
+
+export interface CoreWebCitation {
+  url: string;
+  title?: string;
+  citedText?: string;
+  startIndex?: number;
+  endIndex?: number;
+}
+
+export type CoreWebActivityStatus = "started" | "completed" | "failed";
+
+export interface CoreWebActivity {
+  id: string;
+  kind: CoreWebToolKind;
+  status: CoreWebActivityStatus;
+  backend: Exclude<CoreWebAccessBackend, "disabled">;
+  query?: string;
+  url?: string;
+  citations?: CoreWebCitation[];
+  error?: string;
+}
+
+export interface CoreProviderReplayEnvelope {
+  providerId: string;
+  codecVersion: number;
+  payload: CoreJsonValue;
+  serializedBytes: number;
+  degraded?: boolean;
+  degradedReason?: "size_limit" | "unsupported_payload";
+}
+
+export type CoreWebAccessResolutionReason =
+  | "disabled"
+  | "native_selected"
+  | "native_unsupported"
+  | "native_restrictions_unsupported"
+  | "mcp_selected";
+
+export interface CoreResolvedWebAccessRoute {
+  kind: CoreWebToolKind;
+  backend: Exclude<CoreWebAccessBackend, "mixed">;
+  available: boolean;
+  reason: CoreWebAccessResolutionReason;
+  hostedTool?: CoreHostedToolDefinition;
+}
+
+export interface CoreResolvedWebAccessPolicy {
+  backend: CoreWebAccessBackend;
+  available: boolean;
+  routes: {
+    search: CoreResolvedWebAccessRoute;
+    fetch: CoreResolvedWebAccessRoute;
+  };
+  settings: CoreWebAccessSettings;
+  /** Provider definitions used only by delegated wrapper execution. */
+  hostedTools: CoreHostedToolDefinition[];
+  enabledKinds: CoreWebToolKind[];
+  diagnostics: {
+    providerSearchSupported: boolean;
+    providerFetchSupported: boolean;
+    domainRestrictionsRequested: boolean;
+    maxSearchUsesEnforced: boolean;
+    maxFetchUsesEnforced: boolean;
+    maxFetchContentTokensEnforced: boolean;
+  };
+}
+
+export interface CoreResolveWebAccessPolicyInput {
+  settings?: CoreWebAccessSettingsInput;
+  providerCapabilities?: CoreHostedWebCapabilities;
+}
+
+export function normalizeCoreWebAccessSettings(
+  value: CoreWebAccessSettingsInput = {},
+): CoreWebAccessSettings {
+  const searchBackend = resolveSelection(
+    value.searchBackend,
+    DEFAULT_CORE_WEB_ACCESS_SETTINGS.searchBackend,
+    "searchBackend",
+  );
+  const fetchBackend = resolveSelection(
+    value.fetchBackend,
+    DEFAULT_CORE_WEB_ACCESS_SETTINGS.fetchBackend,
+    "fetchBackend",
+  );
+
+  const allowedDomains = normalizeDomainList(value.allowedDomains ?? []);
+  const blockedDomains = normalizeDomainList(value.blockedDomains ?? []);
+  if (allowedDomains.length > 0 && blockedDomains.length > 0) {
+    throw new Error(
+      "webAccess.allowedDomains and webAccess.blockedDomains are mutually exclusive",
+    );
+  }
+
+  return {
+    searchBackend,
+    fetchBackend,
+    allowedDomains,
+    blockedDomains,
+    maxSearchUsesPerTurn: normalizePositiveInteger(
+      value.maxSearchUsesPerTurn,
+      DEFAULT_CORE_WEB_ACCESS_SETTINGS.maxSearchUsesPerTurn,
+      "maxSearchUsesPerTurn",
+    ),
+    maxFetchUsesPerTurn: normalizePositiveInteger(
+      value.maxFetchUsesPerTurn,
+      DEFAULT_CORE_WEB_ACCESS_SETTINGS.maxFetchUsesPerTurn,
+      "maxFetchUsesPerTurn",
+    ),
+    maxFetchContentTokens: normalizePositiveInteger(
+      value.maxFetchContentTokens,
+      DEFAULT_CORE_WEB_ACCESS_SETTINGS.maxFetchContentTokens,
+      "maxFetchContentTokens",
+    ),
+    maxReplayBytesPerTurn: normalizePositiveInteger(
+      value.maxReplayBytesPerTurn,
+      DEFAULT_CORE_WEB_ACCESS_SETTINGS.maxReplayBytesPerTurn,
+      "maxReplayBytesPerTurn",
+    ),
+  };
+}
+
+export function resolveCoreWebAccessPolicy(
+  input: CoreResolveWebAccessPolicyInput,
+): CoreResolvedWebAccessPolicy {
+  const settings = normalizeCoreWebAccessSettings(input.settings);
+  const providerCapabilities = input.providerCapabilities ?? {};
+  const restrictionsRequested =
+    settings.allowedDomains.length > 0 || settings.blockedDomains.length > 0;
+  const search = resolveRoute({
+    kind: "search",
+    selection: settings.searchBackend,
+    settings,
+    providerCapabilities,
+    restrictionsRequested,
+  });
+  const fetch = resolveRoute({
+    kind: "fetch",
+    selection: settings.fetchBackend,
+    settings,
+    providerCapabilities,
+    restrictionsRequested,
+  });
+  const enabledKinds = [search, fetch]
+    .filter((route) => route.backend === "provider" && route.available)
+    .map((route) => route.kind);
+  const activeBackends = new Set(
+    [search, fetch]
+      .filter((route) => route.available)
+      .map((route) => route.backend),
+  );
+  const backend: CoreWebAccessBackend =
+    activeBackends.size === 0
+      ? "disabled"
+      : activeBackends.size === 1
+        ? ([...activeBackends][0] ?? "disabled")
+        : "mixed";
+
+  return {
+    backend,
+    available: search.available || fetch.available,
+    routes: { search, fetch },
+    settings,
+    hostedTools: [search.hostedTool, fetch.hostedTool].filter(
+      (tool): tool is CoreHostedToolDefinition => Boolean(tool),
+    ),
+    enabledKinds,
+    diagnostics: makeDiagnostics(
+      settings,
+      providerCapabilities,
+      restrictionsRequested,
+    ),
+  };
+}
+
+export function createCoreProviderReplayEnvelope(params: {
+  providerId: string;
+  codecVersion: number;
+  payload: CoreJsonValue;
+  maxBytes: number;
+}): CoreProviderReplayEnvelope {
+  const providerId = params.providerId.trim();
+  if (!providerId) throw new Error("providerId is required");
+  if (!Number.isInteger(params.codecVersion) || params.codecVersion < 1) {
+    throw new Error("codecVersion must be a positive integer");
+  }
+  const serialized = JSON.stringify(params.payload);
+  const serializedBytes = new TextEncoder().encode(serialized).byteLength;
+  if (serializedBytes > params.maxBytes) {
+    return {
+      providerId,
+      codecVersion: params.codecVersion,
+      payload: null,
+      serializedBytes,
+      degraded: true,
+      degradedReason: "size_limit",
+    };
+  }
+  return {
+    providerId,
+    codecVersion: params.codecVersion,
+    payload: params.payload,
+    serializedBytes,
+  };
+}
+
+function resolveRoute(params: {
+  kind: CoreWebToolKind;
+  selection: CoreWebAccessSelection;
+  settings: CoreWebAccessSettings;
+  providerCapabilities: CoreHostedWebCapabilities;
+  restrictionsRequested: boolean;
+}): CoreResolvedWebAccessRoute {
+  const provider = evaluateProviderRoute(
+    params.kind,
+    params.settings,
+    params.providerCapabilities,
+    params.restrictionsRequested,
+  );
+
+  const disabled = (
+    reason: CoreWebAccessResolutionReason,
+  ): CoreResolvedWebAccessRoute => ({
+    kind: params.kind,
+    backend: "disabled",
+    available: false,
+    reason,
+  });
+  const providerRoute = (): CoreResolvedWebAccessRoute => ({
+    kind: params.kind,
+    backend: "provider",
+    available: true,
+    reason: "native_selected",
+    hostedTool: buildHostedTool(
+      params.kind,
+      params.settings,
+      params.providerCapabilities,
+    ),
+  });
+  if (params.selection === "disabled") return disabled("disabled");
+  if (params.selection === "mcp") {
+    return {
+      kind: params.kind,
+      backend: "mcp",
+      available: true,
+      reason: "mcp_selected",
+    };
+  }
+  return provider.available ? providerRoute() : disabled(provider.reason);
+}
+
+function evaluateProviderRoute(
+  kind: CoreWebToolKind,
+  settings: CoreWebAccessSettings,
+  capabilities: CoreHostedWebCapabilities,
+  restrictionsRequested: boolean,
+): {
+  available: boolean;
+  reason: "native_unsupported" | "native_restrictions_unsupported";
+} {
+  const capability =
+    kind === "fetch" && capabilities.fetch?.supported !== true
+      ? capabilities.search?.supportsPageAccess === true
+        ? capabilities.search
+        : undefined
+      : capabilities[kind];
+  if (capability?.supported !== true) {
+    return { available: false, reason: "native_unsupported" };
+  }
+  if (restrictionsRequested && capability.supportsDomainRestrictions !== true) {
+    return {
+      available: false,
+      reason: "native_restrictions_unsupported",
+    };
+  }
+  return { available: true, reason: "native_unsupported" };
+}
+
+function buildHostedTool(
+  kind: CoreWebToolKind,
+  settings: CoreWebAccessSettings,
+  capabilities: CoreHostedWebCapabilities,
+): CoreHostedToolDefinition {
+  const domainFields = {
+    ...(settings.allowedDomains.length > 0
+      ? { allowedDomains: settings.allowedDomains }
+      : {}),
+    ...(settings.blockedDomains.length > 0
+      ? { blockedDomains: settings.blockedDomains }
+      : {}),
+  };
+  if (kind === "search") {
+    return {
+      type: "web_search",
+      ...domainFields,
+      ...(capabilities.search?.supportsMaxUses
+        ? { maxUses: settings.maxSearchUsesPerTurn }
+        : {}),
+    };
+  }
+  if (capabilities.fetch?.supported) {
+    return {
+      type: "web_fetch",
+      ...domainFields,
+      ...(capabilities.fetch.supportsMaxUses
+        ? { maxUses: settings.maxFetchUsesPerTurn }
+        : {}),
+      ...(capabilities.fetch.supportsContentTokenLimit
+        ? { maxContentTokens: settings.maxFetchContentTokens }
+        : {}),
+      citationsEnabled: true,
+    };
+  }
+  return {
+    type: "web_search",
+    ...domainFields,
+    ...(capabilities.search?.supportsMaxUses
+      ? { maxUses: settings.maxFetchUsesPerTurn }
+      : {}),
+  };
+}
+
+function makeDiagnostics(
+  settings: CoreWebAccessSettings,
+  capabilities: CoreHostedWebCapabilities,
+  restrictionsRequested: boolean,
+): CoreResolvedWebAccessPolicy["diagnostics"] {
+  return {
+    providerSearchSupported: capabilities.search?.supported === true,
+    providerFetchSupported: capabilities.fetch?.supported === true,
+    domainRestrictionsRequested: restrictionsRequested,
+    maxSearchUsesEnforced:
+      settings.searchBackend !== "disabled" &&
+      capabilities.search?.supportsMaxUses === true,
+    maxFetchUsesEnforced:
+      settings.fetchBackend !== "disabled" &&
+      (capabilities.fetch?.supportsMaxUses === true ||
+        (capabilities.search?.supportsPageAccess === true &&
+          capabilities.search.supportsMaxUses === true)),
+    maxFetchContentTokensEnforced:
+      settings.fetchBackend !== "disabled" &&
+      capabilities.fetch?.supportsContentTokenLimit === true,
+  };
+}
+
+function resolveSelection(
+  value: unknown,
+  fallback: CoreWebAccessSelection,
+  field: string,
+): CoreWebAccessSelection {
+  if (value === "native" || value === "mcp" || value === "disabled") {
+    return value;
+  }
+  if (value !== undefined) {
+    throw new Error(`Invalid web access ${field}: ${String(value)}`);
+  }
+  return fallback;
+}
+
+function normalizePositiveInteger(
+  value: number | undefined,
+  fallback: number,
+  field: string,
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 1) {
+    throw new Error(`webAccess.${field} must be a positive integer`);
+  }
+  return resolved;
+}
+
+function normalizeDomainList(values: string[]): string[] {
+  const normalized = values.map(normalizeDomain);
+  return [...new Set(normalized)].sort((a, b) => a.localeCompare(b));
+}
+
+function normalizeDomain(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/\/$/, "");
+  if (!normalized) throw new Error("Web domain entries must not be empty");
+  if (
+    normalized.includes("://") ||
+    normalized.includes("?") ||
+    normalized.includes("#") ||
+    normalized.includes("@") ||
+    normalized.includes("*") ||
+    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?:\/[a-z0-9._~!$&'()*+,;=:@%/-]*)?$/.test(
+      normalized,
+    )
+  ) {
+    throw new Error(`Invalid web domain restriction: ${value}`);
+  }
+  return normalized;
+}

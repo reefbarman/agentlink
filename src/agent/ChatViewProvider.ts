@@ -3,6 +3,10 @@ import * as fs from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { isCoreReasoningEffort } from "../core/modelCatalog.js";
+import {
+  normalizeCoreWebAccessSettings,
+  type CoreWebAccessSettings,
+} from "../core/webAccess.js";
 import { providerRegistry, queryProviderUsage } from "./providers/index.js";
 import type { ModelProvider } from "./providers/types.js";
 import type {
@@ -569,6 +573,7 @@ export type ExtensionToWebview =
       mode: string;
       model: string;
       messages: import("./types.js").AgentMessage[];
+      todos: TodoItem[];
       lastInputTokens: number;
       lastOutputTokens: number;
       /** True when this came from automatic startup restore rather than explicit user action. */
@@ -930,7 +935,7 @@ export function getPreviousChunkByUserTurns(
   };
 }
 
-export type BrowserGatewaySurfaceChangeKind = "mcp" | "theme";
+export type BrowserGatewaySurfaceChangeKind = "background" | "mcp" | "theme";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "agentLink.chatView";
@@ -3303,6 +3308,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  public submitBrowserAskAgentWebPolicy(): {
+    ok: true;
+    settings: CoreWebAccessSettings;
+    revision: string;
+  } {
+    const config = vscode.workspace.getConfiguration("agentlink");
+    const settings = normalizeCoreWebAccessSettings({
+      searchBackend: config.get("webAccess.searchBackend"),
+      fetchBackend: config.get("webAccess.fetchBackend"),
+      allowedDomains: config.get("webAccess.allowedDomains"),
+      blockedDomains: config.get("webAccess.blockedDomains"),
+      maxSearchUsesPerTurn: config.get("webAccess.maxSearchUsesPerTurn"),
+      maxFetchUsesPerTurn: config.get("webAccess.maxFetchUsesPerTurn"),
+      maxFetchContentTokens: config.get("webAccess.maxFetchContentTokens"),
+      maxReplayBytesPerTurn: config.get("webAccess.maxReplayBytesPerTurn"),
+    } as Partial<CoreWebAccessSettings>);
+    return {
+      ok: true,
+      settings,
+      revision: JSON.stringify(settings),
+    };
+  }
+
   public submitBrowserAskAgentMcpTools(): {
     ok: boolean;
     tools: ReturnType<typeof getAgentTools>;
@@ -4412,6 +4440,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: "agentBgSessionsUpdate",
       sessions: this.sessionManager.getBgSessionInfos(),
     });
+    this.browserGatewaySurfaceChangeEmitter.fire("background");
   }
 
   /**
@@ -6011,6 +6040,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         mode: session.mode,
         model: session.model,
         messages: agentMessagesToChatMessages(allMessages),
+        todos: getLatestTodoState(allMessages),
         lastInputTokens: session.lastInputTokens,
         lastOutputTokens: session.lastOutputTokens,
         checkpoints: this.getSessionCheckpoints(session.id),
@@ -6359,6 +6389,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           mode: extMsg.mode,
           model: extMsg.model,
           messages: agentMessagesToChatMessages(extMsg.messages as unknown[]),
+          todos: extMsg.todos,
           lastInputTokens: extMsg.lastInputTokens,
           lastOutputTokens: extMsg.lastOutputTokens,
           checkpoints: extMsg.checkpoints,
@@ -8094,6 +8125,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       mode: session.mode,
       model: session.model,
       messages: tail.chunk,
+      todos: getLatestTodoState(all),
       lastInputTokens: session.lastInputTokens,
       // lastOutputTokens is the per-last-request output count used for
       // context bar display. We don't persist this value, so send 0 for

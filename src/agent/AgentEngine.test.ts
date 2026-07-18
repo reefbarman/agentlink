@@ -23,6 +23,7 @@ import { AgentSession } from "./AgentSession.js";
 import { ProviderRegistry } from "./providers/index.js";
 import { AgentToolCallTracker } from "./AgentToolCallTracker.js";
 import type { AgentToolExecutionRequest } from "../core/tools/types.js";
+import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
 import {
   createAgentToolRuntime,
   type ToolDispatchContext,
@@ -1995,6 +1996,312 @@ describe("AgentEngine", () => {
         usedPreviousResponseId: false,
         previousResponseIdFallback: false,
       });
+    });
+
+    it("exposes native web tools without passing hosted tools to the main request", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        yield* makeProviderStream();
+      };
+      const session = await makeSession();
+      session.addUserMessage("search");
+      const engine = new AgentEngine(makeRegistry(provider));
+      setEngineToolContext(engine, {
+        ...({} as ToolDispatchContext),
+        approvalManager: {} as any,
+        approvalPanel: {} as any,
+        sessionId: "agent",
+        extensionUri: {} as any,
+        mcpHub: {
+          getToolDefs: () => [
+            {
+              name: "searxng__search",
+              description: "Search",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
+          getServerConfig: () => ({ toolDisclosure: "inline" }),
+        } as any,
+      });
+
+      await collectEvents(
+        engine.run(session, {
+          webAccessPolicy: {
+            backend: "provider",
+            available: true,
+            routes: {
+              search: {
+                kind: "search",
+                backend: "provider",
+                available: true,
+                reason: "native_selected",
+                hostedTool: { type: "web_search" },
+              },
+              fetch: {
+                kind: "fetch",
+                backend: "disabled",
+                available: false,
+                reason: "disabled",
+              },
+            },
+            settings: {
+              searchBackend: "native",
+              fetchBackend: "disabled",
+              allowedDomains: [],
+              blockedDomains: [],
+              maxSearchUsesPerTurn: 5,
+              maxFetchUsesPerTurn: 3,
+              maxFetchContentTokens: 25_000,
+              maxReplayBytesPerTurn: 5_242_880,
+            },
+            hostedTools: [{ type: "web_search" }],
+            enabledKinds: ["search"],
+            diagnostics: {
+              providerSearchSupported: true,
+              providerFetchSupported: false,
+              domainRestrictionsRequested: false,
+              maxSearchUsesEnforced: false,
+              maxFetchUsesEnforced: false,
+              maxFetchContentTokensEnforced: false,
+            },
+          },
+          mcpToolDefinitions: [],
+          mcpToolDisclosure: {
+            inlineTools: [],
+            deferredTools: [],
+            catalog: [],
+          },
+        }),
+      );
+
+      expect(streamCalls).toHaveLength(1);
+      expect(streamCalls[0]?.hostedTools).toBeUndefined();
+      expect(streamCalls[0]?.tools?.map((tool) => tool.name)).toContain(
+        "web_search",
+      );
+      expect(streamCalls[0]?.tools?.map((tool) => tool.name)).not.toContain(
+        "searxng__search",
+      );
+    });
+
+    it("keeps hosted web details out of public events while preserving assistant content", async () => {
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        yield {
+          type: "web_activity",
+          activity: {
+            id: "search-1",
+            kind: "search",
+            status: "started",
+            backend: "provider",
+            query: "AgentLink docs",
+          },
+        };
+        yield {
+          type: "web_activity",
+          activity: {
+            id: "search-1",
+            kind: "search",
+            status: "completed",
+            backend: "provider",
+            query: "AgentLink docs",
+          },
+        };
+        yield { type: "text_delta", text: "Found it." };
+        yield {
+          type: "content_blocks",
+          blocks: [
+            {
+              type: "text",
+              text: "Found it.",
+              citations: [
+                {
+                  url: "https://example.com/agentlink",
+                  title: "AgentLink docs",
+                  citedText: "Found it.",
+                  startIndex: 0,
+                  endIndex: 9,
+                },
+              ],
+            },
+          ],
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+      const session = await makeSession();
+      session.addUserMessage("search");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+
+      const publicEventTypes = events.map((event) => String(event.type));
+      expect(publicEventTypes).not.toContain("web_activity");
+      expect(publicEventTypes).not.toContain("web_citations");
+      expect(session.getMessages().at(-1)).toMatchObject({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Found it.",
+            citations: [
+              expect.objectContaining({
+                url: "https://example.com/agentlink",
+                startIndex: 0,
+                endIndex: 9,
+              }),
+            ],
+          },
+        ],
+      });
+    });
+
+    it("preserves exact assistant replay and immediately continues pause_turn", async () => {
+      const streamCalls: StreamRequest[] = [];
+      const pausedMessage: AgentMessage = {
+        role: "assistant",
+        content: [
+          {
+            type: "web_activity",
+            activity: {
+              id: "srvtoolu_search",
+              kind: "search",
+              status: "started",
+              backend: "provider",
+              query: "AgentLink",
+            },
+          },
+        ],
+        providerReplay: {
+          providerId: "anthropic",
+          codecVersion: 1,
+          payload: {
+            content: [
+              {
+                type: "server_tool_use",
+                id: "srvtoolu_search",
+                name: "web_search",
+                input: { query: "AgentLink" },
+              },
+            ],
+          },
+          serializedBytes: 1,
+        },
+      };
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        streamCalls.push(request);
+        if (streamCalls.length === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: pausedMessage.content as Exclude<
+              AgentMessage["content"],
+              string
+            >,
+          };
+          yield {
+            type: "model_stop",
+            reason: "pause_turn",
+            assistantMessage: pausedMessage,
+          };
+        } else {
+          yield { type: "text_delta", text: "done" };
+          yield {
+            type: "content_blocks",
+            blocks: [{ type: "text", text: "done" }],
+          };
+          yield {
+            type: "model_stop",
+            reason: "end_turn",
+            assistantMessage: {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+            },
+          };
+        }
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+      const session = await makeSession();
+      session.addUserMessage("search");
+      const engine = new AgentEngine(makeRegistry(provider));
+      await collectEvents(engine.run(session));
+
+      expect(streamCalls).toHaveLength(2);
+      expect(streamCalls[1].messages).toEqual([
+        { role: "user", content: "search" },
+        pausedMessage,
+      ]);
+      expect(session.getAllMessages()).toEqual([
+        { role: "user", content: "search" },
+        pausedMessage,
+        { role: "assistant", content: [{ type: "text", text: "done" }] },
+      ]);
+    });
+
+    it("caps consecutive provider pause_turn continuations", async () => {
+      const pausedMessage: AgentMessage = {
+        role: "assistant",
+        content: [
+          {
+            type: "web_activity",
+            activity: {
+              id: "srvtoolu_search",
+              kind: "search",
+              status: "started",
+              backend: "provider",
+              query: "AgentLink",
+            },
+          },
+        ],
+        providerReplay: {
+          providerId: "anthropic",
+          codecVersion: 1,
+          payload: { encrypted_content: "private" },
+          serializedBytes: 1,
+        },
+      };
+      let streamCalls = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* () {
+        streamCalls += 1;
+        yield {
+          type: "content_blocks",
+          blocks: pausedMessage.content as Exclude<
+            AgentMessage["content"],
+            string
+          >,
+        };
+        yield {
+          type: "model_stop",
+          reason: "pause_turn",
+          assistantMessage: pausedMessage,
+        };
+        yield { type: "usage", inputTokens: 10, outputTokens: 5 };
+        yield { type: "done" };
+      };
+      const session = await makeSession();
+      session.addUserMessage("search");
+      const engine = new AgentEngine(makeRegistry(provider));
+
+      const events = await collectEvents(engine.run(session));
+
+      expect(streamCalls).toBe(CORE_NATIVE_WEB_MAX_PAUSE_TURNS + 1);
+      expect(
+        session
+          .getAllMessages()
+          .filter((message) => message.role === "assistant"),
+      ).toHaveLength(CORE_NATIVE_WEB_MAX_PAUSE_TURNS);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          error: `Provider native web continuation exceeded ${CORE_NATIVE_WEB_MAX_PAUSE_TURNS} pause turns.`,
+          retryable: false,
+        }),
+      );
+      expect(events.some((event) => event.type === "done")).toBe(false);
     });
 
     it("surfaces model fallback and records the effective model", async () => {

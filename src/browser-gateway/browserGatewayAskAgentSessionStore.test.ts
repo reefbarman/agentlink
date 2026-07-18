@@ -427,6 +427,65 @@ describe("BrowserGatewayAskAgentSessionStore", () => {
     expect(reloaded.listSessions()).toEqual([]);
   });
 
+  it("reconstructs exact private model turns without exposing replay in public snapshots", () => {
+    const store = createStore();
+    store.appendUserMessage({
+      id: "ask-user-private-replay",
+      text: "Search privately",
+      now: 100,
+    });
+    const assistant = store.startAssistantMessage({ now: 101 });
+    store.appendAssistantDelta(assistant.id, "Public answer");
+    store.finishAssistantMessage(assistant.id);
+    const exactAssistantMessage = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "Public answer" }],
+      providerReplay: {
+        providerId: "anthropic",
+        codecVersion: 1,
+        payload: {
+          content: [{ type: "encrypted", data: "PRIVATE_REPLAY_SENTINEL" }],
+        },
+        serializedBytes: 64,
+      },
+    };
+    store.appendPrivateModelTurn(assistant.id, [exactAssistantMessage]);
+
+    expect(store.getModelTranscriptMessages()).toEqual([
+      { role: "user", content: "Search privately" },
+      exactAssistantMessage,
+    ]);
+    expect(store.getModelTranscriptMessages(assistant.id)).toEqual([
+      { role: "user", content: "Search privately" },
+    ]);
+
+    const history = store.getHistorySnapshot();
+    expect(JSON.stringify(history)).toContain("PRIVATE_REPLAY_SENTINEL");
+    const reloaded = createStore();
+    reloaded.loadHistory(history);
+    expect(reloaded.getModelTranscriptMessages()).toEqual(
+      store.getModelTranscriptMessages(),
+    );
+
+    const publicResponse = reloaded.getOrCreate({
+      now: 102,
+      theme,
+      modelCredentialStatus: {
+        state: "ready",
+        providerId: "anthropic",
+        method: "apiKey",
+        modelScopes: ["chat"],
+        grantedByOwnerId: "vscode-owner",
+        grantedAt: 100,
+      },
+    });
+    expect(JSON.stringify(publicResponse)).not.toContain("privateModelHistory");
+    expect(JSON.stringify(publicResponse)).not.toContain("providerReplay");
+    expect(JSON.stringify(publicResponse)).not.toContain(
+      "PRIVATE_REPLAY_SENTINEL",
+    );
+  });
+
   it("records assistant tool calls using shared transcript block shape", () => {
     const store = createStore();
     store.appendUserMessage({ id: "ask-user-1", text: "Use a tool", now: 100 });

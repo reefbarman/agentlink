@@ -7,6 +7,49 @@
 
 import { z } from "zod";
 
+// ─── Web tools ───────────────────────────────────────────────────────────────
+
+export const webSearchSchema = {
+  query: z.string().min(1).describe("Web search query"),
+  max_results: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Maximum number of search results to request (default: 10)"),
+  language: z
+    .string()
+    .optional()
+    .describe("Optional language code for search results, such as en or fr"),
+  time_range: z
+    .enum(["day", "week", "month", "year"])
+    .optional()
+    .describe("Optional recency window for search results"),
+  safe_search: z
+    .enum(["off", "moderate", "strict"])
+    .optional()
+    .describe("Optional safe-search level"),
+};
+
+export const webFetchSchema = {
+  url: z.string().url().describe("Absolute HTTP or HTTPS URL to open and read"),
+  max_length: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("Maximum visible content characters to request"),
+  section: z
+    .string()
+    .optional()
+    .describe("Optional heading or section to focus on"),
+  find: z
+    .string()
+    .optional()
+    .describe("Optional text or pattern to locate within the opened page"),
+};
+
 // ─── File tools ──────────────────────────────────────────────────────────────
 
 export const readFileSchema = {

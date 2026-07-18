@@ -1,7 +1,7 @@
+import type { AgentConfig, AgentMessage } from "./types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildPromptArtifacts, buildSystemPrompt } from "./systemPrompt.js";
 
-import type { AgentConfig } from "./types.js";
 import { AgentSession } from "./AgentSession.js";
 import type { ContentBlock } from "./providers/types.js";
 import type { SessionProjectScope } from "../core/workspaceProjects.js";
@@ -299,6 +299,34 @@ describe("AgentSession", () => {
       const messages = session.getMessages();
       expect(messages).toHaveLength(1);
       expect(messages[0]).toEqual({ role: "assistant", content: blocks });
+    });
+
+    it("appendAssistantMessage preserves provider-private replay", async () => {
+      const session = await makeSession();
+      const message: AgentMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "response" }],
+        providerReplay: {
+          providerId: "anthropic",
+          codecVersion: 1,
+          payload: {
+            content: [
+              {
+                type: "server_tool_use",
+                id: "srvtoolu_1",
+                name: "web_search",
+                input: { query: "AgentLink" },
+              },
+            ],
+          },
+          serializedBytes: 1,
+        },
+      };
+
+      session.appendAssistantMessage(message);
+
+      expect(session.getMessages()).toEqual([message]);
+      expect(session.getMessages()[0]).toBe(message);
     });
 
     it("appendToolResults appends tool results as a user message", async () => {

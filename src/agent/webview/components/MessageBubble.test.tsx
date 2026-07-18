@@ -201,6 +201,17 @@ describe("MessageBubble slash-command rendering", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "screenshot.png" })).toBeNull();
+
+    // Clicking the expanded image itself also closes the lightbox.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open screenshot.png" }),
+    );
+    const reopened = container.querySelector(
+      ".user-image-lightbox-image",
+    ) as HTMLImageElement;
+    expect(reopened).toBeTruthy();
+    fireEvent.click(reopened);
+    expect(screen.queryByRole("dialog", { name: "screenshot.png" })).toBeNull();
   });
 
   it("renders inline code and fenced code blocks in user text", () => {

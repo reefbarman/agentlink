@@ -523,7 +523,14 @@ export class AgentSession {
   }
 
   appendAssistantTurn(content: ContentBlock[]): void {
-    this.messages.push({ role: "assistant", content } as AgentMessage);
+    this.appendAssistantMessage({ role: "assistant", content });
+  }
+
+  appendAssistantMessage(message: AgentMessage): void {
+    if (message.role !== "assistant") {
+      throw new Error("appendAssistantMessage requires an assistant message");
+    }
+    this.messages.push(message);
     this.lastActiveAt = Date.now();
   }
 

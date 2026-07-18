@@ -386,7 +386,9 @@ export class BrowserGatewayService implements vscode.Disposable {
   }
 
   subscribeToSurfaceChanges(
-    onDidChangeSurface: (listener: (kind: "mcp" | "theme") => void) => {
+    onDidChangeSurface: (
+      listener: (kind: "background" | "mcp" | "theme") => void,
+    ) => {
       dispose(): void;
     },
   ): void {

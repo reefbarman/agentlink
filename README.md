@@ -219,6 +219,92 @@ Each file uses an `mcpServers` object. For example:
 
 AgentLink can progressively disclose large MCP catalogs and applies the same session/project/global approval model to connected servers and tools.
 
+## Web Access
+
+AgentLink provides native `web_search` and `web_fetch` tools for the built-in VS Code agent and Browser Ask Agent. Search and fetch are configured independently and default to `native`.
+
+The model still decides whether a turn needs web access. Enabling a native tool only makes it available; it does not force a search or fetch on every turn.
+
+### Independent tool selection
+
+Configure each AgentLink-native tool separately:
+
+| Selection  | Behavior                                                                                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `native`   | Expose the AgentLink `web_search` or `web_fetch` tool. AgentLink executes it through the selected model provider's hosted web capability.                                      |
+| `mcp`      | Hide the corresponding AgentLink-native tool. Ordinary connected MCP tools remain available with their own names, schemas, inputs, outputs, disclosure, and approval behavior. |
+| `disabled` | Hide the corresponding AgentLink-native tool. Unrelated MCP tools are unaffected.                                                                                              |
+
+`mcp` does **not** select a specific MCP tool, wrap an MCP call in `web_search`/`web_fetch`, adapt MCP schemas, or automatically switch backends. It simply removes that AgentLink-native tool from the model's available tool list. If a suitable MCP tool is connected and disclosed, the model can call it normally.
+
+For example, to prefer SearXNG or another MCP tool for discovery while keeping provider-native page access:
+
+```jsonc
+{
+  "agentlink.webAccess.searchBackend": "mcp",
+  "agentlink.webAccess.fetchBackend": "native",
+}
+```
+
+This hides AgentLink's `web_search`, leaves ordinary MCP search tools available, and still exposes AgentLink's provider-backed `web_fetch`.
+
+### Native provider execution
+
+AgentLink's native tools are ordinary function tools from the model's perspective. When one is called, AgentLink performs a constrained delegated provider request with no normal client tools, then returns a normalized result through the standard tool-result path.
+
+- **Anthropic API-key models** can use hosted search and hosted page fetch where the selected model/transport advertises support.
+- **OpenAI public API-key Responses and ChatGPT/Codex OAuth** can use hosted search. OpenAI/Codex page open and find-in-page are actions of the combined hosted search capability, so AgentLink implements native `web_fetch` through a constrained delegated request using that capability rather than a separate provider `web_fetch` definition.
+- Native selections fail closed before the turn when the selected provider transport cannot perform the operation or enforce configured domain restrictions.
+- AgentLink never silently switches a native operation to MCP after a turn starts.
+
+Provider-hosted execution occurs in the runtime that owns the model request: the extension for VS Code sessions and helper/core for Browser Ask Agent. Browser page JavaScript never performs web fetches and never receives provider credentials.
+
+### Transcript behavior
+
+Native web operations render exactly like other tool calls:
+
+- the tool name is `web_search` or `web_fetch`;
+- the complete normalized input is visible in the expandable **Input** section;
+- the complete normalized result is visible in the **Result** section;
+- Browser Ask Agent transcript export includes both input and result;
+- ordinary MCP web tools continue to render under their original MCP tool names with their original inputs and results.
+
+Legacy persisted provider web-activity events are projected into ordinary `web_search`/`web_fetch` tool calls for compatibility. Provider-private replay data, encrypted blocks, and credentials are excluded from chat projections, browser snapshots, SSE, logs, and transcript exports.
+
+### Settings
+
+| Setting                                     | Default   | Purpose                                                                          |
+| ------------------------------------------- | --------- | -------------------------------------------------------------------------------- |
+| `agentlink.webAccess.searchBackend`         | `native`  | Select `native`, `mcp`, or `disabled` for AgentLink's `web_search`.              |
+| `agentlink.webAccess.fetchBackend`          | `native`  | Select `native`, `mcp`, or `disabled` for AgentLink's `web_fetch`.               |
+| `agentlink.webAccess.allowedDomains`        | `[]`      | Optional native-provider domain allowlist; mutually exclusive with the denylist. |
+| `agentlink.webAccess.blockedDomains`        | `[]`      | Optional native-provider domain denylist; mutually exclusive with the allowlist. |
+| `agentlink.webAccess.maxSearchUsesPerTurn`  | `5`       | Requested native-provider search-use limit where supported.                      |
+| `agentlink.webAccess.maxFetchUsesPerTurn`   | `3`       | Requested native-provider fetch-use limit where supported.                       |
+| `agentlink.webAccess.maxFetchContentTokens` | `25000`   | Requested native-provider fetched-content token cap where supported.             |
+| `agentlink.webAccess.maxReplayBytesPerTurn` | `5242880` | Maximum private provider replay retained when exact continuation requires it.    |
+
+Domain restrictions apply only to native provider routes and fail closed when the provider transport cannot represent them. Limits are applied only when the provider advertises enforceable support; diagnostics report effective enforcement.
+
+### Cost, privacy, and trust
+
+- Provider-hosted web requests may incur **additional provider charges**. MCP servers and upstream search services may have their own costs or quotas.
+- Native search queries, URLs, and fetched content are sent to the selected model provider. MCP tool calls are sent according to that MCP server's own implementation and trust boundary.
+- Search results and fetched pages are **untrusted external model input**. AgentLink's delegated executor is instructed not to follow embedded prompts, reveal secrets, modify files, or perform unrelated work.
+- A self-hosted SearXNG server improves control over the AgentLink-to-server hop, but it does not make SearXNG's upstream search-engine requests private by itself.
+- Native result envelopes include normalized provider, operation, input, activity, content, citation, and usage fields when available. They do not include provider-private replay metadata.
+
+To hide both AgentLink-native web tools:
+
+```jsonc
+{
+  "agentlink.webAccess.searchBackend": "disabled",
+  "agentlink.webAccess.fetchBackend": "disabled",
+}
+```
+
+This does not disable unrelated connected MCP tools.
+
 ## Semantic Codebase Search Setup
 
 Semantic search powers `codebase_search` plus the `query` parameter on `read_file` and `list_files`. It uses a local Qdrant vector database for the code index and OpenAI embeddings for indexing and queries.
@@ -322,6 +408,59 @@ When a connected MCP server requests URL elicitation, AgentLink shows an explici
 ## Tools
 
 The tools below are available to the built-in agent according to its active mode and capability profile. Some development or orchestration tools are intentionally exposed only in specific modes.
+
+### web_search
+
+Search the public web through the selected model provider's hosted web capability. This AgentLink-native tool is exposed only when `agentlink.webAccess.searchBackend` is `native` and the selected provider transport supports hosted search.
+
+| Parameter     | Type                               | Description                                   |
+| ------------- | ---------------------------------- | --------------------------------------------- |
+| `query`       | string                             | Required web search query.                    |
+| `max_results` | number?                            | Optional requested result count from 1 to 20. |
+| `language`    | string?                            | Optional language code such as `en` or `fr`.  |
+| `time_range`  | `day`, `week`, `month`, or `year`? | Optional recency preference.                  |
+| `safe_search` | `off`, `moderate`, or `strict`?    | Optional safe-search preference.              |
+
+Response details:
+
+- `backend` is `provider` for native execution.
+- `provider` identifies the provider used for the delegated request.
+- `operation` is `search`.
+- `input` contains the complete original normalized input.
+- `activities` contains provider-visible search/open/find lifecycle data when available.
+- `content` contains the provider's useful search findings.
+- `citations` contains normalized source metadata when available.
+- `usage` contains provider token/server-tool usage when exposed by the provider client.
+- Provider-private replay/encrypted metadata is never included.
+
+The delegated request is constrained to hosted web execution, receives no normal client tools, and treats retrieved content as untrusted data.
+
+### web_fetch
+
+Open and read a public HTTP or HTTPS URL through the selected model provider's hosted page-access capability. This AgentLink-native tool is exposed only when `agentlink.webAccess.fetchBackend` is `native` and the provider can perform page access.
+
+For OpenAI/Codex, page open and find-in-page are actions of the combined hosted `web_search` capability. AgentLink therefore implements `web_fetch` through a constrained delegated hosted-search request rather than sending a standalone provider `web_fetch` definition.
+
+| Parameter    | Type    | Description                                            |
+| ------------ | ------- | ------------------------------------------------------ |
+| `url`        | string  | Required absolute HTTP or HTTPS URL.                   |
+| `max_length` | number? | Optional requested maximum visible content characters. |
+| `section`    | string? | Optional heading or section to focus on.               |
+| `find`       | string? | Optional text or pattern to locate within the page.    |
+
+Response details:
+
+- `backend` is `provider` for native execution.
+- `provider` identifies the provider used for the delegated request.
+- `operation` is `fetch`.
+- `input` contains the complete original normalized input.
+- `activities` contains provider-visible page-open/find lifecycle data when available.
+- `content` contains the relevant visible page content.
+- `citations` contains normalized source/final-URL metadata when available.
+- `usage` contains provider token/server-tool usage when exposed by the provider client.
+- Provider-private replay/encrypted metadata is never included.
+
+The tool rejects non-HTTP(S) URLs. The delegated request is instructed to open the exact URL and not search for alternatives except when following that URL's redirect is required.
 
 ### compose (development builds only)
 
@@ -1403,7 +1542,7 @@ Each VS Code window owns its own built-in agent sessions, approvals, terminals, 
 - **Workspace-scoped identity** — instance IDs are persisted per workspace window so multiple open windows remain distinct.
 - **Shared browser entry point** — the helper routes browser actions to the selected healthy VS Code instance.
 
-## Settings
+## Extension Settings
 
 | Setting                                        | Default                    | Description                                                                                                                                 |
 | ---------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |

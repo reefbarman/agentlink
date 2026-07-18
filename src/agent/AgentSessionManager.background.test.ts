@@ -113,6 +113,24 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("vscode", async () => {
+  const actual = await vi.importActual<typeof import("../__mocks__/vscode.js")>(
+    "../__mocks__/vscode.js",
+  );
+  return {
+    ...actual,
+    workspace: {
+      ...actual.workspace,
+      getConfiguration: () => ({
+        get: (key: string, defaultValue: unknown) =>
+          key === "webAccess.searchBackend" || key === "webAccess.fetchBackend"
+            ? "disabled"
+            : defaultValue,
+      }),
+    },
+  };
+});
+
 vi.mock("./backgroundModelRouter.js", () => ({
   resolveBackgroundRoute: (
     registry: unknown,
@@ -166,6 +184,10 @@ describe("AgentSessionManager background agents", () => {
     ),
     getBgSummaryMode: vi.fn(() => "heuristic" as const),
     getBackgroundAgentSettings: vi.fn(() => ({})),
+    getWebAccessSettings: vi.fn(() => ({
+      searchBackend: "disabled" as const,
+      fetchBackend: "disabled" as const,
+    })),
   };
 
   const toolCtx: ToolDispatchContext = {
@@ -2692,23 +2714,17 @@ describe("AgentSessionManager background agents", () => {
     expect(statusInfo.displayStatus).toBe("Running command");
   });
 
-  it("resumes the foreground session when a background result returns after it stopped", async () => {
-    mocks.runBehavior
-      .mockReturnValueOnce(
-        (async function* () {
-          yield { type: "done" };
-        })(),
-      )
-      .mockReturnValueOnce(
-        (async function* () {
-          yield { type: "done" };
-        })(),
-      );
+  it("does not resume an idle foreground session when a background result returns", async () => {
+    mocks.runBehavior.mockReturnValueOnce(
+      (async function* () {
+        yield { type: "done" };
+      })(),
+    );
 
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);
 
-    const fg = await mgr.createSession("code");
+    await mgr.createSession("code");
     const sendMessageSpy = vi.spyOn(mgr, "sendMessage");
 
     const result = await mgr.spawnBackground({
@@ -2718,20 +2734,9 @@ describe("AgentSessionManager background agents", () => {
 
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      fg.id,
-      expect.stringContaining(
-        `The background agent for "inspect failing tests" has returned while you were stopped.`,
-      ),
-      fg.mode,
-    );
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      fg.id,
-      expect.stringContaining(
-        `<background_result task="inspect failing tests" sessionId="${result.sessionId}">`,
-      ),
-      fg.mode,
-    );
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(mgr.getBackgroundStatus(result.sessionId).status).toBe("idle");
+    expect(mgr.getBackgroundResult(result.sessionId).resultText).toBeDefined();
   });
 
   it("does not resume the foreground session if it is still running", async () => {
@@ -2817,6 +2822,21 @@ describe("AgentSessionManager background agents", () => {
     );
     expect(fg.consumePendingModeResume()).toBeNull();
     expect(mocks.runBehavior).toHaveBeenCalledTimes(2);
+    const firstOptions = mocks.runArgs.mock.calls[0]?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    const secondOptions = mocks.runArgs.mock.calls[1]?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(firstOptions?.webAccessPolicy).toBe(secondOptions?.webAccessPolicy);
+    expect(firstOptions?.mcpToolDisclosure).toBe(
+      secondOptions?.mcpToolDisclosure,
+    );
+    expect(firstOptions?.mcpToolDefinitions).toBe(
+      secondOptions?.mcpToolDefinitions,
+    );
+    expect(Object.isFrozen(firstOptions?.webAccessPolicy)).toBe(true);
+    expect(Object.isFrozen(firstOptions?.mcpToolDefinitions)).toBe(true);
   });
 
   it("continues mode-switch resumes independently of the todo auto-continue budget, capped per turn", async () => {

@@ -623,6 +623,7 @@ body {
   max-height: calc(min(92vh, 900px) - 43px);
   object-fit: contain;
   background: color-mix(in srgb, #000 18%, transparent);
+  cursor: zoom-out;
 }
 
 .user-attachment-chip {

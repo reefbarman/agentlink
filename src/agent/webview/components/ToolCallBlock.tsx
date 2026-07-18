@@ -54,6 +54,10 @@ function getToolSummary(
   // Completed tool — summarize based on tool name
   const p = input ?? {};
   switch (name) {
+    case "web_search":
+      return [{ type: "text", text: String(p.query ?? "").slice(0, 100) }];
+    case "web_fetch":
+      return [{ type: "text", text: String(p.url ?? "").slice(0, 140) }];
     case "read_file": {
       const path = String(p.path ?? "");
       const lines = extractField(result, "total_lines");

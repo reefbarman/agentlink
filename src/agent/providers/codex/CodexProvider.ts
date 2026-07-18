@@ -117,6 +117,12 @@ export class CodexProvider implements ModelProvider {
     );
   }
 
+  async getRequestCapabilities(model: string): Promise<ModelCapabilities> {
+    const authMethod = await this.authManager.getPreferredAuthMethod();
+    if (authMethod) this.lastResolvedAuthMethod = authMethod;
+    return getCodexModelCapabilities(model, authMethod ?? "oauth");
+  }
+
   listModels(): ModelInfo[] {
     const authMethod = this.lastResolvedAuthMethod ?? "oauth";
     const all = listCodexModels(this.id, authMethod);
@@ -227,6 +233,7 @@ export class CodexProvider implements ModelProvider {
       systemPrompt,
       messages,
       tools,
+      hostedTools,
       maxTokens,
       reasoningEffort: requestedEffort,
       reasoningMode,
@@ -236,7 +243,9 @@ export class CodexProvider implements ModelProvider {
       onTransportActivity,
     } = request;
 
-    const codexInput = translateCodexMessages(messages);
+    const codexInput = translateCodexMessages(messages, {
+      useProviderReplay: !state?.previousResponseId,
+    });
     const codexTools = tools ? translateCodexTools(tools) : undefined;
 
     // Log image presence in the translated input
@@ -265,30 +274,31 @@ export class CodexProvider implements ModelProvider {
     }
 
     while (true) {
-      const requestBody = buildCodexEndpointRequestBody({
-        model: effectiveModel,
-        input: codexInput,
-        instructions: systemPrompt,
-        maxTokens,
-        state,
-        cache,
-        reasoningEffort,
-        reasoningMode,
-        tools: codexTools,
-        caps: getEndpointCaps(auth),
-      });
-
-      // Log the request shape (not the full body — base64 data can be huge)
-      {
-        const inputSummary = summarizeCodexRequestInput(requestBody.input);
-        const body = requestBody as unknown as Record<string, unknown>;
-        this.log(
-          `[codex] request: model=${requestBody.model} auth=${auth.method} input=${inputSummary} tools=${requestBody.tools?.length ?? 0} store=${requestBody.store} previousResponseId=${body.previous_response_id ?? "none"} cacheKey=${body.prompt_cache_key ?? "none"}`,
-        );
-      }
-
       const streamState = { outputStarted: false };
       try {
+        const requestBody = buildCodexEndpointRequestBody({
+          model: effectiveModel,
+          input: codexInput,
+          instructions: systemPrompt,
+          maxTokens,
+          state,
+          cache,
+          reasoningEffort,
+          reasoningMode,
+          tools: codexTools,
+          hostedTools,
+          caps: getEndpointCaps(auth),
+        });
+
+        // Log the request shape (not the full body — base64 data can be huge)
+        {
+          const inputSummary = summarizeCodexRequestInput(requestBody.input);
+          const body = requestBody as unknown as Record<string, unknown>;
+          this.log(
+            `[codex] request: model=${requestBody.model} auth=${auth.method} input=${inputSummary} tools=${requestBody.tools?.length ?? 0} store=${requestBody.store} previousResponseId=${body.previous_response_id ?? "none"} cacheKey=${body.prompt_cache_key ?? "none"}`,
+          );
+        }
+
         const result = await this.executeStream(
           requestBody,
           auth,
@@ -399,7 +409,9 @@ export class CodexProvider implements ModelProvider {
       signal,
     } = request;
 
-    const codexInput = translateCodexMessages(messages);
+    const codexInput = translateCodexMessages(messages, {
+      useProviderReplay: !state?.previousResponseId,
+    });
 
     let auth = await this.getModelAuthOrThrow();
     let effectiveModel = this.resolveEffectiveModel(model, auth, "complete()");

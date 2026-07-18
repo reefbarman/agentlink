@@ -1,9 +1,9 @@
 /** @vitest-environment jsdom */
 
+import type { ChatMessage, ReasoningEffort } from "../types";
 import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ChatMessage, ReasoningEffort } from "../types";
 import { StreamingBaselineRecorder } from "../../../shared/streamingBaselineMetrics";
 import { TranscriptMessageList } from "./TranscriptMessageList";
 import { h } from "preact";
@@ -22,6 +22,124 @@ function apiRequest(
     timeToFirstToken: 100,
   };
 }
+
+describe("TranscriptMessageList native web tool rendering", () => {
+  it("renders web_fetch as a normal expandable tool call with full input and result", () => {
+    cleanup();
+    const result = {
+      backend: "provider",
+      provider: "openai-codex",
+      operation: "fetch",
+      input: { url: "https://docs.example.com/guide", section: "Usage" },
+      activities: [
+        {
+          id: "fetch-provider-1",
+          kind: "fetch",
+          status: "completed",
+          backend: "provider",
+          url: "https://docs.example.com/guide",
+        },
+      ],
+      content: "Example guide content",
+      citations: [
+        {
+          url: "https://docs.example.com/guide",
+          title: "Example guide",
+        },
+      ],
+    };
+    const messages: ChatMessage[] = [
+      {
+        id: "a-web",
+        role: "assistant",
+        content: "",
+        timestamp: 1,
+        blocks: [
+          {
+            type: "tool_call",
+            id: "fetch-1",
+            name: "web_fetch",
+            inputJson: JSON.stringify({
+              url: "https://docs.example.com/guide",
+              section: "Usage",
+            }),
+            result: JSON.stringify(result, null, 2),
+            complete: true,
+          },
+        ],
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    expect(container.querySelectorAll(".tool-group-block")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: /Tools/ }));
+    const toolName = screen.getByText("web_fetch");
+    expect(toolName).toBeTruthy();
+    expect(screen.getByText("https://docs.example.com/guide")).toBeTruthy();
+    fireEvent.click(toolName.closest("button")!);
+    expect(screen.getByText("Input")).toBeTruthy();
+    expect(screen.getByText("Result")).toBeTruthy();
+    const details =
+      container.querySelector(".tool-call-details")?.textContent ?? "";
+    expect(details).toContain("section");
+    expect(details).toContain("Usage");
+    expect(details).toContain("Example guide content");
+    expect(details).toContain("https://docs.example.com/guide");
+    cleanup();
+  });
+
+  it("renders a failed web_fetch using the normal tool error state", () => {
+    cleanup();
+    const messages: ChatMessage[] = [
+      {
+        id: "a-web-failed",
+        role: "assistant",
+        content: "The fetch failed.",
+        timestamp: 1,
+        blocks: [
+          {
+            type: "tool_call",
+            id: "fetch-failed",
+            name: "web_fetch",
+            inputJson: JSON.stringify({
+              url: "https://docs.example.com/private",
+            }),
+            result: JSON.stringify({
+              error: "Provider fetch limit exceeded",
+              citations: [
+                {
+                  url: "https://first.example/source",
+                  title: "First source",
+                },
+                {
+                  url: "https://second.example/source",
+                  title: "Second source",
+                },
+              ],
+            }),
+            complete: true,
+          },
+        ],
+      },
+    ];
+
+    const { container } = render(
+      h(TranscriptMessageList, { messages, streaming: false }),
+    );
+
+    expect(container.querySelector(".tool-call-block.tool-error")).toBeTruthy();
+    fireEvent.click(screen.getByText("web_fetch").closest("button")!);
+    const details =
+      container.querySelector(".tool-call-details")?.textContent ?? "";
+    expect(details).toContain("Provider fetch limit exceeded");
+    expect(details).toContain("https://first.example/source");
+    expect(details).toContain("https://second.example/source");
+    cleanup();
+  });
+});
 
 describe("TranscriptMessageList model change rendering", () => {
   it("shows a divider before the first response from a different model", () => {

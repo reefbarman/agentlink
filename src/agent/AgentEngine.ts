@@ -24,6 +24,8 @@ import { ToolCallBudget } from "../core/tools/toolCallBudget.js";
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { partitionMcpToolsForDisclosure } from "./mcpToolDisclosure.js";
+import type { CoreResolvedWebAccessPolicy } from "../core/webAccess.js";
+import { CORE_NATIVE_WEB_MAX_PAUSE_TURNS } from "../core/nativeWebTools.js";
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
 import { handleToolError } from "../shared/types.js";
 import type { McpApprovalPromotionMeta, ToolResult } from "../shared/types.js";
@@ -53,6 +55,8 @@ import type {
 import { toSupportedImageMediaType } from "./providers/types.js";
 import {
   toCoreModelDocumentMediaType,
+  type CoreModelMessage,
+  type CoreModelStopReason,
   type CoreModelTransportActivity,
 } from "../core/modelRuntime.js";
 import { sleep } from "../util/sleep.js";
@@ -628,6 +632,14 @@ export class AgentEngine {
       toolProfile?: string;
       maxApiTurns?: number;
       maxToolCalls?: number;
+      /** Immutable web backend/tool selection prepared at the logical turn boundary. */
+      webAccessPolicy?: Readonly<CoreResolvedWebAccessPolicy>;
+      /** MCP disclosure prepared from the same immutable tool-catalog snapshot. */
+      mcpToolDisclosure?: Readonly<
+        ReturnType<typeof partitionMcpToolsForDisclosure>
+      >;
+      /** Exact cloned MCP catalog used to build the prepared disclosure/policy. */
+      mcpToolDefinitions?: readonly ToolDefinition[];
       /** Time to first raw transport activity (normally response headers). */
       providerFirstEventTimeoutMs?: number;
       /** Maximum silence between raw response body chunks/provider events. */
@@ -654,6 +666,7 @@ export class AgentEngine {
     const maxToolCalls = opts?.maxToolCalls ?? 0; // 0 = unlimited
     const toolCallBudget = new ToolCallBudget(maxToolCalls);
     let apiTurnCount = 0;
+    let providerPauseTurnCount = 0;
     let wrapUpAttempts = 0; // Track wrap-up injections to prevent infinite loops
     const MAX_WRAP_UP_ATTEMPTS = 2;
     let pendingFinalMarker: FinalMessageMarker | null = null;
@@ -689,9 +702,16 @@ export class AgentEngine {
         // Include tools when dispatch context is available, filtered by mode.
         // Compute this before any condense path so both automatic and retry-triggered
         // condenses see the same preserved runtime context that future requests will use.
-        const connectedMcpToolDefs =
-          this.toolRuntime?.getConnectedMcpToolDefs?.() ?? [];
-        if (this.toolRuntime && connectedMcpToolDefs.length > 0) {
+        const connectedMcpToolDefs = opts?.mcpToolDefinitions
+          ? [...opts.mcpToolDefinitions]
+          : (this.toolRuntime?.getConnectedMcpToolDefs?.() ?? []);
+        if (opts?.mcpToolDisclosure) {
+          session.mcpToolDisclosure = {
+            inlineTools: [...opts.mcpToolDisclosure.inlineTools],
+            deferredTools: [...opts.mcpToolDisclosure.deferredTools],
+            catalog: [...opts.mcpToolDisclosure.catalog],
+          };
+        } else if (this.toolRuntime && connectedMcpToolDefs.length > 0) {
           const serverNames = new Set(
             connectedMcpToolDefs
               .map((tool) => parseMcpToolName(tool.name)?.serverName)
@@ -719,6 +739,7 @@ export class AgentEngine {
               ...this.toolRuntime.listTools({
                 mode: session.agentMode,
                 mcpToolDefs: providerMcpToolDefs,
+                nativeWebToolKinds: opts?.webAccessPolicy?.enabledKinds,
                 isBackground: opts?.isBackground,
                 toolProfile: opts?.toolProfile,
                 skillAllowedTools: session.getActiveSkillAllowedTools(),
@@ -865,6 +886,8 @@ export class AgentEngine {
         let cacheReadTokens = 0;
         let cacheCreationTokens = 0;
         let providerResponseId: string | undefined;
+        let assistantMessage: CoreModelMessage | undefined;
+        let modelStopReason: CoreModelStopReason | undefined;
         let firstTokenReceived = false;
         let usedPreviousResponseId = false;
         let promptCacheKey: string | undefined;
@@ -900,7 +923,7 @@ export class AgentEngine {
 
           const apiMessages: MessageParam[] = effectiveMessages.map(
             (msg, effectiveIdx) => {
-              const { role, content, media } = msg;
+              const { role, content, media, providerReplay } = msg;
               if (media) {
                 this.log?.(
                   `[media] found attached media at effectiveIdx=${effectiveIdx} role=${role} contentType=${typeof content === "string" ? "string" : Array.isArray(content) ? `array(${content.length})` : "other"} images=${media.images.length} documents=${media.documents.length}`,
@@ -998,7 +1021,13 @@ export class AgentEngine {
                 );
                 return { role, content: blocks };
               }
-              return { role, content };
+              return {
+                role,
+                content,
+                ...(role === "assistant" && providerReplay
+                  ? { providerReplay }
+                  : {}),
+              };
             },
           );
           // Empty-response recovery input is request-local. It must reach the
@@ -1181,6 +1210,12 @@ export class AgentEngine {
                     }
                   }
                   break;
+                case "web_activity":
+                  // Provider-hosted web activity is collected by delegated native
+                  // tool execution or retained in private replay. It is not a
+                  // separate public UI event; web tools render through ordinary
+                  // tool_start/tool_result events.
+                  break;
                 case "tool_start":
                   pendingToolInputDeltas.set(event.toolCallId, []);
                   break;
@@ -1194,6 +1229,10 @@ export class AgentEngine {
                   break;
                 case "content_blocks":
                   contentBlocks = event.blocks;
+                  break;
+                case "model_stop":
+                  assistantMessage = event.assistantMessage;
+                  modelStopReason = event.reason;
                   break;
                 case "usage":
                   inputTokens = event.inputTokens;
@@ -1440,6 +1479,29 @@ export class AgentEngine {
           contextBreakdown,
         };
 
+        const committedAssistantMessage: CoreModelMessage =
+          assistantMessage ?? {
+            role: "assistant",
+            content: contentBlocks,
+          };
+        const appendCommittedAssistantMessage = () => {
+          session.appendAssistantMessage(
+            committedAssistantMessage as AgentMessage,
+          );
+        };
+
+        if (modelStopReason === "pause_turn") {
+          providerPauseTurnCount += 1;
+          if (providerPauseTurnCount > CORE_NATIVE_WEB_MAX_PAUSE_TURNS) {
+            throw new Error(
+              `Provider native web continuation exceeded ${CORE_NATIVE_WEB_MAX_PAUSE_TURNS} pause turns.`,
+            );
+          }
+          appendCommittedAssistantMessage();
+          continue;
+        }
+        providerPauseTurnCount = 0;
+
         // Enforce maxApiTurns: when the limit is reached and the model wants
         // more tool calls, inject a "wrap up" message to force a final response.
         if (maxApiTurns > 0 && apiTurnCount >= maxApiTurns) {
@@ -1448,7 +1510,7 @@ export class AgentEngine {
             wrapUpAttempts++;
             // Hard stop after too many wrap-up attempts to prevent infinite loops
             if (wrapUpAttempts > MAX_WRAP_UP_ATTEMPTS) {
-              session.appendAssistantTurn(contentBlocks);
+              appendCommittedAssistantMessage();
               yield {
                 type: "warning",
                 message: `Background agent exceeded ${MAX_WRAP_UP_ATTEMPTS} wrap-up attempts. Force-stopping.`,
@@ -1457,7 +1519,7 @@ export class AgentEngine {
             }
             // Append the assistant turn with tool calls so history is valid,
             // then add synthetic results asking to wrap up.
-            session.appendAssistantTurn(contentBlocks);
+            appendCommittedAssistantMessage();
             const toolUseBlocksForWrapUp = contentBlocks.filter(
               (b): b is ToolUseBlock => b.type === "tool_use",
             );
@@ -1551,13 +1613,13 @@ export class AgentEngine {
 
         if (toolUseBlocks.length === 0) {
           // No tool calls — append the assistant turn on its own and finish.
-          session.appendAssistantTurn(contentBlocks);
+          appendCommittedAssistantMessage();
           break;
         }
 
         if (!this.toolRuntime) {
           // No dispatch runtime — append and finish without executing tools.
-          session.appendAssistantTurn(contentBlocks);
+          appendCommittedAssistantMessage();
           break;
         }
 
@@ -1572,14 +1634,14 @@ export class AgentEngine {
         if (toolCallReservation && !toolCallReservation.ok) {
           wrapUpAttempts++;
           if (wrapUpAttempts > MAX_WRAP_UP_ATTEMPTS) {
-            session.appendAssistantTurn(contentBlocks);
+            appendCommittedAssistantMessage();
             yield {
               type: "warning",
               message: `Background agent exceeded ${MAX_WRAP_UP_ATTEMPTS} wrap-up attempts. Force-stopping.`,
             };
             break;
           }
-          session.appendAssistantTurn(contentBlocks);
+          appendCommittedAssistantMessage();
           session.appendToolResults(
             toolUseBlocks.map((b) => ({
               type: "tool_result" as const,
@@ -1850,7 +1912,7 @@ export class AgentEngine {
         // Append assistant turn + tool results atomically — no async gap between
         // them so the session is never left with orphaned tool_use blocks.
         const finalMarkerForTurn = pendingFinalMarker;
-        session.appendAssistantTurn(contentBlocks);
+        appendCommittedAssistantMessage();
         if (finalMarkerForTurn) {
           session.applyFinalMarker(finalMarkerForTurn);
           yield { type: "final_marker", marker: finalMarkerForTurn };

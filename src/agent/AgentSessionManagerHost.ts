@@ -31,6 +31,7 @@ import {
 } from "./toolAdapter.js";
 import type { SessionStore } from "./SessionStore.js";
 import type { AgentToolRuntime } from "../core/tools/types.js";
+import type { CoreWebAccessSettings } from "../core/webAccess.js";
 import {
   createVscodeEditorRevealProvider,
   createVscodeEditReviewProvider,
@@ -76,6 +77,8 @@ export interface AgentSessionConfigHost {
   getBackgroundAgentSettings(
     scope?: Readonly<SessionProjectScope>,
   ): RawBackgroundAgentSettings;
+  /** Window-scoped configure-once web policy; intentionally not resource-scoped. */
+  getWebAccessSettings?(): Partial<CoreWebAccessSettings>;
 }
 
 export interface CheckpointManagerLike {
@@ -226,6 +229,35 @@ export function createDefaultAgentSessionManagerHost(args: {
           defaultAgent: config.get<unknown>("background.defaultAgent"),
           acpAgents: config.get<unknown>("background.acpAgents"),
         };
+      },
+      getWebAccessSettings: () => {
+        const config = vscode.workspace.getConfiguration("agentlink");
+        const stringValue = (key: string) => {
+          const value = config.get<unknown>(key);
+          return typeof value === "string" ? value : undefined;
+        };
+
+        const numberValue = (key: string) => {
+          const value = config.get<unknown>(key);
+          return typeof value === "number" ? value : undefined;
+        };
+        const stringArrayValue = (key: string) => {
+          const value = config.get<unknown>(key);
+          return Array.isArray(value) &&
+            value.every((entry) => typeof entry === "string")
+            ? value
+            : undefined;
+        };
+        return {
+          searchBackend: stringValue("webAccess.searchBackend"),
+          fetchBackend: stringValue("webAccess.fetchBackend"),
+          allowedDomains: stringArrayValue("webAccess.allowedDomains"),
+          blockedDomains: stringArrayValue("webAccess.blockedDomains"),
+          maxSearchUsesPerTurn: numberValue("webAccess.maxSearchUsesPerTurn"),
+          maxFetchUsesPerTurn: numberValue("webAccess.maxFetchUsesPerTurn"),
+          maxFetchContentTokens: numberValue("webAccess.maxFetchContentTokens"),
+          maxReplayBytesPerTurn: numberValue("webAccess.maxReplayBytesPerTurn"),
+        } as Partial<CoreWebAccessSettings>;
       },
     },
     providers: providerRegistry,

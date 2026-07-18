@@ -88,6 +88,7 @@ import {
   createToolUsageTelemetry,
   type ToolUsageTelemetry,
 } from "./telemetry/ToolUsageTelemetry.js";
+import { showWebAccessDisclosureOnce } from "./util/webAccessDisclosure.js";
 
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
 
@@ -310,6 +311,16 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   log("Activating AgentLink extension");
+
+  void showWebAccessDisclosureOnce({
+    state: context.globalState,
+    showInformationMessage: (message, action) =>
+      vscode.window.showInformationMessage(message, action),
+    openSettings: (query) =>
+      vscode.commands.executeCommand("workbench.action.openSettings", query),
+  }).catch((error) => {
+    log(`Web access disclosure failed: ${String(error)}`);
+  });
 
   void runLegacyAgentIntegrationCleanup({
     homeDir: os.homedir(),

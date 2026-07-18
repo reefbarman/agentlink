@@ -124,6 +124,10 @@ async function makeAskAgentToolLoopTestHarness(params: {
   helperVersion?: string;
   streamingMetrics?: StreamingBaselineRecorder;
   grantCredential?: boolean;
+  credentialMethod?: "oauth" | "apiKey";
+  cachedWebPolicy?: Parameters<
+    BrowserGatewayAskAgentPreferencesStore["update"]
+  >[0]["webPolicy"];
   beforeAskAgentSnapshotPublish?: (
     publication: AskAgentControllerPublication,
   ) => void | Promise<void>;
@@ -133,6 +137,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
   helperBase: string;
   cookie: string;
   askAgentLogPath: string;
+  askAgentHistoryPath: string;
 }> {
   const extensionRootPath = await makeExtensionRoot();
   const helperPort = await getAvailablePort();
@@ -144,6 +149,13 @@ async function makeAskAgentToolLoopTestHarness(params: {
   const storeDir = await fs.mkdtemp(
     path.join(os.tmpdir(), ".tmp-ask-agent-tool-loop-store-"),
   );
+  const preferencesStore = new BrowserGatewayAskAgentPreferencesStore({
+    filePath: path.join(storeDir, "preferences.json"),
+  });
+  const askAgentHistoryPath = path.join(storeDir, "history.json");
+  if (params.cachedWebPolicy) {
+    await preferencesStore.update({ webPolicy: params.cachedWebPolicy });
+  }
   const helper = new BrowserGatewayHelper(
     {
       port: helperPort,
@@ -155,11 +167,9 @@ async function makeAskAgentToolLoopTestHarness(params: {
     helperServer,
     {
       askAgentModelClient: params.modelClient,
-      askAgentPreferencesStore: new BrowserGatewayAskAgentPreferencesStore({
-        filePath: path.join(storeDir, "preferences.json"),
-      }),
+      askAgentPreferencesStore: preferencesStore,
       askAgentHistoryStore: new BrowserGatewayAskAgentHistoryStore({
-        filePath: path.join(storeDir, "history.json"),
+        filePath: askAgentHistoryPath,
       }),
       askAgentMemoryStore: new BrowserGatewayAskAgentMemoryStore({
         filePath: path.join(storeDir, "memory.json"),
@@ -208,7 +218,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
       headers: internalHeaders,
       body: JSON.stringify({
         providerId: "openai-codex",
-        method: "oauth",
+        method: params.credentialMethod ?? "oauth",
         bearerToken: "test-token",
         grantedByOwnerId: "vscode-owner",
         modelScopes: ["chat"],
@@ -222,7 +232,7 @@ async function makeAskAgentToolLoopTestHarness(params: {
       headers: internalHeaders,
       body: JSON.stringify({
         providerId: "openai-codex",
-        method: "oauth",
+        method: params.credentialMethod ?? "oauth",
         grantedByOwnerId: "vscode-owner",
         grantedToOwnerId: ownerPayload.ownerRegistration.owner.ownerId,
         grantedToOwnerGenerationId:
@@ -234,7 +244,28 @@ async function makeAskAgentToolLoopTestHarness(params: {
       }),
     });
   }
-  return { helper, helperServer, helperBase, cookie, askAgentLogPath };
+  return {
+    helper,
+    helperServer,
+    helperBase,
+    cookie,
+    askAgentLogPath,
+    askAgentHistoryPath,
+  };
+}
+
+function getLatestStringUserMessage(
+  messages: readonly CoreModelMessage[] | undefined,
+): string {
+  const message = [...(messages ?? [])]
+    .reverse()
+    .find((candidate) => candidate.role === "user");
+  if (!message) return "";
+  if (typeof message.content === "string") return message.content;
+  return message.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("");
 }
 
 function makeAskAgentToolLoopClient(
@@ -1519,11 +1550,13 @@ describe("BrowserGatewayHelper proxy routing", () => {
       [];
     const askAgentModelClient = {
       complete: async ({
-        messages,
+        iterationMessages,
         memoryContext,
         onDelta,
       }: Parameters<BrowserGatewayAskAgentModelClient["complete"]>[0]) => {
-        const lastMessage = messages.at(-1) ?? { content: "" };
+        const lastMessage = {
+          content: getLatestStringUserMessage(iterationMessages),
+        };
         const priorFailureCalls = completeCalls.filter(
           (call) => call.content === "Please fail memory retrieval",
         ).length;
@@ -3268,10 +3301,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
     } satisfies BrowserGatewayAskAgentSummarizer;
     const askAgentModelClient = {
       complete: async ({
-        messages,
+        iterationMessages,
         onDelta,
       }: Parameters<BrowserGatewayAskAgentModelClient["complete"]>[0]) => {
-        const lastUser = messages.at(-1)?.content ?? "";
+        const lastUser = getLatestStringUserMessage(iterationMessages);
         onDelta?.(`Answer to ${lastUser}`);
         return `Answer to ${lastUser}`;
       },
@@ -3417,10 +3450,10 @@ describe("BrowserGatewayHelper proxy routing", () => {
     } satisfies BrowserGatewayAskAgentSummarizer;
     const askAgentModelClient = {
       complete: async ({
-        messages,
+        iterationMessages,
         onDelta,
       }: Parameters<BrowserGatewayAskAgentModelClient["complete"]>[0]) => {
-        const lastUser = messages.at(-1)?.content ?? "";
+        const lastUser = getLatestStringUserMessage(iterationMessages);
         onDelta?.(`Answer to ${lastUser}`);
         return `Answer to ${lastUser}`;
       },
@@ -4443,14 +4476,12 @@ describe("BrowserGatewayHelper proxy routing", () => {
 
     const toolResults: CoreModelMessage[][] = [];
     const modelClient = makeAskAgentToolLoopClient(
-      async ({ messages, toolMessages }) => {
+      async ({ iterationMessages, toolMessages }) => {
         toolResults.push([...(toolMessages ?? [])]);
         if (toolMessages?.length) {
           return { text: "Done reading.", toolCalls: [] };
         }
-        const latestUserText = [...messages]
-          .reverse()
-          .find((message) => message.role === "user")?.content;
+        const latestUserText = getLatestStringUserMessage(iterationMessages);
         if (latestUserText === "Read before grant") {
           return {
             text: "Trying denied read.",
@@ -4756,6 +4787,610 @@ describe("BrowserGatewayHelper proxy routing", () => {
     );
   });
 
+  it("uses cached provider policy for API-key hosted search without a VS Code instance", async () => {
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      return { text: "Hosted search available.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      credentialMethod: "apiKey",
+      cachedWebPolicy: {
+        settings: {
+          searchBackend: "native",
+          fetchBackend: "native",
+          allowedDomains: [],
+          blockedDomains: [],
+          maxSearchUsesPerTurn: 5,
+          maxFetchUsesPerTurn: 3,
+          maxFetchContentTokens: 25000,
+          maxReplayBytesPerTurn: 5242880,
+        },
+        sourceInstanceId: "offline-window",
+        sourceRevision: "offline-revision",
+        updatedAt: Date.now(),
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Search the web" }),
+    });
+
+    expect(send.ok).toBe(true);
+    expect(completionParams).toHaveLength(1);
+    expect(completionParams[0]?.hostedTools).toBeUndefined();
+    expect(completionParams[0]?.tools?.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["web_search", "web_fetch"]),
+    );
+  });
+
+  it("executes native web search as an ordinary tool call while keeping provider replay private", async () => {
+    const primaryRequests: string[] = [];
+    const fallbackRequests: string[] = [];
+    const primary = http.createServer((req, res) => {
+      const url = req.url ?? "/";
+      if (url !== "/health" && url !== "/api/instance-status") {
+        primaryRequests.push(url);
+      }
+      if (url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok" }));
+        return;
+      }
+      if (url === "/api/instance-status") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ kind: "idle", label: "Idle" }));
+        return;
+      }
+      if (url === "/internal/ask-agent/web-policy") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            settings: {
+              searchBackend: "native",
+              fetchBackend: "disabled",
+              allowedDomains: [],
+              blockedDomains: [],
+              maxSearchUsesPerTurn: 5,
+              maxFetchUsesPerTurn: 3,
+              maxFetchContentTokens: 25000,
+              maxReplayBytesPerTurn: 5242880,
+            },
+            revision: "native-search-policy-1",
+          }),
+        );
+        return;
+      }
+      if (url === "/internal/ask-agent/mcp-tools") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, tools: [] }));
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "not_found", url }));
+    });
+    const fallback = http.createServer((req, res) => {
+      const url = req.url ?? "/";
+      if (url !== "/health" && url !== "/api/instance-status") {
+        fallbackRequests.push(url);
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        url === "/health"
+          ? JSON.stringify({ status: "ok" })
+          : JSON.stringify({ kind: "idle", label: "Idle" }),
+      );
+    });
+    servers.push(primary, fallback);
+    const primaryPort = await waitForListening(primary, 0);
+    const fallbackPort = await waitForListening(fallback, 0);
+    const registryPath = path.join(
+      os.homedir(),
+      ".agentlink",
+      "browser-gateways.json",
+    );
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    const primaryRecord = {
+      instanceId: "instance-native-search-primary",
+      workspaceName: "Native Search Primary",
+      workspacePath: "/workspace/native-search-primary",
+      pid: process.pid,
+      port: primaryPort,
+      url: `http://127.0.0.1:${primaryPort}`,
+      protocolVersion: 1,
+      startedAt: new Date().toISOString(),
+      authToken: "native-search-primary-token",
+    };
+    const fallbackRecord = {
+      instanceId: "instance-native-search-fallback",
+      workspaceName: "Native Search Fallback",
+      workspacePath: "/workspace/native-search-fallback",
+      pid: process.pid,
+      port: fallbackPort,
+      url: `http://127.0.0.1:${fallbackPort}`,
+      protocolVersion: 1,
+      startedAt: new Date().toISOString(),
+      authToken: "native-search-fallback-token",
+    };
+    await fs.writeFile(registryPath, JSON.stringify([primaryRecord]), "utf-8");
+
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    let releaseDelegatedSearch: (() => void) | undefined;
+    const delegatedSearchHold = new Promise<void>((resolve) => {
+      releaseDelegatedSearch = resolve;
+    });
+    const privateReplayMessage: CoreModelMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "web_activity",
+          activity: {
+            id: "hosted-search-1",
+            kind: "search",
+            status: "completed",
+            backend: "provider",
+            query: "AgentLink replay",
+          },
+        },
+      ],
+      providerReplay: {
+        providerId: "anthropic",
+        codecVersion: 1,
+        payload: {
+          content: [
+            { type: "encrypted", encrypted_content: "PRIVATE_REPLAY_SENTINEL" },
+          ],
+        },
+        serializedBytes: 96,
+      },
+    };
+    let hostedCallCount = 0;
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      if (params.hostedTools?.length) {
+        hostedCallCount += 1;
+        expect(params.tools).toEqual([]);
+        expect(params.hostedTools).toEqual([
+          expect.objectContaining({ type: "web_search" }),
+        ]);
+        if (hostedCallCount === 1) {
+          params.onWebActivity?.({
+            id: "hosted-search-1",
+            kind: "search",
+            status: "started",
+            backend: "provider",
+            query: "AgentLink replay",
+          });
+          await delegatedSearchHold;
+          await fs.writeFile(
+            registryPath,
+            JSON.stringify([fallbackRecord]),
+            "utf-8",
+          );
+          return {
+            text: "",
+            toolCalls: [],
+            assistantMessage: privateReplayMessage,
+            stopReason: "pause_turn",
+            usage: {
+              inputTokens: 5,
+              outputTokens: 1,
+              serverToolUsage: { webSearchRequests: 1 },
+            },
+          };
+        }
+        expect(params.iterationMessages).toEqual([
+          expect.objectContaining({ role: "user" }),
+          privateReplayMessage,
+        ]);
+        params.onWebActivity?.({
+          id: "hosted-search-1",
+          kind: "search",
+          status: "completed",
+          backend: "provider",
+          query: "AgentLink replay",
+        });
+        params.onWebCitations?.([
+          {
+            url: "https://example.com/agentlink",
+            title: "AgentLink source",
+            citedText: "AgentLink replay",
+            startIndex: 0,
+            endIndex: 16,
+          },
+        ]);
+        return {
+          text: "AgentLink search result.",
+          toolCalls: [],
+          assistantMessage: {
+            role: "assistant",
+            content: [{ type: "text", text: "AgentLink search result." }],
+          },
+          stopReason: "end_turn",
+          usage: {
+            inputTokens: 12,
+            outputTokens: 4,
+            serverToolUsage: { webSearchRequests: 1 },
+          },
+        };
+      }
+      if (params.toolMessages?.length) {
+        const toolResults = JSON.stringify(params.toolMessages);
+        expect(toolResults).toContain("AgentLink search result.");
+        expect(toolResults).toContain("hosted-search-1");
+        expect(toolResults).toContain("https://example.com/agentlink");
+        expect(toolResults).not.toContain("PRIVATE_REPLAY_SENTINEL");
+        params.onDelta?.("Final hosted answer.");
+        return {
+          text: "Final hosted answer.",
+          toolCalls: [],
+          assistantMessage: {
+            role: "assistant",
+            content: [{ type: "text", text: "Final hosted answer." }],
+          },
+          stopReason: "end_turn",
+        };
+      }
+      expect(params.hostedTools).toBeUndefined();
+      expect(params.tools?.map((tool) => tool.name)).toContain("web_search");
+      return {
+        text: "Searching.",
+        toolCalls: [
+          {
+            id: "native-search-1",
+            name: "web_search",
+            input: { query: "AgentLink replay" },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      credentialMethod: "apiKey",
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const sendPromise = fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Search and continue" }),
+    });
+    await waitForExpectation(() => {
+      expect(completionParams).toHaveLength(2);
+    });
+    const midSearchSse = await fetch(
+      `${harness.helperBase}/api/ask-agent/events`,
+      {
+        headers: { Accept: "text/event-stream", Cookie: harness.cookie },
+      },
+    );
+    const midSearchReader = midSearchSse.body?.getReader();
+    expect(midSearchReader).toBeTruthy();
+    const midSearchEvent = await midSearchReader!.read();
+    const midSearchText = Buffer.from(
+      midSearchEvent.value ?? new Uint8Array(),
+    ).toString("utf-8");
+    expect(midSearchText).toContain("event: snapshot");
+    expect(midSearchText).toContain("native-search-1");
+    expect(midSearchText).toContain("web_search");
+    expect(midSearchText).toContain("AgentLink replay");
+    expect(midSearchText).not.toContain("hosted-search-1");
+    expect(midSearchText).not.toContain("PRIVATE_REPLAY_SENTINEL");
+    await midSearchReader!.cancel();
+
+    releaseDelegatedSearch?.();
+    const send = await sendPromise;
+    const sendText = await send.text();
+    expect(send.ok).toBe(true);
+    expect(completionParams).toHaveLength(4);
+    expect(completionParams[0]?.hostedTools).toBeUndefined();
+    expect(completionParams[1]?.hostedTools).toEqual([
+      expect.objectContaining({ type: "web_search" }),
+    ]);
+    expect(completionParams[2]?.hostedTools).toEqual([
+      expect.objectContaining({ type: "web_search" }),
+    ]);
+    expect(completionParams[3]?.hostedTools).toBeUndefined();
+    expect(primaryRequests).toHaveLength(2);
+    expect(primaryRequests).toEqual(
+      expect.arrayContaining([
+        "/internal/ask-agent/web-policy",
+        "/internal/ask-agent/mcp-tools",
+      ]),
+    );
+    expect(fallbackRequests).toEqual([]);
+    expect(sendText).toContain("Final hosted answer.");
+    expect(sendText).toContain("native-search-1");
+    expect(sendText).toContain("web_search");
+    expect(sendText).toContain("AgentLink search result.");
+    expect(sendText).toContain("hosted-search-1");
+    expect(sendText).toContain("https://example.com/agentlink");
+    const sendPayload = JSON.parse(sendText) as {
+      snapshot?: {
+        session?: {
+          foreground?: {
+            projectedMessages?: Array<{
+              blocks?: Array<{ type: string; name?: string; result?: string }>;
+            }>;
+          };
+        };
+      };
+    };
+    const webSearchResult =
+      sendPayload.snapshot?.session?.foreground?.projectedMessages
+        ?.flatMap((message) => message.blocks ?? [])
+        .find(
+          (block) => block.type === "tool_call" && block.name === "web_search",
+        )?.result;
+    expect(JSON.parse(webSearchResult ?? "{}")).toMatchObject({
+      usage: {
+        inputTokens: 17,
+        outputTokens: 5,
+        serverToolUsage: { webSearchRequests: 2 },
+      },
+    });
+    expect(sendText).not.toContain("privateModelHistory");
+    expect(sendText).not.toContain("providerReplay");
+    expect(sendText).not.toContain("PRIVATE_REPLAY_SENTINEL");
+
+    const session = await fetch(`${harness.helperBase}/api/ask-agent/session`, {
+      headers: { Cookie: harness.cookie },
+    });
+    const sessionText = await session.text();
+    expect(sessionText).toContain("native-search-1");
+    expect(sessionText).toContain("web_search");
+    expect(sessionText).toContain("AgentLink search result.");
+    expect(sessionText).not.toContain("PRIVATE_REPLAY_SENTINEL");
+    expect(sessionText).not.toContain("providerReplay");
+
+    const privateHistory = await fs.readFile(
+      harness.askAgentHistoryPath,
+      "utf-8",
+    );
+    expect(privateHistory).not.toContain("PRIVATE_REPLAY_SENTINEL");
+    expect(privateHistory).not.toContain("providerReplay");
+  });
+
+  it("advertises provider web search to Codex OAuth in auto mode", async () => {
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      return { text: "Hosted search available.", toolCalls: [] };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({
+      modelClient,
+      credentialMethod: "oauth",
+      cachedWebPolicy: {
+        settings: {
+          searchBackend: "native",
+          fetchBackend: "native",
+          allowedDomains: [],
+          blockedDomains: [],
+          maxSearchUsesPerTurn: 5,
+          maxFetchUsesPerTurn: 3,
+          maxFetchContentTokens: 25000,
+          maxReplayBytesPerTurn: 5242880,
+        },
+        sourceInstanceId: "offline-window",
+        sourceRevision: "offline-revision",
+        updatedAt: Date.now(),
+      },
+    });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Search the web" }),
+    });
+
+    expect(send.ok).toBe(true);
+    expect(completionParams).toHaveLength(1);
+    expect(completionParams[0]?.hostedTools).toBeUndefined();
+    expect(completionParams[0]?.tools?.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["web_search", "web_fetch"]),
+    );
+  });
+
+  it("keeps ordinary MCP calls on one selected instance for the full turn", async () => {
+    const primaryRequests: Array<{ url: string; body: unknown }> = [];
+    const fallbackRequests: string[] = [];
+    const primary = http.createServer(async (req, res) => {
+      const url = req.url ?? "/";
+      if (url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok" }));
+        return;
+      }
+      if (url === "/api/instance-status") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ kind: "idle", label: "Idle" }));
+        return;
+      }
+      if (url === "/internal/ask-agent/web-policy") {
+        primaryRequests.push({ url, body: {} });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            settings: {
+              searchBackend: "mcp",
+              fetchBackend: "disabled",
+              allowedDomains: [],
+              blockedDomains: [],
+              maxSearchUsesPerTurn: 5,
+              maxFetchUsesPerTurn: 3,
+              maxFetchContentTokens: 25000,
+              maxReplayBytesPerTurn: 5242880,
+            },
+            revision: "mcp-selected-revision-1",
+          }),
+        );
+        return;
+      }
+      if (url === "/internal/ask-agent/mcp-tools") {
+        primaryRequests.push({ url, body: {} });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            tools: [
+              {
+                name: "searxng__search",
+                description: "Search the web.",
+                input_schema: {
+                  type: "object",
+                  properties: { query: { type: "string" } },
+                  required: ["query"],
+                },
+              },
+              {
+                name: "linear__list_issues",
+                description: "List issues.",
+                input_schema: { type: "object", properties: {} },
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      if (url === "/internal/ask-agent/mcp-tool") {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const raw = Buffer.concat(chunks).toString("utf-8").trim();
+        primaryRequests.push({ url, body: raw ? JSON.parse(raw) : {} });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            result: {
+              content: [{ type: "text", text: "Search result from primary" }],
+            },
+          }),
+        );
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "not_found", url }));
+    });
+    const fallback = http.createServer((req, res) => {
+      const url = req.url ?? "/";
+      if (url !== "/health" && url !== "/api/instance-status") {
+        fallbackRequests.push(url);
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        url === "/health"
+          ? JSON.stringify({ status: "ok" })
+          : JSON.stringify({ kind: "idle", label: "Idle" }),
+      );
+    });
+    servers.push(primary, fallback);
+    const primaryPort = await waitForListening(primary, 0);
+    const fallbackPort = await waitForListening(fallback, 0);
+    const registryPath = path.join(
+      os.homedir(),
+      ".agentlink",
+      "browser-gateways.json",
+    );
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    const primaryRecord = {
+      instanceId: "instance-primary",
+      workspaceName: "Primary",
+      workspacePath: "/workspace/primary",
+      pid: process.pid,
+      port: primaryPort,
+      url: `http://127.0.0.1:${primaryPort}`,
+      protocolVersion: 1,
+      startedAt: new Date().toISOString(),
+      authToken: "primary-token",
+    };
+    const fallbackRecord = {
+      instanceId: "instance-fallback",
+      workspaceName: "Fallback",
+      workspacePath: "/workspace/fallback",
+      pid: process.pid,
+      port: fallbackPort,
+      url: `http://127.0.0.1:${fallbackPort}`,
+      protocolVersion: 1,
+      startedAt: new Date().toISOString(),
+      authToken: "fallback-token",
+    };
+    await fs.writeFile(
+      registryPath,
+      JSON.stringify([primaryRecord, fallbackRecord]),
+      "utf-8",
+    );
+
+    const completionParams: BrowserGatewayAskAgentCompletionParams[] = [];
+    const modelClient = makeAskAgentToolLoopClient(async (params) => {
+      completionParams.push(params);
+      if (params.toolMessages?.length) {
+        return { text: "Search completed.", toolCalls: [] };
+      }
+      await fs.writeFile(
+        registryPath,
+        JSON.stringify([fallbackRecord]),
+        "utf-8",
+      );
+      return {
+        text: "Searching.",
+        toolCalls: [
+          {
+            id: "direct-search-1",
+            name: "searxng__search",
+            input: { query: "AgentLink" },
+          },
+        ],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Search with MCP" }),
+    });
+
+    expect(send.ok).toBe(true);
+    expect(completionParams).toHaveLength(2);
+    for (const params of completionParams) {
+      expect(params.hostedTools).toBeUndefined();
+      expect(params.tools?.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["searxng__search", "linear__list_issues"]),
+      );
+    }
+    expect(JSON.stringify(completionParams[1]?.toolMessages)).toContain(
+      "Search result from primary",
+    );
+    expect(primaryRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ url: "/internal/ask-agent/web-policy" }),
+        expect.objectContaining({ url: "/internal/ask-agent/mcp-tools" }),
+        expect.objectContaining({
+          url: "/internal/ask-agent/mcp-tool",
+          body: expect.objectContaining({
+            name: "searxng__search",
+            input: { query: "AgentLink" },
+          }),
+        }),
+      ]),
+    );
+    expect(fallbackRequests).toEqual([]);
+  });
+
   it("routes MCP tool calls through a VS Code-owned main-agent MCP bridge", async () => {
     const upstreamRequests: Array<{
       url: string;
@@ -4865,6 +5500,31 @@ describe("BrowserGatewayHelper proxy routing", () => {
                 tools: [{ name: "list_issues", description: "List issues" }],
               },
             ],
+          }),
+        );
+        return;
+      }
+      if (url === "/internal/ask-agent/web-policy") {
+        upstreamRequests.push({
+          url,
+          authorization: req.headers.authorization,
+          body: {},
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            settings: {
+              searchBackend: "native",
+              fetchBackend: "native",
+              allowedDomains: [],
+              blockedDomains: [],
+              maxSearchUsesPerTurn: 5,
+              maxFetchUsesPerTurn: 3,
+              maxFetchContentTokens: 25000,
+              maxReplayBytesPerTurn: 5242880,
+            },
+            revision: "web-policy-revision-1",
           }),
         );
         return;
@@ -5093,6 +5753,14 @@ describe("BrowserGatewayHelper proxy routing", () => {
             profile: "ask-agent",
             scope: "ask-agent-global",
           }),
+        }),
+        expect.objectContaining({
+          url: "/internal/ask-agent/web-policy",
+          authorization: "Bearer mcp-token",
+        }),
+        expect.objectContaining({
+          url: "/internal/ask-agent/mcp-tools",
+          authorization: "Bearer mcp-token",
         }),
         expect.objectContaining({
           url: "/internal/ask-agent/mcp-tool",

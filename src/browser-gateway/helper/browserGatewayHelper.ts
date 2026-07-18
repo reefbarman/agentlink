@@ -76,7 +76,10 @@ import {
   type BrowserGatewayAskAgentPersistedSession,
   type BrowserGatewayAskAgentProjectHandoff,
 } from "../browserGatewayAskAgentSessionStore.js";
-import { BrowserGatewayAskAgentPreferencesStore } from "../browserGatewayAskAgentPreferences.js";
+import {
+  BrowserGatewayAskAgentPreferencesStore,
+  type BrowserGatewayAskAgentWebPolicyCache,
+} from "../browserGatewayAskAgentPreferences.js";
 import { BrowserGatewayAskAgentHistoryStore } from "../browserGatewayAskAgentHistory.js";
 import type { ChatMessage, Question } from "../../agent/webview/types.js";
 import type {
@@ -87,7 +90,10 @@ import {
   BrowserGatewayModelCredentialCache,
   type BrowserGatewayModelCredentialRecord,
 } from "../browserGatewayModelCredentialCache.js";
-import { BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID } from "../browserGatewayModelProviderIds.js";
+import {
+  BROWSER_GATEWAY_CODEX_CREDENTIAL_PROVIDER_ID,
+  normalizeBrowserGatewayModelCredentialProviderId,
+} from "../browserGatewayModelProviderIds.js";
 import {
   CODEX_IMAGE_GENERATION_DEFAULT_TIMEOUT_MS,
   CODEX_IMAGE_GENERATION_MAX_COUNT,
@@ -99,7 +105,25 @@ import {
   type CoreModelContentBlock,
   type CoreModelMessage,
   type CoreModelToolDefinition,
+  type CoreModelUsage,
 } from "../../core/modelRuntime.js";
+import { getCodexModelCapabilities } from "../../core/model/providers/codex/models.js";
+import { ANTHROPIC_HOSTED_WEB_CAPABILITIES } from "../../core/model/providers/anthropic/anthropicModels.js";
+import {
+  normalizeCoreWebAccessSettings,
+  resolveCoreWebAccessPolicy,
+  type CoreResolvedWebAccessPolicy,
+  type CoreWebAccessSettings,
+  type CoreWebActivity,
+  type CoreWebCitation,
+} from "../../core/webAccess.js";
+import {
+  buildNativeWebDelegationPrompt,
+  CORE_NATIVE_WEB_MAX_PAUSE_TURNS,
+  CORE_NATIVE_WEB_TOOL_DEFINITIONS,
+  mergeNativeWebUsage,
+  type CoreNativeWebToolResult,
+} from "../../core/nativeWebTools.js";
 import { runAgentToolLoop } from "../../core/agentToolLoop.js";
 import type {
   FinalMessageMarker,
@@ -170,6 +194,22 @@ import type {
   PublicHelperRouteHandler,
 } from "./helperRouteFamilies.js";
 import { HelperHttpRouter } from "./HelperHttpRouter.js";
+
+export interface PreparedAskAgentWebAccess {
+  target: BrowserGatewayInstanceRecord | null;
+  policy: Readonly<CoreResolvedWebAccessPolicy>;
+  tools: readonly CoreModelToolDefinition[];
+}
+
+function freezeAskAgentValue<T>(value: T): Readonly<T> {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      freezeAskAgentValue(nested);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
 
 export interface HelperRuntimeOptions {
   port: number;
@@ -3161,13 +3201,24 @@ export class BrowserGatewayHelper {
       await this.askAgentController.publishProjectedSnapshot(buildTurnSnapshot);
     };
 
+    const preparedWebAccess = await this.prepareAskAgentWebAccess(
+      params.credential,
+      this.askAgentSessionStore.getModel(),
+      params.signal,
+    );
+    const modelTranscriptMessages =
+      this.askAgentSessionStore.getModelTranscriptMessages(
+        params.assistantMessageId,
+      );
+
     if (!completeWithToolCalls) {
       const assistantText = await this.askAgentModelClient.complete({
         credential: params.credential,
         model: this.askAgentSessionStore.getModel(),
         reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
-        messages: params.transcriptMessages,
+        messages: [],
         memoryContext: params.memoryContext,
+        iterationMessages: modelTranscriptMessages,
         signal: params.signal,
         onDelta: (delta) => {
           if (this.streamingMetrics.enabled) {
@@ -3192,22 +3243,21 @@ export class BrowserGatewayHelper {
       return { outcome: "model_empty", assistantText: "" };
     }
 
-    const mcpBridgeTarget = await this.getAskAgentMcpBridgeTarget();
-    const mcpTools = await this.getAskAgentMcpTools(
-      mcpBridgeTarget,
-      params.signal,
-    );
     return runAgentToolLoop<AskAgentToolLoopResult, AskAgentToolLoopOutcome>({
       initialToolMessages: params.initialToolMessages,
-      callModel: async ({ toolMessages, onText }) => {
+      callModel: async ({ iterationMessages, toolMessages, onText }) => {
         const result = await completeWithToolCalls({
           credential: params.credential,
           model: this.askAgentSessionStore.getModel(),
           reasoningEffort: this.askAgentSessionStore.getReasoningEffort(),
-          messages: params.transcriptMessages,
+          messages: [],
           memoryContext: params.memoryContext,
+          iterationMessages: [...modelTranscriptMessages, ...iterationMessages],
           toolMessages,
-          tools: [...ASK_AGENT_SAFE_PROJECTLESS_TOOLS, ...mcpTools],
+          tools: [
+            ...ASK_AGENT_SAFE_PROJECTLESS_TOOLS,
+            ...preparedWebAccess.tools,
+          ],
           signal: params.signal,
           onDelta: (delta) => {
             onText(delta);
@@ -3226,7 +3276,24 @@ export class BrowserGatewayHelper {
             scheduleTurnSnapshot();
           },
         });
-        return { text: result.text, toolCalls: result.toolCalls };
+        return {
+          text: result.text,
+          toolCalls: result.toolCalls,
+          assistantMessage: result.assistantMessage,
+          stopReason: result.stopReason,
+        };
+      },
+      onIterationMessagesComplete: (messages) => {
+        if (
+          messages.some(
+            (message) => message.role === "assistant" && message.providerReplay,
+          )
+        ) {
+          this.askAgentSessionStore.appendPrivateModelTurn(
+            params.assistantMessageId,
+            messages,
+          );
+        }
       },
       runTool: async (toolCall) => {
         const toolStartedAt = Date.now();
@@ -3240,7 +3307,9 @@ export class BrowserGatewayHelper {
         await publishTurnSnapshot();
         const executed = await this.executeAskAgentSafeProjectlessTool(
           toolCall,
-          mcpBridgeTarget,
+          preparedWebAccess,
+          params.credential,
+          this.askAgentSessionStore.getModel(),
           params.signal,
         );
         this.recordAskAgentSemanticDelta();
@@ -3294,9 +3363,107 @@ export class BrowserGatewayHelper {
     });
   }
 
+  private async prepareAskAgentWebAccess(
+    credential: BrowserGatewayModelCredentialRecord,
+    model: string,
+    signal: AbortSignal,
+  ): Promise<PreparedAskAgentWebAccess> {
+    const target = await this.getAskAgentMcpBridgeTarget();
+    const [remotePolicy, mcpTools] = await Promise.all([
+      this.getAskAgentWebPolicy(target, signal),
+      this.getAskAgentMcpTools(target, signal),
+    ]);
+    const preferences = await this.askAgentPreferencesStore.read();
+    const cachedPolicy = preferences.webPolicy;
+    const settings = normalizeCoreWebAccessSettings(
+      remotePolicy?.settings ?? cachedPolicy?.settings,
+    );
+
+    if (remotePolicy && target) {
+      const nextCache: BrowserGatewayAskAgentWebPolicyCache = {
+        settings,
+        sourceInstanceId: target.instanceId,
+        sourceRevision: remotePolicy.revision,
+        updatedAt: Date.now(),
+      };
+      await this.askAgentPreferencesStore.update({ webPolicy: nextCache });
+    }
+
+    const providerId = normalizeBrowserGatewayModelCredentialProviderId(
+      credential.providerId,
+    );
+    const providerCapabilities =
+      providerId === "openai-codex"
+        ? getCodexModelCapabilities(model, credential.method).hostedWeb
+        : providerId === "anthropic"
+          ? ANTHROPIC_HOSTED_WEB_CAPABILITIES
+          : undefined;
+    const policy = resolveCoreWebAccessPolicy({
+      settings,
+      providerCapabilities,
+    });
+    const unavailableNativeRoute = [
+      policy.routes.search,
+      policy.routes.fetch,
+    ].find(
+      (route) =>
+        settings[route.kind === "search" ? "searchBackend" : "fetchBackend"] ===
+          "native" && !route.available,
+    );
+    if (unavailableNativeRoute) {
+      throw new Error(
+        `browser_gateway_native_web_unavailable:${unavailableNativeRoute.kind}:${unavailableNativeRoute.reason}`,
+      );
+    }
+
+    const nativeTools = policy.enabledKinds.map(
+      (kind) => CORE_NATIVE_WEB_TOOL_DEFINITIONS[kind],
+    );
+    const tools = [...mcpTools, ...nativeTools];
+    return Object.freeze({
+      target,
+      policy: freezeAskAgentValue(policy),
+      tools: freezeAskAgentValue(tools),
+    });
+  }
+
   private async getAskAgentMcpBridgeTarget(): Promise<BrowserGatewayInstanceRecord | null> {
     const instances = await listHealthyBrowserGatewayInstances();
     return this.selectInstance(instances, undefined);
+  }
+
+  private async getAskAgentWebPolicy(
+    target: BrowserGatewayInstanceRecord | null,
+    signal: AbortSignal,
+  ): Promise<{ settings: CoreWebAccessSettings; revision?: string } | null> {
+    if (!target) return null;
+    try {
+      const response = await fetch(
+        `${target.url}/internal/ask-agent/web-policy`,
+        {
+          headers: { authorization: `Bearer ${target.authToken}` },
+          signal,
+        },
+      );
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        ok?: boolean;
+        settings?: Partial<CoreWebAccessSettings>;
+        revision?: string;
+      };
+      if (!body.ok || !body.settings) return null;
+      return {
+        settings: normalizeCoreWebAccessSettings(body.settings),
+        revision: typeof body.revision === "string" ? body.revision : undefined,
+      };
+    } catch (err) {
+      this.logAskAgentEvent("ask-agent.web.policy_failed", {
+        ok: false,
+        targetInstanceId: target.instanceId,
+        error: String(err),
+      });
+      return null;
+    }
   }
 
   private async getAskAgentMcpTools(
@@ -3612,12 +3779,160 @@ export class BrowserGatewayHelper {
     }
   }
 
+  private async executeAskAgentNativeWebTool(
+    toolCall: BrowserGatewayAskAgentToolCall,
+    policy: Readonly<CoreResolvedWebAccessPolicy>,
+    credential: BrowserGatewayModelCredentialRecord,
+    model: string,
+    signal: AbortSignal,
+  ): Promise<AskAgentToolExecutionResult> {
+    const kind = toolCall.name === "web_search" ? "search" : "fetch";
+    const route = policy.routes[kind];
+    const completeWithToolCalls =
+      this.askAgentModelClient.completeWithToolCalls?.bind(
+        this.askAgentModelClient,
+      );
+    if (!route.available || !route.hostedTool || !completeWithToolCalls) {
+      const content = JSON.stringify({
+        error: `Native web ${kind} is not available for this request.`,
+      });
+      return {
+        content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          true,
+        ),
+      };
+    }
+
+    try {
+      const hostedTool = route.hostedTool;
+      const prompt = buildNativeWebDelegationPrompt(kind, toolCall.input);
+      const activitiesById = new Map<string, CoreWebActivity>();
+      const citations: CoreWebCitation[] = [];
+      const citationKeys = new Set<string>();
+      const appendCitation = (citation: CoreWebCitation) => {
+        const key = JSON.stringify([
+          citation.url,
+          citation.title ?? "",
+          citation.startIndex ?? null,
+          citation.endIndex ?? null,
+          citation.citedText ?? "",
+        ]);
+        if (citationKeys.has(key)) return;
+        citationKeys.add(key);
+        citations.push(structuredClone(citation));
+      };
+      const iterationMessages: CoreModelMessage[] = [
+        { role: "user", content: prompt.userPrompt },
+      ];
+      const textParts: string[] = [];
+      let usage: CoreModelUsage | undefined;
+      for (let pauseTurns = 0; ; pauseTurns += 1) {
+        const result = await completeWithToolCalls({
+          credential,
+          model,
+          reasoningEffort: "low",
+          messages: [],
+          instructions: prompt.systemPrompt,
+          iterationMessages,
+          tools: [],
+          hostedTools: [hostedTool],
+          maxTokens: 16_384,
+          signal,
+          onWebActivity: (activity) => {
+            activitiesById.set(activity.id, structuredClone(activity));
+            for (const citation of activity.citations ?? []) {
+              appendCitation(citation);
+            }
+          },
+          onWebCitations: (nextCitations) => {
+            for (const citation of nextCitations) appendCitation(citation);
+          },
+        });
+        if (result.text.trim()) textParts.push(result.text.trim());
+        usage = mergeNativeWebUsage(usage, result.usage);
+        if (result.stopReason !== "pause_turn") break;
+        if (!result.assistantMessage) {
+          throw new Error(
+            `Provider native web ${kind} paused without replay state.`,
+          );
+        }
+        if (pauseTurns >= CORE_NATIVE_WEB_MAX_PAUSE_TURNS) {
+          throw new Error(
+            `Provider native web continuation exceeded ${CORE_NATIVE_WEB_MAX_PAUSE_TURNS} pause turns.`,
+          );
+        }
+        iterationMessages.push(result.assistantMessage);
+      }
+      const resultText = textParts.join("\n\n").trim();
+      if (!resultText) {
+        throw new Error(`Provider native web ${kind} returned no content.`);
+      }
+      const visibleResult: CoreNativeWebToolResult = {
+        backend: "provider",
+        provider: normalizeBrowserGatewayModelCredentialProviderId(
+          credential.providerId,
+        ),
+        operation: kind,
+        input: structuredClone(toolCall.input),
+        activities: [...activitiesById.values()],
+        content: resultText,
+        citations,
+        ...(usage ? { usage } : {}),
+      };
+      const content = JSON.stringify(visibleResult, null, 2);
+      this.logAskAgentEvent(`ask-agent.tool.web_${kind}`, {
+        ok: true,
+        provider: visibleResult.provider,
+        activities: visibleResult.activities.length,
+        citations: visibleResult.citations.length,
+      });
+      return {
+        content,
+        modelResult: content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(toolCall, content),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const content = JSON.stringify({ error: message });
+      this.logAskAgentEvent(`ask-agent.tool.web_${kind}`, {
+        ok: false,
+        error: message,
+      });
+      return {
+        content,
+        stop: false,
+        toolMessage: this.buildAskAgentToolResultMessage(
+          toolCall,
+          content,
+          true,
+        ),
+      };
+    }
+  }
+
   private async executeAskAgentSafeProjectlessTool(
     toolCall: BrowserGatewayAskAgentToolCall,
-    mcpBridgeTarget: BrowserGatewayInstanceRecord | null,
+    preparedWebAccess: PreparedAskAgentWebAccess,
+    credential: BrowserGatewayModelCredentialRecord,
+    model: string,
     signal: AbortSignal,
   ): Promise<AskAgentToolExecutionResult> {
     const startedAt = Date.now();
+    if (toolCall.name === "web_search" || toolCall.name === "web_fetch") {
+      return await this.executeAskAgentNativeWebTool(
+        toolCall,
+        preparedWebAccess.policy,
+        credential,
+        model,
+        signal,
+      );
+    }
+    const mcpBridgeTarget = preparedWebAccess.target;
     if (
       MCP_TOOL_BRIDGE_TOOL_NAMES.includes(toolCall.name) ||
       toolCall.name.includes("__")

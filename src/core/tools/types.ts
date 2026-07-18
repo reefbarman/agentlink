@@ -27,6 +27,8 @@ export interface AgentToolMode {
 export interface AgentToolListRequest {
   mode?: AgentToolMode;
   mcpToolDefs?: CoreToolDefinition[];
+  /** Native AgentLink web tools exposed for this immutable request snapshot. */
+  nativeWebToolKinds?: readonly import("../webAccess.js").CoreWebToolKind[];
   isBackground?: boolean;
   backgroundExpectedResult?:
     | "text"

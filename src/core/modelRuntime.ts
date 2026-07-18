@@ -1,4 +1,11 @@
 import type {
+  CoreHostedToolDefinition,
+  CoreHostedWebCapabilities,
+  CoreProviderReplayEnvelope,
+  CoreWebActivity,
+  CoreWebCitation,
+} from "./webAccess.js";
+import type {
   CoreModelAuthMethod,
   CoreModelAuthProvider,
 } from "./modelAuth.js";
@@ -14,11 +21,13 @@ export type CoreModelContentBlock =
   | CoreModelToolUseBlock
   | CoreModelToolResultBlock
   | CoreModelImageBlock
-  | CoreModelDocumentBlock;
+  | CoreModelDocumentBlock
+  | CoreModelWebActivityBlock;
 
 export interface CoreModelTextBlock {
   type: "text";
   text: string;
+  citations?: CoreWebCitation[];
   cache_control?: { type: "ephemeral" };
 }
 
@@ -40,6 +49,11 @@ export interface CoreModelToolResultBlock {
   tool_use_id: string;
   content: string | CoreModelContentBlock[];
   is_error?: boolean;
+}
+
+export interface CoreModelWebActivityBlock {
+  type: "web_activity";
+  activity: CoreWebActivity;
 }
 
 export type CoreModelImageMediaType =
@@ -123,6 +137,8 @@ export interface CoreModelDocumentBlock {
 export interface CoreModelMessage {
   role: "user" | "assistant";
   content: string | CoreModelContentBlock[];
+  /** Provider-private data decoded only by the provider that created it. */
+  providerReplay?: CoreProviderReplayEnvelope;
 }
 
 export type CoreModelJsonSchema = {
@@ -145,6 +161,7 @@ export interface CoreModelCapabilities {
   supportsCaching: boolean;
   supportsImages: boolean;
   supportsToolUse: boolean;
+  hostedWeb?: CoreHostedWebCapabilities;
   contextWindow: number;
   maxInputTokens?: number;
   maxOutputTokens: number;
@@ -194,7 +211,10 @@ export interface CoreModelRequestBase {
 }
 
 export interface CoreModelStreamRequest extends CoreModelRequestBase {
+  /** Client-dispatched function tools. */
   tools?: CoreModelToolDefinition[];
+  /** Provider-executed tools; never dispatched by the local tool runtime. */
+  hostedTools?: CoreHostedToolDefinition[];
   thinking?: { budgetTokens: number };
 }
 
@@ -202,18 +222,28 @@ export interface CoreModelCompleteRequest extends CoreModelRequestBase {
   temperature?: number;
 }
 
+export interface CoreModelServerToolUsage {
+  webSearchRequests?: number;
+  webFetchRequests?: number;
+}
+
 export interface CoreModelUsage {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  serverToolUsage?: CoreModelServerToolUsage;
 }
 
 export interface CoreModelCompleteResult {
   text: string;
   usage?: CoreModelUsage;
   providerResponseId?: string;
+  assistantMessage?: CoreModelMessage;
+  stopReason?: CoreModelStopReason;
 }
+
+export type CoreModelStopReason = "end_turn" | "tool_use" | "pause_turn";
 
 export type CoreModelStreamEvent =
   | {
@@ -225,6 +255,7 @@ export type CoreModelStreamEvent =
   | { type: "thinking_delta"; thinkingId: string; text: string }
   | { type: "thinking_end"; thinkingId: string }
   | { type: "text_delta"; text: string }
+  | { type: "web_activity"; activity: CoreWebActivity }
   | { type: "tool_start"; toolCallId: string; toolName: string }
   | { type: "tool_input_delta"; toolCallId: string; partialJson: string }
   | {
@@ -234,6 +265,11 @@ export type CoreModelStreamEvent =
       input: unknown;
     }
   | { type: "content_blocks"; blocks: CoreModelContentBlock[] }
+  | {
+      type: "model_stop";
+      reason: CoreModelStopReason;
+      assistantMessage: CoreModelMessage;
+    }
   | ({ type: "usage" } & CoreModelUsage & { providerResponseId?: string })
   | { type: "done" };
 
@@ -245,7 +281,10 @@ export async function collectCoreModelCompleteResult(
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
+  let serverToolUsage: CoreModelServerToolUsage | undefined;
   let providerResponseId: string | undefined;
+  let assistantMessage: CoreModelMessage | undefined;
+  let stopReason: CoreModelStopReason | undefined;
 
   for await (const event of events) {
     if (event.type === "text_delta") {
@@ -255,7 +294,11 @@ export async function collectCoreModelCompleteResult(
       outputTokens = event.outputTokens;
       cacheReadTokens = event.cacheReadTokens ?? 0;
       cacheCreationTokens = event.cacheCreationTokens ?? 0;
+      serverToolUsage = event.serverToolUsage;
       providerResponseId = event.providerResponseId;
+    } else if (event.type === "model_stop") {
+      assistantMessage = event.assistantMessage;
+      stopReason = event.reason;
     }
   }
 
@@ -266,8 +309,11 @@ export async function collectCoreModelCompleteResult(
       outputTokens,
       cacheReadTokens,
       cacheCreationTokens,
+      ...(serverToolUsage ? { serverToolUsage } : {}),
     },
     providerResponseId,
+    ...(assistantMessage ? { assistantMessage } : {}),
+    ...(stopReason ? { stopReason } : {}),
   };
 }
 

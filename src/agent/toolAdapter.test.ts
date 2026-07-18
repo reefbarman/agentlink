@@ -264,6 +264,8 @@ const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "load_skill",
   "list_files",
   "search_files",
+  "web_search",
+  "web_fetch",
   "search_session_history",
   "read_session_excerpt",
   "codebase_search",
@@ -317,6 +319,8 @@ describe("READ_ONLY_TOOLS", () => {
     expect(READ_ONLY_TOOLS.has("codebase_search")).toBe(true);
     expect(READ_ONLY_TOOLS.has("search_session_history")).toBe(true);
     expect(READ_ONLY_TOOLS.has("read_session_excerpt")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("web_search")).toBe(true);
+    expect(READ_ONLY_TOOLS.has("web_fetch")).toBe(true);
   });
 
   it("does not include write or terminal meta tools", () => {

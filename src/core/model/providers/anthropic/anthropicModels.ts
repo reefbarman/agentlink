@@ -3,6 +3,7 @@ import type {
   StaticModelEntry,
 } from "./anthropicModelCatalog.js";
 import type { CoreReasoningEffort } from "../../../modelCatalog.js";
+import type { CoreHostedWebCapabilities } from "../../../webAccess.js";
 
 const CLAUDE_REASONING_EFFORTS = [
   "none",
@@ -11,6 +12,23 @@ const CLAUDE_REASONING_EFFORTS = [
   "high",
   "max",
 ] as const satisfies readonly CoreReasoningEffort[];
+
+export const ANTHROPIC_HOSTED_WEB_CAPABILITIES: Readonly<CoreHostedWebCapabilities> =
+  Object.freeze({
+    search: {
+      supported: true,
+      supportsDomainRestrictions: true,
+      supportsMaxUses: true,
+      supportsCitations: true,
+    },
+    fetch: {
+      supported: true,
+      supportsDomainRestrictions: true,
+      supportsMaxUses: true,
+      supportsContentTokenLimit: true,
+      supportsCitations: true,
+    },
+  });
 
 export const ANTHROPIC_MODEL_CAPABILITIES: Record<
   string,

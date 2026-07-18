@@ -829,6 +829,24 @@ function estimateMessageTextChars(messages: MessageParam[]): number {
           case "image":
           case "document":
             return acc + 256;
+          case "web_activity": {
+            const activity = block.activity;
+            const citationChars = (activity.citations ?? []).reduce(
+              (citationTotal, citation) =>
+                citationTotal +
+                citation.url.length +
+                (citation.title?.length ?? 0) +
+                (citation.citedText?.length ?? 0),
+              0,
+            );
+            return (
+              acc +
+              (activity.query?.length ?? 0) +
+              (activity.url?.length ?? 0) +
+              citationChars +
+              64
+            );
+          }
         }
       }, 0)
     );

@@ -789,7 +789,9 @@ describe("BrowserGatewayService", () => {
       let theme = themeSnapshotStub;
       let effectivePolicy: "safe" | "approve-for-me" = "safe";
       let configuredPolicy: "safe" | "sensitive" = "safe";
-      let surfaceListener: ((kind: "mcp" | "theme") => void) | undefined;
+      let surfaceListener:
+        | ((kind: "background" | "mcp" | "theme") => void)
+        | undefined;
       const service = new BrowserGatewayService(
         hub,
         sessionManager as never,
@@ -837,20 +839,40 @@ describe("BrowserGatewayService", () => {
         configuredCommandApprovalPolicy: "sensitive",
       });
 
+      sessionManager.getBgSessionInfos.mockReturnValue([
+        {
+          id: "bg-web",
+          task: "Search the web",
+          status: "streaming",
+          displayStatus: "Searching the web",
+          lastProgressAt: 2,
+        },
+      ] as never);
+      surfaceListener?.("background");
+      vi.advanceTimersByTime(150);
+      expect(onDidChange).toHaveBeenCalledTimes(2);
+      expect(onDidChange.mock.calls[1][0].snapshot.background).toEqual([
+        expect.objectContaining({
+          id: "bg-web",
+          displayStatus: "Searching the web",
+          lastProgressAt: 2,
+        }),
+      ]);
+
       theme = {
         ...themeSnapshotStub,
         themeLabel: "Updated Dark",
       };
       surfaceListener?.("theme");
       vi.advanceTimersByTime(150);
-      expect(onDidChange).toHaveBeenCalledTimes(2);
-      expect(onDidChange.mock.calls[1][0].snapshot.theme.themeLabel).toBe(
+      expect(onDidChange).toHaveBeenCalledTimes(3);
+      expect(onDidChange.mock.calls[2][0].snapshot.theme.themeLabel).toBe(
         "Updated Dark",
       );
 
       surfaceListener?.("mcp");
       vi.advanceTimersByTime(150);
-      expect(onDidChange).toHaveBeenCalledTimes(2);
+      expect(onDidChange).toHaveBeenCalledTimes(3);
 
       subscription.dispose();
       service.dispose();
@@ -870,7 +892,9 @@ describe("BrowserGatewayService", () => {
         themeLabel: string;
         source: "vscode-theme-api";
       } = themeSnapshotStub;
-      let surfaceListener: ((kind: "mcp" | "theme") => void) | undefined;
+      let surfaceListener:
+        | ((kind: "background" | "mcp" | "theme") => void)
+        | undefined;
       const service = new BrowserGatewayService(
         hub,
         makeSessionManagerStub() as never,
@@ -1239,6 +1263,87 @@ describe("BrowserGatewayService", () => {
     }
   });
 
+  it("rebuilds reconnect snapshots with started and completed web tool calls", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const sessionManager = makeSessionManagerStub();
+    const webMessage = (complete: boolean) => ({
+      id: "chat-web",
+      role: "assistant",
+      content: "Answer with a source.",
+      timestamp: 1,
+      blocks: [
+        {
+          type: "tool_call",
+          id: "search-1",
+          name: "web_search",
+          inputJson: JSON.stringify({ query: "AgentLink docs" }),
+          result: complete
+            ? JSON.stringify({
+                results: [
+                  {
+                    url: "https://example.com/agentlink",
+                    title: "AgentLink docs",
+                  },
+                ],
+              })
+            : "",
+          complete,
+        },
+      ],
+    });
+    let projected = projectedForeground({
+      streaming: true,
+      projectedMessages: [webMessage(false)],
+    });
+    const service = new BrowserGatewayService(
+      hub,
+      sessionManager as never,
+      () => themeSnapshotStub,
+      () => "prompt",
+      () => true,
+      () => "high",
+      () => projected as never,
+      () => [],
+    );
+
+    const midSearchReconnect = service.createSnapshotPublication();
+    expect(
+      midSearchReconnect.snapshot.session.foreground?.projectedMessages[0]
+        ?.blocks,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          name: "web_search",
+          complete: false,
+        }),
+      ]),
+    );
+
+    projected = projectedForeground({
+      streaming: false,
+      projectedMessages: [webMessage(true)],
+    });
+    const completedReconnect = service.createSnapshotPublication();
+    expect(
+      completedReconnect.snapshot.session.foreground?.projectedMessages[0]
+        ?.blocks,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          name: "web_search",
+          complete: true,
+          result: expect.stringContaining("https://example.com/agentlink"),
+        }),
+      ]),
+    );
+    expect(completedReconnect.serialized).not.toContain("providerReplay");
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("uses a fixed coalescing window that does not starve under continuous foreground invalidation", () => {
     vi.useFakeTimers();
     try {
@@ -1511,7 +1616,9 @@ describe("BrowserGatewayService", () => {
       let sessionListener: (() => void) | undefined;
       let foregroundListener: (() => void) | undefined;
       let repositoryListener: (() => void) | undefined;
-      let surfaceListener: ((kind: "mcp" | "theme") => void) | undefined;
+      let surfaceListener:
+        | ((kind: "background" | "mcp" | "theme") => void)
+        | undefined;
       const service = new BrowserGatewayService(
         hub,
         sessionManager as never,
@@ -1651,7 +1758,7 @@ describe("BrowserGatewayService", () => {
               displayStatusSource: "heuristic",
             },
           ] as never);
-          sessionListener?.();
+          surfaceListener?.("background");
         },
         (snapshot) => expect(snapshot.background[0].id).toBe("matrix-bg"),
       );

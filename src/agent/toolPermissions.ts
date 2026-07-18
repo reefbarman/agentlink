@@ -6,6 +6,7 @@ import type { AgentMode } from "./modes.js";
  */
 export const TOOL_GROUPS: Record<string, string[]> = {
   read: [
+    "web_fetch",
     "read_file",
     "get_context",
     "get_repo_map",
@@ -45,7 +46,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
     "get_type_hierarchy",
     "get_inlay_hints",
   ],
-  search: ["codebase_search", "search_files"],
+  search: ["web_search", "codebase_search", "search_files"],
   "read-only-command": ["execute_command"],
   plan: ["write_file", "apply_diff", "execute_command", "get_terminal_output"],
   mcp: [], // populated dynamically from McpClientHub

@@ -2,7 +2,7 @@
   "name": "agentlink",
   "displayName": "AgentLink",
   "description": "AI coding agent for VS Code with browser remote control",
-  "version": "1.16.110",
+  "version": "1.17.0",
   "publisher": "agentlink",
   "repository": {
     "type": "git",
@@ -227,6 +227,84 @@
     "configuration": {
       "title": "AgentLink",
       "properties": {
+        "agentlink.webAccess.searchBackend": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "native",
+            "mcp",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "Expose AgentLink's web_search tool, implemented through the selected model provider's hosted web capability.",
+            "Do not expose AgentLink's web_search tool. The agent may use ordinary connected MCP tools according to their normal disclosure and mode permissions.",
+            "Do not expose AgentLink's web_search tool. This does not disable unrelated MCP tools."
+          ],
+          "default": "native",
+          "description": "Choose whether AgentLink exposes its native web_search tool. Native provider use can incur additional charges and sends queries to the selected provider. Web results are untrusted model input."
+        },
+        "agentlink.webAccess.fetchBackend": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "native",
+            "mcp",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "Expose AgentLink's web_fetch tool, implemented through the selected model provider's hosted page-access capability.",
+            "Do not expose AgentLink's web_fetch tool. The agent may use ordinary connected MCP tools according to their normal disclosure and mode permissions.",
+            "Do not expose AgentLink's web_fetch tool. This does not disable unrelated MCP tools."
+          ],
+          "default": "native",
+          "description": "Choose whether AgentLink exposes its native web_fetch tool. Native provider use can incur additional charges and sends URLs and fetched content to the selected provider. Web content is untrusted model input."
+        },
+        "agentlink.webAccess.allowedDomains": {
+          "scope": "window",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Optional web-domain allowlist. Mutually exclusive with blockedDomains. Resolution fails closed when the selected backend cannot enforce it."
+        },
+        "agentlink.webAccess.blockedDomains": {
+          "scope": "window",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Optional web-domain denylist. Mutually exclusive with allowedDomains. Resolution fails closed when the selected backend cannot enforce it."
+        },
+        "agentlink.webAccess.maxSearchUsesPerTurn": {
+          "scope": "window",
+          "type": "number",
+          "minimum": 1,
+          "default": 5,
+          "description": "Requested maximum hosted search uses per logical turn. Enforced only by backends that support a hard limit; provider-hosted use may incur additional charges."
+        },
+        "agentlink.webAccess.maxFetchUsesPerTurn": {
+          "scope": "window",
+          "type": "number",
+          "minimum": 1,
+          "default": 3,
+          "description": "Requested maximum hosted page fetches per logical turn. Enforced only by backends that support a hard limit."
+        },
+        "agentlink.webAccess.maxFetchContentTokens": {
+          "scope": "window",
+          "type": "number",
+          "minimum": 1,
+          "default": 25000,
+          "description": "Requested per-page fetched-content token cap. Enforced only by backends that support it; fetched content remains untrusted external input."
+        },
+        "agentlink.webAccess.maxReplayBytesPerTurn": {
+          "scope": "window",
+          "type": "number",
+          "minimum": 1,
+          "default": 5242880,
+          "description": "Maximum private provider replay bytes retained for exact hosted-tool continuation. Oversized replay is discarded rather than truncated and is never exposed in browser or transcript projections."
+        },
         "agentlink.browserGatewayPort": {
           "scope": "window",
           "type": "number",

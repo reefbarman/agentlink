@@ -82,6 +82,29 @@ describe("Codex model resolution", () => {
   });
 });
 
+describe("Codex hosted web capabilities", () => {
+  it("advertises cited hosted search for API-key and OAuth Responses", () => {
+    expect(getCodexModelCapabilities("gpt-5.5", "apiKey").hostedWeb).toEqual({
+      search: {
+        supported: true,
+        supportsDomainRestrictions: true,
+        supportsCitations: true,
+        supportsPageAccess: true,
+      },
+      fetch: { supported: false },
+    });
+    expect(getCodexModelCapabilities("gpt-5.5", "oauth").hostedWeb).toEqual({
+      search: {
+        supported: true,
+        supportsDomainRestrictions: false,
+        supportsCitations: true,
+        supportsPageAccess: true,
+      },
+      fetch: { supported: false },
+    });
+  });
+});
+
 describe("Codex OAuth context window clamps", () => {
   it("clamps gpt-5.5 to the enforced 400k/272k window over OAuth", () => {
     const caps = getCodexModelCapabilities("gpt-5.5", "oauth");

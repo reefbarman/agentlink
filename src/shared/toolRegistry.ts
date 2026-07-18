@@ -20,6 +20,19 @@ export interface ToolMeta {
  * only here and nowhere else.
  */
 export const TOOL_REGISTRY: Record<string, ToolMeta> = {
+  // --- Web access ---
+
+  web_search: {
+    label: "Native web search",
+    description:
+      "Search the public web using the selected model provider's hosted web capability. Available only when agentlink.webAccess.searchBackend is native and the authenticated provider supports it. Returns the provider-visible search actions, result text, citations, and usage as an ordinary tool result.",
+  },
+  web_fetch: {
+    label: "Native web fetch",
+    description:
+      "Open and read a public HTTP or HTTPS URL using the selected model provider's hosted web capability. Available only when agentlink.webAccess.fetchBackend is native and the authenticated provider supports page access. Returns provider-visible actions, content, citations, and usage as an ordinary tool result.",
+  },
+
   // --- File operations ---
 
   read_file: {

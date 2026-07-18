@@ -1,9 +1,13 @@
 import type { CoreReasoningEffort } from "../../../modelCatalog.js";
 import type {
+  CoreModelContentBlock,
+  CoreModelMessage,
+  CoreModelStopReason,
   CoreModelStreamEvent,
   CoreModelToolDefinition,
   CoreModelUsage,
 } from "../../../modelRuntime.js";
+import type { CoreHostedToolDefinition } from "../../../webAccess.js";
 import type { CodexAuthMethod } from "./models.js";
 import { toCodexRequestError } from "./errors.js";
 import {
@@ -33,6 +37,8 @@ export interface CodexCompletionResult {
   toolCalls: CodexCompletionToolCall[];
   usage?: CoreModelUsage;
   providerResponseId?: string;
+  assistantMessage: CoreModelMessage;
+  stopReason: CoreModelStopReason;
   request: CodexResolvedRequestBodyResult;
 }
 
@@ -41,14 +47,19 @@ export async function collectCodexCompletionResult(
   options: {
     trimText?: boolean;
     onTextDelta?: (delta: string) => void;
+    onStreamEvent?: (event: CoreModelStreamEvent) => void;
   } = {},
 ): Promise<Omit<CodexCompletionResult, "request">> {
   let text = "";
   let usage: CoreModelUsage | undefined;
   let providerResponseId: string | undefined;
+  let assistantMessage: CoreModelMessage | undefined;
+  let stopReason: CoreModelStopReason | undefined;
+  let contentBlocks: CoreModelContentBlock[] | undefined;
   const toolCalls: CodexCompletionToolCall[] = [];
 
   for await (const event of events) {
+    options.onStreamEvent?.(event);
     if (event.type === "text_delta") {
       text += event.text;
       options.onTextDelta?.(event.text);
@@ -61,23 +72,57 @@ export async function collectCodexCompletionResult(
             ? (event.input as Record<string, unknown>)
             : {},
       });
+    } else if (event.type === "content_blocks") {
+      contentBlocks = event.blocks;
+    } else if (event.type === "model_stop") {
+      assistantMessage = event.assistantMessage;
+      stopReason = event.reason;
     } else if (event.type === "usage") {
       usage = {
         inputTokens: event.inputTokens,
         outputTokens: event.outputTokens,
         cacheReadTokens: event.cacheReadTokens,
         cacheCreationTokens: event.cacheCreationTokens,
+        ...(event.serverToolUsage
+          ? { serverToolUsage: event.serverToolUsage }
+          : {}),
       };
       providerResponseId = event.providerResponseId;
     }
   }
 
+  const finalText = options.trimText === false ? text : text.trim();
   return {
-    text: options.trimText === false ? text : text.trim(),
+    text: finalText,
     toolCalls,
     usage,
     providerResponseId,
+    assistantMessage:
+      assistantMessage ??
+      ({
+        role: "assistant",
+        content:
+          contentBlocks ?? buildCodexAssistantBlocks(finalText, toolCalls),
+      } satisfies CoreModelMessage),
+    stopReason: stopReason ?? (toolCalls.length > 0 ? "tool_use" : "end_turn"),
   };
+}
+
+function buildCodexAssistantBlocks(
+  text: string,
+  toolCalls: readonly CodexCompletionToolCall[],
+): CoreModelContentBlock[] {
+  const blocks: CoreModelContentBlock[] = [];
+  if (text) blocks.push({ type: "text", text });
+  blocks.push(
+    ...toolCalls.map((call) => ({
+      type: "tool_use" as const,
+      id: call.id,
+      name: call.name,
+      input: call.input,
+    })),
+  );
+  return blocks;
 }
 
 export async function executeCodexResolvedCompletion(args: {
@@ -91,8 +136,10 @@ export async function executeCodexResolvedCompletion(args: {
   cache?: { key?: string; retention?: CodexPromptCacheRetention };
   reasoningEffort?: CoreReasoningEffort;
   tools?: readonly CoreModelToolDefinition[];
+  hostedTools?: readonly CoreHostedToolDefinition[];
   signal?: AbortSignal;
   onTextDelta?: (delta: string) => void;
+  onStreamEvent?: (event: CoreModelStreamEvent) => void;
   trimText?: boolean;
 }): Promise<CodexCompletionResult> {
   const request = buildCodexResolvedRequestBody({
@@ -105,6 +152,7 @@ export async function executeCodexResolvedCompletion(args: {
     cache: args.cache,
     reasoningEffort: args.reasoningEffort,
     tools: args.tools ? translateCodexTools([...args.tools]) : undefined,
+    hostedTools: args.hostedTools,
   });
 
   try {
@@ -114,7 +162,11 @@ export async function executeCodexResolvedCompletion(args: {
         body: request.body,
         signal: args.signal,
       }),
-      { trimText: args.trimText, onTextDelta: args.onTextDelta },
+      {
+        trimText: args.trimText,
+        onTextDelta: args.onTextDelta,
+        onStreamEvent: args.onStreamEvent,
+      },
     );
 
     return { ...result, request };

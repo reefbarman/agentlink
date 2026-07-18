@@ -35,6 +35,14 @@ export const PROJECT_SCOPED_AGENTLINK_SETTINGS = [
 ] as const;
 
 export const WINDOW_SCOPED_AGENTLINK_SETTINGS = [
+  "webAccess.searchBackend",
+  "webAccess.fetchBackend",
+  "webAccess.allowedDomains",
+  "webAccess.blockedDomains",
+  "webAccess.maxSearchUsesPerTurn",
+  "webAccess.maxFetchUsesPerTurn",
+  "webAccess.maxFetchContentTokens",
+  "webAccess.maxReplayBytesPerTurn",
   "browserGatewayPort",
   "browserGatewayLanAccess",
   "browserGatewayMdnsName",

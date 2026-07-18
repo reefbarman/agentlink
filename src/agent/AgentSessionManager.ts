@@ -2,11 +2,25 @@ import * as crypto from "crypto";
 import { fileURLToPath, pathToFileURL } from "url";
 
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
-import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
+import type {
+  AgentToolRuntime,
+  PendingQuestionRecoveryContext,
+} from "../core/tools/types.js";
+import {
+  normalizeCoreWebAccessSettings,
+  resolveCoreWebAccessPolicy,
+  type CoreResolvedWebAccessPolicy,
+} from "../core/webAccess.js";
+import {
+  buildNativeWebDelegationPrompt,
+  collectNativeWebToolResult,
+  continueNativeWebProviderStream,
+} from "../core/nativeWebTools.js";
 import type {
   BackgroundAgentBudgetUsage,
   BackgroundAgentRuntimePhase,
 } from "../core/capabilities/background.js";
+import type { NativeWebToolExecutionRequest } from "../core/capabilities/web.js";
 import type {
   PendingQuestionRecoveryState,
   PersistedFleetMetadata,
@@ -163,6 +177,23 @@ const BTW_DEFAULT_TIMEOUT_MS = 120_000;
 /** Hard-stop backstop after the nominal budget has triggered a wrap-up. */
 const BUDGET_HARD_LIMIT_RATIO = 3;
 
+interface PreparedTurnExecution {
+  context: Readonly<ToolDispatchContext> | undefined;
+  policy: Readonly<CoreResolvedWebAccessPolicy>;
+  mcpToolDisclosure: Readonly<McpToolDisclosurePartition>;
+  mcpToolDefinitions: readonly import("./providers/types.js").ToolDefinition[];
+}
+
+function deepFreeze<T>(value: T): Readonly<T> {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(nested);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
 function getEngineHardLimit(limit: number | undefined): number | undefined {
   return limit === undefined
     ? undefined
@@ -299,8 +330,6 @@ export class AgentSessionManager {
       task: string;
     }
   >();
-  /** Background sessions already used to auto-resume a foreground session. */
-  private bgAutoResumed = new Set<string>();
   /** Routing metadata per background session. */
   private bgMeta = new Map<
     string,
@@ -804,6 +833,27 @@ export class AgentSessionManager {
     }
   }
 
+  private bindCapturedEngineToSession(
+    engine: AgentEngine,
+    session: AgentSession,
+    context: Readonly<ToolDispatchContext> | undefined,
+    runtime?: AgentToolRuntime,
+  ): Readonly<ToolDispatchContext> | undefined {
+    if (!context) return undefined;
+    try {
+      this.refreshMcpToolDisclosure(session, context);
+      engine.setToolRuntime(runtime ?? this.host.createToolRuntime(context));
+      this.activeRequestToolContexts.set(session.id, context);
+      if (engine === this.engine) {
+        this.foregroundEngineRequest = { sessionId: session.id, context };
+      }
+      return context;
+    } catch (error) {
+      context.mcpHubLease?.release();
+      throw error;
+    }
+  }
+
   private bindEngineToSession(
     engine: AgentEngine,
     session: AgentSession,
@@ -821,18 +871,7 @@ export class AgentSessionManager {
       inheritedContext,
     );
     if (!context) return undefined;
-    try {
-      this.refreshMcpToolDisclosure(session, context);
-      engine.setToolRuntime(this.host.createToolRuntime(context));
-      this.activeRequestToolContexts.set(session.id, context);
-      if (engine === this.engine) {
-        this.foregroundEngineRequest = { sessionId: session.id, context };
-      }
-      return context;
-    } catch (error) {
-      context.mcpHubLease?.release();
-      throw error;
-    }
+    return this.bindCapturedEngineToSession(engine, session, context);
   }
 
   private releaseSessionToolContext(
@@ -860,6 +899,164 @@ export class AgentSessionManager {
     return normalizeBackgroundAgentSettings(
       this.host.config.getBackgroundAgentSettings(scope),
     );
+  }
+
+  private cloneMcpToolDefinitions(
+    context: Readonly<ToolDispatchContext> | undefined,
+  ): import("./providers/types.js").ToolDefinition[] {
+    return context?.mcpHub ? structuredClone(context.mcpHub.getToolDefs()) : [];
+  }
+
+  private async prepareTurnExecution(
+    session: AgentSession,
+    options: {
+      overrides?: Partial<ToolDispatchContext>;
+      inheritedContext?: Readonly<ToolDispatchContext>;
+    } = {},
+  ): Promise<PreparedTurnExecution> {
+    const context = this.captureSessionToolContext(
+      session,
+      options.overrides,
+      options.inheritedContext,
+    );
+    try {
+      const settings = normalizeCoreWebAccessSettings(
+        this.host.config.getWebAccessSettings?.(),
+      );
+      const provider = this.host.providers.tryResolveProvider(session.model);
+      const capabilities = provider?.getRequestCapabilities
+        ? await provider.getRequestCapabilities(session.model)
+        : provider?.getCapabilities(session.model);
+      const mcpTools = this.cloneMcpToolDefinitions(context);
+      const policy = resolveCoreWebAccessPolicy({
+        settings,
+        providerCapabilities: capabilities?.hostedWeb,
+      });
+      const unavailableNativeRoute = [
+        policy.routes.search,
+        policy.routes.fetch,
+      ].find(
+        (route) =>
+          settings[
+            route.kind === "search" ? "searchBackend" : "fetchBackend"
+          ] === "native" && !route.available,
+      );
+      if (unavailableNativeRoute) {
+        throw new Error(
+          `Native web ${unavailableNativeRoute.kind} is unavailable (${unavailableNativeRoute.reason}).`,
+        );
+      }
+
+      const serverNames = new Set(
+        mcpTools
+          .map((tool) => parseMcpToolName(tool.name)?.serverName)
+          .filter((name): name is string => Boolean(name)),
+      );
+      const mcpToolDisclosure = partitionMcpToolsForDisclosure(mcpTools, {
+        serverConfigs: [...serverNames].map((serverName) => ({
+          serverName,
+          mode: context?.mcpHub?.getServerConfig(serverName)?.toolDisclosure,
+        })),
+      });
+      const requestContext =
+        context && provider
+          ? Object.freeze({
+              ...context,
+              nativeWebToolKinds: [...policy.enabledKinds],
+              nativeWebToolProvider: {
+                execute: async (request: NativeWebToolExecutionRequest) => {
+                  const route = policy.routes[request.kind];
+                  if (!route.available || !route.hostedTool) {
+                    throw new Error(
+                      `Native web ${request.kind} is not available for this request.`,
+                    );
+                  }
+                  const hostedTool = route.hostedTool;
+                  const prompt = buildNativeWebDelegationPrompt(
+                    request.kind,
+                    request.input,
+                  );
+                  const permit =
+                    await this.host.providers.requestScheduler.acquire(
+                      provider.id,
+                      session.background ? "background" : "interactive",
+                      request.signal,
+                    );
+                  try {
+                    return await collectNativeWebToolResult({
+                      provider: provider.id,
+                      operation: request.kind,
+                      input: request.input,
+                      events: continueNativeWebProviderStream({
+                        initialMessages: [
+                          { role: "user", content: prompt.userPrompt },
+                        ],
+                        stream: (messages) =>
+                          provider.stream({
+                            model: session.model,
+                            systemPrompt: prompt.systemPrompt,
+                            messages,
+                            tools: [],
+                            hostedTools: [hostedTool],
+                            maxTokens: Math.min(session.maxTokens, 16_384),
+                            reasoningEffort: "low",
+                            state: { store: false },
+                            providerHints: {
+                              codex: {
+                                sessionId: `${session.id}:web:${request.kind}`,
+                              },
+                            },
+                            signal: request.signal,
+                          }),
+                      }),
+                    });
+                  } finally {
+                    permit.release();
+                  }
+                },
+              },
+            })
+          : context;
+
+      return Object.freeze({
+        context: requestContext,
+        policy: deepFreeze(policy),
+        mcpToolDisclosure: deepFreeze(mcpToolDisclosure),
+        mcpToolDefinitions: deepFreeze(mcpTools),
+      });
+    } catch (error) {
+      context?.mcpHubLease?.release();
+      throw error;
+    }
+  }
+
+  private async prepareInteractiveTurnExecution(
+    session: AgentSession,
+  ): Promise<PreparedTurnExecution> {
+    try {
+      return await this.prepareTurnExecution(session);
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err.message : String(err);
+      session.status = "error";
+      if (!session.background) {
+        session.runState = undefined;
+      }
+      this.recordAndEmitEvent(session.id, {
+        type: "error",
+        error,
+        retryable: false,
+      });
+      await this.saveSessionNow(session.id);
+      this.recordAndEmitEvent(session.id, {
+        type: "done",
+        totalInputTokens: session.totalInputTokens,
+        totalOutputTokens: session.totalOutputTokens,
+        totalCacheReadTokens: session.totalCacheReadTokens,
+        totalCacheCreationTokens: session.totalCacheCreationTokens,
+      });
+      this.notifySessionsChanged();
+      throw err;
+    }
   }
 
   private getAcpAdditionalDirectories(projectRoot: string): string[] {
@@ -1806,18 +2003,9 @@ export class AgentSessionManager {
         structuredClone(fg.getMessages()) as AgentMessage[],
       );
     }
-    session.addUserMessage(trimmed, {
-      displayText: `/btw ${trimmed}`,
-      isSlashCommand: true,
-      slashCommandLabel: "/btw",
-    });
-    session.status = "streaming";
-
     const engine = this.host.createEngine(this.host.providers, this.log);
-    const sideCtx = this.bindEngineToSession(
-      engine,
-      session,
-      {
+    const preparedTurn = await this.prepareTurnExecution(session, {
+      overrides: {
         onModeSwitch: undefined,
         onApprovalRequest: undefined,
         onQuestion: undefined,
@@ -1827,8 +2015,22 @@ export class AgentSessionManager {
         onKillBackground: undefined,
         onFinalStatus: undefined,
       },
-      fg ? this.activeRequestToolContexts.get(fg.id) : undefined,
+      inheritedContext: fg
+        ? this.activeRequestToolContexts.get(fg.id)
+        : undefined,
+    });
+    const sideCtx = this.bindCapturedEngineToSession(
+      engine,
+      session,
+      preparedTurn.context,
     );
+
+    session.addUserMessage(trimmed, {
+      displayText: `/btw ${trimmed}`,
+      isSlashCommand: true,
+      slashCommandLabel: "/btw",
+    });
+    session.status = "streaming";
 
     let answer = "";
     const toolCalls: BtwQuestionResult["toolCalls"] = [];
@@ -1872,6 +2074,9 @@ export class AgentSessionManager {
         toolProfile: "btw",
         maxApiTurns: BTW_MAX_API_TURNS,
         maxToolCalls: BTW_MAX_TOOL_CALLS,
+        webAccessPolicy: preparedTurn.policy,
+        mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
+        mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
       })) {
         switch (event.type) {
           case "text_delta":
@@ -1961,249 +2166,289 @@ export class AgentSessionManager {
         await previousRunSettled;
       }
 
-      // Update reasoning effort. Legacy callers can still send thinkingEnabled.
-      if (opts?.reasoningEffort) {
-        session.reasoningEffort = opts.reasoningEffort;
-      } else if (opts?.thinkingEnabled === false) {
-        session.reasoningEffort = "none";
-      } else if (session.reasoningEffort === "none") {
-        session.reasoningEffort = "high";
-      }
-
-      // Keep the legacy budget field in sync for budget-based providers.
-      if (session.reasoningEffort === "none") {
-        session.thinkingBudget = 0;
-      } else if (session.thinkingBudget === 0) {
-        session.thinkingBudget = this.config.thinkingBudget;
-      }
-
-      // Create checkpoint before adding the next user message, but only after the
-      // first turn — the initial message has no prior state worth restoring to.
-      // `turnIndex` here means "how many visible user turns already exist at this
-      // snapshot". Example: immediately before the second user message, turnIndex=1.
-      // In the UI that checkpoint is displayed on the first user message.
-      const turnIndex = session
-        .getAllMessages()
-        .filter(
-          (m) => m.role === "user" && typeof m.content === "string",
-        ).length;
-      await this.ensureCheckpointForTurn(session, turnIndex, {
-        refreshExisting: true,
-      });
-
-      // Clear any stale pending interjections from the previous run — if the
-      // webview already drained the queue and sent this message via agentSend,
-      // the old interjections would otherwise be re-emitted mid-turn as duplicates.
-      while (session.consumePendingInterjection() !== null) {
-        // drain
-      }
-      // Pasted images/PDFs are stored on the message itself so they're injected
-      // into every API call (the API is stateless) and survive session restore.
-      const priorUserTexts = session
-        .getAllMessages()
-        .filter(
-          (message): message is AgentMessage & { content: string } =>
-            message.role === "user" && typeof message.content === "string",
-        )
-        .map((message) => message.content);
-      const messagesToAdd = [
-        {
-          text,
-          displayText: opts?.displayText,
-          isSlashCommand: opts?.isSlashCommand,
-          slashCommandLabel: opts?.slashCommandLabel,
-          origin: opts?.origin,
-          images: opts?.images,
-          documents: opts?.documents,
-        },
-        ...(opts?.additionalMessages ?? []),
-      ].filter(
-        (message) =>
-          message.text.trim().length > 0 ||
-          (message.images?.length ?? 0) > 0 ||
-          (message.documents?.length ?? 0) > 0,
-      );
-      if (messagesToAdd.length === 0) return;
-
-      const previousMessageCount = session.messageCount;
-      for (const message of messagesToAdd) {
-        const memoryNudge =
-          message.isSlashCommand === true || message.text.trim().length === 0
-            ? { text: message.text, nudged: false }
-            : applyMemoryCandidateNudge(
-                message.text,
-                priorUserTexts,
-                countMemoryNudges(priorUserTexts),
-              );
-        session.addUserMessage(memoryNudge.text, {
-          displayText:
-            message.displayText ??
-            (memoryNudge.nudged ? message.text : undefined),
-          isSlashCommand: message.isSlashCommand === true,
-          slashCommandLabel: message.slashCommandLabel,
-          origin: message.origin,
-          images: message.images,
-          documents: message.documents,
-        });
-        priorUserTexts.push(memoryNudge.text);
-        if (message.images?.length || message.documents?.length) {
-          this.log?.(
-            `[media] attached media to user message: images=${message.images?.length ?? 0} documents=${message.documents?.length ?? 0} totalRawMessages=${session.messageCount}`,
-          );
-        }
-      }
-
-      session.status = "streaming";
-      if (!session.background) {
-        session.runState = { phase: "running", startedAt: Date.now() };
-      }
-
-      if (previousMessageCount === 0) {
-        session.autoTitle();
-      }
-
-      // Persist immediately so the session appears in history even if the
-      // API call fails (e.g. network error, auth failure on the first message).
-      await this.saveSessionNow(session.id);
-      let lastPersistedActiveAt = session.lastActiveAt;
-
-      const persistIfHistoryChanged = () => {
-        if (session.lastActiveAt !== lastPersistedActiveAt) {
-          this.saveSession(session.id);
-          lastPersistedActiveAt = session.lastActiveAt;
-        }
-      };
-
-      // Keep checkpointing in-flight turns so reloads don't drop recent transcript
-      // progress. The guard above avoids writes unless message history changed.
-      const inFlightPersistTimer = this.host.timers.setInterval(
-        persistIfHistoryChanged,
-        1000,
-      );
-
-      this.notifySessionsChanged();
-
-      const MAX_AUTO_CONTINUE = 5;
-      let autoContinueCount = 0;
-      let modeSwitchResumeCount = 0;
-      let lastTodos: TodoItem[] = [];
-
-      let resolveRunSettled!: () => void;
-      const runSettled = new Promise<void>((resolve) => {
-        resolveRunSettled = resolve;
-      });
-      this.sessionRunSettled.set(session.id, runSettled);
-
       const engine = this.getEngine();
-      const requestToolContext = this.bindEngineToSession(engine, session);
-      let runAbortGeneration = session.abortGeneration;
-      try {
-        while (true) {
-          let naturalDone = false;
-          runAbortGeneration = session.abortGeneration;
+      const preparedTurn = await this.prepareInteractiveTurnExecution(session);
+      let requestToolContext = preparedTurn.context;
+      requestToolContext = this.bindCapturedEngineToSession(
+        engine,
+        session,
+        requestToolContext,
+      );
 
-          for await (const event of engine.run(session)) {
+      try {
+        // Update reasoning effort. Legacy callers can still send thinkingEnabled.
+        if (opts?.reasoningEffort) {
+          session.reasoningEffort = opts.reasoningEffort;
+        } else if (opts?.thinkingEnabled === false) {
+          session.reasoningEffort = "none";
+        } else if (session.reasoningEffort === "none") {
+          session.reasoningEffort = "high";
+        }
+
+        // Keep the legacy budget field in sync for budget-based providers.
+        if (session.reasoningEffort === "none") {
+          session.thinkingBudget = 0;
+        } else if (session.thinkingBudget === 0) {
+          session.thinkingBudget = this.config.thinkingBudget;
+        }
+
+        // Create checkpoint before adding the next user message, but only after the
+        // first turn — the initial message has no prior state worth restoring to.
+        // `turnIndex` here means "how many visible user turns already exist at this
+        // snapshot". Example: immediately before the second user message, turnIndex=1.
+        // In the UI that checkpoint is displayed on the first user message.
+        const turnIndex = session
+          .getAllMessages()
+          .filter(
+            (m) => m.role === "user" && typeof m.content === "string",
+          ).length;
+        await this.ensureCheckpointForTurn(session, turnIndex, {
+          refreshExisting: true,
+        });
+
+        // Clear any stale pending interjections from the previous run — if the
+        // webview already drained the queue and sent this message via agentSend,
+        // the old interjections would otherwise be re-emitted mid-turn as duplicates.
+        while (session.consumePendingInterjection() !== null) {
+          // drain
+        }
+        // Pasted images/PDFs are stored on the message itself so they're injected
+        // into every API call (the API is stateless) and survive session restore.
+        const priorUserTexts = session
+          .getAllMessages()
+          .filter(
+            (message): message is AgentMessage & { content: string } =>
+              message.role === "user" && typeof message.content === "string",
+          )
+          .map((message) => message.content);
+        const messagesToAdd = [
+          {
+            text,
+            displayText: opts?.displayText,
+            isSlashCommand: opts?.isSlashCommand,
+            slashCommandLabel: opts?.slashCommandLabel,
+            origin: opts?.origin,
+            images: opts?.images,
+            documents: opts?.documents,
+          },
+          ...(opts?.additionalMessages ?? []),
+        ].filter(
+          (message) =>
+            message.text.trim().length > 0 ||
+            (message.images?.length ?? 0) > 0 ||
+            (message.documents?.length ?? 0) > 0,
+        );
+        if (messagesToAdd.length === 0) return;
+
+        const previousMessageCount = session.messageCount;
+        for (const message of messagesToAdd) {
+          const memoryNudge =
+            message.isSlashCommand === true || message.text.trim().length === 0
+              ? { text: message.text, nudged: false }
+              : applyMemoryCandidateNudge(
+                  message.text,
+                  priorUserTexts,
+                  countMemoryNudges(priorUserTexts),
+                );
+          session.addUserMessage(memoryNudge.text, {
+            displayText:
+              message.displayText ??
+              (memoryNudge.nudged ? message.text : undefined),
+            isSlashCommand: message.isSlashCommand === true,
+            slashCommandLabel: message.slashCommandLabel,
+            origin: message.origin,
+            images: message.images,
+            documents: message.documents,
+          });
+          priorUserTexts.push(memoryNudge.text);
+          if (message.images?.length || message.documents?.length) {
+            this.log?.(
+              `[media] attached media to user message: images=${message.images?.length ?? 0} documents=${message.documents?.length ?? 0} totalRawMessages=${session.messageCount}`,
+            );
+          }
+        }
+
+        session.status = "streaming";
+        if (!session.background) {
+          session.runState = { phase: "running", startedAt: Date.now() };
+        }
+
+        if (previousMessageCount === 0) {
+          session.autoTitle();
+        }
+
+        // Persist immediately so the session appears in history even if the
+        // API call fails (e.g. network error, auth failure on the first message).
+        await this.saveSessionNow(session.id);
+        let lastPersistedActiveAt = session.lastActiveAt;
+
+        const persistIfHistoryChanged = () => {
+          if (session.lastActiveAt !== lastPersistedActiveAt) {
+            this.saveSession(session.id);
+            lastPersistedActiveAt = session.lastActiveAt;
+          }
+        };
+
+        // Keep checkpointing in-flight turns so reloads don't drop recent transcript
+        // progress. The guard above avoids writes unless message history changed.
+        const inFlightPersistTimer = this.host.timers.setInterval(
+          persistIfHistoryChanged,
+          1000,
+        );
+
+        this.notifySessionsChanged();
+
+        const MAX_AUTO_CONTINUE = 5;
+        let autoContinueCount = 0;
+        let modeSwitchResumeCount = 0;
+        let lastTodos: TodoItem[] = [];
+
+        let resolveRunSettled!: () => void;
+        const runSettled = new Promise<void>((resolve) => {
+          resolveRunSettled = resolve;
+        });
+        this.sessionRunSettled.set(session.id, runSettled);
+
+        let runAbortGeneration = session.abortGeneration;
+        try {
+          while (true) {
+            let naturalDone = false;
+            runAbortGeneration = session.abortGeneration;
+
+            for await (const event of engine.run(session, {
+              webAccessPolicy: preparedTurn.policy,
+              mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
+              mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+            })) {
+              if (
+                session.isAborted ||
+                session.abortGeneration !== runAbortGeneration
+              ) {
+                break;
+              }
+              if (event.type === "todo_update") {
+                lastTodos = event.todos;
+              }
+              if (event.type === "done") {
+                this.saveSession(session.id);
+                naturalDone = true;
+                // Don't forward yet — check for pending todos first
+                continue;
+              }
+              this.recordAndEmitEvent(session.id, event);
+
+              // After forwarding a user_interjection event, create a checkpoint so
+              // the user can revert to the state immediately before that injected
+              // turn. Because the message already exists in webview state at this
+              // point, the checkpoint will render on the preceding user message.
+              if (event.type === "user_interjection") {
+                // The interjection is already present in the transcript here, so
+                // length - 1 gives the index of that injected user turn.
+                const interjectionTurnIndex =
+                  session
+                    .getAllMessages()
+                    .filter(
+                      (m) => m.role === "user" && typeof m.content === "string",
+                    ).length - 1;
+                await this.ensureCheckpointForTurn(
+                  session,
+                  interjectionTurnIndex,
+                );
+              }
+            }
+
+            // Aborted — let ChatViewProvider handle the done notification
             if (
               session.isAborted ||
               session.abortGeneration !== runAbortGeneration
             ) {
               break;
             }
-            if (event.type === "todo_update") {
-              lastTodos = event.todos;
-            }
-            if (event.type === "done") {
-              this.saveSession(session.id);
-              naturalDone = true;
-              // Don't forward yet — check for pending todos first
+
+            const modeResumePrompt = naturalDone
+              ? this.takeModeSwitchResumePrompt(session, modeSwitchResumeCount)
+              : null;
+            if (modeResumePrompt) {
+              modeSwitchResumeCount++;
+              session.addUserMessage(modeResumePrompt);
+              session.status = "streaming";
               continue;
             }
-            this.recordAndEmitEvent(session.id, event);
 
-            // After forwarding a user_interjection event, create a checkpoint so
-            // the user can revert to the state immediately before that injected
-            // turn. Because the message already exists in webview state at this
-            // point, the checkpoint will render on the preceding user message.
-            if (event.type === "user_interjection") {
-              // The interjection is already present in the transcript here, so
-              // length - 1 gives the index of that injected user turn.
-              const interjectionTurnIndex =
-                session
-                  .getAllMessages()
-                  .filter(
-                    (m) => m.role === "user" && typeof m.content === "string",
-                  ).length - 1;
-              await this.ensureCheckpointForTurn(
-                session,
-                interjectionTurnIndex,
+            // Queued user messages take priority over auto-continue: emit the
+            // deferred done instead so the UI surfaces flush their queues (and
+            // any not-yet-drained interjection is sent on the next run).
+            const hasQueuedUserMessages =
+              session.hasPendingInterjections === true ||
+              session.hasQueuedUiMessages === true;
+            if (
+              naturalDone &&
+              hasQueuedUserMessages &&
+              hasPendingTodos(lastTodos)
+            ) {
+              this.log?.(
+                "[agent] skipping auto-continue: a queued user message takes priority",
               );
             }
-          }
 
-          // Aborted — let ChatViewProvider handle the done notification
+            // Check if we should auto-continue due to pending todos
+            if (
+              naturalDone &&
+              !hasQueuedUserMessages &&
+              autoContinueCount < MAX_AUTO_CONTINUE &&
+              hasPendingTodos(lastTodos)
+            ) {
+              autoContinueCount++;
+              this.log?.(
+                `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): pending todos remain`,
+              );
+              session.addUserMessage(
+                "You stopped but there are still pending tasks. Continue with the remaining items.",
+              );
+              session.status = "streaming";
+              continue;
+            }
+
+            const completedTurnIndex = session
+              .getAllMessages()
+              .filter(
+                (m) => m.role === "user" && typeof m.content === "string",
+              ).length;
+            await this.ensureCheckpointForTurn(session, completedTurnIndex);
+            if (!session.background) {
+              session.runState = undefined;
+            }
+            await this.saveSessionNow(session.id);
+
+            // Emit the deferred done
+            this.recordAndEmitEvent(session.id, {
+              type: "done",
+              totalInputTokens: session.totalInputTokens,
+              totalOutputTokens: session.totalOutputTokens,
+              totalCacheReadTokens: session.totalCacheReadTokens,
+              totalCacheCreationTokens: session.totalCacheCreationTokens,
+            });
+            break;
+          }
+        } catch (err: unknown) {
           if (
             session.isAborted ||
             session.abortGeneration !== runAbortGeneration
           ) {
-            break;
+            return;
           }
-
-          const modeResumePrompt = naturalDone
-            ? this.takeModeSwitchResumePrompt(session, modeSwitchResumeCount)
-            : null;
-          if (modeResumePrompt) {
-            modeSwitchResumeCount++;
-            session.addUserMessage(modeResumePrompt);
-            session.status = "streaming";
-            continue;
-          }
-
-          // Queued user messages take priority over auto-continue: emit the
-          // deferred done instead so the UI surfaces flush their queues (and
-          // any not-yet-drained interjection is sent on the next run).
-          const hasQueuedUserMessages =
-            session.hasPendingInterjections === true ||
-            session.hasQueuedUiMessages === true;
-          if (
-            naturalDone &&
-            hasQueuedUserMessages &&
-            hasPendingTodos(lastTodos)
-          ) {
-            this.log?.(
-              "[agent] skipping auto-continue: a queued user message takes priority",
-            );
-          }
-
-          // Check if we should auto-continue due to pending todos
-          if (
-            naturalDone &&
-            !hasQueuedUserMessages &&
-            autoContinueCount < MAX_AUTO_CONTINUE &&
-            hasPendingTodos(lastTodos)
-          ) {
-            autoContinueCount++;
-            this.log?.(
-              `[agent] auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUE}): pending todos remain`,
-            );
-            session.addUserMessage(
-              "You stopped but there are still pending tasks. Continue with the remaining items.",
-            );
-            session.status = "streaming";
-            continue;
-          }
-
-          const completedTurnIndex = session
-            .getAllMessages()
-            .filter(
-              (m) => m.role === "user" && typeof m.content === "string",
-            ).length;
-          await this.ensureCheckpointForTurn(session, completedTurnIndex);
+          const error = err instanceof Error ? err.message : String(err);
+          session.status = "error";
+          this.recordAndEmitEvent(session.id, {
+            type: "error",
+            error,
+            retryable: false,
+          });
+          // Persist before emitting done so sendSessionList sees the saved session
           if (!session.background) {
             session.runState = undefined;
           }
           await this.saveSessionNow(session.id);
-
-          // Emit the deferred done
           this.recordAndEmitEvent(session.id, {
             type: "done",
             totalInputTokens: session.totalInputTokens,
@@ -2211,43 +2456,17 @@ export class AgentSessionManager {
             totalCacheReadTokens: session.totalCacheReadTokens,
             totalCacheCreationTokens: session.totalCacheCreationTokens,
           });
-          break;
+        } finally {
+          this.host.timers.clearInterval(inFlightPersistTimer);
+          persistIfHistoryChanged();
+          if (this.sessionRunSettled.get(session.id) === runSettled) {
+            this.sessionRunSettled.delete(session.id);
+          }
+          resolveRunSettled();
+          this.notifySessionsChanged();
         }
-      } catch (err: unknown) {
-        if (
-          session.isAborted ||
-          session.abortGeneration !== runAbortGeneration
-        ) {
-          return;
-        }
-        const error = err instanceof Error ? err.message : String(err);
-        session.status = "error";
-        this.recordAndEmitEvent(session.id, {
-          type: "error",
-          error,
-          retryable: false,
-        });
-        // Persist before emitting done so sendSessionList sees the saved session
-        if (!session.background) {
-          session.runState = undefined;
-        }
-        await this.saveSessionNow(session.id);
-        this.recordAndEmitEvent(session.id, {
-          type: "done",
-          totalInputTokens: session.totalInputTokens,
-          totalOutputTokens: session.totalOutputTokens,
-          totalCacheReadTokens: session.totalCacheReadTokens,
-          totalCacheCreationTokens: session.totalCacheCreationTokens,
-        });
       } finally {
         this.releaseSessionToolContext(session.id, requestToolContext);
-        this.host.timers.clearInterval(inFlightPersistTimer);
-        persistIfHistoryChanged();
-        if (this.sessionRunSettled.get(session.id) === runSettled) {
-          this.sessionRunSettled.delete(session.id);
-        }
-        resolveRunSettled();
-        this.notifySessionsChanged();
       }
     });
   }
@@ -2485,6 +2704,14 @@ export class AgentSessionManager {
     // Force re-creation of the engine so it picks up refreshed credentials
     this.engine = null;
 
+    const engine = this.getEngine();
+    const preparedTurn = await this.prepareInteractiveTurnExecution(session);
+    const requestToolContext = this.bindCapturedEngineToSession(
+      engine,
+      session,
+      preparedTurn.context,
+    );
+
     session.status = "streaming";
     if (!session.background) {
       session.runState = { phase: "running", startedAt: Date.now() };
@@ -2505,13 +2732,15 @@ export class AgentSessionManager {
     );
     this.notifySessionsChanged();
 
-    const engine = this.getEngine();
-    const requestToolContext = this.bindEngineToSession(engine, session);
     let modeSwitchResumeCount = 0;
     try {
       while (true) {
         let naturalDone = false;
-        for await (const event of engine.run(session)) {
+        for await (const event of engine.run(session, {
+          webAccessPolicy: preparedTurn.policy,
+          mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
+          mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
+        })) {
           if (event.type === "done") {
             // Defer done — a queued mode-switch resume may continue this turn.
             this.saveSession(session.id);
@@ -2728,8 +2957,6 @@ export class AgentSessionManager {
     session.status = "streaming";
     this.notifySessionsChanged();
 
-    let condenseSucceeded = false;
-
     try {
       for await (const event of engine.condenseSession(
         session,
@@ -2737,69 +2964,9 @@ export class AgentSessionManager {
         undefined,
         preservedContext,
       )) {
-        if (event.type === "condense") {
-          condenseSucceeded = true;
-        }
         this.recordAndEmitEvent(session.id, event);
       }
       this.saveSession(session.id);
-
-      if (!isAutomatic && condenseSucceeded) {
-        let modeSwitchResumeCount = 0;
-        try {
-          while (true) {
-            let naturalDone = false;
-            for await (const event of engine.run(session)) {
-              if (event.type === "done") {
-                // Defer done — a queued mode-switch resume may continue this turn.
-                this.saveSession(session.id);
-                naturalDone = true;
-                continue;
-              }
-              this.recordAndEmitEvent(session.id, event);
-            }
-
-            if (!naturalDone) break;
-
-            const modeResumePrompt = this.takeModeSwitchResumePrompt(
-              session,
-              modeSwitchResumeCount,
-            );
-            if (modeResumePrompt) {
-              modeSwitchResumeCount++;
-              session.addUserMessage(modeResumePrompt);
-              session.status = "streaming";
-              continue;
-            }
-
-            this.recordAndEmitEvent(session.id, {
-              type: "done",
-              totalInputTokens: session.totalInputTokens,
-              totalOutputTokens: session.totalOutputTokens,
-              totalCacheReadTokens: session.totalCacheReadTokens,
-              totalCacheCreationTokens: session.totalCacheCreationTokens,
-            });
-            break;
-          }
-        } catch (err: unknown) {
-          const error = err instanceof Error ? err.message : String(err);
-          session.status = "error";
-          this.recordAndEmitEvent(session.id, {
-            type: "error",
-            error,
-            retryable: false,
-          });
-          this.saveSession(session.id);
-          this.recordAndEmitEvent(session.id, {
-            type: "done",
-            totalInputTokens: session.totalInputTokens,
-            totalOutputTokens: session.totalOutputTokens,
-            totalCacheReadTokens: session.totalCacheReadTokens,
-            totalCacheCreationTokens: session.totalCacheCreationTokens,
-          });
-          return;
-        }
-      }
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : String(err);
       this.recordAndEmitEvent(session.id, { type: "condense_error", error });
@@ -4085,15 +4252,10 @@ export class AgentSessionManager {
             }
             this.bgResultWaiters.delete(session.id);
             this.notifySessionsChanged();
-            void this.resumeParentAfterBackgroundCompletion(
-              session.id,
-              resultText,
-            );
             this.host.timers.setTimeout(
               () => {
                 this.bgFinalResults.delete(session.id);
                 this.bgParents.delete(session.id);
-                this.bgAutoResumed.delete(session.id);
               },
               5 * 60 * 1000,
             );
@@ -4262,11 +4424,14 @@ export class AgentSessionManager {
     };
 
     const bgEngine = this.host.createEngine(this.host.providers, this.log);
-    const bgCtx = this.bindEngineToSession(
+    const preparedTurn = await this.prepareTurnExecution(session, {
+      overrides: bgContextOverrides,
+      inheritedContext: parentRequestContext,
+    });
+    const bgCtx = this.bindCapturedEngineToSession(
       bgEngine,
       session,
-      bgContextOverrides,
-      parentRequestContext,
+      preparedTurn.context,
     );
 
     if (request.images?.length) {
@@ -4308,6 +4473,9 @@ export class AgentSessionManager {
           toolProfile: effectiveToolProfile,
           maxToolCalls: getEngineHardLimit(engineBudget?.maxToolCalls),
           maxApiTurns: getEngineHardLimit(engineBudget?.maxApiTurns),
+          webAccessPolicy: preparedTurn.policy,
+          mcpToolDisclosure: preparedTurn.mcpToolDisclosure,
+          mcpToolDefinitions: preparedTurn.mcpToolDefinitions,
         })) {
           this.noteBackgroundAgentEvent(session.id, event);
           if (event.type === "text_delta") {
@@ -4431,14 +4599,11 @@ export class AgentSessionManager {
       }
       this.bgResultWaiters.delete(session.id);
       this.notifySessionsChanged();
-      void this.resumeParentAfterBackgroundCompletion(session.id, resultText);
-
       // Cleanup stored result after 5 minutes to prevent unbounded memory growth
       this.host.timers.setTimeout(
         () => {
           this.bgFinalResults.delete(session.id);
           this.bgParents.delete(session.id);
-          this.bgAutoResumed.delete(session.id);
         },
         5 * 60 * 1000,
       );
@@ -6140,41 +6305,6 @@ export class AgentSessionManager {
         minSentenceLength: 20,
       },
     );
-  }
-
-  private async resumeParentAfterBackgroundCompletion(
-    bgSessionId: string,
-    resultText: string,
-  ): Promise<void> {
-    if (this.bgAutoResumed.has(bgSessionId)) return;
-    const parent = this.bgParents.get(bgSessionId);
-    if (!parent) return;
-
-    const session = this.sessions.get(parent.sessionId);
-    if (!session || session.background) return;
-    if (session.status !== "idle") return;
-    if (this.foregroundId !== session.id) return;
-
-    this.bgAutoResumed.add(bgSessionId);
-    try {
-      await this.sendMessage(
-        session.id,
-        [
-          `The background agent for "${parent.task}" has returned while you were stopped.`,
-          "Resume now using the included <background_result> content (do not call get_background_result unless you explicitly need to wait on another session).",
-          "",
-          `<background_result task="${parent.task}" sessionId="${bgSessionId}">`,
-          resultText,
-          "</background_result>",
-        ].join("\n"),
-        session.mode,
-      );
-    } catch (err) {
-      this.bgAutoResumed.delete(bgSessionId);
-      this.log?.(
-        `[bg-resume] failed to resume foreground for ${bgSessionId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
   }
 
   getBackgroundParentSessionId(sessionId: string): string | undefined {
