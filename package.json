@@ -628,6 +628,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package",
+    "package:sandbox-runtime": "node scripts/package-sandbox-runtime.mjs",
     "release": "bash scripts/release.sh",
     "audit:assistant-runtime": "node scripts/audit-assistant-runtime.mjs",
     "benchmark:codex-oauth-models": "node --experimental-strip-types scripts/benchmark-codex-oauth-models.mts",
@@ -637,7 +638,10 @@
     "fmt:check": "oxfmt --check",
     "lint": "bash -c 'e=0; oxfmt --check || e=1; tsc --noEmit || e=1; tsc -p src/agent/webview/tsconfig.json --noEmit || e=1; tsc -p src/sidebar/webview/tsconfig.json --noEmit || e=1; tsc -p src/approvals/webview/tsconfig.json --noEmit || e=1; tsc -p src/browser-gateway/webview/tsconfig.json --noEmit || e=1; oxlint src/ --import-plugin --report-unused-disable-directives --deny-warnings || e=1; exit $e'",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:sandbox-runtime": "node --test scripts/sandbox-network-policy.test.mjs scripts/sandbox-network-proxy.test.mjs scripts/sandbox-process-reaper.test.mjs scripts/sandbox-protected-roots.test.mjs scripts/sandbox-runtime-helper.test.mjs",
+    "probe:sandbox-runtime": "node scripts/sandbox-runtime-behavior.mjs",
+    "benchmark:sandbox-runtime": "node scripts/sandbox-runtime-evidence.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.1.0",
@@ -670,6 +674,7 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.65",
     "@testing-library/preact": "^3.2.4",
     "@types/bmp-js": "^0.1.2",
     "@types/multicast-dns": "^7.2.4",
@@ -681,6 +686,7 @@
     "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
     "monaco-editor": "^0.55.1",
+    "node-pty": "1.1.0",
     "oxfmt": "^0.58.0",
     "oxlint": "^1.73.0",
     "typescript": "^7.0.2",

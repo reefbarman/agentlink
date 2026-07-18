@@ -3,6 +3,8 @@ import * as path from "path";
 
 import { copyFileSync, mkdirSync, readFileSync, readdirSync } from "fs";
 
+import { stageSandboxRuntime } from "./scripts/package-sandbox-runtime.mjs";
+
 const watch = process.argv.includes("--watch");
 
 // Load .env.local if it exists (for DEV_BUILD=true opt-in)
@@ -222,6 +224,8 @@ if (watch) {
       copyFileSync(path.join(wasmSrcDir, f), path.join(wasmDestDir, f));
     }
   }
+
+  await stageSandboxRuntime();
 
   console.log("Build complete.");
 }

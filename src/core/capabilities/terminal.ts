@@ -1,3 +1,8 @@
+import type {
+  SandboxExecutionMetadata,
+  SandboxLaunchAuthorization,
+} from "../sandboxPolicy.js";
+
 export type CommandExecutionPolicy = "read-only";
 
 export interface TerminalCommandResult {
@@ -49,6 +54,7 @@ export interface TerminalCommandResult {
   execution_mode?: "shell_integration" | "send_text";
   verification_hint?: string;
   command_sent?: boolean;
+  sandbox?: SandboxExecutionMetadata;
 }
 
 export interface TerminalExecuteOptions {
@@ -60,6 +66,7 @@ export interface TerminalExecuteOptions {
   background?: boolean;
   timeout?: number;
   env?: Record<string, string>;
+  sandbox?: SandboxLaunchAuthorization;
   onTerminalAssigned?: (terminalId: string) => void;
   /** Called when cleanup ownership transfers to a background terminal lifecycle. */
   onCommandFinalizationDeferred?: () => void;

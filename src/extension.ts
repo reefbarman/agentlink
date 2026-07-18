@@ -82,6 +82,10 @@ import {
   createToolUsageTelemetry,
   type ToolUsageTelemetry,
 } from "./telemetry/ToolUsageTelemetry.js";
+import {
+  CUSTOM_TERMINAL_SUPPORTED_CONTEXT_KEY,
+  isCustomTerminalSupported,
+} from "./terminal/customTerminalSupport.js";
 
 const BROWSER_GATEWAY_HEALTH_CHECK_INTERVAL_MS = 30_000;
 
@@ -235,6 +239,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
   outputChannel = vscode.window.createOutputChannel("AgentLink");
   context.subscriptions.push(outputChannel);
+
+  const customTerminalSupported = isCustomTerminalSupported({
+    platform: process.platform,
+    remoteName: vscode.env.remoteName,
+  });
+  void vscode.commands
+    .executeCommand(
+      "setContext",
+      CUSTOM_TERMINAL_SUPPORTED_CONTEXT_KEY,
+      customTerminalSupported,
+    )
+    .then(undefined, (error: unknown) => {
+      log(`Failed to publish custom terminal support: ${String(error)}`);
+    });
 
   initializeTerminalManager(context.extensionUri, log);
 
