@@ -167,9 +167,15 @@ import type {
 } from "../telemetry/ToolUsageTelemetry.js";
 import { parseMcpToolName } from "./mcpToolNames.js";
 import { randomUUID } from "crypto";
+import * as os from "os";
 import * as path from "path";
 import { z } from "zod";
-import { resolveAndValidatePath } from "../util/paths.js";
+import {
+  canonicalizePath,
+  isPathWithinRoot,
+  resolveAndValidatePath,
+  withWorkspaceRoots,
+} from "../util/paths.js";
 import { isAgentlinkTmpArtifact } from "../util/agentlinkTmpArtifacts.js";
 import { createComposeExecutionScope } from "./compose/composeScope.js";
 import { handleCompose, type ComposeParams } from "./compose/composeRuntime.js";
@@ -623,6 +629,73 @@ const AGENT_BUDGET_SCHEMA = {
   },
 };
 
+const DEFAULT_BACKGROUND_IMAGE_COUNT = 4;
+const MAX_BACKGROUND_IMAGES = 8;
+
+function resolveBackgroundImages(params: {
+  imageIds?: unknown;
+  useRecentImages?: unknown;
+  getSessionImages?: () => SessionImageReference[];
+}): Array<{ name: string; mimeType: string; base64: string }> {
+  const sessionImages = params.getSessionImages?.() ?? [];
+  const byId = new Map(sessionImages.map((image) => [image.id, image]));
+  const selected: SessionImageReference[] = [];
+
+  if (params.imageIds != null) {
+    if (!Array.isArray(params.imageIds)) {
+      throw new Error("imageIds must be an array of session image IDs");
+    }
+    for (const rawId of params.imageIds) {
+      if (typeof rawId !== "string" || !rawId.trim()) {
+        throw new Error("imageIds must be an array of session image IDs");
+      }
+      const id = rawId.trim();
+      const image = byId.get(id);
+      if (!image) {
+        const available = sessionImages.map((item) => item.id).join(", ");
+        throw new Error(
+          `No session image found for imageIds entry "${id}"${available ? `. Available image IDs: ${available}` : ""}`,
+        );
+      }
+      selected.push(image);
+    }
+  }
+
+  if (params.useRecentImages != null && params.useRecentImages !== false) {
+    const numeric =
+      params.useRecentImages === true
+        ? DEFAULT_BACKGROUND_IMAGE_COUNT
+        : Number(params.useRecentImages);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      throw new Error("useRecentImages must be true or a positive number");
+    }
+    const count = Math.min(Math.floor(numeric), MAX_BACKGROUND_IMAGES);
+    selected.push(...sessionImages.slice(-count));
+  }
+
+  const unique = Array.from(
+    new Map(selected.map((image) => [image.id, image])).values(),
+  );
+  if (unique.length > MAX_BACKGROUND_IMAGES) {
+    throw new Error(
+      `spawn_background_agent supports at most ${MAX_BACKGROUND_IMAGES} inherited images`,
+    );
+  }
+  if (
+    (params.imageIds != null ||
+      (params.useRecentImages != null && params.useRecentImages !== false)) &&
+    unique.length === 0
+  ) {
+    throw new Error("No images are available in the current session");
+  }
+
+  return unique.map(({ name, mimeType, base64 }) => ({
+    name,
+    mimeType,
+    base64,
+  }));
+}
+
 /** Background agent management tools (only available in foreground sessions). */
 const BG_AGENT_TOOLS: ToolDefinition[] = [
   {
@@ -679,6 +752,17 @@ const BG_AGENT_TOOLS: ToolDefinition[] = [
           enum: ["review-only", "workspace-safe", "interactive"],
         },
         worktree: { type: "string", enum: ["shared", "isolated"] },
+        imageIds: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Specific image IDs from the current foreground session to copy into the background agent's first message. IDs follow image_1, image_2 attachment/session order. Native in-process backgrounds only; not supported for ACP or isolated-worktree agents.",
+        },
+        useRecentImages: {
+          oneOf: [{ type: "boolean" }, { type: "number" }],
+          description:
+            "Copy recent images from the foreground session into the background agent's first message. Includes user-attached images and screenshot/image tool results. Pass true for up to 4 recent images or a number for that many (maximum 8). Native in-process backgrounds only.",
+        },
         reviewScope: {
           description:
             "Structured review target captured into an immutable snapshot when the background agent is spawned. working_tree defaults to unstaged tracked changes plus untracked files; use paths to narrow it. files captures the current contents of exact files. commit_range resolves Git diff output immediately. diff accepts already captured content.",
@@ -1486,6 +1570,14 @@ export interface ToolDispatchContext {
   approvalManager: ApprovalManager;
   approvalPanel: ApprovalPanelProvider;
   sessionId: string;
+  /** Immutable project identity captured for this request's tool runtime. */
+  projectScope?: Readonly<
+    import("../core/workspaceProjects.js").SessionProjectScope
+  >;
+  /** Available local root captured with projectScope; absent for projectless runtimes. */
+  projectRoot?: string;
+  /** All available local project roots captured for cross-project ownership checks. */
+  workspaceProjectRoots?: readonly string[];
   /** Resolves the active session command policy at dispatch time. */
   getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
   /** Restricts execute_command independently of user approval settings. */
@@ -1516,6 +1608,8 @@ export interface ToolDispatchContext {
   trackerCtx?: import("./AgentToolCallTracker.js").TrackerContext;
   toolCallTracker?: import("./AgentToolCallTracker.js").AgentToolCallTracker;
   mcpHub?: McpClientHub;
+  /** Owned stable MCP generation reference for this request. Internal lifecycle metadata. */
+  mcpHubLease?: import("./ProjectMcpHubRegistry.js").ProjectMcpHubLease;
   /** Current agent mode slug (e.g. "architect", "code"). Used for mode-specific approval logic. */
   mode?: string;
   onModeSwitch?: (
@@ -1548,7 +1642,7 @@ export interface ToolDispatchContext {
   ) => Promise<QuestionResponse>;
   /** Called whenever the agent reads a file — used to track files for folded context on condense */
   onFileRead?: (filePath: string) => void;
-  /** Returns recent user-attached images available to this session's model context. */
+  /** Returns images available in this session, including attachments and image tool results. */
   getSessionImages?: () => SessionImageReference[];
   /** Returns an immutable projection of the executing session's full transcript. */
   getSessionTranscript?: AgentToolExecutionRequest["context"]["getSessionTranscript"];
@@ -1701,15 +1795,20 @@ export function createAgentToolRuntime(
           request.input,
           ctx.delegationPolicy,
         );
+        enforceCrossProjectMutationPolicy(request.name, request.input, ctx);
         if (request.context.interactionPolicy === "deny") {
-          const denied = enforceNonInteractiveReadPathPolicy(
-            request.input,
-            request.context.sessionId,
-            ctx.approvalManager,
-          );
+          const enforceReadPathPolicy = () =>
+            enforceNonInteractiveReadPathPolicy(
+              request.input,
+              request.context.sessionId,
+              ctx.approvalManager,
+            );
+          const denied = ctx.projectRoot
+            ? withWorkspaceRoots([ctx.projectRoot], enforceReadPathPolicy)
+            : enforceReadPathPolicy();
           if (denied) return denied;
         }
-        const result =
+        const execute = async () =>
           request.name === "compose"
             ? __DEV_BUILD__
               ? await handleCompose({
@@ -1752,6 +1851,9 @@ export function createAgentToolRuntime(
                 getSessionImages: request.context.getSessionImages,
                 getSessionTranscript: request.context.getSessionTranscript,
               });
+        const result = ctx.projectRoot
+          ? await withWorkspaceRoots([ctx.projectRoot], execute)
+          : await execute();
         const composeTrace = result.uiMeta?.composeTrace;
         ctx.toolUsageTelemetry?.record({
           toolName: request.name,
@@ -1764,6 +1866,7 @@ export function createAgentToolRuntime(
               : request.input,
           source: "agent",
           mode: request.context.mode,
+          projectId: ctx.projectScope?.projectId,
           outcome: getToolUsageOutcomeFromResult(result),
           durationMs: Date.now() - startedAt,
           ...(composeTrace
@@ -1788,6 +1891,7 @@ export function createAgentToolRuntime(
           params: request.name === "compose" ? {} : request.input,
           source: "agent",
           mode: request.context.mode,
+          projectId: ctx.projectScope?.projectId,
           outcome: "error",
           durationMs: Date.now() - startedAt,
         });
@@ -1837,9 +1941,50 @@ const PATH_MUTATING_TOOLS = new Set([
   "write_file",
   "apply_diff",
   "find_and_replace",
+  "generate_image",
+  "execute_command",
   "rename_symbol",
   "apply_code_action",
 ]);
+
+function enforceCrossProjectMutationPolicy(
+  toolName: string,
+  input: Record<string, unknown>,
+  ctx: ToolDispatchContext,
+): void {
+  if (!ctx.projectRoot || !PATH_MUTATING_TOOLS.has(toolName)) return;
+  const inputPaths = Object.entries(input)
+    .filter(([key]) => /(^|_)(path|file|directory|cwd)$/i.test(key))
+    .flatMap(([, value]) =>
+      typeof value === "string"
+        ? [value]
+        : Array.isArray(value)
+          ? value.filter((item): item is string => typeof item === "string")
+          : [],
+    );
+  if (inputPaths.length === 0) return;
+
+  const sourceRoot = canonicalizePath(ctx.projectRoot);
+  const workspaceRoots = (ctx.workspaceProjectRoots ?? [ctx.projectRoot]).map(
+    canonicalizePath,
+  );
+  for (const inputPath of inputPaths) {
+    const targetPath = canonicalizePath(
+      path.isAbsolute(inputPath)
+        ? inputPath
+        : path.resolve(ctx.projectRoot, inputPath),
+    );
+    if (isPathWithinRoot(targetPath, sourceRoot)) continue;
+    const targetRoot = workspaceRoots
+      .filter((root) => root !== sourceRoot)
+      .sort((left, right) => right.length - left.length)
+      .find((root) => isPathWithinRoot(targetPath, root));
+    if (!targetRoot) continue;
+    throw new Error(
+      `Cross-project mutation is blocked until target-project checkpoint coverage is available: ${inputPath}`,
+    );
+  }
+}
 
 function enforceDelegatedPathPolicy(
   toolName: string,
@@ -1981,16 +2126,16 @@ export async function dispatchToolCall(
       let choice: string;
       let rejectionReason: string | undefined;
 
-      const cwd =
-        vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-      const configPaths = getMcpConfigFilePaths(cwd);
-
       if (onApprovalRequest) {
+        const projectConfigPath = ctx.projectRoot
+          ? getMcpConfigFilePaths(ctx.projectRoot).project
+          : undefined;
         const raw = await onApprovalRequest(
           {
             kind: "mcp",
             title: `Allow MCP tool "${bareToolName}" from "${serverName}"?`,
             detail: inputPreview,
+            targetPath: projectConfigPath,
             choices: [
               { label: "Allow once", value: "allow-once", isPrimary: true },
               {
@@ -2070,42 +2215,65 @@ export async function dispatchToolCall(
         };
       }
 
+      const projectConfigPath = ctx.projectRoot
+        ? getMcpConfigFilePaths(ctx.projectRoot).project
+        : undefined;
+      const globalConfigPath = path.join(
+        os.homedir(),
+        ".agentlink",
+        "mcp.json",
+      );
+
       switch (choice) {
         case "allow-once":
           promotionMeta = {
             serverName,
             bareToolName,
-            scopes: ["session", "project", "global"],
+            scopes: [
+              "session",
+              ...(projectConfigPath ? (["project"] as const) : []),
+              "global",
+            ],
           };
           break;
         case "always-tool-session":
           approvalManager.approveMcpTool(sessionId, toolName);
           break;
-        case "always-tool-project":
+        case "always-tool-project": {
+          const filePath = projectConfigPath;
+          if (!filePath) {
+            return errorResult(
+              "MCP project approval is unavailable because this request has no executable project root.",
+            );
+          }
           approvalManager.approveMcpTool(sessionId, toolName);
-          persistMcpToolApproval(
-            serverName,
-            bareToolName,
-            configPaths.project,
-          ).catch(() => undefined);
+          persistMcpToolApproval(serverName, bareToolName, filePath).catch(
+            () => undefined,
+          );
           break;
+        }
         case "always-tool-global":
           approvalManager.approveMcpTool(sessionId, toolName);
           persistMcpToolApproval(
             serverName,
             bareToolName,
-            configPaths.global,
+            globalConfigPath,
           ).catch(() => undefined);
           break;
-        case "always-server-project":
+        case "always-server-project": {
+          const filePath = projectConfigPath;
+          if (!filePath) {
+            return errorResult(
+              "MCP project approval is unavailable because this request has no executable project root.",
+            );
+          }
           approvalManager.approveMcpServer(sessionId, serverName);
-          persistMcpServerApproval(serverName, configPaths.project).catch(
-            () => undefined,
-          );
+          persistMcpServerApproval(serverName, filePath).catch(() => undefined);
           break;
+        }
         case "always-server-global":
           approvalManager.approveMcpServer(sessionId, serverName);
-          persistMcpServerApproval(serverName, configPaths.global).catch(
+          persistMcpServerApproval(serverName, globalConfigPath).catch(
             () => undefined,
           );
           break;
@@ -2452,6 +2620,8 @@ export async function dispatchToolCall(
           commandExecutionPolicy:
             ctx.commandExecutionPolicy ??
             (ctx.mode === "ask" ? "read-only" : undefined),
+          projectRoot: ctx.projectRoot,
+          workspaceProjectRoots: ctx.workspaceProjectRoots,
         },
       );
     case "get_terminal_output":
@@ -2536,7 +2706,8 @@ export async function dispatchToolCall(
     case "get_diagnostics":
       return handleGetDiagnostics(params, {
         diagnosticsProvider:
-          ctx.diagnosticsProvider ?? createVscodeDiagnosticsProvider(),
+          ctx.diagnosticsProvider ??
+          createVscodeDiagnosticsProvider(ctx.projectRoot),
       });
     case "go_to_definition":
       return handleGoToDefinition(params, sessionId, {
@@ -2566,7 +2737,11 @@ export async function dispatchToolCall(
       return handleGetSymbols(params, sessionId, {
         symbolsProvider:
           ctx.symbolsProvider ??
-          createVscodeSymbolsProvider(approvalManager, approvalPanel),
+          createVscodeSymbolsProvider(
+            approvalManager,
+            approvalPanel,
+            ctx.projectRoot,
+          ),
       });
     case "get_hover":
       return handleGetHover(params, sessionId, {
@@ -2983,6 +3158,11 @@ export async function dispatchToolCall(
           ],
         };
       }
+      const images = resolveBackgroundImages({
+        imageIds: params.imageIds,
+        useRecentImages: params.useRecentImages,
+        getSessionImages: ctx.getSessionImages,
+      });
       const result = await spawnBackground({
         task: String(params.task ?? ""),
         message: String(params.message ?? ""),
@@ -3028,6 +3208,7 @@ export async function dispatchToolCall(
           params.worktree === "shared" || params.worktree === "isolated"
             ? params.worktree
             : undefined,
+        ...(images.length ? { images } : {}),
         reviewScope:
           params.reviewScope && typeof params.reviewScope === "object"
             ? (() => {
@@ -3328,6 +3509,7 @@ export async function dispatchToolCall(
               : undefined,
         },
         sessionId,
+        ctx.projectScope?.projectId,
       );
     }
 

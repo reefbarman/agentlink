@@ -19,7 +19,6 @@ import {
 import type {
   AgentToolRuntime,
   AgentToolExecutionContext,
-  SessionImageReference,
 } from "../core/tools/types.js";
 import { ToolCallBudget } from "../core/tools/toolCallBudget.js";
 import { buildToolContextBreakdown } from "./contextBreakdown.js";
@@ -63,6 +62,7 @@ import type {
 } from "../core/sessionTranscriptRecall.js";
 import { truncateMiddle } from "../util/truncateMiddle.js";
 import { getAgentLinkHttpDiagnostics } from "../util/httpDispatcher.js";
+import { collectSessionImages } from "./sessionImages.js";
 import type { ProviderRegistry } from "./providers/index.js";
 import { AnthropicProvider } from "./providers/anthropic/index.js";
 export function buildSessionTranscriptSnapshot(
@@ -224,11 +224,11 @@ function extractAgentDisplayArgs(
 }
 
 function buildProviderCacheKey(session: AgentSession): string {
-  const workspaceHash = createHash("sha1")
-    .update(session.cwd)
+  const projectHash = createHash("sha1")
+    .update(session.projectScope.projectId)
     .digest("hex")
     .slice(0, 12);
-  return `codex:${workspaceHash}:${session.id}:${session.model}`;
+  return `codex:${projectHash}:${session.id}:${session.model}`;
 }
 
 /** Custom error for auth failures, so the outer catch can mark them specially. */
@@ -762,7 +762,7 @@ export class AgentEngine {
               try {
                 const absPath = path.isAbsolute(filePath)
                   ? filePath
-                  : path.join(session.cwd, filePath);
+                  : path.join(session.requireProjectRoot(), filePath);
                 const content = await fs.readFile(absPath, "utf-8");
                 const ext = path.extname(filePath).slice(1) || "";
                 return `<file path="${filePath}">\n\`\`\`${ext}\n${content}\n\`\`\`\n</file>`;
@@ -1639,27 +1639,8 @@ export class AgentEngine {
           },
           getSessionTranscript: () =>
             buildSessionTranscriptSnapshot(session.getAllMessages()),
-          getSessionImages: () => {
-            const images: SessionImageReference[] = [];
-            for (const [messageIndex, message] of session
-              .getAllMessages()
-              .entries()) {
-              if (message.role !== "user" || !message.media?.images?.length) {
-                continue;
-              }
-              message.media.images.forEach((image, imageIndex) => {
-                images.push({
-                  id: `image_${images.length + 1}`,
-                  name: image.name,
-                  mimeType: image.mimeType,
-                  base64: image.base64,
-                  messageIndex,
-                  imageIndex,
-                });
-              });
-            }
-            return images;
-          },
+          getSessionImages: () =>
+            collectSessionImages(session.getAllMessages()),
         };
 
         // Execute tools (parallel for read-only, sequential for write)
@@ -2255,7 +2236,7 @@ export class AgentEngine {
         systemPrompt: session.systemPrompt,
         isAutomatic,
         filesRead: [...session.filesRead],
-        cwd: session.cwd,
+        cwd: session.requireProjectRoot(),
         preservedContext,
       },
       prevInputTokens,

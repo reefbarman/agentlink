@@ -9,6 +9,8 @@ import simpleGit, { type SimpleGit } from "simple-git";
 export interface Checkpoint {
   /** Unique ID for this checkpoint */
   id: string;
+  /** Project that owns this checkpoint. Missing only on legacy persisted records. */
+  projectId?: string;
   /** The shadow repo commit SHA at this point */
   commitHash: string;
   /**

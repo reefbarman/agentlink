@@ -66,7 +66,9 @@ const config: AgentConfig = {
 
 function makeToolCtx(): ToolDispatchContext {
   return {
-    approvalManager: {} as ToolDispatchContext["approvalManager"],
+    approvalManager: {
+      bindSessionProject: vi.fn(),
+    } as unknown as ToolDispatchContext["approvalManager"],
     approvalPanel: {} as ToolDispatchContext["approvalPanel"],
     extensionUri: {} as ToolDispatchContext["extensionUri"],
     sessionId: "fg",

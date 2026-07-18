@@ -219,10 +219,17 @@ body {
 }
 
 .session-history-item-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   font-size: 10px;
   opacity: 0.5;
   margin-top: 2px;
   padding-left: 22px;
+}
+
+.session-history-project.unavailable {
+  color: var(--vscode-errorForeground);
 }
 
 .session-history-sep {
@@ -2790,6 +2797,25 @@ body {
 .input-toolbar-spacer {
   flex: 1 1 0;
   min-width: 0;
+}
+
+.project-selector-status {
+  margin-left: auto;
+  color: var(--vscode-errorForeground);
+  font-size: 10px;
+}
+
+.project-unavailable {
+  color: var(--vscode-errorForeground);
+}
+
+.composer-disabled-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 6px;
+  color: var(--vscode-errorForeground);
+  font-size: 11px;
 }
 
 /* ── Shared toolbar control base ── */

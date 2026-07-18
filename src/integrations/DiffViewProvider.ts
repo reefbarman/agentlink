@@ -457,6 +457,7 @@ export class DiffViewProvider {
               kind: "write",
               id: this.requestId,
               title: `${operation} \`${this.relPath}\`?`,
+              targetPath: this.absolutePath,
               choices: [],
             },
             sessionId,
@@ -494,6 +495,8 @@ export class DiffViewProvider {
               operation: this.editType!,
               outsideWorkspace: this.outsideWorkspace,
               id: this.requestId,
+              sessionId,
+              targetPath: this.absolutePath,
             });
 
           // If title bar or editor close resolves first, cancel the panel entry

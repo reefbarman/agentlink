@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from "preact/hooks";
+import { useCallback, useMemo, useState } from "preact/hooks";
+
 import type { SessionSummary } from "../types";
 
 function relativeTime(ts: number): string {
@@ -28,6 +29,7 @@ interface SessionHistoryProps {
   onDelete: (sessionId: string) => void;
   onRename: (sessionId: string, title: string) => void;
   onCopyFirstPrompt: (sessionId: string) => void;
+  onNewInProject?: (projectId: string) => void;
   onClose: () => void;
 }
 
@@ -38,6 +40,7 @@ export function SessionHistory({
   onDelete,
   onRename,
   onCopyFirstPrompt,
+  onNewInProject,
   onClose,
 }: SessionHistoryProps) {
   const [search, setSearch] = useState("");
@@ -155,7 +158,7 @@ export function SessionHistory({
                     <div
                       class="session-history-item-main"
                       onClick={() => onLoad(s.id)}
-                      title={`${s.title}\n${s.messageCount} messages · ${s.mode} mode`}
+                      title={`${s.title}\n${s.messageCount} messages · ${s.mode} mode${s.project ? ` · ${s.project.displayName}${s.project.availability === "available" ? "" : " (unavailable)"}` : ""}`}
                     >
                       <div class="session-history-item-title">
                         <i
@@ -171,9 +174,36 @@ export function SessionHistory({
                         <span>
                           {s.messageCount} msg{s.messageCount !== 1 ? "s" : ""}
                         </span>
+                        {s.project && (
+                          <>
+                            <span class="session-history-sep">·</span>
+                            <span
+                              class={
+                                s.project.availability === "available"
+                                  ? "session-history-project"
+                                  : "session-history-project unavailable"
+                              }
+                            >
+                              {s.project.displayName}
+                              {s.project.availability === "available"
+                                ? ""
+                                : " · unavailable"}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
                     <div class="session-history-item-actions">
+                      {onNewInProject &&
+                        s.project?.availability === "available" && (
+                          <button
+                            class="icon-button"
+                            onClick={() => onNewInProject(s.project!.projectId)}
+                            title={`New chat in ${s.project.displayName}`}
+                          >
+                            <i class="codicon codicon-add" />
+                          </button>
+                        )}
                       <button
                         class="icon-button"
                         onClick={() => onCopyFirstPrompt(s.id)}

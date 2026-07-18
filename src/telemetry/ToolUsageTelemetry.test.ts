@@ -81,6 +81,45 @@ describe("ToolUsageTelemetry", () => {
     });
     expect(JSON.stringify(record)).not.toContain("/secret/project/file.ts");
     expect(JSON.stringify(record)).not.toContain("/other/file.ts");
+    expect(record.tools.read_file).not.toHaveProperty("projects");
+  });
+
+  it("aggregates only opaque project IDs when project scope is available", async () => {
+    const telemetryPath = path.join(tmpDir, "tool-usage.jsonl");
+    const telemetry = new ToolUsageTelemetry({
+      telemetryPath,
+      flushIntervalMs: 0,
+    });
+
+    telemetry.record({
+      toolName: "read_file",
+      params: { path: "/sensitive/root/file.ts" },
+      source: "agent",
+      projectId: "project-0123456789abcdef",
+      outcome: "ok",
+    });
+    telemetry.record({
+      toolName: "read_file",
+      source: "agent",
+      projectId: "project-0123456789abcdef",
+      outcome: "error",
+    });
+    telemetry.record({
+      toolName: "read_file",
+      source: "agent",
+      projectId: "project-fedcba9876543210",
+      outcome: "ok",
+    });
+    await telemetry.flush();
+
+    const [record] = (await readJsonLines(telemetryPath)) as Array<{
+      tools: Record<string, { projects?: Record<string, number> }>;
+    }>;
+    expect(record.tools.read_file.projects).toEqual({
+      "project-0123456789abcdef": 2,
+      "project-fedcba9876543210": 1,
+    });
+    expect(JSON.stringify(record)).not.toContain("/sensitive/root/file.ts");
   });
 
   it("aggregates compose metrics without raw script or result values", async () => {

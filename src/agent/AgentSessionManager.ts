@@ -1,4 +1,5 @@
 import * as crypto from "crypto";
+import { fileURLToPath, pathToFileURL } from "url";
 
 import type { AgentConfig, AgentMessage, SessionInfo } from "./types.js";
 import type { PendingQuestionRecoveryContext } from "../core/tools/types.js";
@@ -19,7 +20,9 @@ import { AgentSession } from "./AgentSession.js";
 import type { WorkspaceFolderInfo } from "./systemPrompt.js";
 import { AgentEngine } from "./AgentEngine.js";
 import type { AgentEvent } from "./types.js";
-import type { AgentMode } from "./modes.js";
+import { resolveMode, type AgentMode } from "./modes.js";
+import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
+import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
 import type { ReasoningEffort } from "./providers/types.js";
 import type { Question } from "./webview/types.js";
 import {
@@ -74,6 +77,15 @@ import {
 } from "./AgentSessionManagerHost.js";
 import { FleetAdmissionError, FleetScheduler } from "./FleetScheduler.js";
 import {
+  createSessionProjectScope,
+  createWorkspaceProjectId,
+  type ProjectScopeResolver,
+  type SessionProjectResolution,
+  type SessionProjectScope,
+  type WorkspaceProject,
+} from "../core/workspaceProjects.js";
+import { selectNewSessionProject } from "../adapters/vscode/workspaceProjectCapabilities.js";
+import {
   inferBackgroundDisplayStatus,
   pickBackgroundDisplayStatus,
 } from "./backgroundDisplayStatus.js";
@@ -93,6 +105,7 @@ import type { CommandApprovalPolicy } from "../approvals/commandApprovalPolicy.j
 
 const FLEET_VISIBILITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const MAX_BACKGROUND_HANDOFF_IMAGES = 8;
 
 /**
  * Per-turn budget for auto-continuing after a mode switch. Kept separate from
@@ -175,6 +188,7 @@ function formatBudgetKind(kind: string): string {
 }
 
 export interface CheckpointRevertPreviewResult {
+  projectId: string;
   checkpointId: string;
   sessionRevision: PersistenceRevision;
   persistenceRevision?: PersistenceRevision;
@@ -216,6 +230,17 @@ export class AgentSessionManager {
   private cwd: string;
   private apiKey?: string;
   private toolCtx?: ToolDispatchContext;
+  private activeRequestToolContexts = new Map<
+    string,
+    Readonly<ToolDispatchContext>
+  >();
+  private readonly releasedToolContexts = new WeakSet<
+    Readonly<ToolDispatchContext>
+  >();
+  private foregroundEngineRequest?: {
+    sessionId: string;
+    context: Readonly<ToolDispatchContext>;
+  };
   private devMode: boolean;
   private persistence?: SessionStore;
   private sessionRevisions = new Map<string, PersistenceRevision>();
@@ -225,10 +250,24 @@ export class AgentSessionManager {
   private sessionSendQueues = new Map<string, Promise<void>>();
   private log?: (msg: string) => void;
   private readonly host: AgentSessionManagerHost;
+  private readonly projectCatalog: ProjectScopeResolver;
+  private readonly projectCustomizationRegistry: ProjectCustomizationRegistry;
+  private readonly projectMcpHubRegistry: ProjectMcpHubRegistry | undefined;
+  private readonly legacyProjectScope: SessionProjectScope | undefined;
+  private readonly executionUnavailableReason: string | undefined;
+  private browserPreferredProjectId: string | undefined;
+  private readonly onBrowserPreferredProjectChanged:
+    | ((projectId: string) => void | Promise<void>)
+    | undefined;
   private activityTraceRecorder: ActivityTraceRecorderLike;
 
-  /** CheckpointManager shared across sessions (one shadow repo per workspace) */
+  /** Single-project compatibility override retained for focused tests. */
   private checkpointManager: CheckpointManagerLike | null = null;
+  /** Project-keyed shadow repositories. Never route by state-anchor cwd. */
+  private readonly checkpointManagers = new Map<
+    string,
+    CheckpointManagerLike
+  >();
   /** Checkpoints per session: sessionId → Checkpoint[] */
   private checkpoints = new Map<string, Checkpoint[]>();
   /** Pending waiters for background session completion: sessionId → resolvers */
@@ -459,6 +498,19 @@ export class AgentSessionManager {
       store,
     });
     this.host = mergeAgentSessionManagerHost(defaultHost, opts?.host);
+    this.projectCatalog =
+      opts?.projectCatalog ?? this.createLegacyProjectCatalog(cwd);
+    this.projectCustomizationRegistry =
+      opts?.projectCustomizationRegistry ?? new ProjectCustomizationRegistry();
+    this.projectMcpHubRegistry = opts?.projectMcpHubRegistry;
+    this.executionUnavailableReason = opts?.executionUnavailableReason;
+    this.browserPreferredProjectId = opts?.browserPreferredProjectId;
+    this.onBrowserPreferredProjectChanged =
+      opts?.onBrowserPreferredProjectChanged;
+    const firstProject = this.projectCatalog.listProjects()[0];
+    this.legacyProjectScope =
+      opts?.legacyProjectScope ??
+      (firstProject ? createSessionProjectScope(firstProject) : undefined);
     this.persistence = this.host.persistence;
     this.activityTraceRecorder = this.host.createActivityTraceRecorder({
       workspaceDir: cwd,
@@ -473,15 +525,139 @@ export class AgentSessionManager {
       maxDepth: this.bgDefaults.maxDepth ?? 2,
       maxChildrenPerParent: this.bgDefaults.maxChildrenPerParent ?? 4,
     });
+  }
 
-    // Initialize checkpoint manager asynchronously — failures are non-fatal
-    this.checkpointManager = this.host.createCheckpointManager({
-      workspaceDir: cwd,
-      taskId: "agent",
-      log: (msg: string) => log?.(msg),
+  private createLegacyProjectCatalog(cwd: string): ProjectScopeResolver {
+    const workspaceFolderUri = pathToFileURL(cwd).toString();
+    const project: WorkspaceProject = {
+      id: createWorkspaceProjectId(workspaceFolderUri),
+      name: cwd,
+      uri: workspaceFolderUri,
+      rootPath: cwd,
+      availability: { status: "available" },
+    };
+    return {
+      listProjects: () => [project],
+      resolveProjectForResource: () => project,
+      resolvePersistedScope: (scope): SessionProjectResolution =>
+        scope.projectId === project.id &&
+        scope.workspaceFolderUri === project.uri
+          ? {
+              status: "available",
+              project,
+              scope: createSessionProjectScope(project),
+            }
+          : { status: "missing", scope },
+    };
+  }
+
+  private selectProjectScope(input?: {
+    explicitProjectId?: string;
+    activeFilePath?: string;
+  }): SessionProjectScope {
+    this.requireWorkspaceExecution();
+    const selection = selectNewSessionProject(this.projectCatalog, {
+      explicitProjectId: input?.explicitProjectId,
+      activeResourceUri: input?.activeFilePath
+        ? pathToFileURL(input.activeFilePath).toString()
+        : undefined,
+      browserPreferredProjectId: this.browserPreferredProjectId,
     });
-    this.checkpointManager.initialize().catch((err: unknown) => {
-      log?.(`[checkpoint] Init error: ${err}`);
+    if (selection.status !== "selected") {
+      throw new Error("Open an available workspace folder to start a session.");
+    }
+    return selection.scope;
+  }
+
+  private async createBoundSession(
+    opts: Parameters<AgentSessionManagerHost["createSession"]>[0],
+  ): Promise<AgentSession> {
+    const allModes = await this.projectCustomizationRegistry.getModes(
+      opts.projectScope,
+    );
+    const agentMode = opts.agentMode ?? resolveMode(opts.mode, allModes);
+    const session = await this.host.createSession({ ...opts, agentMode });
+    const existingScope = session.projectScope;
+    if (existingScope === undefined) {
+      Object.defineProperty(session, "projectScope", {
+        value: Object.freeze({ ...opts.projectScope }),
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      });
+      Object.defineProperty(session, "projectAvailability", {
+        value: "available",
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      });
+      return session;
+    }
+    if (
+      existingScope.projectId !== opts.projectScope.projectId ||
+      existingScope.workspaceFolderUri !== opts.projectScope.workspaceFolderUri
+    ) {
+      throw new Error("Session factory returned a mismatched project scope.");
+    }
+    return session;
+  }
+
+  private async createRestoredSession(args: {
+    summary: SessionSummary;
+    metadata: PersistedSessionRecord["metadata"];
+    background?: boolean;
+  }): Promise<AgentSession> {
+    const persistedScope =
+      args.metadata.projectScope ??
+      args.summary.projectScope ??
+      this.legacyProjectScope;
+    if (persistedScope === undefined) {
+      throw new Error(
+        `Persisted session ${args.summary.id} has no project scope and no legacy migration project is available.`,
+      );
+    }
+    const resolution =
+      this.projectCatalog.resolvePersistedScope(persistedScope);
+    const providerId = this.host.providers.tryResolveProvider(
+      args.summary.model,
+    )?.id;
+    const activeContextProject = args.metadata.activeContextResourceUri
+      ? this.projectCatalog.resolveProjectForResource(
+          args.metadata.activeContextResourceUri,
+        )
+      : undefined;
+    let activeFilePath: string | undefined;
+    if (
+      activeContextProject?.id === persistedScope.projectId &&
+      args.metadata.activeContextResourceUri?.startsWith("file:")
+    ) {
+      try {
+        activeFilePath = fileURLToPath(args.metadata.activeContextResourceUri);
+      } catch {
+        activeFilePath = undefined;
+      }
+    }
+    const common = {
+      mode: args.summary.mode,
+      config: this.buildConfigForModel(args.summary.model),
+      background: args.background,
+      activeFilePath,
+      activeContextResourceUri: args.metadata.activeContextResourceUri,
+      workspaceFolders: this.getWorkspaceFolders(),
+      providerId,
+    };
+    if (resolution.status === "available") {
+      return this.createBoundSession({
+        ...common,
+        projectScope: resolution.scope,
+        devMode: this.devMode,
+        isBackground: args.background,
+      });
+    }
+    return AgentSession.createTranscriptOnly({
+      ...common,
+      projectScope: persistedScope,
+      projectAvailability: resolution.status,
     });
   }
 
@@ -494,23 +670,199 @@ export class AgentSessionManager {
     return this.host.workspace.getWorkspaceFolders();
   }
 
-  setToolContext(ctx: ToolDispatchContext): void {
-    this.toolCtx = ctx;
-    if (this.engine) {
-      this.engine.setToolRuntime(this.host.createToolRuntime(ctx));
+  private requireWorkspaceExecution(): void {
+    if (this.executionUnavailableReason) {
+      throw new Error(this.executionUnavailableReason);
     }
   }
 
-  private getBackgroundAgentSettings() {
+  private requireSessionExecution(session: AgentSession): string {
+    this.requireWorkspaceExecution();
+    const resolution = this.projectCatalog.resolvePersistedScope(
+      session.projectScope,
+    );
+    if (
+      session.projectAvailability !== "available" ||
+      resolution.status !== "available" ||
+      resolution.scope.projectId !== session.projectScope.projectId ||
+      resolution.scope.workspaceFolderUri !==
+        session.projectScope.workspaceFolderUri ||
+      resolution.scope.rootPath === undefined ||
+      resolution.scope.rootPath !== session.projectScope.rootPath
+    ) {
+      throw new Error(
+        `Project '${session.projectScope.displayName}' is unavailable for local execution.`,
+      );
+    }
+    return resolution.scope.rootPath;
+  }
+
+  private getCheckpointManagerForSession(
+    session: AgentSession,
+  ): CheckpointManagerLike {
+    const projectRoot = this.requireSessionExecution(session);
+    const projectId = session.projectScope.projectId;
+    if (
+      this.projectCatalog.listProjects().length === 1 &&
+      this.checkpointManager
+    ) {
+      this.checkpointManagers.set(projectId, this.checkpointManager);
+      return this.checkpointManager;
+    }
+    const existing = this.checkpointManagers.get(projectId);
+    if (existing) return existing;
+
+    const manager = this.host.createCheckpointManager({
+      workspaceDir: projectRoot,
+      taskId: "agent",
+      log: (message) => this.log?.(message),
+    });
+    this.checkpointManagers.set(projectId, manager);
+    manager.initialize?.().catch((error: unknown) => {
+      this.log?.(`[checkpoint] Init error for project ${projectId}: ${error}`);
+    });
+    return manager;
+  }
+
+  private peekCheckpointManagerForSession(
+    session: AgentSession,
+  ): CheckpointManagerLike | undefined {
+    return this.projectCatalog.listProjects().length === 1 &&
+      this.checkpointManager
+      ? this.checkpointManager
+      : this.checkpointManagers.get(session.projectScope.projectId);
+  }
+
+  private async getInitializedCheckpointManagerForSession(
+    session: AgentSession,
+  ): Promise<CheckpointManagerLike | null> {
+    const manager = this.getCheckpointManagerForSession(session);
+    if (typeof manager.initialize !== "function") return manager;
+    return (await manager.initialize()) === false ? null : manager;
+  }
+
+  private captureSessionToolContext(
+    session: AgentSession,
+    overrides?: Partial<ToolDispatchContext>,
+    inheritedContext?: Readonly<ToolDispatchContext>,
+  ): Readonly<ToolDispatchContext> | undefined {
+    const projectRoot = this.requireSessionExecution(session);
+    const baseContext = inheritedContext ?? this.toolCtx;
+    if (!baseContext) return undefined;
+    baseContext.approvalManager.bindSessionProject(
+      session.id,
+      session.projectScope,
+    );
+    if (!inheritedContext) {
+      this.projectMcpHubRegistry?.ensure(session.projectScope);
+    }
+    const mcpHubLease = inheritedContext?.mcpHubLease
+      ? inheritedContext.mcpHubLease.retain()
+      : this.projectMcpHubRegistry?.acquire(session.projectScope);
+    try {
+      const captured = inheritedContext
+        ? { ...baseContext, ...overrides }
+        : this.host.captureProjectToolContext(
+            { ...baseContext, ...overrides },
+            session.projectScope,
+          );
+      if (
+        captured.projectScope !== undefined &&
+        (captured.projectScope.projectId !== session.projectScope.projectId ||
+          captured.projectScope.workspaceFolderUri !==
+            session.projectScope.workspaceFolderUri)
+      ) {
+        throw new Error("Tool runtime returned a mismatched project scope.");
+      }
+      if (
+        captured.projectRoot !== undefined &&
+        captured.projectRoot !== projectRoot
+      ) {
+        throw new Error("Tool runtime returned a mismatched project root.");
+      }
+      return Object.freeze({
+        ...captured,
+        sessionId: session.id,
+        mode: session.mode,
+        projectScope: session.projectScope,
+        projectRoot,
+        workspaceProjectRoots: this.projectCatalog
+          .listProjects()
+          .flatMap((project) => (project.rootPath ? [project.rootPath] : [])),
+        ...(mcpHubLease ? { mcpHub: mcpHubLease.hub, mcpHubLease } : {}),
+        onFileRead: (filePath: string) => session.trackFileRead(filePath),
+        getAdvertisedSkills: () => session.getAdvertisedSkills(),
+        getAdvertisedRules: () => session.getAdvertisedRules(),
+        onSkillLoad: (skillName: string) => session.trackLoadedSkill(skillName),
+      });
+    } catch (error) {
+      mcpHubLease?.release();
+      throw error;
+    }
+  }
+
+  private bindEngineToSession(
+    engine: AgentEngine,
+    session: AgentSession,
+    overrides?: Partial<ToolDispatchContext>,
+    inheritedContext?: Readonly<ToolDispatchContext>,
+  ): Readonly<ToolDispatchContext> | undefined {
+    if (engine === this.engine && this.foregroundEngineRequest) {
+      throw new Error(
+        `Foreground engine is already bound to session '${this.foregroundEngineRequest.sessionId}'.`,
+      );
+    }
+    const context = this.captureSessionToolContext(
+      session,
+      overrides,
+      inheritedContext,
+    );
+    if (!context) return undefined;
+    try {
+      this.refreshMcpToolDisclosure(session, context);
+      engine.setToolRuntime(this.host.createToolRuntime(context));
+      this.activeRequestToolContexts.set(session.id, context);
+      if (engine === this.engine) {
+        this.foregroundEngineRequest = { sessionId: session.id, context };
+      }
+      return context;
+    } catch (error) {
+      context.mcpHubLease?.release();
+      throw error;
+    }
+  }
+
+  private releaseSessionToolContext(
+    sessionId: string,
+    context: Readonly<ToolDispatchContext> | undefined,
+  ): void {
+    if (!context || this.releasedToolContexts.has(context)) return;
+    this.releasedToolContexts.add(context);
+    if (this.activeRequestToolContexts.get(sessionId) === context) {
+      this.activeRequestToolContexts.delete(sessionId);
+    }
+    if (this.foregroundEngineRequest?.context === context) {
+      this.foregroundEngineRequest = undefined;
+    }
+    context.mcpHubLease?.release();
+  }
+
+  setToolContext(ctx: ToolDispatchContext): void {
+    // This is a window-level capability source only. Active requests capture a
+    // project-bound snapshot and must not be mutated when the source changes.
+    this.toolCtx = ctx;
+  }
+
+  private getBackgroundAgentSettings(scope?: Readonly<SessionProjectScope>) {
     return normalizeBackgroundAgentSettings(
-      this.host.config.getBackgroundAgentSettings(),
+      this.host.config.getBackgroundAgentSettings(scope),
     );
   }
 
-  private getAcpAdditionalDirectories(): string[] {
+  private getAcpAdditionalDirectories(projectRoot: string): string[] {
     return this.getWorkspaceFolders()
       .map((folder) => folder.path)
-      .filter((folderPath) => folderPath && folderPath !== this.cwd);
+      .filter((folderPath) => folderPath && folderPath !== projectRoot);
   }
 
   private acpTextFromContentBlock(block: AcpContentBlock): string {
@@ -597,6 +949,7 @@ export class AgentSessionManager {
     sessionId: string;
     task: string;
     readonlyOnly: boolean;
+    requestContext: Readonly<ToolDispatchContext> | undefined;
     request: RequestPermissionRequest;
   }): Promise<RequestPermissionResponse> {
     const toolKind = args.request.toolCall.kind;
@@ -613,7 +966,7 @@ export class AgentSessionManager {
 
     this.noteBackgroundProgress(args.sessionId, "awaiting_approval");
 
-    const selected = await this.toolCtx?.onApprovalRequest?.(
+    const selected = await args.requestContext?.onApprovalRequest?.(
       {
         kind: this.acpToolKindToApprovalKind(toolKind),
         title:
@@ -727,17 +1080,21 @@ export class AgentSessionManager {
           model: event.modelFallback.effectiveModel,
           autoCondenseThreshold: this.getCondenseThresholdForModel(
             event.modelFallback.effectiveModel,
+            session.projectScope,
           ),
         });
       }
       this.saveSession(sessionId);
       this.notifySessionsChanged();
     }
-    this.activityTraceRecorder.appendAgentEvent(
-      sessionId,
-      event,
-      session?.background ? "background_agent" : "foreground_agent",
-    );
+    if (session) {
+      this.activityTraceRecorder.appendAgentEvent(
+        sessionId,
+        session.projectScope.projectId,
+        event,
+        session.background ? "background_agent" : "foreground_agent",
+      );
+    }
     this.onEvent?.(sessionId, event);
     for (const listener of this.agentEventListeners) {
       listener(sessionId, event);
@@ -772,7 +1129,7 @@ export class AgentSessionManager {
     turnIndex: number,
     opts?: { refreshExisting?: boolean },
   ): Promise<Checkpoint | null> {
-    if (turnIndex <= 0 || !this.checkpointManager) return null;
+    if (turnIndex <= 0) return null;
 
     const existingBefore = this.checkpoints.get(session.id) ?? [];
     const existingMatch = existingBefore.find(
@@ -782,8 +1139,14 @@ export class AgentSessionManager {
       return null;
     }
 
-    const checkpoint = await this.checkpointManager.createCheckpoint(turnIndex);
-    if (!checkpoint) return null;
+    const checkpointManager = this.getCheckpointManagerForSession(session);
+    const createdCheckpoint =
+      await checkpointManager.createCheckpoint(turnIndex);
+    if (!createdCheckpoint) return null;
+    const checkpoint: Checkpoint = {
+      ...createdCheckpoint,
+      projectId: session.projectScope.projectId,
+    };
 
     const existingAfter = this.checkpoints.get(session.id) ?? [];
     const existingIndex = existingAfter.findIndex(
@@ -796,6 +1159,7 @@ export class AgentSessionManager {
       }
       const refreshed: Checkpoint = {
         ...existingAfter[existingIndex],
+        projectId: session.projectScope.projectId,
         commitHash: checkpoint.commitHash,
         createdAt: checkpoint.createdAt,
       };
@@ -818,9 +1182,6 @@ export class AgentSessionManager {
   private getEngine(): AgentEngine {
     if (!this.engine) {
       this.engine = this.host.createEngine(this.host.providers, this.log);
-      if (this.toolCtx) {
-        this.engine.setToolRuntime(this.host.createToolRuntime(this.toolCtx));
-      }
     }
     return this.engine;
   }
@@ -829,9 +1190,12 @@ export class AgentSessionManager {
     Object.assign(this.config, config);
   }
 
-  private getCondenseThresholdForModel(model: string): number {
+  private getCondenseThresholdForModel(
+    model: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): number {
     try {
-      return this.host.config.getCondenseThresholdForModel(model);
+      return this.host.config.getCondenseThresholdForModel(model, scope);
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured condense threshold for ${model}: ${err instanceof Error ? err.message : String(err)}`,
@@ -844,17 +1208,36 @@ export class AgentSessionManager {
     }
   }
 
-  private buildConfigForModel(model: string): AgentConfig {
-    return {
+  private buildConfigForModel(
+    model: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): AgentConfig {
+    const base = {
       ...this.config,
       model,
-      autoCondenseThreshold: this.getCondenseThresholdForModel(model),
+      autoCondenseThreshold: this.getCondenseThresholdForModel(model, scope),
     };
+    if (!scope || !this.host.config.resolveAgentConfig) return base;
+    try {
+      return this.host.config.resolveAgentConfig(base, scope);
+    } catch (err) {
+      this.log?.(
+        `[agent] Failed to resolve project agent config: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return base;
+    }
   }
 
-  private getModelForMode(mode: string): string {
+  private getModelForMode(
+    mode: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): string {
     try {
-      return this.host.config.resolveModelForMode(mode, this.config.model);
+      return this.host.config.resolveModelForMode(
+        mode,
+        this.config.model,
+        scope,
+      );
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured model for mode ${mode}: ${err instanceof Error ? err.message : String(err)}`,
@@ -863,9 +1246,14 @@ export class AgentSessionManager {
     }
   }
 
-  private getReasoningEffortForMode(mode: string): ReasoningEffort {
+  private getReasoningEffortForMode(
+    mode: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): ReasoningEffort {
     try {
-      return this.host.config.resolveReasoningEffortForMode?.(mode) ?? "high";
+      return (
+        this.host.config.resolveReasoningEffortForMode?.(mode, scope) ?? "high"
+      );
     } catch (err) {
       this.log?.(
         `[agent] Failed to resolve configured reasoning effort for mode ${mode}: ${err instanceof Error ? err.message : String(err)}`,
@@ -889,11 +1277,14 @@ export class AgentSessionManager {
   private applyThresholdToSession(session: AgentSession): void {
     session.autoCondenseThreshold = this.getCondenseThresholdForModel(
       session.model,
+      session.projectScope,
     );
   }
 
-  private buildMcpToolDisclosure(): McpToolDisclosurePartition | undefined {
-    const mcpHub = this.toolCtx?.mcpHub;
+  private buildMcpToolDisclosure(
+    context: Pick<ToolDispatchContext, "mcpHub"> | undefined = this.toolCtx,
+  ): McpToolDisclosurePartition | undefined {
+    const mcpHub = context?.mcpHub;
     if (!mcpHub) return undefined;
     const tools = mcpHub.getToolDefs();
     if (tools.length === 0) return undefined;
@@ -909,17 +1300,68 @@ export class AgentSessionManager {
     return partitionMcpToolsForDisclosure(tools, { serverConfigs });
   }
 
-  private refreshMcpToolDisclosure(session: AgentSession): void {
-    session.mcpToolDisclosure = this.buildMcpToolDisclosure();
+  private refreshMcpToolDisclosure(
+    session: AgentSession,
+    context?: Pick<ToolDispatchContext, "mcpHub">,
+  ): void {
+    const currentContext =
+      context ??
+      (() => {
+        const generation = this.projectMcpHubRegistry?.getCurrent(
+          session.projectScope,
+        );
+        return generation ? { mcpHub: generation.hub } : undefined;
+      })();
+    session.mcpToolDisclosure = this.buildMcpToolDisclosure(currentContext);
   }
 
   getConfig(): AgentConfig {
     return this.config;
   }
 
+  getWorkspaceProjects(): readonly WorkspaceProject[] {
+    if (!this.executionUnavailableReason)
+      return this.projectCatalog.listProjects();
+    return this.projectCatalog.listProjects().map((project) => ({
+      ...project,
+      rootPath: undefined,
+      availability: {
+        status: "unavailable" as const,
+        reason: "root_unavailable" as const,
+        message: this.executionUnavailableReason!,
+      },
+    }));
+  }
+
+  getDefaultProjectScope(): SessionProjectScope | undefined {
+    if (this.executionUnavailableReason) return undefined;
+    const selection = selectNewSessionProject(this.projectCatalog, {
+      browserPreferredProjectId: this.browserPreferredProjectId,
+    });
+    return selection.status === "selected" ? selection.scope : undefined;
+  }
+
+  setBrowserPreferredProject(projectId: string): boolean {
+    const project = this.projectCatalog
+      .listProjects()
+      .find((candidate) => candidate.id === projectId);
+    if (!project || project.availability.status !== "available") return false;
+    if (this.browserPreferredProjectId === projectId) return true;
+    this.browserPreferredProjectId = projectId;
+    this.notifySessionsChanged();
+    Promise.resolve(this.onBrowserPreferredProjectChanged?.(projectId)).catch(
+      (error: unknown) => {
+        this.log?.(
+          `[browser] failed to persist preferred project ${projectId}: ${error}`,
+        );
+      },
+    );
+    return true;
+  }
+
   async createForegroundSession(
     mode: string,
-    opts?: { activeFilePath?: string },
+    opts?: { activeFilePath?: string; projectId?: string },
   ): Promise<AgentSession> {
     await this.discardEmptyForegroundSession();
     return this.createSession(mode, opts);
@@ -927,30 +1369,42 @@ export class AgentSessionManager {
 
   async createSession(
     mode: string,
-    opts?: { activeFilePath?: string },
+    opts?: { activeFilePath?: string; projectId?: string },
   ): Promise<AgentSession> {
-    const model = this.getModelForMode(mode);
-    const config = this.buildConfigForModel(model);
+    const projectScope = this.selectProjectScope({
+      explicitProjectId: opts?.projectId,
+      activeFilePath: opts?.activeFilePath,
+    });
+    const model = this.getModelForMode(mode, projectScope);
+    const config = this.buildConfigForModel(model, projectScope);
     const providerId = this.host.providers.tryResolveProvider(config.model)?.id;
     this.updateConfig({
       model,
       autoCondenseThreshold: config.autoCondenseThreshold,
     });
-    const session = await this.host.createSession({
+    const projectMcpGeneration =
+      this.projectMcpHubRegistry?.getCurrent(projectScope);
+    const session = await this.createBoundSession({
       mode,
       config,
-      cwd: this.cwd,
+      projectScope,
       workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       activeFilePath: opts?.activeFilePath,
+      activeContextResourceUri: opts?.activeFilePath
+        ? pathToFileURL(opts.activeFilePath).toString()
+        : undefined,
       providerId,
-      mcpToolDisclosure: this.buildMcpToolDisclosure(),
+      mcpToolDisclosure: this.buildMcpToolDisclosure(
+        projectMcpGeneration ? { mcpHub: projectMcpGeneration.hub } : undefined,
+      ),
     });
     this.applyReasoningEffortToSession(
       session,
-      this.getReasoningEffortForMode(mode),
+      this.getReasoningEffortForMode(mode, projectScope),
     );
     this.sessions.set(session.id, session);
+    this.getCheckpointManagerForSession(session);
     const pendingPolicy = this.commandApprovalPolicies.get("agent");
     if (pendingPolicy) {
       this.commandApprovalPolicies.set(session.id, pendingPolicy);
@@ -965,9 +1419,10 @@ export class AgentSessionManager {
    * Rebuild the system prompt for all active foreground sessions.
    * Called when instruction files (AGENTS.md, CLAUDE.md, etc.) change on disk.
    */
-  async rebuildSystemPrompts(): Promise<void> {
+  async rebuildSystemPrompts(projectId?: string): Promise<void> {
     const fg = this.getForegroundSession();
-    if (!fg) return;
+    if (!fg || (projectId && fg.projectScope.projectId !== projectId)) return;
+    this.requireSessionExecution(fg);
     this.refreshMcpToolDisclosure(fg);
     await fg.rebuildSystemPrompt({
       devMode: this.devMode,
@@ -982,11 +1437,15 @@ export class AgentSessionManager {
    * provider-specific behavioral tuning takes effect.
    */
   async setModel(model: string): Promise<void> {
+    const fg = this.getForegroundSession();
+    if (fg) this.requireSessionExecution(fg);
     this.updateConfig({
       model,
-      autoCondenseThreshold: this.getCondenseThresholdForModel(model),
+      autoCondenseThreshold: this.getCondenseThresholdForModel(
+        model,
+        fg?.projectScope,
+      ),
     });
-    const fg = this.getForegroundSession();
     if (!fg) return;
 
     fg.model = model;
@@ -1109,6 +1568,8 @@ export class AgentSessionManager {
       lastCacheReadTokens: session.lastCacheReadTokens,
       reasoningEffort: session.reasoningEffort,
       background: session.background,
+      projectScope: session.projectScope,
+      activeContextResourceUri: session.activeContextResourceUri,
       getLoadedSkills: () => session.getLoadedSkills?.() ?? [],
       getAllMessages: () => session.getAllMessages(),
       checkpoints: this.checkpoints.get(session.id) ?? [],
@@ -1191,6 +1652,10 @@ export class AgentSessionManager {
     },
   ): PersistedSessionRecord {
     const messages = opts?.messages ?? session.getAllMessages();
+    const revertPending =
+      opts?.revertPending === null
+        ? undefined
+        : (opts?.revertPending ?? this.sessionRevertPending.get(session.id));
     return {
       summary: {
         schemaVersion: 1,
@@ -1204,9 +1669,12 @@ export class AgentSessionManager {
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,
         background: session.background,
+        projectScope: session.projectScope,
       },
       messages,
       metadata: {
+        projectScope: session.projectScope,
+        activeContextResourceUri: session.activeContextResourceUri,
         mode: session.mode,
         model: session.model,
         totalInputTokens: session.totalInputTokens,
@@ -1217,20 +1685,28 @@ export class AgentSessionManager {
         lastCacheReadTokens: session.lastCacheReadTokens,
         reasoningEffort: session.reasoningEffort,
         loadedSkills: session.getLoadedSkills?.() ?? [],
-        runState: session.runState ? { ...session.runState } : undefined,
+        runState: session.runState
+          ? { ...session.runState, projectId: session.projectScope.projectId }
+          : undefined,
         fleet: session.fleetMetadata
-          ? structuredClone(session.fleetMetadata)
+          ? {
+              ...structuredClone(session.fleetMetadata),
+              projectId: session.projectScope.projectId,
+            }
           : undefined,
         checkpointState: {
-          baseCommit: this.checkpointManager?.baseCommit ?? null,
+          projectId: session.projectScope.projectId,
+          baseCommit:
+            this.peekCheckpointManagerForSession(session)?.baseCommit ?? null,
           checkpoints:
             opts?.checkpoints ?? this.checkpoints.get(session.id) ?? [],
         },
-        revertPending:
-          opts?.revertPending === null
-            ? undefined
-            : (opts?.revertPending ??
-              this.sessionRevertPending.get(session.id)),
+        revertPending: revertPending
+          ? {
+              ...revertPending,
+              projectId: session.projectScope.projectId,
+            }
+          : undefined,
       },
     };
   }
@@ -1252,6 +1728,8 @@ export class AgentSessionManager {
       background: s.background,
       createdAt: s.createdAt,
       lastActiveAt: s.lastActiveAt,
+      projectScope: s.projectScope,
+      projectAvailability: s.projectAvailability,
     }));
   }
 
@@ -1285,6 +1763,7 @@ export class AgentSessionManager {
     }
 
     const fg = this.getForegroundSession();
+    if (fg) this.requireSessionExecution(fg);
 
     const mode = fg?.mode ?? "code";
     const model = fg?.model ?? this.config.model;
@@ -1303,14 +1782,16 @@ export class AgentSessionManager {
         }
       : this.buildConfigForModel(model);
 
-    const session = await this.host.createSession({
+    const projectScope = fg?.projectScope ?? this.selectProjectScope();
+    const session = await this.createBoundSession({
       mode,
       agentMode: fg?.agentMode,
       config,
-      cwd: this.cwd,
+      projectScope,
       workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       activeFilePath: fg?.activeFilePath,
+      activeContextResourceUri: fg?.activeContextResourceUri,
       providerId,
     });
 
@@ -1329,28 +1810,22 @@ export class AgentSessionManager {
     });
     session.status = "streaming";
 
-    const sideCtx: ToolDispatchContext = {
-      ...this.toolCtx,
-      sessionId: session.id,
-      mode: session.agentMode.slug,
-      onModeSwitch: undefined,
-      onApprovalRequest: undefined,
-      onQuestion: undefined,
-      onSpawnBackground: undefined,
-      onGetBackgroundStatus: undefined,
-      onGetBackgroundResult: undefined,
-      onKillBackground: undefined,
-      onFinalStatus: undefined,
-      onFileRead: (filePath) => {
-        session.trackFileRead(filePath);
-      },
-      getAdvertisedSkills: () => session.getAdvertisedSkills(),
-      getAdvertisedRules: () => session.getAdvertisedRules(),
-      onSkillLoad: (skillName) => session.trackLoadedSkill(skillName),
-    };
-
     const engine = this.host.createEngine(this.host.providers, this.log);
-    engine.setToolRuntime(this.host.createToolRuntime(sideCtx));
+    const sideCtx = this.bindEngineToSession(
+      engine,
+      session,
+      {
+        onModeSwitch: undefined,
+        onApprovalRequest: undefined,
+        onQuestion: undefined,
+        onSpawnBackground: undefined,
+        onGetBackgroundStatus: undefined,
+        onGetBackgroundResult: undefined,
+        onKillBackground: undefined,
+        onFinalStatus: undefined,
+      },
+      fg ? this.activeRequestToolContexts.get(fg.id) : undefined,
+    );
 
     let answer = "";
     const toolCalls: BtwQuestionResult["toolCalls"] = [];
@@ -1421,6 +1896,7 @@ export class AgentSessionManager {
         }
       }
     } finally {
+      this.releaseSessionToolContext(session.id, sideCtx);
       this.btwInFlight = false;
       if (deadline) this.host.timers.clearTimeout(deadline);
       externalSignal?.removeEventListener("abort", onExternalAbort);
@@ -1476,6 +1952,7 @@ export class AgentSessionManager {
     }
 
     return this.withSessionSendQueue(session.id, async () => {
+      this.requireSessionExecution(session);
       const previousRunSettled = this.sessionRunSettled.get(session.id);
       if (previousRunSettled) {
         await previousRunSettled;
@@ -1614,13 +2091,15 @@ export class AgentSessionManager {
       });
       this.sessionRunSettled.set(session.id, runSettled);
 
+      const engine = this.getEngine();
+      const requestToolContext = this.bindEngineToSession(engine, session);
       let runAbortGeneration = session.abortGeneration;
       try {
         while (true) {
           let naturalDone = false;
           runAbortGeneration = session.abortGeneration;
 
-          for await (const event of this.getEngine().run(session)) {
+          for await (const event of engine.run(session)) {
             if (
               session.isAborted ||
               session.abortGeneration !== runAbortGeneration
@@ -1741,6 +2220,7 @@ export class AgentSessionManager {
           totalCacheCreationTokens: session.totalCacheCreationTokens,
         });
       } finally {
+        this.releaseSessionToolContext(session.id, requestToolContext);
         this.host.timers.clearInterval(inFlightPersistTimer);
         persistIfHistoryChanged();
         if (this.sessionRunSettled.get(session.id) === runSettled) {
@@ -1980,6 +2460,7 @@ export class AgentSessionManager {
   async retrySession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    this.requireSessionExecution(session);
 
     // Force re-creation of the engine so it picks up refreshed credentials
     this.engine = null;
@@ -2004,11 +2485,13 @@ export class AgentSessionManager {
     );
     this.notifySessionsChanged();
 
+    const engine = this.getEngine();
+    const requestToolContext = this.bindEngineToSession(engine, session);
     let modeSwitchResumeCount = 0;
     try {
       while (true) {
         let naturalDone = false;
-        for await (const event of this.getEngine().run(session)) {
+        for await (const event of engine.run(session)) {
           if (event.type === "done") {
             // Defer done — a queued mode-switch resume may continue this turn.
             this.saveSession(session.id);
@@ -2065,6 +2548,7 @@ export class AgentSessionManager {
         totalCacheCreationTokens: session.totalCacheCreationTokens,
       });
     } finally {
+      this.releaseSessionToolContext(session.id, requestToolContext);
       this.host.timers.clearInterval(inFlightPersistTimer);
       persistIfHistoryChanged();
       this.notifySessionsChanged();
@@ -2086,19 +2570,26 @@ export class AgentSessionManager {
   ): Promise<AgentSession | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
+    this.requireSessionExecution(session);
 
-    const model = this.getModelForMode(mode);
+    const model = this.getModelForMode(mode, session.projectScope);
     const newProviderId = this.host.providers.tryResolveProvider(model)?.id;
 
     session.model = model;
     session.providerId = newProviderId;
     this.applyReasoningEffortToSession(
       session,
-      this.getReasoningEffortForMode(mode),
+      this.getReasoningEffortForMode(mode, session.projectScope),
     );
     this.applyThresholdToSession(session);
     this.refreshMcpToolDisclosure(session);
-    await session.setMode(mode, opts);
+    const agentMode =
+      opts?.agentMode ??
+      resolveMode(
+        mode,
+        await this.projectCustomizationRegistry.getModes(session.projectScope),
+      );
+    await session.setMode(mode, { ...opts, agentMode });
 
     if (!session.background && this.foregroundId === session.id) {
       this.updateConfig({
@@ -2172,16 +2663,19 @@ export class AgentSessionManager {
    * Manually condense the foreground session's context.
    * Emits condense or condense_error events via onEvent.
    */
-  private buildPreservedContext(session: AgentSession): {
+  private buildPreservedContext(
+    session: AgentSession,
+    context: Readonly<ToolDispatchContext> | undefined,
+  ): {
     toolNames: string[];
     mcpServerNames: string[];
     activeSkills: string[];
   } {
-    this.refreshMcpToolDisclosure(session);
-    const connectedMcpToolDefs = this.toolCtx?.mcpHub?.getToolDefs() ?? [];
+    this.refreshMcpToolDisclosure(session, context);
+    const connectedMcpToolDefs = context?.mcpHub?.getToolDefs() ?? [];
     const providerMcpToolDefs =
       session.mcpToolDisclosure?.inlineTools ?? connectedMcpToolDefs;
-    const rawTools = this.toolCtx
+    const rawTools = context
       ? [
           ...getAgentTools(session.agentMode, providerMcpToolDefs, false),
           todoTool,
@@ -2204,8 +2698,13 @@ export class AgentSessionManager {
     session: AgentSession,
     isAutomatic: boolean,
   ): Promise<void> {
+    this.requireSessionExecution(session);
     const engine = this.getEngine();
-    const preservedContext = this.buildPreservedContext(session);
+    const requestToolContext = this.bindEngineToSession(engine, session);
+    const preservedContext = this.buildPreservedContext(
+      session,
+      requestToolContext,
+    );
     session.status = "streaming";
     this.notifySessionsChanged();
 
@@ -2285,6 +2784,7 @@ export class AgentSessionManager {
       const error = err instanceof Error ? err.message : String(err);
       this.recordAndEmitEvent(session.id, { type: "condense_error", error });
     } finally {
+      this.releaseSessionToolContext(session.id, requestToolContext);
       session.status = "idle";
       this.notifySessionsChanged();
     }
@@ -2293,7 +2793,9 @@ export class AgentSessionManager {
   async condenseCurrentSession(): Promise<void> {
     const session = this.getForegroundSession();
     if (!session) return;
-    await this.condenseSession(session, false);
+    await this.withSessionSendQueue(session.id, () =>
+      this.condenseSession(session, false),
+    );
   }
 
   async maybeAutoCondenseForegroundSession(): Promise<void> {
@@ -2319,7 +2821,8 @@ export class AgentSessionManager {
    */
   async createManualCheckpoint(): Promise<Checkpoint | null> {
     const session = this.getForegroundSession();
-    if (!session || !this.checkpointManager) return null;
+    if (!session) return null;
+    this.requireSessionExecution(session);
 
     const turnIndex = session
       .getAllMessages()
@@ -2338,11 +2841,17 @@ export class AgentSessionManager {
     sessionId: string,
     checkpointId: string,
   ): Promise<CheckpointRevertPreviewResult | null> {
+    const session = this.sessions.get(sessionId);
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
-    if (!checkpoint || !this.checkpointManager) return null;
-    const preview = await this.checkpointManager.previewRevert(checkpoint);
+    if (!session || !checkpoint) return null;
+    this.requireSessionExecution(session);
+    const checkpointManager =
+      await this.getInitializedCheckpointManagerForSession(session);
+    if (!checkpointManager) return null;
+    const preview = await checkpointManager.previewRevert(checkpoint);
     if (!preview) return null;
     return {
+      projectId: session.projectScope.projectId,
       checkpointId,
       sessionRevision: this.currentSessionRevisionToken(sessionId),
       persistenceRevision: this.sessionRevisions.get(sessionId),
@@ -2360,20 +2869,32 @@ export class AgentSessionManager {
     checkpointId: string,
     expectedSessionRevision?: PersistenceRevision,
     expectedPersistenceRevision?: PersistenceRevision,
+    expectedProjectId?: string,
   ): Promise<CheckpointRevertResult> {
+    const session = this.sessions.get(sessionId);
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
-    if (!checkpoint || !this.checkpointManager) {
+    if (!session || !checkpoint) {
       return { ok: false, reason: "not_found" };
+    }
+    try {
+      this.requireSessionExecution(session);
+    } catch {
+      return { ok: false, reason: "not_found" };
+    }
+    if (
+      expectedProjectId !== undefined &&
+      expectedProjectId !== session.projectScope.projectId
+    ) {
+      return {
+        ok: false,
+        reason: "session_conflict",
+        currentRevision: this.currentSessionRevisionToken(sessionId),
+      };
     }
 
     const pendingSave = this.sessionSaveQueues.get(sessionId);
     if (pendingSave) {
       await pendingSave.catch(() => undefined);
-    }
-
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      return { ok: false, reason: "not_found" };
     }
 
     if (
@@ -2429,8 +2950,13 @@ export class AgentSessionManager {
       };
     }
 
+    const checkpointManager =
+      await this.getInitializedCheckpointManagerForSession(session);
+    if (!checkpointManager) {
+      return { ok: false, reason: "workspace_revert_failed" };
+    }
     const workspaceReverted =
-      await this.checkpointManager.revertToCheckpoint(checkpoint);
+      await checkpointManager.revertToCheckpoint(checkpoint);
     if (!workspaceReverted) {
       return { ok: false, reason: "workspace_revert_failed" };
     }
@@ -2468,7 +2994,13 @@ export class AgentSessionManager {
     const checkpoints = this.checkpoints.get(sessionId) ?? [];
     return crypto
       .createHash("sha256")
-      .update(JSON.stringify({ checkpoints, messages }))
+      .update(
+        JSON.stringify({
+          projectId: session?.projectScope.projectId,
+          checkpoints,
+          messages,
+        }),
+      )
       .digest("hex");
   }
 
@@ -2543,6 +3075,7 @@ export class AgentSessionManager {
     failedSaveResult: PersistResult,
   ): Promise<void> {
     const pending: RevertRecoveryState = {
+      projectId: session.projectScope.projectId,
       checkpointId: checkpoint.id,
       sessionRevision:
         "currentRevision" in failedSaveResult
@@ -2564,6 +3097,11 @@ export class AgentSessionManager {
     try {
       const readResult = await this.persistence.readSession(session.id);
       if (!readResult.ok) return;
+      const persistedProjectId =
+        readResult.value.metadata.projectScope?.projectId ??
+        readResult.value.summary.projectScope?.projectId ??
+        this.legacyProjectScope?.projectId;
+      if (persistedProjectId !== session.projectScope.projectId) return;
       const result = await this.persistence.saveSession({
         session: {
           ...readResult.value,
@@ -2593,34 +3131,50 @@ export class AgentSessionManager {
     checkpointId: string,
     scope: "turn" | "all",
   ): Promise<string> {
+    const session = this.sessions.get(sessionId);
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
-    if (!checkpoint || !this.checkpointManager) return "";
+    if (!session || !checkpoint) return "";
+    const checkpointManager =
+      await this.getInitializedCheckpointManagerForSession(session);
+    if (!checkpointManager) return "";
 
-    const baseHash = this.checkpointManager.baseCommit;
+    const baseHash = checkpointManager.baseCommit;
     if (!baseHash) return "";
 
     if (scope === "all") {
-      return this.checkpointManager.getDiffBetween(
-        baseHash,
-        checkpoint.commitHash,
-      );
+      return checkpointManager.getDiffBetween(baseHash, checkpoint.commitHash);
     }
 
     // "turn" scope: diff from the previous checkpoint to this one
     const all = this.checkpoints.get(sessionId) ?? [];
     const idx = all.findIndex((c) => c.id === checkpointId);
     const fromHash = idx > 0 ? all[idx - 1].commitHash : baseHash;
-    return this.checkpointManager.getDiffBetween(
-      fromHash,
-      checkpoint.commitHash,
-    );
+    return checkpointManager.getDiffBetween(fromHash, checkpoint.commitHash);
   }
 
   private findCheckpoint(
     sessionId: string,
     checkpointId: string,
   ): Checkpoint | undefined {
-    return this.checkpoints.get(sessionId)?.find((c) => c.id === checkpointId);
+    const session = this.sessions.get(sessionId);
+    const checkpoints = this.checkpoints.get(sessionId);
+    const checkpoint = checkpoints?.find(
+      (candidate) => candidate.id === checkpointId,
+    );
+    if (!session || !checkpoint) return undefined;
+    const projectId = session.projectScope.projectId;
+    if (checkpoint.projectId !== undefined) {
+      return checkpoint.projectId === projectId ? checkpoint : undefined;
+    }
+
+    const pinnedCheckpoint = { ...checkpoint, projectId };
+    this.checkpoints.set(
+      sessionId,
+      checkpoints!.map((candidate) =>
+        candidate === checkpoint ? pinnedCheckpoint : candidate,
+      ),
+    );
+    return pinnedCheckpoint;
   }
 
   // ---------------------------------------------------------------------------
@@ -2649,8 +3203,21 @@ export class AgentSessionManager {
     return this.persistence?.loadMessages(sessionId) ?? null;
   }
 
-  getRevertRecoveryState(sessionId: string): RevertRecoveryState | null {
-    return this.sessionRevertPending.get(sessionId) ?? null;
+  getRevertRecoveryState(
+    sessionId: string,
+  ): (RevertRecoveryState & { projectId: string }) | null {
+    const session = this.sessions.get(sessionId);
+    const recovery = this.sessionRevertPending.get(sessionId);
+    if (!session || !recovery) return null;
+    const projectId = session.projectScope.projectId;
+    if (recovery.projectId !== undefined && recovery.projectId !== projectId) {
+      return null;
+    }
+    const attributedRecovery = { ...recovery, projectId };
+    if (recovery.projectId !== projectId) {
+      this.sessionRevertPending.set(sessionId, attributedRecovery);
+    }
+    return attributedRecovery;
   }
 
   /**
@@ -2681,28 +3248,31 @@ export class AgentSessionManager {
     }
 
     this.sessionRevisions.set(sessionId, readResult.revision);
+    const session = await this.createRestoredSession({ summary, metadata });
+    const projectId = session.projectScope.projectId;
+    const checkpointState = metadata.checkpointState;
     this.checkpoints.set(
       sessionId,
-      metadata.checkpointState?.checkpoints ?? [],
+      checkpointState?.projectId !== undefined &&
+        checkpointState.projectId !== projectId
+        ? []
+        : (checkpointState?.checkpoints ?? []).map((checkpoint) => ({
+            ...checkpoint,
+            projectId: checkpoint.projectId ?? projectId,
+          })),
     );
-    if (metadata.revertPending) {
-      this.sessionRevertPending.set(sessionId, metadata.revertPending);
+    if (
+      metadata.revertPending &&
+      (metadata.revertPending.projectId === undefined ||
+        metadata.revertPending.projectId === projectId)
+    ) {
+      this.sessionRevertPending.set(sessionId, {
+        ...metadata.revertPending,
+        projectId,
+      });
     } else {
       this.sessionRevertPending.delete(sessionId);
     }
-
-    // Reconstruct session from persisted data
-    const providerId = this.host.providers.tryResolveProvider(
-      summary.model,
-    )?.id;
-    const session = await this.host.createSession({
-      mode: summary.mode,
-      config: this.buildConfigForModel(summary.model),
-      cwd: this.cwd,
-      workspaceFolders: this.getWorkspaceFolders(),
-      devMode: this.devMode,
-      providerId,
-    });
 
     // Restore persisted state
     session.restoreFromStore({
@@ -2721,10 +3291,6 @@ export class AgentSessionManager {
       loadedSkills: metadata.loadedSkills ?? [],
       runState: metadata.runState,
       messages,
-    });
-    await session.rebuildSystemPrompt({
-      devMode: this.devMode,
-      workspaceFolders: this.getWorkspaceFolders(),
     });
 
     if (opts?.onlyIfForegroundUnset && this.foregroundId) return null;
@@ -2777,18 +3343,10 @@ export class AgentSessionManager {
       ) {
         continue;
       }
-      const providerId = this.host.providers.tryResolveProvider(
-        summary.model,
-      )?.id;
-      const session = await this.host.createSession({
-        mode: summary.mode,
-        config: this.buildConfigForModel(summary.model),
-        cwd: this.cwd,
-        workspaceFolders: this.getWorkspaceFolders(),
-        devMode: this.devMode,
+      const session = await this.createRestoredSession({
+        summary,
+        metadata,
         background: true,
-        isBackground: true,
-        providerId,
       });
       session.restoreFromStore({
         id: summary.id,
@@ -2805,10 +3363,6 @@ export class AgentSessionManager {
         loadedSkills: metadata.loadedSkills ?? [],
         messages,
         fleetMetadata: metadata.fleet,
-      });
-      await session.rebuildSystemPrompt({
-        devMode: this.devMode,
-        workspaceFolders: this.getWorkspaceFolders(),
       });
 
       const fleet = session.fleetMetadata;
@@ -3208,9 +3762,37 @@ export class AgentSessionManager {
         "spawn_background_agent requires non-empty task and message",
       );
     }
+    if ((request.images?.length ?? 0) > MAX_BACKGROUND_HANDOFF_IMAGES) {
+      throw new Error(
+        `spawn_background_agent supports at most ${MAX_BACKGROUND_HANDOFF_IMAGES} inherited images`,
+      );
+    }
+    if (
+      request.images?.some(
+        (image) =>
+          !image.name.trim() || !image.mimeType.trim() || !image.base64.trim(),
+      )
+    ) {
+      throw new Error("spawn_background_agent received an invalid image");
+    }
     const parent = parentSessionId
       ? this.sessions.get(parentSessionId)
       : this.getForegroundSession();
+    const inheritedScope =
+      parent?.projectScope ??
+      this.getForegroundSession()?.projectScope ??
+      this.selectProjectScope();
+    const executionRoot = parent
+      ? this.requireSessionExecution(parent)
+      : inheritedScope.rootPath;
+    if (!executionRoot) {
+      throw new Error(
+        `Project '${inheritedScope.displayName}' is unavailable for local execution.`,
+      );
+    }
+    const parentRequestContext = parent
+      ? this.activeRequestToolContexts.get(parent.id)
+      : undefined;
     const parentDepth = parent?.fleetMetadata?.depth ?? 0;
     const childCount = parent
       ? Array.from(this.sessions.values()).filter(
@@ -3235,10 +3817,15 @@ export class AgentSessionManager {
     this.ensureChildBudgetAdmission(parent, request);
     this.ensureSharedWorkspaceScopeAvailable(request);
     const executionMessage = request.reviewScope
-      ? `${message}\n\n${await captureReviewScope(this.cwd, request.reviewScope)}`
+      ? `${message}\n\n${await captureReviewScope(executionRoot, request.reviewScope)}`
       : message;
 
     if (request.worktree === "isolated") {
+      if (request.images?.length) {
+        throw new Error(
+          "Image handoff is not supported for isolated-worktree background agents; use a native shared background agent or save the images in the workspace and reference their paths.",
+        );
+      }
       return this.spawnIsolatedWorktree(
         { ...request, message: executionMessage },
         parent,
@@ -3246,13 +3833,18 @@ export class AgentSessionManager {
     }
 
     const backendRoute = resolveBackgroundBackendRoute(
-      this.getBackgroundAgentSettings(),
+      this.getBackgroundAgentSettings(inheritedScope),
       request,
     );
     const fg = this.getForegroundSession();
     parentSessionId = parent?.id;
 
     if (backendRoute.backend === "acp") {
+      if (request.images?.length) {
+        throw new Error(
+          "Image handoff is not supported by ACP background agents; use a native background agent or save the images in the workspace and reference their paths.",
+        );
+      }
       // ACP agents do not use AgentLink's set_task_status tool, so keep the
       // serialized-envelope fallback at that external boundary only.
       const acpExecutionMessage = withFleetResultInstruction(
@@ -3261,14 +3853,14 @@ export class AgentSessionManager {
       );
       const resolvedMode = request.mode?.trim() || "review";
       const taskClass = request.taskClass?.trim() || "review";
-      const session = await this.host.createSession({
+      const session = await this.createBoundSession({
         mode: resolvedMode,
         config: {
           ...this.config,
           model: `acp:${backendRoute.agent.id}`,
           thinkingBudget: 0,
         },
-        cwd: this.cwd,
+        projectScope: inheritedScope,
         workspaceFolders: this.getWorkspaceFolders(),
         devMode: this.devMode,
         background: true,
@@ -3332,14 +3924,24 @@ export class AgentSessionManager {
       this.saveSession(session.id);
       this.notifySessionsChanged();
 
+      const acpRequestContext = this.captureSessionToolContext(
+        session,
+        undefined,
+        parentRequestContext,
+      );
+      if (acpRequestContext) {
+        this.activeRequestToolContexts.set(session.id, acpRequestContext);
+      }
       const assistantTextParts: string[] = [];
       let promptResponse: PromptResponse | undefined;
       const runAcpBackground = async () => {
         try {
           await this.host.acpBackgroundRunner.run({
             agent: backendRoute.agent,
-            cwd: this.cwd,
-            additionalDirectories: this.getAcpAdditionalDirectories(),
+            cwd: session.requireProjectRoot(),
+            additionalDirectories: this.getAcpAdditionalDirectories(
+              session.requireProjectRoot(),
+            ),
             prompt: acpExecutionMessage,
             signal: session.abortSignal,
             onEvent: (event) => {
@@ -3380,6 +3982,7 @@ export class AgentSessionManager {
                 sessionId: session.id,
                 task,
                 readonlyOnly: backendRoute.agent.readonlyOnly,
+                requestContext: acpRequestContext,
                 request: permissionRequest,
               }),
           });
@@ -3435,6 +4038,7 @@ export class AgentSessionManager {
             });
           }
         } finally {
+          this.releaseSessionToolContext(session.id, acpRequestContext);
           if (session.fleetMetadata?.lifecycle === "paused") {
             this.saveSession(session.id);
             this.notifySessionsChanged();
@@ -3520,10 +4124,10 @@ export class AgentSessionManager {
       this.host.providers.tryResolveProvider(route.resolvedModel)?.id ??
       route.resolvedProvider;
 
-    const session = await this.host.createSession({
+    const session = await this.createBoundSession({
       mode: route.resolvedMode,
       config: bgConfig,
-      cwd: this.cwd,
+      projectScope: inheritedScope,
       workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       background: true,
@@ -3593,10 +4197,8 @@ export class AgentSessionManager {
       effectivePermissionProfile === "review-only"
         ? "review"
         : route.toolProfile;
-    const baseCtx = this.toolCtx;
-    const bgCtx: ToolDispatchContext = {
-      ...baseCtx,
-      sessionId: session.id,
+    const baseCtx = parentRequestContext ?? this.toolCtx;
+    const bgContextOverrides: Partial<ToolDispatchContext> = {
       commandExecutionPolicy:
         effectiveToolProfile === "review" ||
         effectiveToolProfile === "readonly-research"
@@ -3637,9 +4239,18 @@ export class AgentSessionManager {
     };
 
     const bgEngine = this.host.createEngine(this.host.providers, this.log);
-    bgEngine.setToolRuntime(this.host.createToolRuntime(bgCtx));
+    const bgCtx = this.bindEngineToSession(
+      bgEngine,
+      session,
+      bgContextOverrides,
+      parentRequestContext,
+    );
 
-    session.addUserMessage(executionMessage);
+    if (request.images?.length) {
+      session.addUserMessage(executionMessage, { images: request.images });
+    } else {
+      session.addUserMessage(executionMessage);
+    }
 
     // Fire-and-forget — runs concurrently alongside the foreground session.
     // Reviews receive an automatic bounded budget unless the caller supplies
@@ -3755,6 +4366,7 @@ export class AgentSessionManager {
           totalCacheCreationTokens: session.totalCacheCreationTokens,
         });
       } finally {
+        this.releaseSessionToolContext(session.id, bgCtx);
         this.host.timers.clearInterval(inFlightPersistTimer);
         persistIfHistoryChanged();
       }
@@ -3945,7 +4557,9 @@ export class AgentSessionManager {
     resultText?: string;
     errorMessage?: string;
   }): Promise<void> {
-    const mode = this.host.config.getBgSummaryMode();
+    const mode = this.host.config.getBgSummaryMode(
+      this.sessions.get(args.sessionId)?.projectScope,
+    );
     if (mode === "heuristic") return;
 
     const summary = this.getOrInitBgSummary(args.sessionId);
@@ -4529,6 +5143,7 @@ export class AgentSessionManager {
           typeof firstUserMessage?.content === "string"
             ? firstUserMessage.content
             : `Retry the task: ${fleet.task}`,
+        images: firstUserMessage?.media?.images,
         mode: fleet.resolvedMode,
         model: fleet.resolvedModel,
         provider: fleet.resolvedProvider,
@@ -4944,10 +5559,10 @@ export class AgentSessionManager {
     }
     const mode = request.mode?.trim() || parent?.mode || "code";
     const model = request.model?.trim() || parent?.model || this.config.model;
-    const session = await this.host.createSession({
+    const session = await this.createBoundSession({
       mode,
       config: { ...this.config, model },
-      cwd: this.cwd,
+      projectScope: parent?.projectScope ?? this.selectProjectScope(),
       workspaceFolders: this.getWorkspaceFolders(),
       devMode: this.devMode,
       background: true,
@@ -5004,9 +5619,10 @@ export class AgentSessionManager {
     session.fleetMetadata.placement = "worktree";
     session.fleetMetadata.lifecycle = "running";
     const exchangeStore = new WorktreeFleetExchangeStore(globalStoragePath);
+    const sourceWorkspacePath = this.requireSessionExecution(session);
     const exchange = await exchangeStore.create({
       parentFleetSessionId: session.id,
-      sourceWorkspacePath: this.cwd,
+      sourceWorkspacePath,
     });
     session.fleetMetadata.worktreeExchangeId = exchange.id;
     this.appendFleetEvent(session, "queued", "Worktree agent launch requested");
@@ -5019,7 +5635,7 @@ export class AgentSessionManager {
           request.expectedResult,
           request.message,
         ),
-        sourcePath: this.cwd,
+        sourcePath: sourceWorkspacePath,
         mode: request.mode,
         autoSubmit: true,
         fleetExchangeId: exchange.id,
@@ -5500,7 +6116,7 @@ export class AgentSessionManager {
           rootSessionId: s.fleetMetadata?.rootSessionId,
           goalId: s.fleetMetadata?.goalId,
           workflowId: s.fleetMetadata?.workflowId,
-          workspace: s.cwd,
+          workspace: s.projectScope.displayName,
           worktreePath: s.fleetMetadata?.worktreePath,
           worktreeBranch: s.fleetMetadata?.worktreeBranch,
           depth: s.fleetMetadata?.depth,

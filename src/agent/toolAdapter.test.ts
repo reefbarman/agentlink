@@ -15,6 +15,7 @@ import { TOOL_REGISTRY } from "../shared/toolRegistry.js";
 import { BUILT_IN_MODES } from "./modes.js";
 import type { ToolDefinition } from "./providers/types.js";
 import type { ToolResult } from "../shared/types.js";
+import { getWorkspaceRoots, resolveAndValidatePath } from "../util/paths.js";
 import { handleLoadRule } from "../tools/loadRule.js";
 import { handleGetContext } from "../tools/context/getContext.js";
 import { handleGetModuleNeighbors } from "../tools/getModuleNeighbors.js";
@@ -177,6 +178,7 @@ const mockCtx: ToolDispatchContext = {
   approvalManager: {} as any,
   approvalPanel: {} as any,
   sessionId: "test-session",
+  projectRoot: "/tmp/project",
   extensionUri: {} as any,
   onApprovalRequest: mockOnApprovalRequest,
   terminalProvider: {} as any,
@@ -212,6 +214,46 @@ const ddgMcpTools: ToolDefinition[] = [
     },
   },
 ];
+
+describe("tool usage telemetry project attribution", () => {
+  it("records only the request-bound project ID", async () => {
+    const record = vi.fn();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      projectScope: {
+        schemaVersion: 1,
+        kind: "project",
+        projectId: "project-0123456789abcdef",
+        workspaceFolderUri: "file:///sensitive/project",
+        displayName: "Sensitive Project Name",
+        rootPath: "/sensitive/project",
+      },
+      toolUsageTelemetry: { record } as any,
+    });
+
+    await runtime.executeTool({
+      name: "read_file",
+      input: { path: "README.md" },
+      context: { sessionId: "test-session", mode: "code" },
+    });
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "read_file",
+        projectId: "project-0123456789abcdef",
+      }),
+    );
+    expect(JSON.stringify(record.mock.calls)).not.toContain(
+      "Sensitive Project Name",
+    );
+    expect(JSON.stringify(record.mock.calls)).not.toContain(
+      "file:///sensitive/project",
+    );
+    expect(JSON.stringify(record.mock.calls)).not.toContain(
+      "/sensitive/project",
+    );
+  });
+});
 
 const READ_ONLY_TOOLS_COMPATIBILITY_SNAPSHOT = [
   "read_file",
@@ -870,10 +912,75 @@ describe("spawn_background_agent tool", () => {
     expect(props.ownedPaths).toBeDefined();
     expect(props.forbiddenPaths).toBeDefined();
     expect(props.permissionProfile).toBeDefined();
+    expect(props.imageIds).toBeDefined();
+    expect(props.useRecentImages).toBeDefined();
     expect(props.reviewScope).toBeDefined();
     expect(props.budget).toBeDefined();
     expect(props.timeoutSeconds).toBeUndefined();
     expect(props.tokenBudget).toBeUndefined();
+  });
+
+  it("copies selected and recent foreground images into the spawn request", async () => {
+    const onSpawnBackground = vi.fn().mockResolvedValue({
+      sessionId: "bg-images",
+      resolvedMode: "review",
+      resolvedModel: "claude-sonnet-4-6",
+      resolvedProvider: "anthropic",
+      taskClass: "review_code",
+      routingReason: "test",
+      fallbackUsed: false,
+    });
+    const sessionImages = [
+      {
+        id: "image_1",
+        name: "user-reference.png",
+        mimeType: "image/png",
+        base64: "first",
+        messageIndex: 0,
+        imageIndex: 0,
+      },
+      {
+        id: "image_2",
+        name: "captured-ui.png",
+        mimeType: "image/png",
+        base64: "second",
+        messageIndex: 4,
+        imageIndex: 0,
+      },
+    ];
+
+    await dispatchToolCall(
+      "spawn_background_agent",
+      {
+        task: "Review UI",
+        message: "Compare the supplied reference and current UI",
+        imageIds: ["image_1"],
+        useRecentImages: 1,
+      },
+      {
+        ...mockCtx,
+        onSpawnBackground,
+        getSessionImages: () => sessionImages,
+      },
+    );
+
+    expect(onSpawnBackground).toHaveBeenCalledWith(
+      "test-session",
+      expect.objectContaining({
+        images: [
+          {
+            name: "user-reference.png",
+            mimeType: "image/png",
+            base64: "first",
+          },
+          {
+            name: "captured-ui.png",
+            mimeType: "image/png",
+            base64: "second",
+          },
+        ],
+      }),
+    );
   });
 
   it("dispatches structured request and returns structured result", async () => {
@@ -1124,6 +1231,108 @@ describe("spawn_background_agent tool", () => {
 });
 
 describe("dispatchToolCall", () => {
+  it("pins concurrent tool runtimes to their captured project roots", async () => {
+    const { handleWriteFile } = await import("../tools/writeFile.js");
+    vi.mocked(handleWriteFile).mockImplementationOnce(async (params) => {
+      await Promise.resolve();
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              roots: getWorkspaceRoots(),
+              resolved: resolveAndValidatePath(params.path),
+            }),
+          },
+        ],
+      };
+    });
+    vi.mocked(handleWriteFile).mockImplementationOnce(async (params) => {
+      await Promise.resolve();
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              roots: getWorkspaceRoots(),
+              resolved: resolveAndValidatePath(params.path),
+            }),
+          },
+        ],
+      };
+    });
+
+    const runtimeA = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/workspace/project-a",
+    });
+    const runtimeB = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/workspace/project-b",
+    });
+    const [resultA, resultB] = await Promise.all([
+      runtimeA.executeTool({
+        name: "write_file",
+        input: { path: "src/index.ts", content: "A" },
+        context: { sessionId: "session-a", mode: "code" },
+      }),
+      runtimeB.executeTool({
+        name: "write_file",
+        input: { path: "src/index.ts", content: "B" },
+        context: { sessionId: "session-b", mode: "code" },
+      }),
+    ]);
+    const parse = (result: ToolResult) =>
+      JSON.parse((result.content[0] as { text: string }).text);
+
+    expect(parse(resultA)).toEqual({
+      roots: ["/workspace/project-a"],
+      resolved: {
+        absolutePath: "/workspace/project-a/src/index.ts",
+        inWorkspace: true,
+      },
+    });
+    expect(parse(resultB)).toEqual({
+      roots: ["/workspace/project-b"],
+      resolved: {
+        absolutePath: "/workspace/project-b/src/index.ts",
+        inWorkspace: true,
+      },
+    });
+  });
+
+  it("blocks cross-project mutations before invoking tool handlers", async () => {
+    const { handleWriteFile } = await import("../tools/writeFile.js");
+    const { handleExecuteCommand } = await import("../tools/executeCommand.js");
+    vi.mocked(handleWriteFile).mockClear();
+    vi.mocked(handleExecuteCommand).mockClear();
+    const runtime = createAgentToolRuntime({
+      ...mockCtx,
+      projectRoot: "/workspace/project-a",
+      workspaceProjectRoots: ["/workspace/project-a", "/workspace/project-b"],
+    });
+
+    await expect(
+      runtime.executeTool({
+        name: "write_file",
+        input: {
+          path: "/workspace/project-b/src/index.ts",
+          content: "blocked",
+        },
+        context: { sessionId: "session-a", mode: "code" },
+      }),
+    ).rejects.toThrow(/Cross-project mutation is blocked/);
+    await expect(
+      runtime.executeTool({
+        name: "execute_command",
+        input: { command: "touch output.txt", cwd: "/workspace/project-b" },
+        context: { sessionId: "session-a", mode: "code" },
+      }),
+    ).rejects.toThrow(/Cross-project mutation is blocked/);
+    expect(handleWriteFile).not.toHaveBeenCalled();
+    expect(handleExecuteCommand).not.toHaveBeenCalled();
+  });
+
   it("searches and hydrates the current session transcript with append-safe snapshots", async () => {
     const messages = [
       {
@@ -1900,7 +2109,10 @@ describe("dispatchToolCall", () => {
       mockCtx.approvalPanel,
       mockCtx.sessionId,
       mockCtx.trackerCtx,
-      { terminalProvider: mockCtx.terminalProvider },
+      expect.objectContaining({
+        terminalProvider: mockCtx.terminalProvider,
+        projectRoot: mockCtx.projectRoot,
+      }),
     );
     expect(result.content[0]).toMatchObject({ type: "text", text: "output" });
   });
@@ -3236,6 +3448,7 @@ describe("dispatchToolCall", () => {
       } as any,
       approvalPanel: {} as any,
       sessionId: "test-session",
+      projectRoot: "/tmp/project",
       extensionUri: {} as any,
       onApprovalRequest,
       mcpHub: mcpHub as any,
@@ -3251,6 +3464,7 @@ describe("dispatchToolCall", () => {
       expect.objectContaining({
         kind: "mcp",
         title: 'Allow MCP tool "list_issues" from "linear"?',
+        targetPath: "/tmp/project/.agentlink/mcp.json",
       }),
       "test-session",
     );
@@ -3616,6 +3830,7 @@ describe("dispatchToolCall", () => {
       } as any,
       approvalPanel: {} as any,
       sessionId: "test-session",
+      projectRoot: "/tmp/project",
       extensionUri: {} as any,
       onApprovalRequest,
       mcpHub: mcpHub as any,

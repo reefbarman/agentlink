@@ -404,7 +404,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "GET",
-        rawExact("/api/slash-commands"),
+        pathExact("/api/slash-commands"),
         ({ req, res }) => this.handleSlashCommandsRequest(req, res),
         internal("slash commands request failed"),
       ),
@@ -417,7 +417,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
       ),
       route(
         "GET",
-        rawExact("/api/modes"),
+        pathExact("/api/modes"),
         ({ req, res }) => this.handleModesRequest(req, res),
         internal("modes request failed"),
       ),
@@ -462,6 +462,12 @@ export class BrowserGatewayServer implements vscode.Disposable {
         rawExact("/api/attach-file"),
         ({ req, res }) => this.handleAttachFileAction(req, res),
         json("attach file action failed"),
+      ),
+      route(
+        "POST",
+        rawExact("/api/project/default"),
+        ({ req, res }) => this.handleDefaultProjectAction(req, res),
+        json("default project action failed"),
       ),
       route(
         "POST",
@@ -923,6 +929,8 @@ export class BrowserGatewayServer implements vscode.Disposable {
       displayText?: string;
       slashCommandLabel?: string;
       isSlashCommand?: boolean;
+      projectId?: string;
+      interject?: boolean;
     };
 
     const text = typeof body?.text === "string" ? body.text : "";
@@ -960,11 +968,21 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
+    const projectId = this.resolveRequestedProjectId(body.projectId, res);
+    if (!projectId) return;
+    if (
+      body.sessionId &&
+      !this.validateSessionProject(body.sessionId, projectId, res)
+    ) {
+      return;
+    }
+
     const result = await this.chatViewProvider.submitBrowserSend({
       text,
       id: typeof body.id === "string" ? body.id : undefined,
       mode: body.mode,
       sessionId: body.sessionId,
+      projectId,
       thinkingEnabled: body.thinkingEnabled,
       reasoningEffort: body.reasoningEffort,
       attachments,
@@ -977,6 +995,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
           ? body.slashCommandLabel
           : undefined,
       isSlashCommand: body.isSlashCommand === true,
+      ...(body.interject === true ? { interject: true } : {}),
     });
     this.writeJson(res, result.ok ? 200 : 400, result);
   }
@@ -992,9 +1011,11 @@ export class BrowserGatewayServer implements vscode.Disposable {
       attachments?: unknown;
       images?: unknown;
       documents?: unknown;
+      projectId?: unknown;
     } | null,
   ): {
     sessionId: string;
+    projectId?: string;
     queueId: string;
     text: string;
     displayText?: string;
@@ -1060,6 +1081,8 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     return {
       sessionId,
+      projectId:
+        typeof body?.projectId === "string" ? body.projectId.trim() : undefined,
       queueId,
       text,
       displayText:
@@ -1086,6 +1109,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const body = (await readJsonBody(req)) as {
       sessionId?: unknown;
+      projectId?: unknown;
       queueId?: unknown;
       text?: unknown;
       displayText?: unknown;
@@ -1100,9 +1124,18 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
+    const projectId = this.resolveRequestedProjectId(input.projectId, res);
+    if (
+      !projectId ||
+      !this.validateSessionProject(input.sessionId, projectId, res)
+    ) {
+      return;
+    }
 
-    const result =
-      await this.chatViewProvider.submitBrowserSteerQueuedMessage(input);
+    const result = await this.chatViewProvider.submitBrowserSteerQueuedMessage({
+      ...input,
+      projectId,
+    });
     this.writeJson(
       res,
       result.ok ? 200 : 404,
@@ -1121,6 +1154,7 @@ export class BrowserGatewayServer implements vscode.Disposable {
 
     const body = (await readJsonBody(req)) as {
       sessionId?: unknown;
+      projectId?: unknown;
       queueId?: unknown;
       text?: unknown;
       displayText?: unknown;
@@ -1135,9 +1169,18 @@ export class BrowserGatewayServer implements vscode.Disposable {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
+    const projectId = this.resolveRequestedProjectId(input.projectId, res);
+    if (
+      !projectId ||
+      !this.validateSessionProject(input.sessionId, projectId, res)
+    ) {
+      return;
+    }
 
-    const result =
-      this.chatViewProvider.submitBrowserInterjectQueuedMessage(input);
+    const result = this.chatViewProvider.submitBrowserInterjectQueuedMessage({
+      ...input,
+      projectId,
+    });
     this.writeJson(
       res,
       result.ok ? 200 : 409,
@@ -1157,16 +1200,31 @@ export class BrowserGatewayServer implements vscode.Disposable {
     const body = (await readJsonBody(req)) as {
       mode?: string;
       reason?: string;
+      projectId?: unknown;
+      sessionId?: unknown;
     };
     if (typeof body?.mode !== "string" || !body.mode.trim()) {
       this.writeJson(res, 400, { error: "invalid_request" });
       return;
     }
 
+    const projectId = this.resolveRequestedProjectId(body.projectId, res);
+    if (!projectId) return;
+    const foregroundSessionId =
+      this.gatewayService.getSerializableSessionState().foreground?.sessionId;
+    const sessionId =
+      typeof body.sessionId === "string" && body.sessionId.trim()
+        ? body.sessionId.trim()
+        : foregroundSessionId;
+    if (!sessionId || !this.validateSessionProject(sessionId, projectId, res)) {
+      return;
+    }
+
     const result = await this.chatViewProvider.submitBrowserModeSwitch(
       body.mode,
+      projectId,
     );
-    this.writeJson(res, 200, result);
+    this.writeJson(res, result.approved ? 200 : 409, result);
   }
 
   private async handleSlashCommandsRequest(
@@ -1178,7 +1236,17 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const commands = await this.chatViewProvider.getBrowserSlashCommands();
+    const parsedUrl = new URL(
+      req.url ?? "/api/slash-commands",
+      "http://127.0.0.1",
+    );
+    const projectId = this.resolveRequestedProjectId(
+      parsedUrl.searchParams.get("projectId"),
+      res,
+    );
+    if (!projectId) return;
+    const commands =
+      await this.chatViewProvider.getBrowserSlashCommands(projectId);
     this.writeJson(res, 200, { commands });
   }
 
@@ -1199,7 +1267,15 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const files = await this.chatViewProvider.searchBrowserFiles(query);
+    const projectId = this.resolveRequestedProjectId(
+      parsedUrl.searchParams.get("projectId"),
+      res,
+    );
+    if (!projectId) return;
+    const files = await this.chatViewProvider.searchBrowserFiles(
+      query,
+      projectId,
+    );
     this.writeJson(res, 200, { files });
   }
 
@@ -1212,7 +1288,13 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const modes = await this.chatViewProvider.getBrowserModes();
+    const parsedUrl = new URL(req.url ?? "/api/modes", "http://127.0.0.1");
+    const projectId = this.resolveRequestedProjectId(
+      parsedUrl.searchParams.get("projectId"),
+      res,
+    );
+    if (!projectId) return;
+    const modes = await this.chatViewProvider.getBrowserModes(projectId);
     this.writeJson(res, 200, { modes });
   }
 
@@ -1360,8 +1442,142 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const result = await this.chatViewProvider.submitBrowserAttachFile();
+    const body = (await readJsonBody(req)) as { projectId?: unknown };
+    const projectId = this.resolveRequestedProjectId(body?.projectId, res);
+    if (!projectId) return;
+    const result =
+      await this.chatViewProvider.submitBrowserAttachFile(projectId);
     this.writeJson(res, 200, result);
+  }
+
+  private async handleDefaultProjectAction(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (!this.isAuthorized(req)) {
+      this.writeJson(res, 401, { error: "unauthorized" });
+      return;
+    }
+
+    const body = (await readJsonBody(req)) as { projectId?: unknown };
+    const projectId = this.resolveRequestedProjectId(body?.projectId, res, {
+      requireExplicit: true,
+    });
+    if (!projectId) return;
+    const ok = this.gatewayService.setDefaultProject(projectId);
+    this.writeJson(
+      res,
+      ok ? 200 : 409,
+      ok
+        ? { ok: true, projectId, snapshot: this.getSnapshot() }
+        : {
+            error: "project_state_mismatch",
+            reason: "project_unavailable",
+            projectId,
+            refresh: true,
+          },
+    );
+  }
+
+  private resolveRequestedProjectId(
+    value: unknown,
+    res: http.ServerResponse,
+    options: { requireExplicit?: boolean } = {},
+  ): string | undefined {
+    const projects = this.gatewayService.getSerializableSessionState().projects;
+    const requestedProjectId =
+      typeof value === "string" && value.trim() ? value.trim() : undefined;
+    const projectId =
+      requestedProjectId ??
+      (!options.requireExplicit && projects.length === 1
+        ? projects[0].projectId
+        : undefined);
+    if (!projectId) {
+      this.writeJson(res, 409, {
+        error: "project_state_mismatch",
+        reason: "project_required",
+        refresh: true,
+      });
+      return undefined;
+    }
+
+    const availability = this.gatewayService.getProjectAvailability(projectId);
+    if (availability !== "available") {
+      this.writeJson(res, 409, {
+        error: "project_state_mismatch",
+        reason:
+          availability === "unknown"
+            ? "project_not_found"
+            : "project_unavailable",
+        projectId,
+        refresh: true,
+      });
+      return undefined;
+    }
+    return projectId;
+  }
+
+  private validateSessionProject(
+    sessionId: string,
+    projectId: string,
+    res: http.ServerResponse,
+  ): boolean {
+    const sessionProjectId = this.gatewayService.getSessionProjectId(sessionId);
+    if (sessionProjectId === projectId) return true;
+    this.writeJson(res, 409, {
+      error: "project_state_mismatch",
+      reason: sessionProjectId
+        ? "session_project_mismatch"
+        : "session_not_found",
+      sessionId,
+      projectId,
+      ...(sessionProjectId ? { sessionProjectId } : {}),
+      refresh: true,
+    });
+    return false;
+  }
+
+  private validateSessionLoadProject(
+    sessionId: string,
+    value: unknown,
+    res: http.ServerResponse,
+  ): boolean {
+    const sessionProjectId = this.gatewayService.getSessionProjectId(sessionId);
+    if (!sessionProjectId) {
+      this.writeJson(res, 409, {
+        error: "project_state_mismatch",
+        reason: "session_not_found",
+        sessionId,
+        refresh: true,
+      });
+      return false;
+    }
+
+    const requestedProjectId =
+      typeof value === "string" && value.trim() ? value.trim() : undefined;
+    const projectCount =
+      this.gatewayService.getSerializableSessionState().projects.length;
+    if (!requestedProjectId && projectCount > 1) {
+      this.writeJson(res, 409, {
+        error: "project_state_mismatch",
+        reason: "project_required",
+        sessionId,
+        refresh: true,
+      });
+      return false;
+    }
+    if (requestedProjectId && requestedProjectId !== sessionProjectId) {
+      this.writeJson(res, 409, {
+        error: "project_state_mismatch",
+        reason: "session_project_mismatch",
+        sessionId,
+        projectId: requestedProjectId,
+        sessionProjectId,
+        refresh: true,
+      });
+      return false;
+    }
+    return true;
   }
 
   private async handleSessionNewAction(
@@ -1373,9 +1589,15 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await readJsonBody(req)) as { mode?: string };
+    const body = (await readJsonBody(req)) as {
+      mode?: string;
+      projectId?: unknown;
+    };
+    const projectId = this.resolveRequestedProjectId(body?.projectId, res);
+    if (!projectId) return;
     const result = await this.chatViewProvider.submitBrowserNewSession(
       body?.mode,
+      projectId,
     );
     this.writeJson(
       res,
@@ -1393,9 +1615,16 @@ export class BrowserGatewayServer implements vscode.Disposable {
       return;
     }
 
-    const body = (await readJsonBody(req)) as { sessionId?: string };
+    const body = (await readJsonBody(req)) as {
+      sessionId?: string;
+      projectId?: unknown;
+    };
     if (typeof body?.sessionId !== "string" || !body.sessionId.trim()) {
       this.writeJson(res, 400, { error: "invalid_request" });
+      return;
+    }
+
+    if (!this.validateSessionLoadProject(body.sessionId, body.projectId, res)) {
       return;
     }
 

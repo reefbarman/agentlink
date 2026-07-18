@@ -167,6 +167,7 @@ async function reviewMemoryProposalInDiff(
   approvalPanel: ApprovalPanelProvider,
   params: ProposeMemoryParams,
   options?: {
+    sessionId?: string;
     validateContent?: (content: string) => void;
     shouldSave?: (
       decision: MemoryApprovalResponse,
@@ -200,8 +201,9 @@ async function reviewMemoryProposalInDiff(
         name: params.name,
         title: params.title,
         rationale: params.rationale,
-        targetPath: target.displayPath,
+        targetPath: target.filePath,
         id: diffView.requestId,
+        sessionId: options?.sessionId,
       });
 
       const approval = await waitForMemoryApproval(
@@ -277,7 +279,8 @@ export async function handleProposeMemory(
         name: params.name,
         title: params.title,
         rationale: params.rationale,
-        targetPath: target.displayPath,
+        targetPath: target.filePath,
+        sessionId,
       });
 
       decision = (await promise) as MemoryApprovalResponse;
@@ -295,6 +298,7 @@ export async function handleProposeMemory(
         approvalPanel,
         params,
         {
+          sessionId,
           validateContent: (content) => {
             if (params.tier === "skill") validateSkill({ ...params, content });
           },

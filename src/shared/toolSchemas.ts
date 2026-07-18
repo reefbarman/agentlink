@@ -370,13 +370,13 @@ export const generateImageSchema = {
     .array(z.string())
     .optional()
     .describe(
-      "IDs of prior user-attached images from this session to use as generation references. Prefer use_recent_images when the user says to use an image they just provided; explicit IDs follow image_N attachment order and errors list available IDs.",
+      "IDs of prior images from this session to use as generation references, including user attachments and image tool results. Prefer use_recent_images when the relevant image is recent; explicit IDs follow image_N session order and errors list available IDs.",
     ),
   use_recent_images: z
     .union([z.boolean(), z.coerce.number()])
     .optional()
     .describe(
-      "Use recent user-attached images from this session as references. Prefer this when the user asks to use an image they already provided. Pass true for up to 4 recent images, or a number for that many recent images.",
+      "Use recent images from this session as references, including user attachments and image tool results. Pass true for up to 4 recent images, or a number for that many recent images.",
     ),
   timeout_seconds: z.coerce
     .number()

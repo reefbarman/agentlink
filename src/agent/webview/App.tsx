@@ -1329,6 +1329,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         kind: "image" | "document";
       }>,
       origin: "user" | "autoContinue" = "user",
+      interject = false,
     ) => {
       const userMessageId = randomId();
       if (origin === "autoContinue") {
@@ -1382,6 +1383,19 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
       // While streaming, enqueue the message instead of sending immediately.
       if (state.streaming) {
         const queueId = randomId();
+        const queueItem = {
+          id: queueId,
+          text: displayWithMedia,
+          ...(displayWithMedia !== fullText ? { fullText } : {}),
+          ...(isSlashCommand ? { isSlashCommand: true } : {}),
+          ...(slashCommandLabel ? { slashCommandLabel } : {}),
+          ...(attachments.length > 0 ? { attachments } : {}),
+          ...(images.length > 0 ? { images } : {}),
+          ...(documents.length > 0 ? { documents } : {}),
+          ...(displayMedia ? { displayMedia } : {}),
+          source: "vscode" as const,
+        };
+        messageQueueRef.current = [...messageQueueRef.current, queueItem];
         dispatch({
           type: "ENQUEUE_MESSAGE",
           id: queueId,
@@ -1398,6 +1412,20 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           displayMedia,
           source: "vscode",
         });
+        if (interject) {
+          vscodeApi.postMessage({
+            command: "agentInterjectQueuedMessage",
+            sessionId: stateRef.current.sessionId,
+            queueId,
+            text: fullText,
+            displayText: displayWithMedia,
+            isSlashCommand,
+            slashCommandLabel,
+            attachments,
+            images: images.length > 0 ? images : undefined,
+            documents: documents.length > 0 ? documents : undefined,
+          });
+        }
         return;
       }
 
@@ -1438,6 +1466,32 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
       });
     },
     [vscodeApi, state.streaming, state.chatState.reasoningEffort],
+  );
+
+  const handleInterject = useCallback(
+    (
+      text: string,
+      attachments: string[] = [],
+      displayText?: string,
+      slashCommandLabel?: string,
+      media?: Array<{
+        name: string;
+        mimeType: string;
+        base64: string;
+        kind: "image" | "document";
+      }>,
+    ) => {
+      handleSend(
+        text,
+        attachments,
+        displayText,
+        slashCommandLabel,
+        media,
+        "user",
+        true,
+      );
+    },
+    [handleSend],
   );
 
   const handleStop = useCallback(() => {
@@ -1736,17 +1790,21 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     [vscodeApi],
   );
 
-  const handleNewSession = useCallback(() => {
-    startupRestorePendingRef.current = false;
-    dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
-    dispatch({ type: "NEW_SESSION" });
-    setBgSessions([]);
-    setTranscriptView(null);
-    vscodeApi.postMessage({
-      command: "agentNewSession",
-      mode: stateRef.current.mode,
-    });
-  }, [vscodeApi]);
+  const handleNewSession = useCallback(
+    (projectId?: string) => {
+      startupRestorePendingRef.current = false;
+      dispatch({ type: "SET_RESTORING_SESSION", restoring: false });
+      dispatch({ type: "NEW_SESSION" });
+      setBgSessions([]);
+      setTranscriptView(null);
+      vscodeApi.postMessage({
+        command: "agentNewSession",
+        mode: stateRef.current.mode,
+        projectId,
+      });
+    },
+    [vscodeApi],
+  );
 
   const handleSwitchMode = useCallback(
     (slug: string) => {
@@ -2374,6 +2432,10 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
             onDelete={handleDeleteSession}
             onRename={handleRenameSession}
             onCopyFirstPrompt={handleCopyFirstPrompt}
+            onNewInProject={(projectId) => {
+              handleNewSession(projectId);
+              setShowHistory(false);
+            }}
             onClose={() => setShowHistory(false)}
           />
         )}
@@ -2683,6 +2745,7 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
         />
         <InputArea
           onSend={handleSend}
+          onInterject={handleInterject}
           onStop={handleStop}
           streaming={state.streaming}
           reasoningEffort={
@@ -2697,6 +2760,12 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onInjectionConsumed={() => setInjection(null)}
           slashCommands={state.slashCommands}
           onExecuteBuiltinCommand={handleExecuteBuiltinCommand}
+          projects={state.chatState.projects}
+          currentProjectId={
+            state.chatState.project?.projectId ??
+            state.chatState.defaultProjectId
+          }
+          onSelectProject={handleNewSession}
           modes={state.modes}
           currentMode={state.chatState.mode}
           currentModel={state.chatState.model}
@@ -2718,6 +2787,17 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           autoContinueEnabled={autoContinueEnabled}
           onToggleAutoContinue={handleToggleAutoContinue}
           autoContinueStatus={autoContinueStatus}
+          disabled={
+            state.chatState.projects?.length === 0 ||
+            state.chatState.project?.availability === "unavailable"
+          }
+          disabledReason={
+            state.chatState.projects?.length === 0
+              ? "Open a folder to enable local execution."
+              : state.chatState.project?.availability === "unavailable"
+                ? `Project unavailable: ${state.chatState.project.displayName}`
+                : undefined
+          }
         />
       </div>
     </>

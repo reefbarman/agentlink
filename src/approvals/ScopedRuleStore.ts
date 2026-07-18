@@ -1,7 +1,5 @@
 import type { AgentLinkConfig, ConfigStore } from "./ConfigStore.js";
 
-import { tryGetFirstWorkspaceRoot } from "../util/paths.js";
-
 export interface StoredRule {
   pattern: string;
   mode: string;
@@ -43,7 +41,12 @@ export class ScopedRuleStore<
     private readonly descriptor: RuleStoreDescriptor<TRule, TSession>,
   ) {}
 
-  add(sessionId: string, rule: TRule, scope: RuleScope): boolean {
+  add(
+    sessionId: string,
+    rule: TRule,
+    scope: RuleScope,
+    projectRoot?: string,
+  ): boolean {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((config) => {
         this.addToConfig(config, rule);
@@ -52,9 +55,8 @@ export class ScopedRuleStore<
     }
 
     if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return false;
-      this.configStore.updateProjectConfig(folder, (config) => {
+      if (!projectRoot) return false;
+      this.configStore.updateProjectConfig(projectRoot, (config) => {
         this.addToConfig(config, rule);
       });
       return true;
@@ -78,6 +80,7 @@ export class ScopedRuleStore<
     newRule: TRule,
     scope: RuleScope,
     sessionId?: string,
+    projectRoot?: string,
   ): boolean {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((config) => {
@@ -87,9 +90,8 @@ export class ScopedRuleStore<
     }
 
     if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return false;
-      this.configStore.updateProjectConfig(folder, (config) => {
+      if (!projectRoot) return false;
+      this.configStore.updateProjectConfig(projectRoot, (config) => {
         this.editConfigRule(config, oldPattern, newRule);
       });
       return true;
@@ -111,7 +113,12 @@ export class ScopedRuleStore<
     return true;
   }
 
-  remove(pattern: string, scope: RuleScope, sessionId?: string): boolean {
+  remove(
+    pattern: string,
+    scope: RuleScope,
+    sessionId?: string,
+    projectRoot?: string,
+  ): boolean {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((config) => {
         this.removeFromConfig(config, pattern);
@@ -120,9 +127,8 @@ export class ScopedRuleStore<
     }
 
     if (scope === "project") {
-      const folder = tryGetFirstWorkspaceRoot();
-      if (!folder) return false;
-      this.configStore.updateProjectConfig(folder, (config) => {
+      if (!projectRoot) return false;
+      this.configStore.updateProjectConfig(projectRoot, (config) => {
         this.removeFromConfig(config, pattern);
       });
       return true;
@@ -143,8 +149,10 @@ export class ScopedRuleStore<
     return true;
   }
 
-  get(sessionId: string): ScopedRules<TRule> {
-    const projectConfig = this.configStore.getProjectConfigForFirstRoot();
+  get(sessionId: string, projectRoot?: string): ScopedRules<TRule> {
+    const projectConfig = projectRoot
+      ? this.configStore.getProjectConfig(projectRoot)
+      : undefined;
     const session = this.sessions.get(sessionId);
     return {
       session: session ? [...this.descriptor.getSessionRules(session)] : [],

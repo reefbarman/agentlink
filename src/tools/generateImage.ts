@@ -305,7 +305,7 @@ export async function requestImageGenerationApprovalForTest(params: {
   prompt: string;
   count: number;
   size?: string;
-  targets?: Array<{ relPath: string }>;
+  targets?: Array<{ relPath: string; absolutePath?: string }>;
   referenceImages?: GenerateImageReferenceImage[];
   billing: string;
 }): Promise<ImageGenerationApprovalResult> {
@@ -338,6 +338,9 @@ export async function requestImageGenerationApprovalForTest(params: {
         kind: "write",
         title: `Generate ${params.count} image${params.count === 1 ? "" : "s"}?`,
         detail,
+        targetPath:
+          targets[0]?.absolutePath ??
+          (targets.length === 1 ? targets[0]?.relPath : undefined),
         choices: [
           { label: "Generate", value: "accept", isPrimary: true },
           { label: "Deny", value: "reject", isDanger: true },

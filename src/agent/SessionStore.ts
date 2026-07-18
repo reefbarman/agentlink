@@ -23,6 +23,10 @@ import {
 } from "./sessionTitle.js";
 
 import type { Checkpoint } from "./CheckpointManager.js";
+import {
+  SESSION_PROJECT_SCOPE_SCHEMA_VERSION,
+  type SessionProjectScope,
+} from "../core/workspaceProjects.js";
 
 /**
  * Persisted session index entry — lightweight metadata kept in sessions.json.
@@ -44,6 +48,8 @@ export interface SessionSummary {
    * Optional for backward compatibility with old persisted entries.
    */
   background?: boolean;
+  /** Derived history projection; persisted metadata remains authoritative. */
+  projectScope?: SessionProjectScope;
 }
 
 interface MessagesFile {
@@ -60,6 +66,8 @@ interface MetadataFile {
   schemaVersion: number;
   revision?: PersistenceRevision;
   summary?: SessionSummary;
+  projectScope?: SessionProjectScope;
+  activeContextResourceUri?: string;
   mode: string;
   model: string;
   totalInputTokens: number;
@@ -95,6 +103,9 @@ export interface SessionStoreOptions {
    * workspace). Omit to preserve the legacy single-folder history layout.
    */
   historyNamespace?: string;
+  /** Activation-time primary project used only to migrate pre-scope sessions. */
+  legacyProjectScope?: SessionProjectScope;
+  log?: (message: string) => void;
 }
 
 const SCHEMA_VERSION = 1;
@@ -120,6 +131,8 @@ export class SessionStore implements SessionPersistenceProvider {
   private readonly historyDir: string;
   private readonly sessionsFile: string;
   private readonly atomicFileOps: SessionStoreAtomicFileOps;
+  private readonly legacyProjectScope: SessionProjectScope | undefined;
+  private readonly log: ((message: string) => void) | undefined;
   /** In-memory index — updated on every save/delete/rename */
   private index: Map<string, SessionSummary> = new Map();
   private indexLoadState:
@@ -140,6 +153,8 @@ export class SessionStore implements SessionPersistenceProvider {
   ) {
     this.identity = identity;
     this.atomicFileOps = atomicFileOps;
+    this.legacyProjectScope = options.legacyProjectScope;
+    this.log = options.log;
     const historyRoot = path.join(workspaceDir, ".agentlink", "history");
     this.historyDir = options.historyNamespace
       ? path.join(historyRoot, options.historyNamespace)
@@ -167,21 +182,36 @@ export class SessionStore implements SessionPersistenceProvider {
         return;
       }
 
-      let didMigrateTitles = false;
-      const normalized = parsed.map((s) => {
-        const migratedTitle = buildSessionTitleFromUserText(s.title);
+      let didNormalizeIndex = false;
+      const normalized = parsed.map((summary) => {
+        const migratedTitle = buildSessionTitleFromUserText(summary.title);
         const nextTitle = migratedTitle ?? DEFAULT_SESSION_TITLE;
-        if (nextTitle !== s.title) {
-          didMigrateTitles = true;
-          return { ...s, title: nextTitle };
+        let normalizedSummary =
+          nextTitle === summary.title
+            ? summary
+            : { ...summary, title: nextTitle };
+        if (normalizedSummary !== summary) didNormalizeIndex = true;
+
+        const metadataResult = this.readMetadataFile(summary.id);
+        const metadataScope = metadataResult.ok
+          ? metadataResult.value.projectScope
+          : undefined;
+        const projectScope = this.resolvePersistedProjectScope(
+          summary.id,
+          metadataScope,
+          summary.projectScope,
+        );
+        if (
+          !this.projectScopesEqual(normalizedSummary.projectScope, projectScope)
+        ) {
+          normalizedSummary = { ...normalizedSummary, projectScope };
+          didNormalizeIndex = true;
         }
-        return s;
+        return normalizedSummary;
       });
       this.index = new Map(normalized.map((s) => [s.id, s]));
       this.indexLoadState = { ok: true };
-      if (didMigrateTitles) {
-        this.flushIndex();
-      }
+      if (didNormalizeIndex) this.flushIndex();
     } catch (error) {
       if (this.isNotFoundError(error)) {
         this.indexLoadState = { ok: true };
@@ -223,7 +253,12 @@ export class SessionStore implements SessionPersistenceProvider {
           continue;
         }
 
-        rebuilt.set(summary.id, summary);
+        const projectScope = this.resolvePersistedProjectScope(
+          summary.id,
+          metadataResult.value.projectScope,
+          summary.projectScope,
+        );
+        rebuilt.set(summary.id, { ...summary, projectScope });
       }
     } catch (error) {
       if (!this.isNotFoundError(error) && this.indexLoadState.ok) {
@@ -273,11 +308,24 @@ export class SessionStore implements SessionPersistenceProvider {
     const metadataResult = this.readMetadataFile(sessionId);
     if (!metadataResult.ok) return metadataResult;
 
-    const metadata = this.metadataFileToRecord(metadataResult.value);
+    const metadata = this.metadataFileToRecord(metadataResult.value, summary);
+    const normalizedSummary = this.withAuthoritativeProjectScope(
+      summary,
+      metadata.projectScope,
+    );
+    if (
+      !this.projectScopesEqual(
+        summary.projectScope,
+        normalizedSummary.projectScope,
+      )
+    ) {
+      this.index.set(sessionId, normalizedSummary);
+      this.flushIndex();
+    }
     return {
       ok: true,
       value: {
-        summary,
+        summary: normalizedSummary,
         messages: messagesResult.value.messages,
         metadata,
       },
@@ -406,6 +454,8 @@ export class SessionStore implements SessionPersistenceProvider {
     lastCacheReadTokens: number;
     reasoningEffort?: import("./providers/types.js").ReasoningEffort;
     background?: boolean;
+    projectScope?: SessionProjectScope;
+    activeContextResourceUri?: string;
     getLoadedSkills?(): string[];
     getAllMessages(): AgentMessage[];
     checkpoints?: Checkpoint[];
@@ -427,9 +477,12 @@ export class SessionStore implements SessionPersistenceProvider {
           createdAt: session.createdAt,
           lastActiveAt: session.lastActiveAt,
           background: session.background,
+          projectScope: session.projectScope,
         },
         messages,
         metadata: {
+          projectScope: session.projectScope,
+          activeContextResourceUri: session.activeContextResourceUri,
           mode: session.mode,
           model: session.model,
           totalInputTokens: session.totalInputTokens,
@@ -493,7 +546,22 @@ export class SessionStore implements SessionPersistenceProvider {
   ): (MetadataFile & { checkpoints?: Checkpoint[] }) | null {
     const result = this.readMetadataFile(sessionId);
     if (!result.ok) return null;
-    return this.metadataFileWithLegacyCheckpoints(result.value);
+    const projectScope = this.resolvePersistedProjectScope(
+      sessionId,
+      result.value.projectScope,
+      result.value.summary?.projectScope,
+    );
+    return this.metadataFileWithLegacyCheckpoints({
+      ...result.value,
+      projectScope,
+      summary:
+        result.value.summary === undefined
+          ? undefined
+          : this.withAuthoritativeProjectScope(
+              result.value.summary,
+              projectScope,
+            ),
+    });
   }
 
   get(sessionId: string): SessionSummary | undefined {
@@ -594,10 +662,21 @@ export class SessionStore implements SessionPersistenceProvider {
     record: PersistedSessionRecord,
     revision: PersistenceRevision,
   ): void {
+    const projectScope = this.resolvePersistedProjectScope(
+      record.summary.id,
+      record.metadata.projectScope,
+      record.summary.projectScope,
+    );
+    const metadata = { ...record.metadata, projectScope };
+    const summary = this.withAuthoritativeProjectScope(
+      record.summary,
+      projectScope,
+    );
+
     // Persist messages before metadata so a durable metadata revision never
     // references transcript bytes that have not already been flushed.
     // `sessions.json` is a derived index and can be rebuilt from metadata.
-    const sessionDir = path.join(this.historyDir, record.summary.id);
+    const sessionDir = path.join(this.historyDir, summary.id);
     this.ensureDir(sessionDir);
 
     const messagesFile: MessagesFile = {
@@ -609,22 +688,28 @@ export class SessionStore implements SessionPersistenceProvider {
       messagesFile,
     );
 
-    const metadataFile = this.recordMetadataToFile(
-      record.metadata,
-      revision,
-      record.summary,
-    );
+    const metadataFile = this.recordMetadataToFile(metadata, revision, summary);
     this.writeJsonFileAtomic(
       path.join(sessionDir, "metadata.json"),
       metadataFile,
     );
 
-    this.index.set(record.summary.id, record.summary);
+    this.index.set(summary.id, summary);
     this.flushIndex();
   }
 
-  private metadataFileToRecord(file: MetadataFile): PersistedSessionMetadata {
+  private metadataFileToRecord(
+    file: MetadataFile,
+    summary?: SessionSummary,
+  ): PersistedSessionMetadata {
+    const projectScope = this.resolvePersistedProjectScope(
+      summary?.id ?? file.summary?.id ?? "<unknown>",
+      file.projectScope,
+      summary?.projectScope ?? file.summary?.projectScope,
+    );
     return {
+      projectScope,
+      activeContextResourceUri: file.activeContextResourceUri,
       mode: file.mode,
       model: file.model,
       totalInputTokens: file.totalInputTokens,
@@ -657,7 +742,12 @@ export class SessionStore implements SessionPersistenceProvider {
     return {
       schemaVersion: SCHEMA_VERSION,
       revision,
-      summary,
+      summary: this.withAuthoritativeProjectScope(
+        summary,
+        metadata.projectScope,
+      ),
+      projectScope: metadata.projectScope,
+      activeContextResourceUri: metadata.activeContextResourceUri,
       mode: metadata.mode,
       model: metadata.model,
       totalInputTokens: metadata.totalInputTokens,
@@ -733,6 +823,71 @@ export class SessionStore implements SessionPersistenceProvider {
         }
       }
     }
+  }
+
+  private resolvePersistedProjectScope(
+    sessionId: string,
+    metadataScope: SessionProjectScope | undefined,
+    summaryScope: SessionProjectScope | undefined,
+  ): SessionProjectScope | undefined {
+    if (this.isSessionProjectScope(metadataScope)) {
+      if (
+        summaryScope !== undefined &&
+        !this.projectScopesEqual(metadataScope, summaryScope)
+      ) {
+        this.log?.(
+          `[history] Normalized conflicting project summary for session ${sessionId}; persisted metadata is authoritative.`,
+        );
+      }
+      return metadataScope;
+    }
+    if (this.isSessionProjectScope(summaryScope)) return summaryScope;
+    if (this.legacyProjectScope !== undefined) {
+      this.log?.(
+        `[history] Session ${sessionId} has no project scope; using the activation-time legacy primary project until its next successful save.`,
+      );
+      return this.legacyProjectScope;
+    }
+    return undefined;
+  }
+
+  private withAuthoritativeProjectScope(
+    summary: SessionSummary,
+    projectScope: SessionProjectScope | undefined,
+  ): SessionSummary {
+    if (this.projectScopesEqual(summary.projectScope, projectScope))
+      return summary;
+    return { ...summary, projectScope };
+  }
+
+  private projectScopesEqual(
+    left: SessionProjectScope | undefined,
+    right: SessionProjectScope | undefined,
+  ): boolean {
+    if (left === undefined || right === undefined) return left === right;
+    return (
+      left.schemaVersion === right.schemaVersion &&
+      left.kind === right.kind &&
+      left.projectId === right.projectId &&
+      left.workspaceFolderUri === right.workspaceFolderUri &&
+      left.displayName === right.displayName &&
+      left.rootPath === right.rootPath
+    );
+  }
+
+  private isSessionProjectScope(
+    value: SessionProjectScope | undefined,
+  ): value is SessionProjectScope {
+    return (
+      value?.schemaVersion === SESSION_PROJECT_SCOPE_SCHEMA_VERSION &&
+      value.kind === "project" &&
+      typeof value.projectId === "string" &&
+      value.projectId.length > 0 &&
+      typeof value.workspaceFolderUri === "string" &&
+      value.workspaceFolderUri.length > 0 &&
+      typeof value.displayName === "string" &&
+      (value.rootPath === undefined || typeof value.rootPath === "string")
+    );
   }
 
   private metadataFileWithLegacyCheckpoints(

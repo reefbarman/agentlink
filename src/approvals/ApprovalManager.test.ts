@@ -25,6 +25,7 @@ class MockEventEmitter<T> {
   }
 }
 
+const configurationValues = new Map<string, Record<string, unknown>>();
 const mockWorkspace = {
   workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
   createFileSystemWatcher: vi.fn(() => ({
@@ -34,9 +35,16 @@ const mockWorkspace = {
     dispose: vi.fn(),
   })),
   onDidChangeWorkspaceFolders: vi.fn(() => ({ dispose: vi.fn() })),
-  getConfiguration: vi.fn(() => ({
-    get: vi.fn((_key: string, fallback?: unknown) => fallback),
-  })),
+  getConfiguration: vi.fn(
+    (_section: string, resource?: { fsPath?: string }) => ({
+      get: vi.fn((key: string, fallback?: unknown) => {
+        const values = resource?.fsPath
+          ? configurationValues.get(resource.fsPath)
+          : undefined;
+        return values && key in values ? values[key] : fallback;
+      }),
+    }),
+  ),
 };
 
 vi.mock("vscode", () => ({
@@ -51,7 +59,14 @@ vi.mock("vscode", () => ({
     showTextDocument: vi.fn(() => Promise.resolve(undefined)),
   },
   Uri: {
-    file: (fsPath: string) => ({ fsPath }),
+    file: (fsPath: string) => ({
+      fsPath,
+      toString: () => `file://${fsPath}`,
+    }),
+    parse: (value: string) => ({
+      fsPath: value.replace(/^file:\/\//, ""),
+      toString: () => value,
+    }),
   },
 }));
 
@@ -114,6 +129,7 @@ describe("ApprovalManager session approval persistence", () => {
     fs.mkdirSync(workspaceDir, { recursive: true });
     process.env.HOME = tempDir;
     mockWorkspace.workspaceFolders = [{ uri: { fsPath: workspaceDir } }];
+    configurationValues.clear();
   });
 
   function disposeManagers(resource: (typeof activeResources)[number]): void {
@@ -497,7 +513,7 @@ describe("ApprovalManager session approval persistence", () => {
   );
 
   it.each(["command", "path", "write"] as const)(
-    "binds %s project rules to the first workspace folder",
+    "isolates %s project rules by immutable session project binding",
     async (channel) => {
       const memento = new MockMemento();
       const secondWorkspaceDir = path.join(tempDir, "workspace-second");
@@ -507,73 +523,117 @@ describe("ApprovalManager session approval persistence", () => {
         { uri: { fsPath: secondWorkspaceDir } },
       ];
       const { approvalManager, configStore } = await createManagers(memento);
-      const sessionId = `folder-identity-${channel}`;
-      const rule = { pattern: "first-root-only", mode: "exact" as const };
+      const sessionA = `project-a-${channel}`;
+      const sessionB = `project-b-${channel}`;
+      approvalManager.bindSessionProject(sessionA, {
+        schemaVersion: 1,
+        kind: "project",
+        projectId: "project-a",
+        workspaceFolderUri: `file://${workspaceDir}`,
+        displayName: "Project A",
+        rootPath: workspaceDir,
+      });
+      approvalManager.bindSessionProject(sessionB, {
+        schemaVersion: 1,
+        kind: "project",
+        projectId: "project-b",
+        workspaceFolderUri: `file://${secondWorkspaceDir}`,
+        displayName: "Project B",
+        rootPath: secondWorkspaceDir,
+      });
+      const ruleA = { pattern: "project-a-only", mode: "exact" as const };
+      const ruleB = { pattern: "project-b-only", mode: "exact" as const };
 
-      if (channel === "command") {
-        approvalManager.addCommandRule(sessionId, rule, "project");
-      } else if (channel === "path") {
-        approvalManager.addPathRule(sessionId, rule, "project");
-      } else {
-        approvalManager.addWriteRule(sessionId, rule, "project");
-      }
-
-      const firstConfig = JSON.parse(
-        fs.readFileSync(
-          path.join(workspaceDir, ".agentlink", "agentlink.json"),
-          "utf-8",
-        ),
-      ) as Record<string, unknown>;
-      expect(firstConfig[`${channel}Rules`]).toEqual([rule]);
-      expect(
-        fs.existsSync(
-          path.join(secondWorkspaceDir, ".agentlink", "agentlink.json"),
-        ),
-      ).toBe(false);
-
-      mockWorkspace.workspaceFolders = [
-        { uri: { fsPath: secondWorkspaceDir } },
-        { uri: { fsPath: workspaceDir } },
-      ];
-      const visibleAfterSwitch =
+      const addRule = (sessionId: string, rule: typeof ruleA) => {
+        if (channel === "command") {
+          approvalManager.addCommandRule(sessionId, rule, "project");
+        } else if (channel === "path") {
+          approvalManager.addPathRule(sessionId, rule, "project");
+        } else {
+          approvalManager.addWriteRule(sessionId, rule, "project");
+        }
+      };
+      const getProjectRules = (sessionId: string) =>
         channel === "command"
           ? approvalManager.getCommandRules(sessionId).project
           : channel === "path"
             ? approvalManager.getPathRules(sessionId).project
             : approvalManager.getWriteRules(sessionId).project;
-      expect(visibleAfterSwitch).toEqual([]);
 
-      const secondRule = {
-        pattern: "second-root-only",
-        mode: "prefix" as const,
-      };
-      if (channel === "command") {
-        approvalManager.addCommandRule(sessionId, secondRule, "project");
-      } else if (channel === "path") {
-        approvalManager.addPathRule(sessionId, secondRule, "project");
-      } else {
-        approvalManager.addWriteRule(sessionId, secondRule, "project");
-      }
+      addRule(sessionA, ruleA);
+      addRule(sessionB, ruleB);
 
-      const secondConfig = JSON.parse(
-        fs.readFileSync(
-          path.join(secondWorkspaceDir, ".agentlink", "agentlink.json"),
-          "utf-8",
-        ),
-      ) as Record<string, unknown>;
-      expect(secondConfig[`${channel}Rules`]).toEqual([secondRule]);
-      expect(
-        JSON.parse(
-          fs.readFileSync(
-            path.join(workspaceDir, ".agentlink", "agentlink.json"),
-            "utf-8",
-          ),
-        ),
-      ).toMatchObject({ [`${channel}Rules`]: [rule] });
+      expect(getProjectRules(sessionA)).toEqual([ruleA]);
+      expect(getProjectRules(sessionB)).toEqual([ruleB]);
+      expect(() =>
+        approvalManager.bindSessionProject(sessionA, {
+          schemaVersion: 1,
+          kind: "project",
+          projectId: "project-b",
+          workspaceFolderUri: `file://${secondWorkspaceDir}`,
+          displayName: "Project B",
+          rootPath: secondWorkspaceDir,
+        }),
+      ).toThrow("cannot be rebound");
 
       disposeManagers({ approvalManager, configStore });
     },
   );
+
+  it("uses source-project settings without relativizing cross-project targets", async () => {
+    const memento = new MockMemento();
+    const secondWorkspaceDir = path.join(tempDir, "workspace-second");
+    fs.mkdirSync(path.join(workspaceDir, "src"), { recursive: true });
+    fs.mkdirSync(path.join(secondWorkspaceDir, "src"), { recursive: true });
+    mockWorkspace.workspaceFolders = [
+      { uri: { fsPath: workspaceDir } },
+      { uri: { fsPath: secondWorkspaceDir } },
+    ];
+    configurationValues.set(workspaceDir, { writeRules: ["src/**"] });
+    configurationValues.set(secondWorkspaceDir, { writeRules: [] });
+    const { approvalManager, configStore } = await createManagers(memento);
+    approvalManager.bindSessionProject("project-a-session", {
+      schemaVersion: 1,
+      kind: "project",
+      projectId: "project-a",
+      workspaceFolderUri: `file://${workspaceDir}`,
+      displayName: "Project A",
+      rootPath: workspaceDir,
+    });
+    approvalManager.bindSessionProject("project-b-session", {
+      schemaVersion: 1,
+      kind: "project",
+      projectId: "project-b",
+      workspaceFolderUri: `file://${secondWorkspaceDir}`,
+      displayName: "Project B",
+      rootPath: secondWorkspaceDir,
+    });
+
+    expect(
+      approvalManager.isFileWriteApproved(
+        "project-a-session",
+        path.join(workspaceDir, "src", "allowed.ts"),
+      ),
+    ).toBe(true);
+    expect(
+      approvalManager.isFileWriteApproved(
+        "project-a-session",
+        path.join(secondWorkspaceDir, "src", "blocked.ts"),
+      ),
+    ).toBe(false);
+    expect(
+      approvalManager.isFileWriteApproved(
+        "project-b-session",
+        path.join(secondWorkspaceDir, "src", "blocked.ts"),
+      ),
+    ).toBe(false);
+
+    expect(mockWorkspace.getConfiguration).toHaveBeenCalledWith(
+      "agentlink",
+      expect.objectContaining({ fsPath: workspaceDir }),
+    );
+    disposeManagers({ approvalManager, configStore });
+  });
 
   it("migrates legacy global rules by appending unique entries in order", async () => {
     const memento = new MockMemento();
@@ -998,6 +1058,95 @@ describe("ApprovalManager session approval persistence", () => {
       pattern: "src/later",
       mode: "prefix",
     });
+
+    disposeManagers({ approvalManager, configStore });
+  });
+
+  it("routes project config through canonical workspace roots", async () => {
+    const memento = new MockMemento();
+    const realWorkspace = path.join(tempDir, "real-workspace");
+    const workspaceAlias = path.join(tempDir, "workspace-alias");
+    fs.mkdirSync(realWorkspace, { recursive: true });
+    fs.symlinkSync(realWorkspace, workspaceAlias, "dir");
+    mockWorkspace.workspaceFolders = [{ uri: { fsPath: workspaceAlias } }];
+
+    const { approvalManager, configStore } = await createManagers(memento);
+    approvalManager.bindSessionProject("canonical-session", {
+      schemaVersion: 1,
+      kind: "project",
+      projectId: "canonical-project",
+      workspaceFolderUri: `file://${workspaceAlias}`,
+      displayName: "Canonical Project",
+      rootPath: fs.realpathSync.native(realWorkspace),
+    });
+
+    approvalManager.setAgentWriteApproval("canonical-session", "project");
+
+    expect(
+      configStore.getProjectConfig(fs.realpathSync.native(realWorkspace))
+        .agentWriteApproved,
+    ).toBe(true);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(realWorkspace, ".agentlink", "agentlink.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({ agentWriteApproved: true });
+
+    disposeManagers({ approvalManager, configStore });
+  });
+
+  it("rejects conflicting project migration before mutating destination state", async () => {
+    const memento = new MockMemento();
+    const secondWorkspaceDir = path.join(tempDir, "workspace-b");
+    fs.mkdirSync(secondWorkspaceDir, { recursive: true });
+    mockWorkspace.workspaceFolders = [
+      { uri: { fsPath: workspaceDir } },
+      { uri: { fsPath: secondWorkspaceDir } },
+    ];
+
+    const { approvalManager, configStore } = await createManagers(memento);
+    approvalManager.addWriteRule(
+      "source-session",
+      { pattern: "src/source", mode: "prefix" },
+      "session",
+    );
+    approvalManager.addWriteRule(
+      "destination-session",
+      { pattern: "src/destination", mode: "prefix" },
+      "session",
+    );
+    approvalManager.bindSessionProject("source-session", {
+      schemaVersion: 1,
+      kind: "project",
+      projectId: "project-a",
+      workspaceFolderUri: `file://${workspaceDir}`,
+      displayName: "Project A",
+      rootPath: workspaceDir,
+    });
+    approvalManager.bindSessionProject("destination-session", {
+      schemaVersion: 1,
+      kind: "project",
+      projectId: "project-b",
+      workspaceFolderUri: `file://${secondWorkspaceDir}`,
+      displayName: "Project B",
+      rootPath: secondWorkspaceDir,
+    });
+
+    expect(() =>
+      approvalManager.migrateSessionState(
+        "source-session",
+        "destination-session",
+      ),
+    ).toThrow("already bound to another project");
+    expect(
+      approvalManager.getWriteRules("destination-session").session,
+    ).toEqual([{ pattern: "src/destination", mode: "prefix" }]);
+    expect(approvalManager.getWriteRules("source-session").session).toEqual([
+      { pattern: "src/source", mode: "prefix" },
+    ]);
 
     disposeManagers({ approvalManager, configStore });
   });

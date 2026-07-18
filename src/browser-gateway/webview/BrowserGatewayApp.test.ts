@@ -23,10 +23,13 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     availableModels,
     onExecuteBuiltinCommand,
     onExportTranscript,
+    onInterject,
     onSelectModel,
+    onSelectProject,
     onSend,
     onSetReasoningEffort,
     onStop,
+    projects,
     slashCommands,
     submitOnEnter,
   }: {
@@ -34,10 +37,13 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     availableModels?: Array<{ id: string; displayName?: string }>;
     onExecuteBuiltinCommand?: (name: string, args: string) => void;
     onExportTranscript?: () => void;
+    onInterject?: (text: string, attachments: string[]) => void;
     onSelectModel?: (modelId: string) => void;
+    onSelectProject?: (projectId: string) => void;
     onSend?: (text: string, attachments: string[]) => void;
     onSetReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
     onStop?: () => void;
+    projects?: Array<{ projectId: string }>;
     slashCommands?: Array<{ name: string }>;
     submitOnEnter?: boolean;
   }) =>
@@ -78,6 +84,17 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         },
         "Trigger send",
       ),
+      onInterject
+        ? h(
+            "button",
+            {
+              type: "button",
+              "data-testid": "trigger-interject",
+              onClick: () => onInterject("Change course", []),
+            },
+            "Trigger interject",
+          )
+        : null,
       h(
         "button",
         {
@@ -87,6 +104,17 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         },
         "Trigger model",
       ),
+      projects && projects.length > 1
+        ? h(
+            "button",
+            {
+              type: "button",
+              "data-testid": "trigger-select-project",
+              onClick: () => onSelectProject?.(projects[1]!.projectId),
+            },
+            "Trigger project",
+          )
+        : null,
       h(
         "button",
         {
@@ -259,9 +287,20 @@ type TestSnapshot = {
     mcpStatusInfos: never[];
   };
   session: {
-    repository: { branch?: string; dirty?: boolean } | null;
+    projects: Array<{
+      projectId: string;
+      displayName: string;
+      availability: "available" | "unavailable";
+    }>;
+    defaultProjectId: string | null;
+    repository: { projectId: string; branch?: string; dirty?: boolean } | null;
     sessions: never[];
     foreground: {
+      project: {
+        projectId: string;
+        displayName: string;
+        availability: "available" | "unavailable";
+      };
       sessionId: string;
       title: string;
       mode: string;
@@ -370,9 +409,22 @@ function createSnapshot(): TestSnapshot {
       mcpStatusInfos: [],
     },
     session: {
+      projects: [
+        {
+          projectId: "project-1",
+          displayName: "Workspace",
+          availability: "available",
+        },
+      ],
+      defaultProjectId: "project-1",
       repository: null,
       sessions: [],
       foreground: {
+        project: {
+          projectId: "project-1",
+          displayName: "Workspace",
+          availability: "available",
+        },
         sessionId: "session-1",
         title: "Test Session",
         mode: "code",
@@ -736,6 +788,68 @@ describe("BrowserGatewayApp /mcp behavior", () => {
     });
   });
 
+  it("marks a message from the browser composer as an interjection", async () => {
+    const snapshot = createSnapshot();
+    snapshot.session.foreground.status = "streaming";
+    snapshot.session.foreground.streaming = true;
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/send")) {
+        return jsonResponse({ ok: true, queued: true, interjected: true });
+      }
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "streaming", label: "Streaming" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands")) {
+        return jsonResponse({ commands: [] });
+      }
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    await screen.findByText("Waiting for response…");
+    fireEvent.click(await screen.findByTestId("trigger-interject"));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          if (!String(input).includes("/api/send")) return false;
+          const body = JSON.parse(String((init as RequestInit).body ?? "{}"));
+          return body.text === "Change course" && body.interject === true;
+        }),
+      ).toBe(true);
+      expect(
+        screen.getByText("Ready to interject at the next break."),
+      ).toBeTruthy();
+    });
+  });
+
   it("renders browser queue steering controls and posts queue actions", async () => {
     const queuedSnapshot = createSnapshot();
     queuedSnapshot.session.foreground.status = "streaming";
@@ -911,7 +1025,8 @@ describe("BrowserGatewayApp /mcp behavior", () => {
           const body = JSON.parse(String((init as RequestInit).body ?? "{}"));
           return (
             body.text === "Please continue the next slice." &&
-            body.sessionId === "session-1"
+            body.sessionId === "session-1" &&
+            body.projectId === "project-1"
           );
         }),
       ).toBe(true);
@@ -3717,6 +3832,85 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         String(input).includes("/api/send"),
       ),
     ).toBe(false);
+  });
+
+  it("persists a selected project before creating a new project session", async () => {
+    const snapshot = createSnapshot();
+    snapshot.session.projects.push({
+      projectId: "project-2",
+      displayName: "Project Two",
+      availability: "available",
+    });
+    const selectedSnapshot = createSnapshot();
+    selectedSnapshot.session.projects = snapshot.session.projects;
+    selectedSnapshot.session.defaultProjectId = "project-2";
+    selectedSnapshot.session.foreground.project = {
+      projectId: "project-2",
+      displayName: "Project Two",
+      availability: "available",
+    };
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
+      if (url.includes("/api/project/default")) {
+        return jsonResponse({ ok: true, snapshot: selectedSnapshot });
+      }
+      if (url.includes("/api/session/new")) {
+        return jsonResponse({ ok: true, snapshot: selectedSnapshot });
+      }
+      if (url.includes("/api/instances")) {
+        return jsonResponse({
+          currentInstanceId: "instance-1",
+          instances: [
+            {
+              instanceId: "instance-1",
+              workspaceName: "Workspace",
+              workspacePath: "/workspace",
+              url: "http://127.0.0.1:3333",
+              status: { kind: "idle", label: "Idle" },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/slash-commands"))
+        return jsonResponse({ commands: [] });
+      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
+      if (url.includes("/api/models")) return jsonResponse({ models: [] });
+      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
+      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
+      return jsonResponse({ error: "not_found" }, 404);
+    });
+
+    render(
+      h(BrowserGatewayApp, {
+        authToken: "test-token",
+        currentInstanceId: "instance-1",
+        workspaceName: "Workspace",
+        routeByInstance: true,
+      }),
+    );
+
+    await selectWorkspaceTab();
+    fireEvent.click(await screen.findByTestId("trigger-select-project"));
+
+    await waitFor(() => {
+      const projectDefaultCallIndex = fetchMock.mock.calls.findIndex(
+        ([input]) => String(input).includes("/api/project/default"),
+      );
+      const sessionNewCallIndex = fetchMock.mock.calls.findIndex(([input]) =>
+        String(input).includes("/api/session/new"),
+      );
+      expect(projectDefaultCallIndex).toBeGreaterThanOrEqual(0);
+      expect(sessionNewCallIndex).toBeGreaterThan(projectDefaultCallIndex);
+      for (const callIndex of [projectDefaultCallIndex, sessionNewCallIndex]) {
+        const body = JSON.parse(
+          String((fetchMock.mock.calls[callIndex]![1] as RequestInit).body),
+        );
+        expect(body.projectId).toBe("project-2");
+      }
+    });
   });
 
   it("optimistically dismisses visible approval card after submitting a decision", async () => {

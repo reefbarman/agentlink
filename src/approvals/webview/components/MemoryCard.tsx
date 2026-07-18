@@ -77,6 +77,9 @@ export function MemoryCard({ request, submit, followUpRef }: MemoryCardProps) {
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      sourceProject={request.sourceProject}
+      targetProject={request.targetProject}
+      targetPath={request.targetPath}
       purpose={purpose}
       rulesModified={false}
       primaryLabel={nameMissing ? "Name required" : "Accept"}

@@ -9,7 +9,9 @@ import type {
   BtwBudget,
   ChatMessage,
   ExtensionMessage,
+  ProjectInfo,
   ProviderUsageCardData,
+  SessionSummary as WebviewSessionSummary,
   SlashCommandInfo,
   WebviewModelInfo,
 } from "./webview/types.js";
@@ -51,7 +53,8 @@ import {
   type FinalMessageMarker,
 } from "../shared/finalStatus.js";
 import { getLatestTodoState, type TodoItem } from "./todoTool.js";
-import { SlashCommandRegistry } from "./SlashCommandRegistry.js";
+import { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
+import { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
 import { McpClientHub, type McpServerInfo } from "./McpClientHub.js";
 import { dispatchToolCall, getAgentTools } from "./toolAdapter.js";
 import { MCP_TOOL_BRIDGE_TOOL_NAMES } from "../shared/mcpToolDefinitions.js";
@@ -66,15 +69,15 @@ import {
   buildMcpConfigEntries,
   getAskAgentMcpConfigPaths,
   getAskAgentMcpConfigFilePaths,
+  getGlobalMcpConfigPaths,
   getMcpConfigFilePaths,
   getMcpConfigSources,
   loadAskAgentMcpConfigs,
-  loadMcpConfigs,
   persistMcpToolApproval,
   removeMcpConfigServer,
   upsertMcpConfigServer,
 } from "./mcpConfig.js";
-import { BUILT_IN_MODES, loadCustomModes, getAllModes } from "./modes.js";
+import { BUILT_IN_MODES } from "./modes.js";
 import {
   buildSystemPrompt,
   formatRuleCatalogPath,
@@ -95,7 +98,11 @@ import {
 import { DeltaBufferFlusher } from "./DeltaBufferFlusher.js";
 import { ProjectedForegroundStore } from "./ProjectedForegroundStore.js";
 import { DIFF_VIEW_URI_SCHEME } from "../integrations/diffViewContentProvider.js";
-import { getRelativePath } from "../util/paths.js";
+import {
+  canonicalizePath,
+  getRelativePath,
+  isPathWithinRoot,
+} from "../util/paths.js";
 import {
   detectQuestion,
   getQuestionDetectionMode,
@@ -116,6 +123,11 @@ import {
   isCommandApprovalPolicy,
   type CommandApprovalPolicy,
 } from "../approvals/commandApprovalPolicy.js";
+import {
+  createSessionProjectScope,
+  createWorkspaceProjectId,
+  type SessionProjectScope,
+} from "../core/workspaceProjects.js";
 
 type DisplayMedia = NonNullable<ChatMessage["displayMedia"]>;
 type RawDisplayImage = { name: string; mimeType: string; base64: string };
@@ -154,12 +166,13 @@ export function formatPersistedSessionMutationFailureMessage(
 }
 
 export function formatRevertRecoveryNotice(
-  recovery: RevertRecoveryState,
+  recovery: RevertRecoveryState & { projectId: string },
 ): RevertRecoveryNotice {
   const workspaceSuffix = recovery.workspaceRevision
     ? ` Workspace revision: ${recovery.workspaceRevision.slice(0, 12)}.`
     : "";
   return {
+    projectId: recovery.projectId,
     checkpointId: recovery.checkpointId,
     sessionRevision: recovery.sessionRevision,
     workspaceRevision: recovery.workspaceRevision,
@@ -545,7 +558,7 @@ export type ExtensionToWebview =
     }
   | {
       type: "agentSessionList";
-      sessions: import("./SessionStore.js").SessionSummary[];
+      sessions: WebviewSessionSummary[];
     }
   | { type: "agentRestoreSessionStart" }
   | { type: "agentRestoreSessionDone" }
@@ -797,6 +810,9 @@ export type ExtensionToWebview =
 
 export interface ChatState {
   sessionId: string | null;
+  projects?: ProjectInfo[];
+  defaultProjectId?: string | null;
+  project?: ProjectInfo | null;
   mode: string;
   model: string;
   streaming: boolean;
@@ -924,10 +940,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private outputChannel: vscode.OutputChannel;
   private webviewReady = false;
   private pendingMessages: ExtensionToWebview[] = [];
-  private slashRegistry: SlashCommandRegistry | undefined;
+  private readonly projectCustomizationRegistry: ProjectCustomizationRegistry;
+  private readonly projectMcpHubRegistry: ProjectMcpHubRegistry;
+  private initialProjectScope: SessionProjectScope | undefined;
+  /** Compatibility-only fallback for tests/pre-initialization; production requests lease project hubs. */
   private mcpHub: McpClientHub;
   private askAgentMcpHub: McpClientHub;
   private fileWatchers: vscode.Disposable[] = [];
+  private readonly watchedCustomizationProjectIds = new Set<string>();
+  private mainGlobalMcpWatchersInitialized = false;
+  private askAgentMcpWatchersInitialized = false;
   private cwd: string = "";
   private pendingElicitations = new Map<
     string,
@@ -1007,14 +1029,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private specialBlockPanel: vscode.WebviewPanel | undefined;
   private lastMcpStatuses = new Map<
     string,
-    { status: string; error?: string }
+    Map<string, { status: string; error?: string }>
   >();
   private lastAskAgentMcpStatuses = new Map<
     string,
     { status: string; error?: string }
   >();
-  private lastMcpPromptSignature = "";
-  private mcpConfigVersion = 0;
+  private lastMcpPromptSignatures = new Map<string, string>();
+  private mcpConfigVersions = new Map<string, number>();
   private askAgentMcpConfigVersion = 0;
   private readonly uiEventHub: InMemoryAgentUiEventHub;
   private readonly uiPublisher: AgentUiPublisher;
@@ -1037,7 +1059,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly globalState: vscode.Memento,
+    projectCustomizationRegistry?: ProjectCustomizationRegistry,
   ) {
+    this.projectCustomizationRegistry =
+      projectCustomizationRegistry ?? new ProjectCustomizationRegistry();
     this.outputChannel = vscode.window.createOutputChannel("AgentLink Agent");
     this.uiEventHub = new InMemoryAgentUiEventHub();
     this.uiPublisher = new FanoutAgentUiPublisher([
@@ -1151,6 +1176,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.mcpHub.onUrlElicitationComplete = handleMcpUrlElicitationComplete;
     this.askAgentMcpHub.onUrlElicitationComplete =
       handleMcpUrlElicitationComplete;
+    this.projectMcpHubRegistry = new ProjectMcpHubRegistry({
+      createHub: (scope, generation) =>
+        new McpClientHub(
+          globalState,
+          `project-${scope.projectId}-${generation}`,
+        ),
+      configureHub: (hub, scope) => {
+        hub.onSampling = handleMcpSampling;
+        hub.onElicitation = handleMcpElicitation;
+        hub.onUrlElicitation = handleMcpUrlElicitation;
+        hub.onUrlElicitationComplete = handleMcpUrlElicitationComplete;
+        hub.onStatusChange = (infos) =>
+          this.handleMcpStatusChange(infos, scope.projectId);
+        hub.onLog = (message) =>
+          this.log(`[mcp:${scope.projectId}] ${message}`);
+      },
+      onError: (error, projectId) =>
+        this.log(`[mcp:${projectId}] lifecycle error: ${error}`),
+    });
   }
 
   dispose(): void {
@@ -1202,6 +1246,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     for (const w of this.fileWatchers) w.dispose();
     this.fileWatchers = [];
     this.approvalManagerListener?.dispose();
+    void this.projectMcpHubRegistry.dispose();
     this.mcpHub?.disconnectAll().catch(() => undefined);
     this.askAgentMcpHub?.disconnectAll().catch(() => undefined);
   }
@@ -1248,10 +1293,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     CommandApprovalPolicy,
     "approve-for-me"
   > {
-    const tier = vscode.workspace
-      .getConfiguration("agentlink")
-      .get<"off" | "safe" | "sensitive">("commandAutoApproveTier", "safe");
-    return commandApprovalPolicyFromLegacyTier(tier);
+    const tier = this.getCurrentProjectConfiguration()?.get<
+      "off" | "safe" | "sensitive"
+    >("commandAutoApproveTier", "safe");
+    return commandApprovalPolicyFromLegacyTier(tier ?? "safe");
   }
 
   getBrowserCommandApprovalPolicy(): CommandApprovalPolicy {
@@ -1523,10 +1568,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   async initialize(cwd: string): Promise<void> {
     this.cwd = cwd;
+    const workspaceFolderUri = vscode.Uri.file(cwd).toString();
+    this.initialProjectScope = Object.freeze({
+      schemaVersion: 1,
+      kind: "project",
+      projectId: createWorkspaceProjectId(workspaceFolderUri),
+      workspaceFolderUri,
+      displayName:
+        vscode.workspace.getWorkspaceFolder(vscode.Uri.file(cwd))?.name ??
+        path.basename(cwd),
+      rootPath: cwd,
+    });
 
-    // Slash commands
-    this.slashRegistry = new SlashCommandRegistry(cwd);
-    await this.slashRegistry.reload();
+    const initialCommands = await this.getCurrentSlashCommands();
 
     this.mcpHub.onStatusChange = (infos) => {
       this.handleMcpStatusChange(infos);
@@ -1544,23 +1598,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.askAgentMcpHub.onLog = (message) => {
       this.log(`[ask-agent] ${message}`);
     };
-    await this.refreshMcpConnections();
+    const projectScopes = new Map<string, SessionProjectScope>();
+    projectScopes.set(
+      this.initialProjectScope.projectId,
+      this.initialProjectScope,
+    );
+    for (const project of this.sessionManager?.getWorkspaceProjects() ?? []) {
+      if (project.rootPath) {
+        const scope = createSessionProjectScope(project);
+        projectScopes.set(scope.projectId, scope);
+      }
+    }
+    await Promise.all(
+      Array.from(projectScopes.values()).map((scope) =>
+        this.refreshMcpConnections(undefined, scope),
+      ),
+    );
     await this.refreshAskAgentMcpConnections();
 
     // File watchers for hot reload
-    this.setupFileWatchers(cwd);
+    for (const scope of projectScopes.values()) {
+      this.setupFileWatchers(scope, true);
+    }
 
-    this.log(
-      `[slash] loaded ${this.slashRegistry.getAll().length} commands on init`,
-    );
+    this.log(`[slash] loaded ${initialCommands.length} commands on init`);
     // Re-send after async init completes in case webview opened during init
     void this.sendModesUpdate();
-    this.sendSlashCommands();
+    void this.sendSlashCommands();
   }
 
-  /** Returns the MCP client hub (always defined, may not yet be connected). */
+  getProjectMcpHubRegistry(): ProjectMcpHubRegistry {
+    return this.projectMcpHubRegistry;
+  }
+
+  /** Returns the current foreground/default project hub, or the compatibility fallback. */
   getMcpHub(): McpClientHub {
-    return this.mcpHub;
+    return this.getCurrentProjectMcpHub() ?? this.mcpHub;
   }
 
   /** Returns the Ask Agent MCP client hub (always defined, may not yet be connected). */
@@ -1568,17 +1641,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.askAgentMcpHub;
   }
 
-  private handleMcpStatusChange(infos: McpServerInfo[]): void {
-    this.logMcpStatusTransitions("mcp", this.lastMcpStatuses, infos);
-    this.browserGatewaySurfaceChangeEmitter.fire("mcp");
-
-    // Push live updates to the status panel if it's open.
-    void this.postMcpManagerSnapshot({ profile: "main", infos });
+  private handleMcpStatusChange(
+    infos: McpServerInfo[],
+    projectId?: string,
+  ): void {
+    const foregroundScope = this.getCurrentProjectScope();
+    const foregroundProjectId = foregroundScope?.projectId;
+    const isForegroundProject = !projectId || projectId === foregroundProjectId;
+    const statusKey = projectId ?? "compatibility";
+    const previousStatuses =
+      this.lastMcpStatuses.get(statusKey) ??
+      new Map<string, { status: string; error?: string }>();
+    this.lastMcpStatuses.set(statusKey, previousStatuses);
+    this.logMcpStatusTransitions(
+      projectId ? `mcp:${projectId}` : "mcp",
+      previousStatuses,
+      infos,
+    );
+    if (isForegroundProject) {
+      this.browserGatewaySurfaceChangeEmitter.fire("mcp");
+      void this.postMcpManagerSnapshot({
+        profile: "main",
+        infos,
+        projectScope: foregroundScope,
+      });
+    }
 
     const promptSignature = this.buildMcpPromptSignature(infos);
-    if (promptSignature !== this.lastMcpPromptSignature) {
-      this.lastMcpPromptSignature = promptSignature;
-      void this.rebuildSessionSystemPromptsForMcp();
+    if (promptSignature !== this.lastMcpPromptSignatures.get(statusKey)) {
+      this.lastMcpPromptSignatures.set(statusKey, promptSignature);
+      void this.rebuildSessionSystemPromptsForMcp(projectId);
     }
   }
 
@@ -1635,29 +1727,79 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .join("|");
   }
 
-  private async rebuildSessionSystemPromptsForMcp(): Promise<void> {
+  private async rebuildSessionSystemPromptsForMcp(
+    projectId?: string,
+  ): Promise<void> {
     if (!this.sessionManager) return;
     try {
-      await this.sessionManager.rebuildSystemPrompts();
+      await this.sessionManager.rebuildSystemPrompts(projectId);
       this.log("[mcp] Rebuilt system prompt after MCP availability change");
     } catch (err) {
       this.log(`[mcp] Failed to rebuild system prompt: ${err}`);
     }
   }
 
-  private async refreshMcpConnections(options?: {
-    interactiveForNewServers?: boolean;
-  }): Promise<void> {
-    if (!this.mcpHub || !this.cwd) return;
+  private bumpMcpConfigVersion(projectId: string): void {
+    this.mcpConfigVersions.set(
+      projectId,
+      (this.mcpConfigVersions.get(projectId) ?? 0) + 1,
+    );
+  }
+
+  private async refreshMcpConnections(
+    options?: { interactiveForNewServers?: boolean },
+    explicitScope?: SessionProjectScope,
+  ): Promise<void> {
+    const scope = explicitScope ?? this.getCurrentProjectScope();
+    if (!scope?.rootPath) return;
     try {
-      const configs = await loadMcpConfigs(this.cwd);
-      await this.mcpHub.connect(configs, {
-        interactiveForNewServers: options?.interactiveForNewServers,
-      });
-      this.log(`[mcp] connected ${configs.length} server(s)`);
+      const generation = await this.projectMcpHubRegistry.reload(
+        scope,
+        options,
+      );
+      this.log(
+        `[mcp:${scope.projectId}] activated generation ${generation.generation}`,
+      );
+      this.handleMcpStatusChange(
+        generation.hub.getServerInfos(),
+        scope.projectId,
+      );
     } catch (err) {
-      this.log(`[mcp] connection error: ${err}`);
+      this.log(`[mcp:${scope.projectId}] connection error: ${err}`);
     }
+  }
+
+  private getCurrentProjectScope(): SessionProjectScope | undefined {
+    return (
+      this.sessionManager?.getForegroundSession()?.projectScope ??
+      this.sessionManager?.getDefaultProjectScope?.() ??
+      this.initialProjectScope
+    );
+  }
+
+  private getCurrentProjectConfiguration():
+    | vscode.WorkspaceConfiguration
+    | undefined {
+    const scope = this.getCurrentProjectScope();
+    if (scope) {
+      return vscode.workspace.getConfiguration(
+        "agentlink",
+        vscode.Uri.parse(scope.workspaceFolderUri),
+      );
+    }
+    // Compatibility for provider-only tests/legacy doubles. Production sessions
+    // always carry projectScope and unavailable sessions cannot reach send/tools.
+    return this.sessionManager?.getForegroundSession()
+      ? vscode.workspace.getConfiguration("agentlink")
+      : undefined;
+  }
+
+  private getCurrentProjectMcpHub(
+    scope = this.getCurrentProjectScope(),
+  ): McpClientHub | undefined {
+    return scope
+      ? this.projectMcpHubRegistry.getCurrent(scope)?.hub
+      : undefined;
   }
 
   private async refreshAskAgentMcpConnections(options?: {
@@ -1678,27 +1820,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async buildMcpConfigSnapshot(
     profile: McpManagerProfile,
     statusInfos?: McpServerInfo[],
+    projectScope = profile === "main"
+      ? this.getCurrentProjectScope()
+      : undefined,
+    mainHub = projectScope
+      ? this.getCurrentProjectMcpHub(projectScope)
+      : undefined,
   ): Promise<McpConfigSnapshot> {
     const infos =
       statusInfos ??
       (profile === "ask-agent"
         ? (this.askAgentMcpHub?.getServerInfos() ?? [])
-        : this.mcpHub.getServerInfos());
+        : (mainHub ?? this.mcpHub).getServerInfos());
+    const projectRoot = projectScope?.rootPath ?? this.cwd;
     const sources =
       profile === "ask-agent"
         ? await getMcpConfigSources("ask-agent")
-        : await getMcpConfigSources("main", this.cwd ?? process.cwd());
+        : await getMcpConfigSources("main", projectRoot);
     const entries =
       profile === "ask-agent"
         ? await buildMcpConfigEntries("ask-agent")
-        : await buildMcpConfigEntries("main", this.cwd ?? process.cwd());
+        : await buildMcpConfigEntries("main", projectRoot);
 
     return {
       profile,
       version:
         profile === "ask-agent"
           ? this.askAgentMcpConfigVersion
-          : this.mcpConfigVersion,
+          : (this.mcpConfigVersions.get(
+              projectScope?.projectId ?? "compatibility",
+            ) ?? 0),
       sources,
       entries,
       statusInfos: infos,
@@ -1718,24 +1869,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     open?: boolean;
     view?: McpManagerView;
     infos?: McpServerInfo[];
+    projectScope?: SessionProjectScope;
+    mainHub?: McpClientHub;
   }): Promise<void> {
+    const projectScope =
+      options.profile === "main"
+        ? (options.projectScope ?? this.getCurrentProjectScope())
+        : undefined;
+    const mainHub =
+      options.profile === "main"
+        ? (options.mainHub ?? this.getCurrentProjectMcpHub(projectScope))
+        : undefined;
     const infos =
       options.infos ??
       (options.profile === "ask-agent"
         ? (this.askAgentMcpHub?.getServerInfos() ?? [])
-        : this.mcpHub.getServerInfos());
+        : (mainHub ?? this.mcpHub).getServerInfos());
     this.postMessage({
       type: "agentMcpStatus",
       infos,
       open: options.open,
       view: options.view,
-      configSnapshot: await this.buildMcpConfigSnapshot(options.profile, infos),
+      configSnapshot: await this.buildMcpConfigSnapshot(
+        options.profile,
+        infos,
+        projectScope,
+        mainHub,
+      ),
     } as ExtensionToWebview);
   }
 
   private async openRawMcpConfig(
     profile: McpManagerProfile,
     scope: McpManagerScope,
+    projectScope = profile === "main"
+      ? this.getCurrentProjectScope()
+      : undefined,
   ): Promise<void> {
     if (profile === "ask-agent") {
       if (scope !== "ask-agent-global") return;
@@ -1743,7 +1912,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (scope !== "global" && scope !== "project") return;
-    await this.openMcpConfig(scope);
+    await this.openMcpConfig(scope, projectScope);
   }
 
   private async openMcpConfigFile(filePath: string): Promise<void> {
@@ -1762,9 +1931,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await vscode.window.showTextDocument(doc, withPrimaryEditorColumn());
   }
 
-  private async openMcpConfig(scope: "project" | "global"): Promise<void> {
-    if (!this.cwd) return;
-    const paths = getMcpConfigFilePaths(this.cwd);
+  private async openMcpConfig(
+    scope: "project" | "global",
+    projectScope = this.getCurrentProjectScope(),
+  ): Promise<void> {
+    const projectRoot = projectScope?.rootPath;
+    if (!projectRoot) return;
+    const paths = getMcpConfigFilePaths(projectRoot);
     const filePath = scope === "global" ? paths.global : paths.project;
 
     await this.openMcpConfigFile(filePath);
@@ -2041,6 +2214,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }>;
       id?: string;
       backgroundTask?: string;
+      targetPath?: string;
     },
     sessionId?: string,
   ): Promise<
@@ -2061,7 +2235,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const id = request.id ?? randomUUID();
 
     // Build an ApprovalRequest for the rich card system
-    const approvalRequest = this.buildApprovalRequest(id, request);
+    const approvalRequest = this.buildApprovalRequest(id, request, sessionId);
 
     if (sessionId) {
       const sessionSet = this.approvalSessionIndex.get(sessionId) ?? new Set();
@@ -2096,8 +2270,54 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         isPrimary?: boolean;
         isDanger?: boolean;
       }>;
+      targetPath?: string;
     },
+    sessionId?: string,
   ): ApprovalRequest {
+    const session = sessionId
+      ? this.sessionManager?.getSession(sessionId)
+      : undefined;
+    const sourceScope = session?.projectScope;
+    const sourceProject = sourceScope
+      ? {
+          projectId: sourceScope.projectId,
+          displayName: sourceScope.displayName,
+          availability: session.projectAvailability,
+        }
+      : undefined;
+    const targetPath = request.targetPath
+      ? canonicalizePath(
+          path.isAbsolute(request.targetPath)
+            ? request.targetPath
+            : sourceScope?.rootPath
+              ? path.resolve(sourceScope.rootPath, request.targetPath)
+              : request.targetPath,
+        )
+      : undefined;
+    const target = targetPath
+      ? this.sessionManager
+          ?.getWorkspaceProjects()
+          .filter((project) => project.rootPath)
+          .sort(
+            (left, right) =>
+              (right.rootPath?.length ?? 0) - (left.rootPath?.length ?? 0),
+          )
+          .find((project) =>
+            isPathWithinRoot(targetPath, canonicalizePath(project.rootPath!)),
+          )
+      : undefined;
+    const targetProject =
+      target && target.id !== sourceProject?.projectId
+        ? {
+            projectId: target.id,
+            displayName: target.name,
+            availability:
+              target.availability.status === "available"
+                ? ("available" as const)
+                : ("unavailable" as const),
+          }
+        : undefined;
+    const projectContext = { sourceProject, targetProject, targetPath };
     switch (request.kind) {
       case "write": {
         const pathMatch = request.title.match(/`([^`]+)`/);
@@ -2106,6 +2326,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return {
           kind: "write",
           id,
+          ...projectContext,
           filePath,
           writeOperation: isCreate ? "create" : "modify",
           detail: request.detail,
@@ -2162,6 +2383,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return {
           kind: "rename",
           id,
+          ...projectContext,
           oldName,
           newName,
           affectedFiles,
@@ -2172,6 +2394,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return {
           kind: "mcp",
           id,
+          ...projectContext,
           command: request.title,
           mcpDetail: request.detail,
           mcpChoices: request.choices,
@@ -2180,6 +2403,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return {
           kind: "mode-switch",
           id,
+          ...projectContext,
           command: request.title,
           mcpDetail: request.detail,
         };
@@ -2187,6 +2411,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return {
           kind: "memory",
           id,
+          ...projectContext,
           command: request.title,
           mcpDetail: request.detail,
         };
@@ -2194,6 +2419,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return {
           kind: request.kind as ApprovalRequest["kind"],
           id,
+          ...projectContext,
           command: request.detail ?? request.title,
           subCommands: [],
         };
@@ -2434,6 +2660,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     id?: string;
     mode?: string;
     sessionId?: string;
+    projectId?: string;
     thinkingEnabled?: boolean;
     reasoningEffort?: import("./providers/types.js").ReasoningEffort;
     attachments?: string[];
@@ -2442,7 +2669,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     displayText?: string;
     slashCommandLabel?: string;
     isSlashCommand?: boolean;
-  }): Promise<{ ok: boolean; queued?: boolean; error?: string }> {
+    interject?: boolean;
+  }): Promise<{
+    ok: boolean;
+    queued?: boolean;
+    interjected?: boolean;
+    error?: string;
+  }> {
     const text = input.text;
     const mode = input.mode ?? "code";
     const sessionId = input.sessionId;
@@ -2468,7 +2701,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return { ok: false };
     }
 
-    const resolvedText = await this.resolveAttachments(text, attachments);
     const mgr = this.sessionManager;
     if (!mgr) return { ok: false };
     let effectiveSessionId = sessionId;
@@ -2476,12 +2708,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
       const newSession = await mgr.createSession(mode, {
         activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+        projectId: input.projectId,
       });
       effectiveSessionId = newSession.id;
       this.approvalManager?.migrateSessionState("agent", effectiveSessionId);
     }
 
     const effectiveSession = mgr.getSession(effectiveSessionId);
+    if (
+      !effectiveSession ||
+      (input.projectId !== undefined &&
+        effectiveSession.projectScope.projectId !== input.projectId)
+    ) {
+      return { ok: false, error: "project_state_mismatch" };
+    }
+    const projectRoot = this.getSessionProjectRoot(effectiveSessionId);
+    if (!projectRoot) return { ok: false, error: "project_unavailable" };
+    const resolvedText = await this.resolveAttachments(
+      text,
+      attachments,
+      projectRoot,
+    );
     const isActiveSession =
       effectiveSession?.status === "streaming" ||
       effectiveSession?.status === "tool_executing" ||
@@ -2512,7 +2759,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         displayMedia,
         source: "browser",
       });
-      return { ok: true, queued: true };
+      const interjected = input.interject
+        ? this.interjectQueuedMessageFromUi({
+            sessionId: effectiveSessionId,
+            queueId,
+            text: resolvedText,
+            displayText: displayQueueText,
+            isSlashCommand,
+            slashCommandLabel,
+            attachments,
+            images,
+            documents,
+          })
+        : undefined;
+      return {
+        ok: true,
+        queued: true,
+        ...(interjected !== undefined ? { interjected } : {}),
+      };
     }
 
     this.postMessage({
@@ -2531,7 +2795,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .sendMessage(effectiveSessionId, resolvedText, mode, {
         thinkingEnabled,
         reasoningEffort,
-        activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+        activeFilePath: effectiveSession?.activeFilePath,
         displayText: displayText ?? text,
         isSlashCommand,
         slashCommandLabel,
@@ -2572,17 +2836,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return { ok: true };
   }
 
-  public async submitBrowserModeSwitch(mode: string): Promise<{
+  public async submitBrowserModeSwitch(
+    mode: string,
+    projectId?: string,
+  ): Promise<{
     approved: boolean;
     mode: string;
   }> {
     const fg = this.sessionManager?.getForegroundSession();
+    if (
+      !fg ||
+      !projectId ||
+      fg.projectScope.projectId !== projectId ||
+      !this.getAvailableBrowserProjectScope(projectId)
+    ) {
+      return { approved: false, mode };
+    }
     if (fg && fg.mode !== mode) {
       try {
         const session = await this.sessionManager?.switchForegroundMode(mode);
-        if (!session && this.sessionManager) {
-          await this.sessionManager.createSession(mode);
-        } else if (session) {
+        if (!session) {
+          return { approved: false, mode };
+        } else {
           this.approvalManager?.resetSessionAgentWriteApproval(session.id);
         }
         this.sendInitialState();
@@ -2594,13 +2869,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    if (!fg && this.sessionManager) {
-      await this.sessionManager.createSession(mode);
-      this.sendInitialState();
-      this.log(`[mode] browser created new session in mode ${mode}`);
-      return { approved: true, mode };
-    }
-
     return { approved: true, mode };
   }
 
@@ -2608,8 +2876,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!model || !this.sessionManager) return { ok: false };
     await this.sessionManager.setModel(model);
 
-    const config = vscode.workspace.getConfiguration("agentlink");
-    await config.update("agentModel", model, vscode.ConfigurationTarget.Global);
+    const config = this.getCurrentProjectConfiguration();
+    if (!config) return { ok: false };
+    await config.update(
+      "agentModel",
+      model,
+      vscode.ConfigurationTarget.WorkspaceFolder,
+    );
 
     const fgMode = this.sessionManager.getForegroundSession()?.mode ?? "code";
     const modePrefs = getModeModelPreferences(config);
@@ -2619,7 +2892,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         ...modePrefs,
         [fgMode]: model,
       },
-      vscode.ConfigurationTarget.Global,
+      vscode.ConfigurationTarget.WorkspaceFolder,
     );
 
     this.sendInitialState();
@@ -2685,13 +2958,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!this.sessionManager.setForegroundReasoningEffort(effort)) {
       return { ok: false };
     }
-    const config = vscode.workspace.getConfiguration("agentlink");
+    const config = this.getCurrentProjectConfiguration();
+    if (!config) return { ok: false };
     const mode = fg.mode ?? "code";
     const preferences = getModeReasoningEffortPreferences(config);
     await config.update(
       "modeReasoningEffortPreferences",
       { ...preferences, [mode]: effort },
-      vscode.ConfigurationTarget.Global,
+      vscode.ConfigurationTarget.WorkspaceFolder,
     );
     this.applyProjectedAction({ type: "SET_REASONING_EFFORT", effort });
     this.sendInitialState();
@@ -2701,10 +2975,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async submitBrowserNewSession(
     mode?: string,
-  ): Promise<{ ok: boolean }> {
+    projectId?: string,
+  ): Promise<{ ok: boolean; sessionId?: string; projectId?: string }> {
     if (!this.sessionManager) return { ok: false };
     const nextMode = mode?.trim() || "code";
-    const session = await this.sessionManager.createForegroundSession(nextMode);
+    const session = await this.sessionManager.createForegroundSession(
+      nextMode,
+      {
+        projectId,
+      },
+    );
     this.postSessionLoaded(session, {
       checkpoints: this.getSessionCheckpoints(session.id),
       tailTurns: 0,
@@ -2713,7 +2993,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.log(
       `New session created from browser (${nextMode}, model: ${session.model})`,
     );
-    return { ok: true };
+    return {
+      ok: true,
+      sessionId: session.id,
+      projectId: session.projectScope.projectId,
+    };
   }
 
   public submitBrowserListSessions(): {
@@ -2856,17 +3140,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       info[`env.${key}`] = displayValue;
     }
 
-    const activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
     const fg = this.sessionManager?.getForegroundSession();
+    const debugRoot = fg?.projectScope
+      ? fg.projectScope.rootPath
+      : fg
+        ? undefined
+        : this.cwd;
+    const activeFilePath = fg
+      ? fg.activeFileContext?.status === "accepted"
+        ? fg.activeFileContext.activeFilePath
+        : undefined
+      : vscode.window.activeTextEditor?.document.uri.fsPath;
+    if (fg?.projectScope) {
+      info["project.id"] = fg.projectScope.projectId;
+      info["project.availability"] = fg.projectAvailability;
+      if (fg.activeFileContext) {
+        info["project.activeFileContext"] =
+          fg.activeFileContext.status === "accepted"
+            ? "accepted"
+            : `ignored:${fg.activeFileContext.reason}`;
+      }
+    }
     let systemPrompt = fg?.systemPrompt;
-    if (!systemPrompt && this.cwd) {
+    if (!systemPrompt && debugRoot) {
       try {
         const mode = fg?.mode ?? "code";
         const model = fg?.model ?? this.sessionManager?.getConfig().model;
         const providerId = model
           ? providerRegistry.tryResolveProvider(model)?.id
           : undefined;
-        systemPrompt = await buildSystemPrompt(mode, this.cwd, {
+        systemPrompt = await buildSystemPrompt(mode, debugRoot, {
           providerId,
           activeFilePath,
           workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
@@ -2879,13 +3182,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     let loadedInstructions: LoadedInstructionDebugInfo[] | undefined;
-    if (this.cwd) {
+    if (debugRoot) {
       try {
-        const blocks = await loadAllInstructionBlocks(this.cwd, {
+        const blocks = await loadAllInstructionBlocks(debugRoot, {
           activeFilePath,
         });
         loadedInstructions = blocks.map((block) =>
-          formatInstructionDebugInfo(block, this.cwd, activeFilePath),
+          formatInstructionDebugInfo(block, debugRoot, activeFilePath),
         );
       } catch (err) {
         this.log(`[warn] Failed to load instruction blocks for debug: ${err}`);
@@ -3025,25 +3328,39 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     infos?: ReturnType<McpClientHub["getServerInfos"]>;
   } {
     if (!serverName || !action) return { ok: false };
+    const projectScope = this.getCurrentProjectScope();
+    const hub = this.getCurrentProjectMcpHub(projectScope) ?? this.mcpHub;
     void (async () => {
       if (action === "disable") {
-        await this.mcpHub.disableServer(serverName);
+        await hub.disableServer(serverName);
       } else if (action === "reconnect") {
-        await this.mcpHub.reconnectServer(serverName);
+        await hub.reconnectServer(serverName);
       } else if (action === "reauthenticate") {
-        await this.mcpHub.reauthenticateServer(serverName);
+        await hub.reauthenticateServer(serverName);
       }
-      await this.postMcpManagerSnapshot({ profile: "main" });
+      await this.postMcpManagerSnapshot({
+        profile: "main",
+        projectScope,
+        mainHub: hub,
+      });
     })();
-    return { ok: true, infos: this.mcpHub.getServerInfos() };
+    return { ok: true, infos: hub.getServerInfos() };
   }
 
   public async submitBrowserMcpConfigSnapshot(
     profile: McpManagerProfile,
   ): Promise<{ ok: true; configSnapshot: McpConfigSnapshot }> {
+    const projectScope =
+      profile === "main" ? this.getCurrentProjectScope() : undefined;
+    const mainHub = this.getCurrentProjectMcpHub(projectScope);
     return {
       ok: true,
-      configSnapshot: await this.buildMcpConfigSnapshot(profile),
+      configSnapshot: await this.buildMcpConfigSnapshot(
+        profile,
+        undefined,
+        projectScope,
+        mainHub,
+      ),
     };
   }
 
@@ -3061,19 +3378,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (input.profile !== "ask-agent" && !input.allowMainProfileMutation) {
         throw new Error("main_profile_read_only_in_browser");
       }
-      await upsertMcpConfigServer(input, this.cwd);
+      const projectScope =
+        input.profile === "main" ? this.getCurrentProjectScope() : undefined;
+      const projectRoot = projectScope?.rootPath;
+      if (input.profile === "main" && !projectRoot) {
+        throw new Error("project_unavailable");
+      }
+      await upsertMcpConfigServer(input, projectRoot);
       if (input.profile === "ask-agent") {
         this.askAgentMcpConfigVersion += 1;
         await this.refreshAskAgentMcpConnections({
           interactiveForNewServers: false,
         });
       } else {
-        this.mcpConfigVersion += 1;
-        await this.refreshMcpConnections({ interactiveForNewServers: true });
+        this.bumpMcpConfigVersion(projectScope!.projectId);
+        await this.refreshMcpConnections(
+          { interactiveForNewServers: true },
+          projectScope,
+        );
       }
       return {
         ok: true,
-        configSnapshot: await this.buildMcpConfigSnapshot(input.profile),
+        configSnapshot: await this.buildMcpConfigSnapshot(
+          input.profile,
+          undefined,
+          projectScope,
+          this.getCurrentProjectMcpHub(projectScope),
+        ),
       };
     } catch (err) {
       return {
@@ -3097,11 +3428,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (input.profile !== "ask-agent" && !input.allowMainProfileMutation) {
         throw new Error("main_profile_read_only_in_browser");
       }
+      const projectScope =
+        input.profile === "main" ? this.getCurrentProjectScope() : undefined;
+      const projectRoot = projectScope?.rootPath;
+      if (input.profile === "main" && !projectRoot) {
+        throw new Error("project_unavailable");
+      }
       await removeMcpConfigServer(
         input.profile,
         input.scope,
         input.serverName,
-        this.cwd,
+        input.profile === "main" ? projectRoot : undefined,
       );
       if (input.profile === "ask-agent") {
         this.askAgentMcpConfigVersion += 1;
@@ -3109,12 +3446,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           interactiveForNewServers: false,
         });
       } else {
-        this.mcpConfigVersion += 1;
-        await this.refreshMcpConnections({ interactiveForNewServers: true });
+        this.bumpMcpConfigVersion(projectScope!.projectId);
+        await this.refreshMcpConnections(
+          { interactiveForNewServers: true },
+          projectScope,
+        );
       }
       return {
         ok: true,
-        configSnapshot: await this.buildMcpConfigSnapshot(input.profile),
+        configSnapshot: await this.buildMcpConfigSnapshot(
+          input.profile,
+          undefined,
+          projectScope,
+          this.getCurrentProjectMcpHub(projectScope),
+        ),
       };
     } catch (err) {
       return {
@@ -3129,7 +3474,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     scope: McpManagerScope;
   }): Promise<{ ok: boolean; error?: string }> {
     try {
-      await this.openRawMcpConfig(input.profile, input.scope);
+      const projectScope =
+        input.profile === "main" ? this.getCurrentProjectScope() : undefined;
+      await this.openRawMcpConfig(input.profile, input.scope, projectScope);
       return { ok: true };
     } catch (err) {
       return {
@@ -3139,8 +3486,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  public async submitBrowserAttachFile(): Promise<{ files: string[] }> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+  public async submitBrowserAttachFile(
+    projectId?: string,
+  ): Promise<{ files: string[] }> {
+    const scope = projectId
+      ? this.getAvailableBrowserProjectScope(projectId)
+      : this.getCustomizationSelection()?.scope;
+    if (!scope?.rootPath) return { files: [] };
+    const workspaceRoot = vscode.Uri.file(scope.rootPath);
     const uris = await vscode.window.showOpenDialog({
       canSelectMany: true,
       canSelectFiles: true,
@@ -3151,9 +3504,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!uris?.length) {
       return { files: [] };
     }
-    return {
-      files: uris.map((u) => getRelativePath(u.fsPath)),
-    };
+    try {
+      const canonicalRoot = fs.realpathSync(scope.rootPath) as string;
+      return {
+        files: uris.flatMap((uri) => {
+          try {
+            const canonicalPath = fs.realpathSync(uri.fsPath) as string;
+            const relative = path.relative(canonicalRoot, canonicalPath);
+            return relative !== ".." &&
+              !relative.startsWith(`..${path.sep}`) &&
+              !path.isAbsolute(relative)
+              ? [relative]
+              : [];
+          } catch {
+            return [];
+          }
+        }),
+      };
+    } catch {
+      return { files: [] };
+    }
   }
 
   /**
@@ -3271,9 +3641,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.stopSessionFromUi(input.sessionId, { drainBrowserQueue: false });
     }
 
+    const projectRoot = this.getSessionProjectRoot(input.sessionId);
+    if (!projectRoot) return;
     const resolvedText = await this.resolveAttachments(
       input.text,
       input.attachments,
+      projectRoot,
     );
     const displayText = input.displayText ?? input.text;
     const reasoningEffort = session.reasoningEffort;
@@ -3298,7 +3671,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .sendMessage(input.sessionId, resolvedText, session.mode, {
         thinkingEnabled,
         reasoningEffort,
-        activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+        activeFilePath: session.activeFilePath,
         displayText,
         isSlashCommand: input.isSlashCommand,
         slashCommandLabel: input.slashCommandLabel,
@@ -3389,6 +3762,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async submitBrowserSteerQueuedMessage(input: {
     sessionId: string;
+    projectId: string;
     queueId: string;
     text: string;
     displayText?: string;
@@ -3399,7 +3773,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     documents?: Array<{ name: string; mimeType: string; base64: string }>;
   }): Promise<{ ok: boolean }> {
     if (!input.sessionId || !input.queueId) return { ok: false };
-    if (!this.sessionManager?.getSession(input.sessionId)) {
+    const session = this.sessionManager?.getSession(input.sessionId);
+    if (
+      !session ||
+      session.projectScope.projectId !== input.projectId ||
+      !this.getAvailableBrowserProjectScope(input.projectId)
+    ) {
       return { ok: false };
     }
     const queued = this.projectedForegroundState.messageQueue.find(
@@ -3423,6 +3802,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public submitBrowserInterjectQueuedMessage(input: {
     sessionId: string;
+    projectId: string;
     queueId: string;
     text: string;
     displayText?: string;
@@ -3434,6 +3814,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }): { ok: boolean; error?: string } {
     if (!input.sessionId || !input.queueId) {
       return { ok: false, error: "invalid_request" };
+    }
+    const session = this.sessionManager?.getSession(input.sessionId);
+    if (
+      !session ||
+      session.projectScope.projectId !== input.projectId ||
+      !this.getAvailableBrowserProjectScope(input.projectId)
+    ) {
+      return { ok: false, error: "project_state_mismatch" };
     }
     const queued = this.projectedForegroundState.messageQueue.find(
       (entry) => entry.id === input.queueId && entry.source === "browser",
@@ -3564,30 +3952,69 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
   }
 
-  public async getBrowserSlashCommands(): Promise<SlashCommandInfo[]> {
-    await this.slashRegistry?.reload();
-    return this.slashRegistry?.getAll() ?? [];
+  private getSessionProjectRoot(sessionId: string): string | undefined {
+    const session = this.sessionManager?.getSession(sessionId);
+    const scope = session?.projectScope;
+    if (
+      !session ||
+      !scope?.rootPath ||
+      (session.projectAvailability !== undefined &&
+        session.projectAvailability !== "available")
+    ) {
+      return undefined;
+    }
+
+    const projects = this.sessionManager?.getWorkspaceProjects?.();
+    if (!projects) return scope.rootPath;
+    const project = projects.find(
+      (candidate) => candidate.id === scope.projectId,
+    );
+    return project?.availability.status === "available" &&
+      project.uri === scope.workspaceFolderUri &&
+      project.rootPath === scope.rootPath
+      ? scope.rootPath
+      : undefined;
+  }
+
+  private getAvailableBrowserProjectScope(
+    projectId: string,
+  ): SessionProjectScope | undefined {
+    const project = this.sessionManager
+      ?.getWorkspaceProjects?.()
+      .find((candidate) => candidate.id === projectId);
+    return project?.availability.status === "available" && project.rootPath
+      ? createSessionProjectScope(project)
+      : undefined;
+  }
+
+  public async getBrowserSlashCommands(
+    projectId: string,
+  ): Promise<SlashCommandInfo[]> {
+    const scope = this.getAvailableBrowserProjectScope(projectId);
+    if (!scope) return [];
+    const session = this.sessionManager?.getForegroundSession();
+    const mode =
+      session?.projectScope.projectId === projectId ? session.mode : "code";
+    return this.projectCustomizationRegistry.getSlashCommands(scope, mode);
   }
 
   public async searchBrowserFiles(
     query: string,
+    projectId: string,
   ): Promise<Array<{ path: string; kind: "file" | "folder" }>> {
-    const workspaceRoot =
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-    if (!workspaceRoot) {
-      return [];
-    }
+    const scope = this.getAvailableBrowserProjectScope(projectId);
+    if (!scope?.rootPath) return [];
 
     try {
       const pattern = query === "*" ? "**/*" : `**/*${query}*`;
       const uris = await vscode.workspace.findFiles(
-        pattern,
+        new vscode.RelativePattern(scope.rootPath, pattern),
         "**/node_modules/**",
         50,
       );
 
       const files = uris.map((uri) => ({
-        path: path.relative(workspaceRoot, uri.fsPath),
+        path: path.relative(scope.rootPath!, uri.fsPath),
         kind: "file" as const,
       }));
 
@@ -3608,11 +4035,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  public async getBrowserModes(): Promise<
-    Array<{ slug: string; name: string; icon: string }>
-  > {
-    const customModes = this.cwd ? await loadCustomModes(this.cwd) : [];
-    const allModes = getAllModes(customModes);
+  public async getBrowserModes(
+    projectId: string,
+  ): Promise<Array<{ slug: string; name: string; icon: string }>> {
+    const scope = this.getAvailableBrowserProjectScope(projectId);
+    if (!scope) return [];
+    const allModes = await this.projectCustomizationRegistry.getModes(scope);
     return allModes.map((m) => ({
       slug: m.slug,
       name: m.name,
@@ -3637,38 +4065,89 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }));
   }
 
-  private setupFileWatchers(cwd: string): void {
-    // Watch .agentlink/ and .claude/ for config changes
+  private setupFileWatchers(
+    scope: SessionProjectScope,
+    refreshMainMcp: boolean,
+  ): void {
+    const cwd = scope.rootPath;
+    if (!cwd || this.watchedCustomizationProjectIds.has(scope.projectId))
+      return;
+    this.watchedCustomizationProjectIds.add(scope.projectId);
+
     const configPattern = new vscode.RelativePattern(
       cwd,
-      ".agentlink/{commands/**,modes.json,mcp.json}",
+      "{.agents,.claude,.agentlink}/{commands/**,skills/**,modes.json,mcp.json}",
     );
     const configWatcher =
       vscode.workspace.createFileSystemWatcher(configPattern);
     const reloadConfig = () => {
-      this.slashRegistry?.reload().then(() => this.sendSlashCommands());
-      this.refreshMcpConnections({ interactiveForNewServers: true });
-      void this.sendModesUpdate();
+      this.projectCustomizationRegistry.invalidate(scope.projectId);
+      if (
+        this.getCustomizationSelection()?.scope.projectId === scope.projectId
+      ) {
+        void this.sendSlashCommands();
+        void this.sendModesUpdate();
+      }
+      if (refreshMainMcp) {
+        this.bumpMcpConfigVersion(scope.projectId);
+        void this.refreshMcpConnections(
+          { interactiveForNewServers: true },
+          scope,
+        );
+      }
     };
     configWatcher.onDidChange(reloadConfig);
     configWatcher.onDidCreate(reloadConfig);
     configWatcher.onDidDelete(reloadConfig);
     this.fileWatchers.push(configWatcher);
 
-    for (const filePath of getAskAgentMcpConfigPaths()) {
-      const askAgentMcpWatcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(
-          path.dirname(filePath),
-          path.basename(filePath),
-        ),
-      );
-      const reloadAskAgentMcp = () => {
-        this.refreshAskAgentMcpConnections({ interactiveForNewServers: true });
-      };
-      askAgentMcpWatcher.onDidChange(reloadAskAgentMcp);
-      askAgentMcpWatcher.onDidCreate(reloadAskAgentMcp);
-      askAgentMcpWatcher.onDidDelete(reloadAskAgentMcp);
-      this.fileWatchers.push(askAgentMcpWatcher);
+    if (!this.mainGlobalMcpWatchersInitialized) {
+      this.mainGlobalMcpWatchersInitialized = true;
+      for (const filePath of getGlobalMcpConfigPaths()) {
+        const globalMcpWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(
+            path.dirname(filePath),
+            path.basename(filePath),
+          ),
+        );
+        const reloadGlobalMcp = () => {
+          for (const project of this.sessionManager?.getWorkspaceProjects() ??
+            []) {
+            if (!project.rootPath) continue;
+            const projectScope = createSessionProjectScope(project);
+            this.bumpMcpConfigVersion(projectScope.projectId);
+            void this.refreshMcpConnections(
+              { interactiveForNewServers: true },
+              projectScope,
+            );
+          }
+        };
+        globalMcpWatcher.onDidChange(reloadGlobalMcp);
+        globalMcpWatcher.onDidCreate(reloadGlobalMcp);
+        globalMcpWatcher.onDidDelete(reloadGlobalMcp);
+        this.fileWatchers.push(globalMcpWatcher);
+      }
+    }
+
+    if (!this.askAgentMcpWatchersInitialized) {
+      this.askAgentMcpWatchersInitialized = true;
+      for (const filePath of getAskAgentMcpConfigPaths()) {
+        const askAgentMcpWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(
+            path.dirname(filePath),
+            path.basename(filePath),
+          ),
+        );
+        const reloadAskAgentMcp = () => {
+          void this.refreshAskAgentMcpConnections({
+            interactiveForNewServers: true,
+          });
+        };
+        askAgentMcpWatcher.onDidChange(reloadAskAgentMcp);
+        askAgentMcpWatcher.onDidCreate(reloadAskAgentMcp);
+        askAgentMcpWatcher.onDidDelete(reloadAskAgentMcp);
+        this.fileWatchers.push(askAgentMcpWatcher);
+      }
     }
 
     // Watch instruction files for system prompt hot-reload
@@ -3679,7 +4158,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const instructionWatcher =
       vscode.workspace.createFileSystemWatcher(instructionPattern);
     const reloadInstructions = () => {
-      void this.rebuildSessionSystemPrompts();
+      this.projectCustomizationRegistry.invalidate(scope.projectId);
+      void this.rebuildSessionSystemPrompts(scope.projectId);
     };
     instructionWatcher.onDidChange(reloadInstructions);
     instructionWatcher.onDidCreate(reloadInstructions);
@@ -3687,8 +4167,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.fileWatchers.push(instructionWatcher);
   }
 
-  private async rebuildSessionSystemPrompts(): Promise<void> {
+  private async rebuildSessionSystemPrompts(projectId?: string): Promise<void> {
     if (!this.sessionManager) return;
+    const foreground = this.sessionManager.getForegroundSession();
+    if (projectId && foreground?.projectScope.projectId !== projectId) return;
     try {
       await this.sessionManager.rebuildSystemPrompts();
       this.log(
@@ -3700,8 +4182,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async sendModesUpdate(): Promise<void> {
-    const customModes = this.cwd ? await loadCustomModes(this.cwd) : [];
-    const allModes = getAllModes(customModes);
+    const selection = this.getCustomizationSelection();
+    const selectionKey = this.getCustomizationSelectionKey(selection);
+    const allModes = selection
+      ? await this.projectCustomizationRegistry.getModes(selection.scope)
+      : BUILT_IN_MODES;
+    if (
+      selectionKey !==
+      this.getCustomizationSelectionKey(this.getCustomizationSelection())
+    ) {
+      return;
+    }
     const modes = allModes.map((m) => ({
       slug: m.slug,
       name: m.name,
@@ -3720,22 +4211,118 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } as ExtensionToWebview);
   }
 
-  private sendSlashCommands(): void {
-    if (!this.slashRegistry) return;
+  private async sendSlashCommands(): Promise<void> {
+    const selection = this.getCustomizationSelection();
+    if (!selection) return;
+    const selectionKey = this.getCustomizationSelectionKey(selection);
+    const commands = await this.getCurrentSlashCommands(selection);
+    if (
+      selectionKey !==
+      this.getCustomizationSelectionKey(this.getCustomizationSelection())
+    ) {
+      return;
+    }
     this.postMessage({
       type: "agentSlashCommandsUpdate",
-      commands: this.slashRegistry.getAll(),
+      commands,
     } as ExtensionToWebview);
   }
 
+  private getCustomizationSelection():
+    | { scope: SessionProjectScope; mode: string }
+    | undefined {
+    const foreground = this.sessionManager?.getForegroundSession();
+    if (foreground) {
+      const scope = foreground.projectScope;
+      if (!scope) return undefined;
+      if (foreground.projectAvailability !== "available" || !scope.rootPath) {
+        return undefined;
+      }
+      return { scope, mode: foreground.mode };
+    }
+
+    const managerDefaultScope =
+      typeof this.sessionManager?.getDefaultProjectScope === "function"
+        ? this.sessionManager.getDefaultProjectScope()
+        : undefined;
+    const scope = managerDefaultScope ?? this.initialProjectScope;
+    return scope?.rootPath ? { scope, mode: "code" } : undefined;
+  }
+
+  private getCustomizationSelectionKey(
+    selection: { scope: SessionProjectScope; mode: string } | undefined,
+  ): string {
+    return selection
+      ? `${selection.scope.projectId}:${selection.scope.workspaceFolderUri}:${selection.mode}`
+      : "unavailable";
+  }
+
+  private async getCurrentSlashCommands(
+    selection = this.getCustomizationSelection(),
+  ): Promise<SlashCommandInfo[]> {
+    return selection
+      ? this.projectCustomizationRegistry.getSlashCommands(
+          selection.scope,
+          selection.mode,
+        )
+      : [];
+  }
+
+  private getProjectInfos(): ProjectInfo[] {
+    return (this.sessionManager?.getWorkspaceProjects?.() ?? []).map(
+      (project) => ({
+        projectId: project.id,
+        displayName: project.name,
+        availability:
+          project.availability.status === "available"
+            ? "available"
+            : "unavailable",
+      }),
+    );
+  }
+
+  private getWebviewSessionSummaries(): WebviewSessionSummary[] {
+    const projects = new Map(
+      this.getProjectInfos().map((project) => [project.projectId, project]),
+    );
+    return (this.sessionManager?.listPersistedSessions() ?? []).map(
+      (session) => {
+        const projectId = session.projectScope?.projectId;
+        const project = projectId
+          ? (projects.get(projectId) ?? {
+              projectId,
+              displayName:
+                session.projectScope?.displayName ?? "Project unavailable",
+              availability: "unavailable" as const,
+            })
+          : undefined;
+        return {
+          id: session.id,
+          project,
+          mode: session.mode,
+          model: session.model,
+          title: session.title,
+          messageCount: session.messageCount,
+          totalInputTokens: session.totalInputTokens,
+          totalOutputTokens: session.totalOutputTokens,
+          createdAt: session.createdAt,
+          lastActiveAt: session.lastActiveAt,
+        };
+      },
+    );
+  }
+
   private sendSessionList(): void {
-    const sessions = this.sessionManager?.listPersistedSessions() ?? [];
-    this.postMessage({ type: "agentSessionList", sessions });
+    this.postMessage({
+      type: "agentSessionList",
+      sessions: this.getWebviewSessionSummaries(),
+    });
   }
 
   private getConfiguredCondenseThreshold(modelId: string): number {
     return getConfiguredBaseThresholdForModel(
-      vscode.workspace.getConfiguration("agentlink"),
+      this.getCurrentProjectConfiguration() ??
+        vscode.workspace.getConfiguration("agentlink"),
       modelId,
       providerRegistry.tryResolveProvider(modelId)?.getCapabilities(modelId),
     );
@@ -3781,8 +4368,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   setSessionManager(manager: AgentSessionManager): void {
     this.sessionManager = manager;
-    this.slashRegistry?.setMode(manager.getForegroundSession()?.mode ?? "code");
-    void this.slashRegistry?.reload().then(() => this.sendSlashCommands());
+    const projects =
+      typeof manager.getWorkspaceProjects === "function"
+        ? manager.getWorkspaceProjects()
+        : [];
+    for (const project of projects) {
+      if (project.rootPath) {
+        const scope = createSessionProjectScope(project);
+        this.projectMcpHubRegistry.ensure(scope);
+        this.setupFileWatchers(scope, true);
+        void this.refreshMcpConnections(undefined, scope);
+      }
+    }
+    if (this.getCustomizationSelection()) {
+      void this.sendModesUpdate();
+      void this.sendSlashCommands();
+    }
 
     manager.onEvent = (sessionId, event) => {
       this.handleAgentEvent(sessionId, event);
@@ -3793,10 +4394,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // when a tracked tool is force-cancelled/completed from the sidebar). Push a
       // full foreground state refresh so the chat webview's streaming/session state
       // stays aligned with the real session status, then refresh the sidebar strips.
-      this.slashRegistry?.setMode(
-        manager.getForegroundSession()?.mode ?? "code",
-      );
-      void this.slashRegistry?.reload().then(() => this.sendSlashCommands());
+      if (this.getCustomizationSelection()) {
+        void this.sendModesUpdate();
+        void this.sendSlashCommands();
+      }
       this.sendInitialState();
       this.sendBgSessionsUpdate();
     };
@@ -3905,7 +4506,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
         void this.sendModesUpdate();
         void this.sendModelsUpdate();
-        this.sendSlashCommands();
+        void this.sendSlashCommands();
         this.sendSessionList();
         // Flush any messages queued before the webview was ready. Use the same
         // guarded send path as live messages so a reload/crash during replay does
@@ -3978,6 +4579,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 documents: msg.documents,
               },
             ];
+        const mgr = this.sessionManager;
+        let effectiveSessionId = sessionId;
+        if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
+          const newSession = await mgr.createSession(mode, {
+            activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+          });
+          effectiveSessionId = newSession.id;
+          this.approvalManager?.migrateSessionState(
+            "agent",
+            effectiveSessionId,
+          );
+        }
+        const projectRoot = this.getSessionProjectRoot(effectiveSessionId);
+        if (!projectRoot) {
+          vscode.window.showErrorMessage(
+            "The selected project is unavailable for local attachments.",
+          );
+          return;
+        }
         const sendMessages = await Promise.all(
           rawMessages.map(async (raw) => {
             const messageText = String(raw.text ?? "");
@@ -3991,7 +4611,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 | Array<{ name: string; mimeType: string; base64: string }>
                 | undefined) ?? [];
             return {
-              text: await this.resolveAttachments(messageText, attachments),
+              text: await this.resolveAttachments(
+                messageText,
+                attachments,
+                projectRoot,
+              ),
               displayText: raw.displayText as string | undefined,
               isSlashCommand: raw.isSlashCommand === true,
               slashCommandLabel: raw.slashCommandLabel as string | undefined,
@@ -4030,24 +4654,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         }
 
-        const mgr = this.sessionManager;
-        let effectiveSessionId = sessionId;
-        if (!effectiveSessionId || !mgr.getSession(effectiveSessionId)) {
-          const newSession = await mgr.createSession(mode, {
-            activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
-          });
-          effectiveSessionId = newSession.id;
-          this.approvalManager?.migrateSessionState(
-            "agent",
-            effectiveSessionId,
-          );
-        }
-
         mgr
           .sendMessage(effectiveSessionId, nonEmptyMessages[0]!.text, mode, {
             thinkingEnabled,
             reasoningEffort,
-            activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+            activeFilePath: mgr.getSession(effectiveSessionId)?.activeFilePath,
             displayText: nonEmptyMessages[0]!.displayText,
             isSlashCommand: nonEmptyMessages[0]!.isSlashCommand,
             slashCommandLabel: nonEmptyMessages[0]!.slashCommandLabel,
@@ -4258,22 +4869,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "agentNewSession": {
         const mode = (msg.mode as string) ?? "code";
-        this.sessionManager.createForegroundSession(mode).then((session) => {
-          this.postSessionLoaded(session, {
-            checkpoints: this.getSessionCheckpoints(session.id),
-            tailTurns: 0,
+        const projectId =
+          typeof msg.projectId === "string" ? msg.projectId : undefined;
+        this.sessionManager
+          .createForegroundSession(mode, { projectId })
+          .then((session) => {
+            this.postSessionLoaded(session, {
+              checkpoints: this.getSessionCheckpoints(session.id),
+              tailTurns: 0,
+            });
+            this.sendInitialState();
+            this.log(
+              `New session created: ${session.id} (model: ${session.model})`,
+            );
           });
-          this.sendInitialState();
-          this.log(
-            `New session created: ${session.id} (model: ${session.model})`,
-          );
-        });
         break;
       }
 
       case "agentSwitchMode": {
         const mode = (msg.mode as string) ?? "code";
-        this.slashRegistry?.setMode(mode);
         const fg = this.sessionManager.getForegroundSession();
         if (fg && fg.mode !== mode) {
           this.sessionManager
@@ -4287,9 +4901,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               return session;
             })
             .then(async () => {
-              await this.slashRegistry?.reload();
               this.sendInitialState();
-              this.sendSlashCommands();
+              await this.sendModesUpdate();
+              await this.sendSlashCommands();
               this.log(`[mode] user switched mode to ${mode}`);
             })
             .catch((err) => {
@@ -4298,9 +4912,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } else if (!fg) {
           // No session yet — create one in the target mode
           this.sessionManager.createSession(mode).then(async () => {
-            await this.slashRegistry?.reload();
             this.sendInitialState();
-            this.sendSlashCommands();
+            await this.sendModesUpdate();
+            await this.sendSlashCommands();
             this.log(`[mode] new session created in mode ${mode}`);
           });
         }
@@ -4327,12 +4941,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (!model) break;
         // Update config, session model, and rebuild system prompt if provider changed
         await this.sessionManager.setModel(model);
-        // Persist to VS Code global settings so it survives restarts
-        const config = vscode.workspace.getConfiguration("agentlink");
+        const config = this.getCurrentProjectConfiguration();
+        if (!config) break;
         await config.update(
           "agentModel",
           model,
-          vscode.ConfigurationTarget.Global,
+          vscode.ConfigurationTarget.WorkspaceFolder,
         );
 
         // Auto-save manual model changes as the default for the current mode.
@@ -4345,7 +4959,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             ...modePrefs,
             [fgMode]: model,
           },
-          vscode.ConfigurationTarget.Global,
+          vscode.ConfigurationTarget.WorkspaceFolder,
         );
 
         this.sendInitialState();
@@ -4356,7 +4970,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "agentSetCondenseThreshold": {
         const threshold = Number(msg.threshold);
         if (!Number.isFinite(threshold)) break;
-        const config = vscode.workspace.getConfiguration("agentlink");
+        const config = this.getCurrentProjectConfiguration();
+        if (!config) break;
         const currentModel =
           this.sessionManager.getForegroundSession()?.model ??
           this.sessionManager.getConfig().model;
@@ -4369,7 +4984,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await config.update(
           "modelCondenseThresholds",
           thresholds,
-          vscode.ConfigurationTarget.Global,
+          vscode.ConfigurationTarget.WorkspaceFolder,
         );
         this.sessionManager.updateConfig({
           autoCondenseThreshold: thresholds[currentModel],
@@ -4435,8 +5050,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.approvalManager.approveMcpTool(sessionId, toolName);
 
         if (scope === "project" || scope === "global") {
-          const cwd =
-            vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? this.cwd;
+          const cwd = this.getSessionProjectRoot(sessionId);
           if (!cwd) {
             vscode.window.showErrorMessage(
               "Unable to persist MCP approval: no workspace or cwd available.",
@@ -4469,14 +5083,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const serverName = msg.serverName as string;
         const action = msg.action as "disable" | "reconnect" | "reauthenticate";
         if (!serverName || !action) break;
+        const projectScope = this.getCurrentProjectScope();
+        const hub = this.getCurrentProjectMcpHub(projectScope) ?? this.mcpHub;
         if (action === "disable") {
-          await this.mcpHub.disableServer(serverName);
+          await hub.disableServer(serverName);
         } else if (action === "reconnect") {
-          await this.mcpHub.reconnectServer(serverName);
+          await hub.reconnectServer(serverName);
         } else if (action === "reauthenticate") {
-          await this.mcpHub.reauthenticateServer(serverName);
+          await hub.reauthenticateServer(serverName);
         }
-        await this.postMcpManagerSnapshot({ profile: "main" });
+        await this.postMcpManagerSnapshot({
+          profile: "main",
+          projectScope,
+          mainHub: hub,
+        });
         break;
       }
 
@@ -4633,12 +5253,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentRefreshSlashCommands": {
-        this.slashRegistry?.reload().then(() => {
-          this.sendSlashCommands();
-          this.log(
-            `[slash] refreshed: ${this.slashRegistry?.getAll().length ?? 0} commands`,
+        const selection = this.getCustomizationSelection();
+        if (selection) {
+          this.projectCustomizationRegistry.invalidate(
+            selection.scope.projectId,
           );
-        });
+        }
+        const commands = await this.getCurrentSlashCommands(selection);
+        await this.sendSlashCommands();
+        this.log(`[slash] refreshed: ${commands.length} commands`);
         break;
       }
 
@@ -4698,8 +5321,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
           await this.revertCheckpointWithConfirmation(fg.id, checkpoint.id);
         } else if (name === "skills") {
-          await this.slashRegistry?.reload();
-          const skills = this.slashRegistry?.getSkillCommands() ?? [];
+          const selection = this.getCustomizationSelection();
+          const skills = selection
+            ? await this.projectCustomizationRegistry.getSkillCommands(
+                selection.scope,
+                selection.mode,
+              )
+            : [];
           const lines = [
             `Detected skills for mode "${this.sessionManager.getForegroundSession()?.mode ?? "code"}": ${skills.length}`,
             "",
@@ -4733,8 +5361,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             });
           }
         } else if (name === "mcp-refresh") {
-          await this.refreshMcpConnections();
-          await this.postMcpManagerSnapshot({ profile: "main" });
+          const projectScope = this.getCurrentProjectScope();
+          await this.refreshMcpConnections(undefined, projectScope);
+          await this.postMcpManagerSnapshot({
+            profile: "main",
+            projectScope,
+            mainHub: this.getCurrentProjectMcpHub(projectScope),
+          });
           vscode.window.showInformationMessage("MCP servers reconnected.");
         } else if (name === "btw") {
           const question = String(msg.args ?? "").trim();
@@ -4781,8 +5414,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const filePath = msg.path as string;
         const line = msg.line as number | undefined;
         if (!filePath) break;
-        const workspaceRoot =
-          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+        const workspaceRoot = this.getCustomizationSelection()?.scope.rootPath;
+        if (!workspaceRoot) break;
         const absPath = path.isAbsolute(filePath)
           ? filePath
           : path.join(workspaceRoot, filePath);
@@ -4975,8 +5608,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "agentListSessions": {
-        const sessions = this.sessionManager?.listPersistedSessions() ?? [];
-        this.postMessage({ type: "agentSessionList", sessions });
+        this.sendSessionList();
         break;
       }
 
@@ -5036,8 +5668,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
         }
         this.approvalManager?.clearSession(sessionId);
-        const sessions = this.sessionManager.listPersistedSessions();
-        this.postMessage({ type: "agentSessionList", sessions });
+        this.sendSessionList();
         break;
       }
 
@@ -5056,8 +5687,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           );
           break;
         }
-        const sessions = this.sessionManager.listPersistedSessions();
-        this.postMessage({ type: "agentSessionList", sessions });
+        this.sendSessionList();
         break;
       }
 
@@ -5855,7 +6485,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public getBrowserMcpStatusInfos(): McpServerInfo[] {
-    return this.mcpHub.getServerInfos();
+    return this.getMcpHub().getServerInfos();
   }
 
   private handleAgentEvent(sessionId: string, event: AgentEvent): void {
@@ -6280,6 +6910,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private requireSessionArtifactRoot(sessionId?: string): string {
+    const session = sessionId
+      ? this.sessionManager?.getSession(sessionId)
+      : this.sessionManager?.getForegroundSession();
+    if (!session) {
+      throw new Error("No agent session is available for artifact export.");
+    }
+
+    const scope = session.projectScope;
+    if (session.projectAvailability !== "available" || !scope?.rootPath) {
+      throw new Error(
+        `Project '${scope?.displayName ?? "unknown"}' is unavailable for artifact export.`,
+      );
+    }
+
+    const projects = this.sessionManager?.getWorkspaceProjects?.();
+    if (projects) {
+      const project = projects.find(
+        (candidate) => candidate.id === scope.projectId,
+      );
+      if (
+        !project ||
+        project.availability.status !== "available" ||
+        project.uri !== scope.workspaceFolderUri ||
+        project.rootPath !== scope.rootPath
+      ) {
+        throw new Error(
+          `Project '${scope.displayName}' is unavailable for artifact export.`,
+        );
+      }
+    }
+
+    return scope.rootPath;
+  }
+
   private async writeCondenseDebug(
     sessionId: string,
     event: {
@@ -6307,9 +6972,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       };
     },
   ): Promise<void> {
+    const projectRoot = this.requireSessionArtifactRoot(sessionId);
+    const session = this.sessionManager?.getSession(sessionId);
     const { randomUUID: uuid } = require("crypto") as typeof import("crypto");
     const id = uuid().slice(0, 8);
-    const dir = path.join(this.cwd, ".agentlink", "debug", "condensing", id);
+    const dir = path.join(projectRoot, ".agentlink", "debug", "condensing", id);
     fs.mkdirSync(dir, { recursive: true });
 
     // Write summary result
@@ -6402,7 +7069,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
 
     // Write full session transcript
-    const session = this.sessionManager?.getSession(sessionId);
     if (session) {
       const transcriptLines: string[] = [
         `# Session Transcript (at time of condensing)`,
@@ -6479,15 +7145,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }>;
     }>,
   ): Promise<void> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!workspaceRoot) {
-      vscode.window.showErrorMessage("No workspace folder open.");
+    let projectRoot: string;
+    try {
+      projectRoot = this.requireSessionArtifactRoot();
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      );
       return;
     }
 
     const fs = require("fs");
     const path = require("path");
-    const dir = path.join(workspaceRoot, ".agentlink", "transcripts");
+    const dir = path.join(projectRoot, ".agentlink", "transcripts");
     fs.mkdirSync(dir, { recursive: true });
 
     const now = new Date();
@@ -6770,6 +7440,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       checkpointId,
       previewResult.sessionRevision,
       previewResult.persistenceRevision,
+      previewResult.projectId,
     );
 
     if (result.ok) {
@@ -6880,17 +7551,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Get system prompt from foreground session. If no foreground session
     // exists yet (fresh chat), build a fallback prompt for the default mode
     // so the Environment panel can still show the System Prompt section.
-    const activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
     const fg = this.sessionManager?.getForegroundSession();
+    const debugRoot = fg?.projectScope
+      ? fg.projectScope.rootPath
+      : fg
+        ? undefined
+        : this.cwd;
+    const activeFilePath = fg
+      ? fg.activeFileContext?.status === "accepted"
+        ? fg.activeFileContext.activeFilePath
+        : undefined
+      : vscode.window.activeTextEditor?.document.uri.fsPath;
+    if (fg?.projectScope) {
+      info["project.id"] = fg.projectScope.projectId;
+      info["project.availability"] = fg.projectAvailability;
+      if (fg.activeFileContext) {
+        info["project.activeFileContext"] =
+          fg.activeFileContext.status === "accepted"
+            ? "accepted"
+            : `ignored:${fg.activeFileContext.reason}`;
+      }
+    }
     let systemPrompt = fg?.systemPrompt;
-    if (!systemPrompt && this.cwd) {
+    if (!systemPrompt && debugRoot) {
       try {
         const mode = fg?.mode ?? "code";
         const model = fg?.model ?? this.sessionManager?.getConfig().model;
         const providerId = model
           ? providerRegistry.tryResolveProvider(model)?.id
           : undefined;
-        systemPrompt = await buildSystemPrompt(mode, this.cwd, {
+        systemPrompt = await buildSystemPrompt(mode, debugRoot, {
           providerId,
           activeFilePath,
           workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map(
@@ -6904,13 +7594,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // Load instruction blocks for the preview panel
     let loadedInstructions: LoadedInstructionDebugInfo[] | undefined;
-    if (this.cwd) {
+    if (debugRoot) {
       try {
-        const blocks = await loadAllInstructionBlocks(this.cwd, {
+        const blocks = await loadAllInstructionBlocks(debugRoot, {
           activeFilePath,
         });
         loadedInstructions = blocks.map((block) =>
-          formatInstructionDebugInfo(block, this.cwd, activeFilePath),
+          formatInstructionDebugInfo(block, debugRoot, activeFilePath),
         );
       } catch (err) {
         this.log(`[warn] Failed to load instruction blocks for debug: ${err}`);
@@ -6935,20 +7625,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async resolveAttachments(
     text: string,
     attachments: string[],
+    projectRoot: string,
   ): Promise<string> {
     if (attachments.length === 0) return text;
 
     const fs = require("fs");
     const pathMod = require("path");
-    const workspaceRoot =
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
 
     const blocks: string[] = [];
     for (const relPath of attachments) {
       try {
-        const absPath = pathMod.isAbsolute(relPath)
-          ? relPath
-          : pathMod.join(workspaceRoot, relPath);
+        const canonicalProjectRoot = fs.realpathSync(projectRoot) as string;
+        const absPath = fs.realpathSync(
+          pathMod.resolve(projectRoot, relPath),
+        ) as string;
+        const relative = pathMod.relative(canonicalProjectRoot, absPath);
+        if (
+          relative === ".." ||
+          relative.startsWith(`..${pathMod.sep}`) ||
+          pathMod.isAbsolute(relative)
+        ) {
+          throw new Error("Attachment is outside the session project");
+        }
         const content = fs.readFileSync(absPath, "utf-8") as string;
         const ext = pathMod.extname(relPath).slice(1) || "";
         blocks.push(
@@ -6971,9 +7669,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     query: string,
     requestId: string,
   ): Promise<void> {
-    const workspaceRoot =
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-    if (!workspaceRoot) {
+    const selection = this.getCustomizationSelection();
+    if (!selection) {
       this.postMessage({
         type: "agentFileSearchResults",
         requestId,
@@ -6983,36 +7680,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     try {
-      // Use VS Code's findFiles API for fast glob-based search
-      const pattern = query === "*" ? "**/*" : `**/*${query}*`;
-      const uris = await vscode.workspace.findFiles(
-        pattern,
-        "**/node_modules/**",
-        50,
+      const files = await this.searchBrowserFiles(
+        query,
+        selection.scope.projectId,
       );
-
-      const path = require("path");
-      const files = uris.map((uri) => ({
-        path: path.relative(workspaceRoot, uri.fsPath),
-        kind: "file" as const,
-      }));
-
-      // Sort: prefer files whose basename starts with the query
-      const lowerQuery = query.toLowerCase();
-      files.sort((a, b) => {
-        const aBase = path.basename(a.path).toLowerCase();
-        const bBase = path.basename(b.path).toLowerCase();
-        const aStarts = aBase.startsWith(lowerQuery) ? 0 : 1;
-        const bStarts = bBase.startsWith(lowerQuery) ? 0 : 1;
-        if (aStarts !== bStarts) return aStarts - bStarts;
-        // Then prefer shorter paths
-        return a.path.length - b.path.length;
-      });
-
       this.postMessage({
         type: "agentFileSearchResults",
         requestId,
-        files: files.slice(0, 20),
+        files,
       });
     } catch (err) {
       this.log(`[error] File search failed: ${err}`);
@@ -7070,8 +7745,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       modelId,
       condenseThreshold,
     );
+    const projects = this.getProjectInfos();
+    const defaultProjectId =
+      this.sessionManager.getDefaultProjectScope?.()?.projectId ?? null;
     const state: ChatState = {
       sessionId: fg?.id ?? null,
+      projects,
+      defaultProjectId,
+      project: fg?.projectScope
+        ? {
+            projectId: fg.projectScope.projectId,
+            displayName: fg.projectScope.displayName,
+            availability:
+              fg.projectAvailability === "available" &&
+              projects.find(
+                (project) => project.projectId === fg.projectScope.projectId,
+              )?.availability === "available"
+                ? "available"
+                : "unavailable",
+          }
+        : (projects.find((project) => project.projectId === defaultProjectId) ??
+          null),
       mode: fg?.mode ?? "code",
       model: modelId,
       streaming:
@@ -7270,7 +7964,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ?.sendMessage(sessionId, sendMessages[0]!.text, mode, {
         thinkingEnabled,
         reasoningEffort,
-        activeFilePath: vscode.window.activeTextEditor?.document.uri.fsPath,
+        activeFilePath: session.activeFilePath,
         displayText: sendMessages[0]!.displayText,
         isSlashCommand: sendMessages[0]!.isSlashCommand,
         slashCommandLabel: sendMessages[0]!.slashCommandLabel,

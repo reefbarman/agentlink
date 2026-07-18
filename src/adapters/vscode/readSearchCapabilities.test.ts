@@ -92,19 +92,19 @@ describe("createVscodeSemanticSearchProvider", () => {
     });
   });
 
-  it("uses all workspace roots when no path is provided", async () => {
-    const provider = createVscodeSemanticSearchProvider();
+  it("uses only the pinned project root when no path is provided", async () => {
+    const provider = createVscodeSemanticSearchProvider("/workspace/project-b");
 
     await provider.search({ query: "auth flow" });
 
     expect(resolveAndValidatePath).not.toHaveBeenCalled();
-    expect(tryGetFirstWorkspaceRoot).toHaveBeenCalledTimes(1);
+    expect(tryGetFirstWorkspaceRoot).not.toHaveBeenCalled();
     expect(semanticSearch).toHaveBeenCalledWith(
-      "/workspace",
+      "/workspace/project-b",
       "auth flow",
       undefined,
       undefined,
-      { includeAllWorkspaceRoots: true },
+      { includeAllWorkspaceRoots: false },
     );
   });
 });

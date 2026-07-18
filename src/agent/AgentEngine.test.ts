@@ -177,7 +177,7 @@ function makeRegistry(provider?: ModelProvider): ProviderRegistry {
 async function makeSession(
   config: AgentConfig = testConfig,
 ): Promise<AgentSession> {
-  return AgentSession.create({
+  return AgentSession.createForLegacyCwd({
     mode: "code",
     config,
     cwd: "/test",
@@ -788,7 +788,7 @@ describe("AgentEngine", () => {
         yield* makeProviderStream({ text: "done" });
       };
 
-      const session = await AgentSession.create({
+      const session = await AgentSession.createForLegacyCwd({
         mode: "code",
         config: testConfig,
         cwd,

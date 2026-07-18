@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BrowserGatewayService } from "./BrowserGatewayService.js";
 import { InMemoryAgentUiEventHub } from "../agent/AgentUiPublisher.js";
+import type { SessionSummary } from "../agent/SessionStore.js";
 import { diffSnapshotHub } from "./DiffSnapshotHub.js";
 
 vi.mock("vscode", () => {
@@ -38,7 +39,26 @@ vi.mock("vscode", () => {
 
 function makeSessionManagerStub() {
   return {
-    listPersistedSessions: vi.fn(() => [
+    getWorkspaceProjects: vi.fn(() => [
+      {
+        id: "project-a",
+        name: "Project A",
+        uri: "file:///workspace/a",
+        rootPath: "/workspace/a",
+        availability: { status: "available" },
+      },
+      {
+        id: "project-b",
+        name: "Project B",
+        uri: "file:///workspace/b",
+        rootPath: "/workspace/b",
+        availability: { status: "available" },
+      },
+    ]),
+    getDefaultProjectScope: vi.fn(() => ({
+      projectId: "project-a",
+    })),
+    listPersistedSessions: vi.fn<() => SessionSummary[]>(() => [
       {
         schemaVersion: 1,
         id: "session-1",
@@ -50,6 +70,14 @@ function makeSessionManagerStub() {
         totalOutputTokens: 20,
         createdAt: 1,
         lastActiveAt: 2,
+        projectScope: {
+          schemaVersion: 1,
+          kind: "project",
+          projectId: "project-a",
+          workspaceFolderUri: "file:///workspace/a",
+          displayName: "Project A",
+          rootPath: "/workspace/a",
+        },
       },
     ]),
     getForegroundSession: vi.fn(() => ({
@@ -62,6 +90,11 @@ function makeSessionManagerStub() {
       lastOutputTokens: 20,
       lastCacheReadTokens: 3,
       estimatedTotalUsed: 33,
+      projectScope: {
+        projectId: "project-a",
+        displayName: "Project A",
+      },
+      projectAvailability: "available",
       getAllMessages: vi.fn(() => [
         { role: "user", content: "hello" },
         { role: "assistant", content: [{ type: "text", text: "world" }] },
@@ -138,6 +171,45 @@ function makeService(hub: InMemoryAgentUiEventHub): BrowserGatewayService {
 }
 
 describe("BrowserGatewayService", () => {
+  it("serializes project catalog and foreground identity without local roots", () => {
+    const hub = new InMemoryAgentUiEventHub();
+    const service = makeService(hub);
+
+    const snapshot = service.getSerializableSnapshotState();
+
+    expect(snapshot.session.projects).toEqual([
+      {
+        projectId: "project-a",
+        displayName: "Project A",
+        availability: "available",
+      },
+      {
+        projectId: "project-b",
+        displayName: "Project B",
+        availability: "available",
+      },
+    ]);
+    expect(snapshot.session.defaultProjectId).toBe("project-a");
+    expect(snapshot.session.foreground?.project).toEqual({
+      projectId: "project-a",
+      displayName: "Project A",
+      availability: "available",
+    });
+    expect(snapshot.session.sessions[0]?.project).toEqual({
+      projectId: "project-a",
+      displayName: "Project A",
+      availability: "available",
+    });
+    const serializedSession = JSON.stringify(snapshot.session);
+    expect(serializedSession).not.toContain("/workspace/");
+    expect(serializedSession).not.toContain("file://");
+    expect(serializedSession).not.toContain("workspaceFolderUri");
+    expect(serializedSession).not.toContain("rootPath");
+
+    service.dispose();
+    hub.dispose();
+  });
+
   it("publishes monotonic snapshots with their prebuilt wire payload", () => {
     const hub = new InMemoryAgentUiEventHub();
     const service = makeService(hub);
@@ -246,6 +318,7 @@ describe("BrowserGatewayService", () => {
         loadedInstructions: null,
         restoringSession: false,
         revertRecoveryNotice: {
+          projectId: "project-test",
           checkpointId: "checkpoint-1",
           sessionRevision: "revision-2",
           workspaceRevision: "abcdef1234567890",
@@ -285,7 +358,7 @@ describe("BrowserGatewayService", () => {
       },
       question: undefined,
     });
-    expect(service.getSerializableSessionState()).toEqual({
+    expect(service.getSerializableSessionState()).toMatchObject({
       sessions: [
         expect.objectContaining({
           id: "session-1",
@@ -325,6 +398,7 @@ describe("BrowserGatewayService", () => {
         loadedInstructions: null,
         restoringSession: false,
         revertRecoveryNotice: {
+          projectId: "project-test",
           checkpointId: "checkpoint-1",
           sessionRevision: "revision-2",
           workspaceRevision: "abcdef1234567890",
@@ -996,7 +1070,11 @@ describe("BrowserGatewayService", () => {
     vi.useFakeTimers();
     try {
       const hub = new InMemoryAgentUiEventHub();
-      let repository = { branch: "main", dirty: false };
+      let repository = {
+        projectId: "project-a",
+        branch: "main",
+        dirty: false,
+      };
       let repositoryListener: (() => void) | undefined;
       const repositorySubscriptionDispose = vi.fn();
       const service = new BrowserGatewayService(
@@ -1026,7 +1104,11 @@ describe("BrowserGatewayService", () => {
       const onDidChange = vi.fn();
       const subscription = service.onDidChange(onDidChange);
 
-      repository = { branch: "feature/a4e", dirty: true };
+      repository = {
+        projectId: "project-a",
+        branch: "feature/a4e",
+        dirty: true,
+      };
       repositoryListener?.();
       vi.advanceTimersByTime(150);
 
@@ -1055,7 +1137,11 @@ describe("BrowserGatewayService", () => {
     vi.useFakeTimers();
     try {
       const hub = new InMemoryAgentUiEventHub();
-      let repository = { branch: "main", dirty: false };
+      let repository = {
+        projectId: "project-a",
+        branch: "main",
+        dirty: false,
+      };
       let repositoryListener: (() => void) | undefined;
       const service = new BrowserGatewayService(
         hub,
@@ -1084,7 +1170,7 @@ describe("BrowserGatewayService", () => {
       const onDidChange = vi.fn();
       service.onDidChange(onDidChange);
 
-      repository = { branch: "main", dirty: true };
+      repository = { projectId: "project-a", branch: "main", dirty: true };
       repositoryListener?.();
       vi.advanceTimersByTime(150);
 
@@ -1415,7 +1501,11 @@ describe("BrowserGatewayService", () => {
       const hub = new InMemoryAgentUiEventHub();
       const sessionManager = makeSessionManagerStub();
       let projected = projectedForeground();
-      let repository = { branch: "main", dirty: false };
+      let repository = {
+        projectId: "project-a",
+        branch: "main",
+        dirty: false,
+      };
       let theme = themeSnapshotStub;
       let mcpStatusInfos: unknown[] = [];
       let sessionListener: (() => void) | undefined;
@@ -1568,7 +1658,11 @@ describe("BrowserGatewayService", () => {
 
       expectPublication(
         () => {
-          repository = { branch: "matrix-branch", dirty: true };
+          repository = {
+            projectId: "project-a",
+            branch: "matrix-branch",
+            dirty: true,
+          };
           repositoryListener?.();
         },
         (snapshot) => expect(snapshot.session.repository).toEqual(repository),

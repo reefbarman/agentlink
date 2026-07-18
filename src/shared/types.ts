@@ -24,6 +24,8 @@ export interface InlineApprovalRequest {
   id?: string;
   /** When set, shows attribution for which background task is requesting approval. */
   backgroundTask?: string;
+  /** Optional exact target path for project/cross-project attribution. */
+  targetPath?: string;
 }
 
 /**
@@ -114,6 +116,7 @@ export interface RequestContextBreakdown {
 }
 
 export interface RevertRecoveryNotice {
+  projectId: string;
   checkpointId: string;
   sessionRevision: string;
   workspaceRevision?: string;

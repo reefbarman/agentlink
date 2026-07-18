@@ -79,6 +79,7 @@ describe("requestImageGenerationApprovalForTest", () => {
     expect(approvalRequest).toEqual(
       expect.objectContaining({
         kind: "write",
+        targetPath: "generated-icons/gemini.png",
         choices: expect.arrayContaining([
           expect.objectContaining({ value: "accept" }),
           expect.objectContaining({ value: "reject" }),

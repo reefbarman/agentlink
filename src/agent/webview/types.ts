@@ -13,6 +13,12 @@ import type { ComposeTrace } from "../../shared/composeTypes.js";
 import type { LoadedInstructionDebugInfo } from "../../shared/chatProjection.js";
 import type { McpUrlElicitationRequest } from "../../shared/mcpUrlElicitation.js";
 
+export interface ProjectInfo {
+  projectId: string;
+  displayName: string;
+  availability: "available" | "unavailable";
+}
+
 /** A mode available for selection */
 export interface ModeInfo {
   slug: string;
@@ -690,6 +696,9 @@ export type ShowBgTranscriptMessage = {
 
 export interface ChatState {
   sessionId: string | null;
+  projects?: ProjectInfo[];
+  defaultProjectId?: string | null;
+  project?: ProjectInfo | null;
   mode: string;
   model: string;
   streaming: boolean;
@@ -732,6 +741,7 @@ export interface SessionInfo {
 /** Persisted session summary from the SessionStore */
 export interface SessionSummary {
   id: string;
+  project?: ProjectInfo;
   mode: string;
   model: string;
   title: string;

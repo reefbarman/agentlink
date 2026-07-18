@@ -37,7 +37,9 @@ import {
   type ToolResult,
 } from "../../shared/types.js";
 import {
+  canonicalizePath,
   getRelativePath,
+  isPathWithinRoot,
   resolveAndValidatePath,
   tryGetFirstWorkspaceRoot,
 } from "../../util/paths.js";
@@ -141,6 +143,7 @@ export function createVscodeReferencesProvider(
 export function createVscodeSymbolsProvider(
   approvalManager: ApprovalManager,
   approvalPanel: ApprovalPanelProvider,
+  projectRoot?: string,
 ): LanguageSymbolsProvider {
   return {
     async getSymbols(params) {
@@ -191,8 +194,16 @@ export function createVscodeSymbolsProvider(
         });
       }
 
-      const total = symbols.length;
-      const capped = symbols.slice(0, MAX_WORKSPACE_SYMBOLS);
+      const scopedSymbols = projectRoot
+        ? symbols.filter((symbol) =>
+            isPathWithinRoot(
+              canonicalizePath(symbol.location.uri.fsPath),
+              canonicalizePath(projectRoot),
+            ),
+          )
+        : symbols;
+      const total = scopedSymbols.length;
+      const capped = scopedSymbols.slice(0, MAX_WORKSPACE_SYMBOLS);
 
       const serialized = capped.map((sym) => ({
         name: sym.name,
@@ -613,7 +624,9 @@ export function createVscodeInlayHintsProvider(
   };
 }
 
-export function createVscodeDiagnosticsProvider(): DiagnosticsProvider {
+export function createVscodeDiagnosticsProvider(
+  projectRoot?: string,
+): DiagnosticsProvider {
   return {
     async getDiagnostics(params) {
       let diagnostics: [vscode.Uri, vscode.Diagnostic[]][];
@@ -625,6 +638,12 @@ export function createVscodeDiagnosticsProvider(): DiagnosticsProvider {
         diagnostics = [[uri, fileDiags]];
       } else {
         diagnostics = vscode.languages.getDiagnostics();
+        if (projectRoot) {
+          const canonicalRoot = canonicalizePath(projectRoot);
+          diagnostics = diagnostics.filter(([uri]) =>
+            isPathWithinRoot(canonicalizePath(uri.fsPath), canonicalRoot),
+          );
+        }
       }
 
       const severityFilter = params.severity
@@ -665,7 +684,7 @@ export function createVscodeDiagnosticsProvider(): DiagnosticsProvider {
         if (filteredDiags.length === 0) continue;
 
         const workspaceRoot =
-          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          projectRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         const filePath = workspaceRoot
           ? path.relative(workspaceRoot, uri.fsPath)
           : uri.fsPath;

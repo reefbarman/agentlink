@@ -6,6 +6,7 @@ import type {
 import type { MessageParam, ReasoningEffort } from "./providers/types.js";
 
 import type { FinalMessageMarker } from "../shared/finalStatus.js";
+import type { SessionProjectScope } from "../core/workspaceProjects.js";
 import type { TodoItem } from "./todoTool.js";
 
 // --- Agent Message (conversation history with condense metadata) ---
@@ -229,6 +230,8 @@ export interface SessionInfo {
   background: boolean;
   createdAt: number;
   lastActiveAt: number;
+  projectScope: SessionProjectScope;
+  projectAvailability: import("./AgentSession.js").SessionProjectAvailabilityStatus;
 }
 
 // --- Configuration ---

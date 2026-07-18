@@ -5,6 +5,7 @@ import {
 } from "./AttachmentChip";
 import type {
   ModeInfo,
+  ProjectInfo,
   ReasoningEffort,
   SlashCommandInfo,
   WebviewModelInfo,
@@ -45,6 +46,7 @@ import { FilePicker } from "./FilePicker";
 import type { Injection } from "../App";
 import { ModeSelector } from "./ModeSelector";
 import { ModelSelector } from "./ModelSelector";
+import { ProjectSelector } from "./ProjectSelector";
 import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
 import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
@@ -138,19 +140,22 @@ function getDocumentMimeType(file: File): string | null {
   return ext ? (DOCUMENT_EXTENSION_MIME_TYPES[ext] ?? null) : null;
 }
 
+type ComposerSubmitHandler = (
+  text: string,
+  attachments: string[],
+  displayText?: string,
+  slashCommandLabel?: string,
+  media?: Array<{
+    name: string;
+    mimeType: string;
+    base64: string;
+    kind: "image" | "document";
+  }>,
+) => void;
+
 interface InputAreaProps {
-  onSend: (
-    text: string,
-    attachments: string[],
-    displayText?: string,
-    slashCommandLabel?: string,
-    media?: Array<{
-      name: string;
-      mimeType: string;
-      base64: string;
-      kind: "image" | "document";
-    }>,
-  ) => void;
+  onSend: ComposerSubmitHandler;
+  onInterject?: ComposerSubmitHandler;
   onStop: () => void;
   streaming: boolean;
   reasoningEffort: ReasoningEffort;
@@ -162,6 +167,9 @@ interface InputAreaProps {
   onInjectionConsumed: () => void;
   slashCommands?: SlashCommandInfo[];
   onExecuteBuiltinCommand?: (name: string, args: string) => void;
+  projects?: ProjectInfo[];
+  currentProjectId?: string | null;
+  onSelectProject?: (projectId: string) => void;
   modes?: ModeInfo[];
   currentMode?: string;
   onSwitchMode?: (slug: string) => void;
@@ -187,6 +195,8 @@ interface InputAreaProps {
   allowFileMentions?: boolean;
   allowThinkingToggle?: boolean;
   allowExportTranscript?: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
   submitOnEnter?: boolean;
   onComposerEvent?: (
     event: string,
@@ -196,6 +206,7 @@ interface InputAreaProps {
 
 export function InputArea({
   onSend,
+  onInterject,
   onStop,
   streaming,
   reasoningEffort,
@@ -207,6 +218,9 @@ export function InputArea({
   onInjectionConsumed,
   slashCommands = [],
   onExecuteBuiltinCommand,
+  projects = [],
+  currentProjectId,
+  onSelectProject,
   modes = [],
   currentMode = "code",
   onSwitchMode,
@@ -229,6 +243,8 @@ export function InputArea({
   allowFileMentions = true,
   allowThinkingToggle = true,
   allowExportTranscript = true,
+  disabled = false,
+  disabledReason,
   submitOnEnter = true,
   onComposerEvent,
 }: InputAreaProps) {
@@ -363,82 +379,100 @@ export function InputArea({
     inputWrapperRef,
   });
 
-  const handleSubmit = useCallback(() => {
-    const trimmed = text.trim();
-    onComposerEvent?.("submit.attempt", {
-      textChars: trimmed.length,
-      hasSubmitContent,
-      streaming,
-      attachmentCount: allowAttachments ? attachments.length : 0,
-      mediaCount: allowMediaPaste ? mediaAttachments.length : 0,
-      slashMatch: Boolean(matchedExecutableSlashCommand),
-    });
-    if (!hasSubmitContent) {
-      onComposerEvent?.("submit.ignored", { reason: "empty" });
-      return;
-    }
+  const handleSubmit = useCallback(
+    (asInterjection = false) => {
+      const trimmed = text.trim();
+      onComposerEvent?.("submit.attempt", {
+        textChars: trimmed.length,
+        hasSubmitContent,
+        streaming,
+        asInterjection,
+        attachmentCount: allowAttachments ? attachments.length : 0,
+        mediaCount: allowMediaPaste ? mediaAttachments.length : 0,
+        slashMatch: Boolean(matchedExecutableSlashCommand),
+      });
+      if (disabled) {
+        onComposerEvent?.("submit.ignored", { reason: "disabled" });
+        return;
+      }
+      if (!hasSubmitContent) {
+        onComposerEvent?.("submit.ignored", { reason: "empty" });
+        return;
+      }
 
-    const submitAttachments = allowAttachments ? attachments : [];
-    const submitMedia = allowMediaPaste ? pendingMedia : undefined;
+      const submitAttachments = allowAttachments ? attachments : [];
+      const submitMedia = allowMediaPaste ? pendingMedia : undefined;
+      const submitMessage =
+        asInterjection && onInterject ? onInterject : onSend;
 
-    if (matchedExecutableSlashCommand) {
+      if (matchedExecutableSlashCommand) {
+        setText("");
+        setAttachments([]);
+        setMediaAttachments([]);
+        closeSlash();
+        if (textareaRef.current) textareaRef.current.style.height = "auto";
+
+        const { command, args, displayText, userText, prefixText } =
+          matchedExecutableSlashCommand;
+        if (command.builtin) {
+          onComposerEvent?.("submit.builtin", { command: command.name });
+          onExecuteBuiltinCommand?.(command.name, args);
+        } else if (command.body) {
+          const contextParts = [prefixText, args].filter(
+            (part) => part.length > 0,
+          );
+          const commandInput = contextParts.join("\n\n");
+          const finalText = commandInput
+            ? `${commandInput}\n\n${command.body}`
+            : command.body;
+          onComposerEvent?.("submit.send", {
+            route: "slash_command_body",
+            command: command.name,
+          });
+          submitMessage(
+            finalText,
+            submitAttachments,
+            userText,
+            displayText,
+            submitMedia,
+          );
+        }
+        return;
+      }
+
+      onComposerEvent?.("submit.send", { route: "message" });
+      submitMessage(
+        trimmed,
+        submitAttachments,
+        undefined,
+        undefined,
+        submitMedia,
+      );
       setText("");
       setAttachments([]);
       setMediaAttachments([]);
-      closeSlash();
-      if (textareaRef.current) textareaRef.current.style.height = "auto";
-
-      const { command, args, displayText, userText, prefixText } =
-        matchedExecutableSlashCommand;
-      if (command.builtin) {
-        onComposerEvent?.("submit.builtin", { command: command.name });
-        onExecuteBuiltinCommand?.(command.name, args);
-      } else if (command.body) {
-        const contextParts = [prefixText, args].filter(
-          (part) => part.length > 0,
-        );
-        const commandInput = contextParts.join("\n\n");
-        const finalText = commandInput
-          ? `${commandInput}\n\n${command.body}`
-          : command.body;
-        onComposerEvent?.("submit.send", {
-          route: "slash_command_body",
-          command: command.name,
-        });
-        onSend(
-          finalText,
-          submitAttachments,
-          userText,
-          displayText,
-          submitMedia,
-        );
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
       }
-      return;
-    }
-
-    onComposerEvent?.("submit.send", { route: "message" });
-    onSend(trimmed, submitAttachments, undefined, undefined, submitMedia);
-    setText("");
-    setAttachments([]);
-    setMediaAttachments([]);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-    }
-  }, [
-    text,
-    attachments,
-    mediaAttachments,
-    allowAttachments,
-    allowMediaPaste,
-    hasSubmitContent,
-    onSend,
-    matchedExecutableSlashCommand,
-    onExecuteBuiltinCommand,
-    closeSlash,
-    pendingMedia,
-    onComposerEvent,
-    streaming,
-  ]);
+    },
+    [
+      text,
+      attachments,
+      mediaAttachments,
+      allowAttachments,
+      allowMediaPaste,
+      hasSubmitContent,
+      onSend,
+      onInterject,
+      matchedExecutableSlashCommand,
+      onExecuteBuiltinCommand,
+      closeSlash,
+      pendingMedia,
+      onComposerEvent,
+      streaming,
+      disabled,
+    ],
+  );
 
   // Commands that execute immediately with no args needed
   const ZERO_ARG_BUILTINS = new Set([
@@ -1128,6 +1162,13 @@ export function InputArea({
   return (
     <div class="input-area">
       <div class="input-toolbar">
+        {projects.length > 1 && onSelectProject && (
+          <ProjectSelector
+            currentProjectId={currentProjectId}
+            projects={projects}
+            onSelect={onSelectProject}
+          />
+        )}
         {modes.length > 0 && onSwitchMode && (
           <ModeSelector
             currentMode={currentMode}
@@ -1214,7 +1255,7 @@ export function InputArea({
             }
             title="Attach file"
             type="button"
-            disabled={streaming}
+            disabled={streaming || disabled}
           >
             <i class="codicon codicon-attach" />
           </button>
@@ -1307,6 +1348,12 @@ export function InputArea({
           onHover={setEmojiSelectedIdx}
         />
       )}
+      {disabled && disabledReason && (
+        <div class="composer-disabled-notice" role="status">
+          <i class="codicon codicon-warning" />
+          <span>{disabledReason}</span>
+        </div>
+      )}
       <ComposerBox
         className={`input-wrapper ${dragOver ? "drag-over" : ""} ${pickerOpen ? "picker-active" : ""} ${matchedExecutableSlashCommand ? "slash-match-active" : ""}`}
         mainAlign="center"
@@ -1356,10 +1403,13 @@ export function InputArea({
           ref={textareaRef}
           class="chat-input"
           placeholder={
-            allowFileMentions && allowAttachments
-              ? "Message... (/ for commands, @ to attach files, : for emoji)"
-              : "Message... (/ for commands, : for emoji)"
+            disabled
+              ? (disabledReason ?? "Local execution unavailable")
+              : allowFileMentions && allowAttachments
+                ? "Message... (/ for commands, @ to attach files, : for emoji)"
+                : "Message... (/ for commands, : for emoji)"
           }
+          disabled={disabled}
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
@@ -1379,17 +1429,43 @@ export function InputArea({
               <i class="codicon codicon-debug-stop" />
             </button>
           )}
+          {streaming &&
+            onInterject &&
+            !matchedExecutableSlashCommand?.command.builtin &&
+            hasSubmitContent && (
+              <button
+                class="send-button interject-button"
+                onClick={() => {
+                  onComposerEvent?.("submit.click", {
+                    disabled: disabled || !hasSubmitContent,
+                    asInterjection: true,
+                  });
+                  handleSubmit(true);
+                }}
+                disabled={disabled || !hasSubmitContent}
+                title="Interject at next break"
+                type="button"
+              >
+                <i class="codicon codicon-reply" />
+              </button>
+            )}
           {(!streaming || hasSubmitContent) && (
             <button
               class="send-button"
               onClick={() => {
                 onComposerEvent?.("submit.click", {
-                  disabled: !hasSubmitContent,
+                  disabled: disabled || !hasSubmitContent,
                 });
                 handleSubmit();
               }}
-              disabled={!hasSubmitContent}
-              title={submitOnEnter ? "Send message (Enter)" : "Send message"}
+              disabled={disabled || !hasSubmitContent}
+              title={
+                disabled
+                  ? (disabledReason ?? "Local execution unavailable")
+                  : submitOnEnter
+                    ? "Send message (Enter)"
+                    : "Send message"
+              }
               type="button"
             >
               <i class="codicon codicon-send" />

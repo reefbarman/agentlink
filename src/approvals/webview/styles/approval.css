@@ -75,6 +75,70 @@ body {
   font-weight: 600;
 }
 
+.approval-project-context {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: -4px 0 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editor-inactiveSelectionBackground);
+}
+
+.approval-project-route {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.approval-project-route > .codicon {
+  flex-shrink: 0;
+  color: var(--vscode-descriptionForeground);
+}
+
+.approval-project-route-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.approval-project-route-arrow {
+  color: var(--vscode-descriptionForeground);
+}
+
+.approval-project-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.approval-project-status {
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, #cca700) 15%,
+    transparent
+  );
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.approval-project-target {
+  padding-left: 22px;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  line-height: 1.35;
+  word-break: break-all;
+}
+
 /* ── Card label ──────────────────────────────────────────────────────── */
 
 .card-label {

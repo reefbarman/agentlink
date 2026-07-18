@@ -36,7 +36,14 @@ import {
   createVscodeWriteApprovalPolicyProvider,
 } from "../adapters/vscode/editReviewCapabilities.js";
 import { createVscodeSemanticSearchProvider } from "../adapters/vscode/readSearchCapabilities.js";
+import { createProjectSettingsAccessor } from "../adapters/vscode/projectSettingsAccessor.js";
 import type { AgentEvent } from "./types.js";
+import type { ProjectCustomizationRegistry } from "./ProjectCustomizationRegistry.js";
+import type { ProjectMcpHubRegistry } from "./ProjectMcpHubRegistry.js";
+import type {
+  ProjectScopeResolver,
+  SessionProjectScope,
+} from "../core/workspaceProjects.js";
 
 export interface AgentWorkspaceHost {
   getWorkspaceFolders(): WorkspaceFolderInfo[];
@@ -45,18 +52,32 @@ export interface AgentWorkspaceHost {
 export type BgSummaryMode = "agent" | "openai" | "heuristic";
 
 export interface AgentSessionConfigHost {
-  getCondenseThresholdForModel(model: string): number;
-  resolveModelForMode(mode: string, fallbackModel: string): string;
+  resolveAgentConfig?(
+    base: import("./types.js").AgentConfig,
+    scope: Readonly<SessionProjectScope>,
+  ): import("./types.js").AgentConfig;
+  getCondenseThresholdForModel(
+    model: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): number;
+  resolveModelForMode(
+    mode: string,
+    fallbackModel: string,
+    scope?: Readonly<SessionProjectScope>,
+  ): string;
   resolveReasoningEffortForMode?(
     mode: string,
+    scope?: Readonly<SessionProjectScope>,
   ): import("./providers/types.js").ReasoningEffort;
-  getBgSummaryMode(): BgSummaryMode;
-  getBackgroundAgentSettings(): RawBackgroundAgentSettings;
+  getBgSummaryMode(scope?: Readonly<SessionProjectScope>): BgSummaryMode;
+  getBackgroundAgentSettings(
+    scope?: Readonly<SessionProjectScope>,
+  ): RawBackgroundAgentSettings;
 }
 
 export interface CheckpointManagerLike {
   readonly baseCommit: string | null;
-  initialize(): Promise<unknown>;
+  initialize?(): Promise<unknown>;
   createCheckpoint(turnIndex: number): Promise<Checkpoint | null>;
   previewRevert(checkpoint: Checkpoint): Promise<RevertPreview | null>;
   revertToCheckpoint(checkpoint: Checkpoint): Promise<boolean>;
@@ -66,6 +87,7 @@ export interface CheckpointManagerLike {
 export interface ActivityTraceRecorderLike {
   appendAgentEvent(
     sessionId: string,
+    projectId: string,
     event: AgentEvent,
     source: "foreground_agent" | "background_agent",
   ): void;
@@ -105,6 +127,11 @@ export interface AgentSessionManagerHost {
   createActivityTraceRecorder: (
     opts: ActivityTraceRecorderOptions,
   ) => ActivityTraceRecorderLike;
+  /** Captures one immutable project-sensitive capability generation for a request. */
+  captureProjectToolContext: (
+    ctx: ToolDispatchContext,
+    scope: Readonly<SessionProjectScope>,
+  ) => ToolDispatchContext;
   createToolRuntime: (ctx: ToolDispatchContext) => AgentToolRuntime;
   acpBackgroundRunner: AcpBackgroundRunner;
   persistence?: SessionStore;
@@ -113,6 +140,17 @@ export interface AgentSessionManagerHost {
 
 export interface AgentSessionManagerOptions {
   host?: Partial<AgentSessionManagerHost>;
+  projectCatalog?: ProjectScopeResolver;
+  projectCustomizationRegistry?: ProjectCustomizationRegistry;
+  projectMcpHubRegistry?: ProjectMcpHubRegistry;
+  browserPreferredProjectId?: string;
+  onBrowserPreferredProjectChanged?: (
+    projectId: string,
+  ) => void | Promise<void>;
+  /** Fail-closed activation gate used when workspace execution state is unresolved. */
+  executionUnavailableReason?: string;
+  /** Activation-time primary project used only for pre-scope session records. */
+  legacyProjectScope?: import("../core/workspaceProjects.js").SessionProjectScope;
 }
 
 export function createDefaultAgentSessionManagerHost(args: {
@@ -120,6 +158,11 @@ export function createDefaultAgentSessionManagerHost(args: {
   log?: (msg: string) => void;
   store?: SessionStore;
 }): AgentSessionManagerHost {
+  const projectSettings = createProjectSettingsAccessor();
+  const configurationFor = (scope?: Readonly<SessionProjectScope>) =>
+    scope
+      ? projectSettings.getConfiguration(scope)
+      : vscode.workspace.getConfiguration("agentlink");
   return {
     workspace: {
       getWorkspaceFolders: () =>
@@ -129,40 +172,48 @@ export function createDefaultAgentSessionManagerHost(args: {
         })),
     },
     config: {
-      getCondenseThresholdForModel: (model) => {
+      resolveAgentConfig: (base, scope) => {
+        const config = configurationFor(scope);
+        return {
+          ...base,
+          maxTokens: config.get<number>("agentMaxTokens") ?? 8192,
+          thinkingBudget: config.get<number>("thinkingBudget") ?? 10000,
+          autoCondense: config.get<boolean>("autoCondense") ?? true,
+          codexStatefulResponses:
+            config.get<boolean>("codexStatefulResponses") ?? true,
+          codexStoreResponses:
+            config.get<boolean>("codexStoreResponses") ?? false,
+          codexProMode: config.get<boolean>("codexProMode") ?? false,
+        };
+      },
+      getCondenseThresholdForModel: (model, scope) => {
         const capabilities = providerRegistry
           .tryResolveProvider(model)
           ?.getCapabilities(model);
         return (
           getConfiguredBaseThresholdForModel(
-            vscode.workspace.getConfiguration("agentlink"),
+            configurationFor(scope),
             model,
             capabilities,
           ) ?? getEffectiveAutoCondenseThreshold(model, undefined, capabilities)
         );
       },
-      resolveModelForMode: (mode, fallbackModel) =>
-        resolveModelForMode(
-          vscode.workspace.getConfiguration("agentlink"),
-          mode,
-          fallbackModel,
-        ),
-      resolveReasoningEffortForMode: (mode) =>
-        resolveReasoningEffortForMode(
-          vscode.workspace.getConfiguration("agentlink"),
-          mode,
-        ),
-      getBgSummaryMode: () => {
-        const value = vscode.workspace
-          .getConfiguration("agentlink")
-          .get<string>("bgSummary.mode", "agent");
+      resolveModelForMode: (mode, fallbackModel, scope) =>
+        resolveModelForMode(configurationFor(scope), mode, fallbackModel),
+      resolveReasoningEffortForMode: (mode, scope) =>
+        resolveReasoningEffortForMode(configurationFor(scope), mode),
+      getBgSummaryMode: (scope) => {
+        const value = configurationFor(scope).get<string>(
+          "bgSummary.mode",
+          "agent",
+        );
         if (value === "agent" || value === "openai" || value === "heuristic") {
           return value;
         }
         return "agent";
       },
-      getBackgroundAgentSettings: () => {
-        const config = vscode.workspace.getConfiguration("agentlink");
+      getBackgroundAgentSettings: (scope) => {
+        const config = configurationFor(scope);
         return {
           defaultAgent: config.get<unknown>("background.defaultAgent"),
           acpAgents: config.get<unknown>("background.acpAgents"),
@@ -174,11 +225,17 @@ export function createDefaultAgentSessionManagerHost(args: {
     createSession: (opts) => AgentSession.create(opts),
     createCheckpointManager: (opts) => new CheckpointManager(opts),
     createActivityTraceRecorder: (opts) => new ActivityTraceRecorder(opts),
+    captureProjectToolContext: (ctx, scope) => ({
+      ...ctx,
+      projectScope: scope,
+      projectRoot: scope.rootPath,
+    }),
     createToolRuntime: (ctx) =>
       createAgentToolRuntime({
         ...ctx,
         semanticSearchProvider:
-          ctx.semanticSearchProvider ?? createVscodeSemanticSearchProvider(),
+          ctx.semanticSearchProvider ??
+          createVscodeSemanticSearchProvider(ctx.projectRoot),
         editorRevealProvider:
           ctx.editorRevealProvider ?? createVscodeEditorRevealProvider(),
         editReviewProvider:
@@ -224,6 +281,8 @@ export function mergeAgentSessionManagerHost(
     createActivityTraceRecorder:
       overrides?.createActivityTraceRecorder ??
       base.createActivityTraceRecorder,
+    captureProjectToolContext:
+      overrides?.captureProjectToolContext ?? base.captureProjectToolContext,
     createToolRuntime: overrides?.createToolRuntime ?? base.createToolRuntime,
     acpBackgroundRunner:
       overrides?.acpBackgroundRunner ?? base.acpBackgroundRunner,

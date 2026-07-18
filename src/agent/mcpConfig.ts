@@ -420,6 +420,11 @@ export async function loadAskAgentMcpConfigs(): Promise<McpServerConfig[]> {
   return loadMcpConfigsFromSources(getAskAgentMcpConfigSources());
 }
 
+/** Paths to watch for global main-agent MCP config changes. */
+export function getGlobalMcpConfigPaths(): string[] {
+  return getGlobalMcpSourceDefinitions().map((source) => source.path);
+}
+
 /** Paths to watch for main-agent MCP config changes */
 export function getMcpConfigPaths(cwd: string): string[] {
   return getMainMcpConfigSources(cwd);

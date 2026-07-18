@@ -1268,7 +1268,17 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case "SET_STATE":
       return {
         ...state,
-        chatState: action.state,
+        chatState: {
+          ...state.chatState,
+          ...action.state,
+          projects: action.state.projects ?? state.chatState.projects,
+          defaultProjectId: Object.hasOwn(action.state, "defaultProjectId")
+            ? action.state.defaultProjectId
+            : state.chatState.defaultProjectId,
+          project: Object.hasOwn(action.state, "project")
+            ? action.state.project
+            : state.chatState.project,
+        },
         streaming: action.state.streaming,
         thinkingEnabled: action.state.thinkingEnabled ?? state.thinkingEnabled,
         revertRecoveryNotice: Object.hasOwn(

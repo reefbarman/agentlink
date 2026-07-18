@@ -47,6 +47,9 @@ export function McpCard({ request, submit, followUpRef }: McpCardProps) {
     <ApprovalLayout
       queuePosition={request.queuePosition}
       queueTotal={request.queueTotal}
+      sourceProject={request.sourceProject}
+      targetProject={request.targetProject}
+      targetPath={request.targetPath}
       purpose="Use an external MCP tool"
       rulesContent={null}
       rulesModified={false}

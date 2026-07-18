@@ -321,6 +321,7 @@ export function createVscodeMultiFileEditReviewProvider(
                 kind: "rename",
                 title: `Replace \`${params.find}\` → \`${params.replace}\`?`,
                 detail: `${params.totalMatches} match${params.totalMatches !== 1 ? "es" : ""} across ${filesPreview.length} file${filesPreview.length !== 1 ? "s" : ""}:\n${filesDetail}`,
+                targetPath: filesPreview[0]?.path,
                 choices: [
                   { label: "Accept all", value: "accept", isPrimary: true },
                   { label: "Reject", value: "reject", isDanger: true },
@@ -373,6 +374,10 @@ export function createVscodeMultiFileEditReviewProvider(
               params.replace,
               filesPreview,
               params.totalMatches,
+              {
+                sessionId: params.sessionId,
+                targetPath: filesPreview[0]?.path,
+              },
             );
 
             const response = await promise;
@@ -625,6 +630,7 @@ export function createVscodeRenameSymbolProvider(
               kind: "rename",
               title: `Rename \`${oldName}\` → \`${params.newName}\`?`,
               detail: `${totalChanges} change${totalChanges !== 1 ? "s" : ""} across ${filesPreview.length} file${filesPreview.length !== 1 ? "s" : ""}:\n${filesDetail}`,
+              targetPath: filesPreview[0]?.path,
               choices: [
                 { label: "Accept", value: "accept", isPrimary: true },
                 { label: "Reject", value: "reject", isDanger: true },
@@ -667,6 +673,7 @@ export function createVscodeRenameSymbolProvider(
             params.newName,
             filesPreview,
             totalChanges,
+            { sessionId: params.sessionId, targetPath: filesPreview[0]?.path },
           );
 
           const response = await promise;

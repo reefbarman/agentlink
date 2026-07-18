@@ -82,18 +82,20 @@ export function createVscodeReadFileEnrichmentProvider(): ReadFileEnrichmentProv
   };
 }
 
-export function createVscodeSemanticSearchProvider(): SemanticSearchProvider {
+export function createVscodeSemanticSearchProvider(
+  projectRoot?: string,
+): SemanticSearchProvider {
   return {
     search(params) {
       const dirPath = params.path
         ? resolveAndValidatePath(params.path).absolutePath
-        : (tryGetFirstWorkspaceRoot() ?? ".");
+        : (projectRoot ?? tryGetFirstWorkspaceRoot() ?? ".");
       return semanticSearch(
         dirPath,
         params.query,
         params.limit,
         params.exclude_globs,
-        { includeAllWorkspaceRoots: !params.path },
+        { includeAllWorkspaceRoots: false },
       );
     },
   };

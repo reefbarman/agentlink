@@ -1,8 +1,19 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentMessage } from "./types.js";
 
 type Listener<T> = (value: T) => void;
+
+class MockRelativePattern {
+  constructor(
+    readonly base: string,
+    readonly pattern: string,
+  ) {}
+}
 
 class MockEventEmitter<T> {
   private listeners = new Set<Listener<T>>();
@@ -24,6 +35,11 @@ class MockEventEmitter<T> {
 }
 
 const mockPostMessage = vi.fn();
+const mockFindFiles = vi.fn(async () => [] as Array<{ fsPath: string }>);
+const mockOpenTextDocument = vi.fn(async (filePath: string) => ({ filePath }));
+const mockShowTextDocument = vi.fn(async () => undefined);
+const mockShowErrorMessage = vi.fn();
+const mockShowOpenDialog = vi.fn();
 const mockOutputChannel = {
   appendLine: vi.fn(),
   info: vi.fn(),
@@ -79,11 +95,14 @@ describe("tool terminal reveal messages", () => {
 
 vi.mock("vscode", () => ({
   EventEmitter: MockEventEmitter,
+  RelativePattern: MockRelativePattern,
   window: {
     createOutputChannel: vi.fn(() => mockOutputChannel),
     showInformationMessage: vi.fn(),
     showWarningMessage: vi.fn(),
-    showErrorMessage: vi.fn(),
+    showErrorMessage: mockShowErrorMessage,
+    showOpenDialog: mockShowOpenDialog,
+    showTextDocument: mockShowTextDocument,
     activeTextEditor: undefined,
     activeColorTheme: { kind: 2 },
   },
@@ -159,6 +178,8 @@ vi.mock("vscode", () => ({
   workspace: {
     getConfiguration: mockGetConfiguration,
     workspaceFolders: [],
+    findFiles: mockFindFiles,
+    openTextDocument: mockOpenTextDocument,
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
     createFileSystemWatcher: vi.fn(() => ({
       onDidChange: vi.fn(),
@@ -170,9 +191,10 @@ vi.mock("vscode", () => ({
   Uri: {
     joinPath: vi.fn(() => ({ fsPath: "/tmp/dist" })),
     file: vi.fn((fsPath: string) => ({ fsPath })),
+    parse: vi.fn((value: string) => ({ fsPath: value, toString: () => value })),
   },
   ViewColumn: { One: 1, Beside: 2 },
-  ConfigurationTarget: { Global: 1 },
+  ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
   ColorThemeKind: {
     Light: 1,
     Dark: 2,
@@ -180,6 +202,315 @@ vi.mock("vscode", () => ({
     HighContrastLight: 4,
   },
 }));
+
+describe("browser project discovery", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("searches and relativizes files against the explicitly requested project", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getWorkspaceProjects: () => [
+        {
+          id: "project-a",
+          name: "Project A",
+          uri: "file:///workspace/a",
+          rootPath: "/workspace/a",
+          availability: { status: "available" },
+        },
+        {
+          id: "project-b",
+          name: "Project B",
+          uri: "file:///workspace/b",
+          rootPath: "/workspace/b",
+          availability: { status: "available" },
+        },
+      ],
+    };
+    mockFindFiles.mockResolvedValueOnce([
+      { fsPath: "/workspace/b/src/project-b.ts" },
+    ]);
+
+    await expect(
+      provider.searchBrowserFiles("project", "project-b"),
+    ).resolves.toEqual([{ path: "src/project-b.ts", kind: "file" }]);
+    expect(mockFindFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base: "/workspace/b",
+        pattern: "**/*project*",
+      }),
+      "**/node_modules/**",
+      50,
+    );
+  });
+});
+
+describe("session artifact routing", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it("returns only canonically contained files from the attachment picker", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-attachment-picker-"),
+    );
+    const projectRoot = path.join(workspace, "project");
+    const projectFile = path.join(projectRoot, "inside.txt");
+    const externalFile = path.join(workspace, "outside.txt");
+    fs.mkdirSync(projectRoot);
+    fs.writeFileSync(projectFile, "inside", "utf8");
+    fs.writeFileSync(externalFile, "outside", "utf8");
+    const linkPath = path.join(projectRoot, "outside-link.txt");
+    fs.symlinkSync(externalFile, linkPath);
+
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      (provider as unknown as { sessionManager: unknown }).sessionManager = {
+        getWorkspaceProjects: () => [
+          {
+            id: "project-a",
+            name: "Project A",
+            uri: `file://${projectRoot}`,
+            rootPath: projectRoot,
+            availability: { status: "available" },
+          },
+        ],
+      };
+      mockShowOpenDialog.mockResolvedValueOnce([
+        { fsPath: projectFile },
+        { fsPath: externalFile },
+        { fsPath: linkPath },
+      ]);
+
+      await expect(
+        provider.submitBrowserAttachFile("project-a"),
+      ).resolves.toEqual({ files: ["inside.txt"] });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects attachment symlinks that escape the session project", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-attachment-containment-"),
+    );
+    const projectRoot = path.join(workspace, "project");
+    const externalFile = path.join(workspace, "external-secret.txt");
+    fs.mkdirSync(projectRoot);
+    fs.writeFileSync(externalFile, "must-not-leak", "utf8");
+    fs.symlinkSync(externalFile, path.join(projectRoot, "link.txt"));
+
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      const result = await (
+        provider as unknown as {
+          resolveAttachments(
+            text: string,
+            attachments: string[],
+            projectRoot: string,
+          ): Promise<string>;
+        }
+      ).resolveAttachments(
+        "[Attached: link.txt]\n\nInspect this",
+        ["link.txt"],
+        projectRoot,
+      );
+
+      expect(result).toContain("[Error: could not read file]");
+      expect(result).not.toContain("must-not-leak");
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("writes condense debug and transcript artifacts only under the session project", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-artifact-projects-"),
+    );
+    const rootA = path.join(workspace, "project-a");
+    const rootB = path.join(workspace, "project-b");
+    fs.mkdirSync(rootA);
+    fs.mkdirSync(rootB);
+
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      const session = {
+        id: "session-b",
+        projectScope: {
+          projectId: "project-b",
+          workspaceFolderUri: `file://${rootB}`,
+          displayName: "Project B",
+          rootPath: rootB,
+        },
+        projectAvailability: "available",
+        getAllMessages: vi.fn(() => [
+          { role: "user", content: "project B prompt" },
+        ]),
+      };
+      (provider as unknown as { sessionManager: unknown }).sessionManager = {
+        getSession: (sessionId: string) =>
+          sessionId === session.id ? session : undefined,
+        getForegroundSession: () => session,
+        getWorkspaceProjects: () => [
+          {
+            id: "project-a",
+            uri: `file://${rootA}`,
+            rootPath: rootA,
+            availability: { status: "available" },
+          },
+          {
+            id: "project-b",
+            uri: `file://${rootB}`,
+            rootPath: rootB,
+            availability: { status: "available" },
+          },
+        ],
+      };
+
+      await (
+        provider as unknown as {
+          writeCondenseDebug(
+            sessionId: string,
+            event: {
+              prevInputTokens: number;
+              newInputTokens: number;
+              summary: string;
+            },
+          ): Promise<void>;
+        }
+      ).writeCondenseDebug(session.id, {
+        prevInputTokens: 100,
+        newInputTokens: 40,
+        summary: "condensed project B",
+      });
+      await (
+        provider as unknown as {
+          exportTranscript(
+            messages: Array<{
+              role: string;
+              content: string;
+              timestamp: number;
+              blocks: Array<{ type: string; text?: string }>;
+            }>,
+          ): Promise<void>;
+        }
+      ).exportTranscript([
+        {
+          role: "user",
+          content: "project B prompt",
+          timestamp: 1,
+          blocks: [],
+        },
+      ]);
+
+      expect(fs.existsSync(path.join(rootA, ".agentlink"))).toBe(false);
+      const condenseRoot = path.join(
+        rootB,
+        ".agentlink",
+        "debug",
+        "condensing",
+      );
+      const condenseDirectories = fs.readdirSync(condenseRoot);
+      expect(condenseDirectories).toHaveLength(1);
+      expect(
+        fs.existsSync(
+          path.join(condenseRoot, condenseDirectories[0], "condense-result.md"),
+        ),
+      ).toBe(true);
+      const transcriptRoot = path.join(rootB, ".agentlink", "transcripts");
+      expect(fs.readdirSync(transcriptRoot)).toHaveLength(1);
+      expect(mockOpenTextDocument).toHaveBeenCalledWith(
+        expect.stringMatching(
+          new RegExp(
+            `^${transcriptRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+          ),
+        ),
+      );
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed without writing artifacts for an unavailable session project", async () => {
+    const workspace = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-artifact-unavailable-"),
+    );
+    try {
+      const { ChatViewProvider } = await import("./ChatViewProvider.js");
+      const provider = new ChatViewProvider(
+        { fsPath: "/tmp/ext" } as never,
+        { get: vi.fn(), update: vi.fn() } as never,
+      );
+      const session = {
+        id: "session-missing",
+        projectScope: {
+          projectId: "project-missing",
+          workspaceFolderUri: `file://${workspace}`,
+          displayName: "Missing Project",
+          rootPath: workspace,
+        },
+        projectAvailability: "missing",
+        getAllMessages: vi.fn(() => []),
+      };
+      (provider as unknown as { sessionManager: unknown }).sessionManager = {
+        getSession: () => session,
+        getForegroundSession: () => session,
+        getWorkspaceProjects: () => [],
+      };
+
+      await expect(
+        (
+          provider as unknown as {
+            writeCondenseDebug(
+              sessionId: string,
+              event: {
+                prevInputTokens: number;
+                newInputTokens: number;
+                summary: string;
+              },
+            ): Promise<void>;
+          }
+        ).writeCondenseDebug(session.id, {
+          prevInputTokens: 100,
+          newInputTokens: 40,
+          summary: "must not write",
+        }),
+      ).rejects.toThrow("unavailable for artifact export");
+      await (
+        provider as unknown as {
+          exportTranscript(messages: []): Promise<void>;
+        }
+      ).exportTranscript([]);
+
+      expect(fs.existsSync(path.join(workspace, ".agentlink"))).toBe(false);
+      expect(mockOpenTextDocument).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining("unavailable for artifact export"),
+      );
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("persisted session mutation failure messages", () => {
   beforeEach(() => {
@@ -277,6 +608,7 @@ describe("checkpoint revert failure messages", () => {
       await import("./ChatViewProvider.js");
 
     const notice = formatRevertRecoveryNotice({
+      projectId: "project-test",
       checkpointId: "checkpoint-1",
       sessionRevision: "revision-2",
       workspaceRevision: "abcdef1234567890",
@@ -554,7 +886,7 @@ describe("ChatViewProvider session state sync", () => {
     expect(mockConfigUpdate).toHaveBeenCalledWith(
       "modeReasoningEffortPreferences",
       { code: "max" },
-      1,
+      3,
     );
   });
 
@@ -954,6 +1286,7 @@ describe("ChatViewProvider session state sync", () => {
     const manager = {
       getForegroundSession: vi.fn(() => foreground),
       getRevertRecoveryState: vi.fn(() => ({
+        projectId: "project-test",
         checkpointId: "checkpoint-1",
         sessionRevision: "revision-2",
         workspaceRevision: "abcdef1234567890",
@@ -984,6 +1317,7 @@ describe("ChatViewProvider session state sync", () => {
         model: foreground.model,
         streaming: false,
         revertRecoveryNotice: {
+          projectId: "project-test",
           checkpointId: "checkpoint-1",
           sessionRevision: "revision-2",
           workspaceRevision: "abcdef1234567890",
@@ -1051,6 +1385,7 @@ describe("ChatViewProvider session state sync", () => {
         model: foreground.model,
         streaming: false,
         revertRecoveryNotice: {
+          projectId: "project-test",
           checkpointId: "checkpoint-1",
           sessionRevision: "revision-2",
           startedAt: 123,
@@ -1202,6 +1537,13 @@ describe("ChatViewProvider session state sync", () => {
       estimatedTotalUsed: 0,
       lastInputTokens: 0,
       lastOutputTokens: 0,
+      projectScope: {
+        projectId: "project-a",
+        workspaceFolderUri: "file:///workspace/a",
+        displayName: "Project A",
+        rootPath: "/workspace/a",
+      },
+      projectAvailability: "available",
       getAllMessages: () => [] as unknown[],
       setPendingInterjection: vi.fn(),
     };
@@ -1237,6 +1579,80 @@ describe("ChatViewProvider session state sync", () => {
       {
         text: "please do this next",
         source: "browser",
+      },
+    ]);
+  });
+
+  it("marks a browser composer message as an interjection when queueing it", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+
+    const session = {
+      id: "session-1",
+      mode: "code",
+      model: "claude-sonnet-4-6",
+      status: "tool_executing",
+      title: "Session 1",
+      reasoningEffort: "high",
+      estimatedTotalUsed: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      projectScope: {
+        projectId: "project-a",
+        workspaceFolderUri: "file:///workspace/a",
+        displayName: "Project A",
+        rootPath: "/workspace/a",
+      },
+      projectAvailability: "available",
+      getAllMessages: () => [] as unknown[],
+      setPendingInterjection: vi.fn(() => true),
+    };
+    const manager = {
+      getForegroundSession: vi.fn(() => session),
+      getSession: vi.fn(() => session),
+      getConfig: vi.fn(() => ({
+        model: "claude-sonnet-4-6",
+        autoCondenseThreshold: 0.8,
+      })),
+      getSessionInfos: vi.fn(() => []),
+      getBgSessionInfos: vi.fn(() => []),
+      sendMessage: vi.fn(),
+      onEvent: undefined,
+      onSessionsChanged: undefined,
+    };
+    provider.setSessionManager(manager as never);
+
+    const result = await provider.submitBrowserSend({
+      text: "change course now",
+      displayText: "Change course now",
+      sessionId: "session-1",
+      mode: "code",
+      interject: true,
+    });
+
+    expect(result).toEqual({ ok: true, queued: true, interjected: true });
+    expect(session.setPendingInterjection).toHaveBeenCalledWith(
+      "change course now",
+      expect.any(String),
+      undefined,
+      "Change course now",
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    );
+    expect(
+      provider.getBrowserProjectedForegroundState()?.messageQueue,
+    ).toMatchObject([
+      {
+        text: "Change course now",
+        source: "browser",
+        interjectionReady: true,
       },
     ]);
   });
@@ -1337,6 +1753,7 @@ describe("ChatViewProvider session state sync", () => {
       mode: "code",
       model: "claude-sonnet-4-6",
       status: "idle",
+      projectScope: { projectId: "project-1" },
       lastInputTokens: 0,
       lastOutputTokens: 0,
       getAllMessages: () => [] as unknown[],
@@ -1383,8 +1800,10 @@ describe("ChatViewProvider session state sync", () => {
 
     const result = await provider.submitBrowserNewSession("code");
 
-    expect(result.ok).toBe(true);
-    expect(manager.createForegroundSession).toHaveBeenCalledWith("code");
+    expect(result).toMatchObject({ ok: true, projectId: "project-1" });
+    expect(manager.createForegroundSession).toHaveBeenCalledWith("code", {
+      projectId: undefined,
+    });
     expect(provider.getBrowserProjectedForegroundState()?.sessionId).toBe(
       "session-new",
     );
@@ -1908,6 +2327,9 @@ describe("ChatViewProvider session state sync", () => {
       type: "stateUpdate",
       state: {
         sessionId: "session-1",
+        projects: [],
+        defaultProjectId: null,
+        project: null,
         mode: "code",
         model: "claude-sonnet-4-6",
         streaming: true,
@@ -1987,7 +2409,7 @@ describe("ChatViewProvider session state sync", () => {
       ],
     });
 
-    expect(mapped).toEqual({
+    expect(mapped).toMatchObject({
       kind: "rename",
       id: "approval-1",
       oldName: "OldSymbol",
@@ -2009,13 +2431,118 @@ describe("ChatViewProvider session state sync", () => {
       ],
     });
 
-    expect(mappedAsciiArrow).toEqual({
+    expect(mappedAsciiArrow).toMatchObject({
       kind: "rename",
       id: "approval-2",
       oldName: "fromName",
       newName: "toName",
       affectedFiles: [{ path: "src/file.ts", changes: 1 }],
       totalChanges: 1,
+    });
+  });
+
+  it("attributes inline approvals to the initiating session and target project", async () => {
+    const { ChatViewProvider } = await import("./ChatViewProvider.js");
+
+    const provider = new ChatViewProvider(
+      { fsPath: "/tmp/ext" } as never,
+      { get: vi.fn(), update: vi.fn() } as never,
+    );
+    const sessions = {
+      "session-a": {
+        projectScope: {
+          projectId: "project-a",
+          displayName: "Project A",
+          rootPath: "/workspace/a",
+        },
+        projectAvailability: "available",
+      },
+      "session-b": {
+        projectScope: {
+          projectId: "project-b",
+          displayName: "Project B",
+          rootPath: "/workspace/b",
+        },
+        projectAvailability: "available",
+      },
+    };
+    (provider as unknown as { sessionManager: unknown }).sessionManager = {
+      getForegroundSession: () => sessions["session-a"],
+      getSession: (id: keyof typeof sessions) => sessions[id],
+      getWorkspaceProjects: () => [
+        {
+          id: "project-a",
+          name: "Project A",
+          rootPath: "/workspace/a",
+          availability: { status: "available" },
+        },
+        {
+          id: "project-b",
+          name: "Project B",
+          rootPath: "/workspace/b",
+          availability: { status: "available" },
+        },
+      ],
+    };
+
+    const buildApprovalRequest = (
+      provider as unknown as {
+        buildApprovalRequest: (
+          id: string,
+          request: {
+            kind: string;
+            title: string;
+            targetPath?: string;
+            choices: Array<{ label: string; value: string }>;
+          },
+          sessionId?: string,
+        ) => {
+          sourceProject?: { projectId: string; displayName: string };
+          targetProject?: { projectId: string; displayName: string };
+          targetPath?: string;
+        };
+      }
+    ).buildApprovalRequest.bind(provider);
+
+    const backgroundApproval = buildApprovalRequest(
+      "approval-background",
+      {
+        kind: "write",
+        title: "Modify `src/output.ts`?",
+        targetPath: "src/output.ts",
+        choices: [{ label: "Accept", value: "accept" }],
+      },
+      "session-b",
+    );
+    expect(backgroundApproval).toMatchObject({
+      sourceProject: {
+        projectId: "project-b",
+        displayName: "Project B",
+      },
+      targetPath: "/workspace/b/src/output.ts",
+    });
+    expect(backgroundApproval.targetProject).toBeUndefined();
+
+    const crossProjectApproval = buildApprovalRequest(
+      "approval-cross-project",
+      {
+        kind: "write",
+        title: "Modify `shared.ts`?",
+        targetPath: "/workspace/b/shared.ts",
+        choices: [{ label: "Accept", value: "accept" }],
+      },
+      "session-a",
+    );
+    expect(crossProjectApproval).toMatchObject({
+      sourceProject: {
+        projectId: "project-a",
+        displayName: "Project A",
+      },
+      targetProject: {
+        projectId: "project-b",
+        displayName: "Project B",
+      },
+      targetPath: "/workspace/b/shared.ts",
     });
   });
 

@@ -83,6 +83,7 @@ function createState(overrides: Partial<AppState> = {}): AppState {
     loadedInstructions: [{ source: "CLAUDE.md", chars: 100 }],
     restoringSession: true,
     revertRecoveryNotice: {
+      projectId: "project-test",
       checkpointId: "checkpoint-1",
       sessionRevision: "revision-1",
       workspaceRevision: "abcdef",

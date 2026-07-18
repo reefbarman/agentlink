@@ -4,6 +4,7 @@ import type {
   ModeInfo,
   Question,
   ReasoningEffort,
+  ProjectInfo,
   SessionSummary,
   SlashCommandInfo,
   TodoItem,
@@ -313,7 +314,10 @@ type GatewaySnapshot = {
     }>;
   };
   session: {
+    projects: ProjectInfo[];
+    defaultProjectId: string | null;
     repository: {
+      projectId: string;
       branch?: string;
       dirty?: boolean;
     } | null;
@@ -327,9 +331,11 @@ type GatewaySnapshot = {
       totalOutputTokens: number;
       createdAt: number;
       lastActiveAt: number;
+      project?: ProjectInfo;
     }>;
     foreground: {
       sessionId: string;
+      project: ProjectInfo;
       title: string;
       mode: string;
       model: string;
@@ -1557,10 +1563,16 @@ export function BrowserGatewayApp({
     generation = selectedTabGenerationRef.current,
   ): Promise<void> {
     try {
+      const projectId =
+        snapshot?.session.foreground?.project.projectId ??
+        snapshot?.session.defaultProjectId;
       const response = await fetch(
         askAgentSelected
           ? "/api/ask-agent/slash-commands"
-          : buildApiPathForInstance("/api/slash-commands", instanceId),
+          : buildApiPathForInstance(
+              `/api/slash-commands${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+              instanceId,
+            ),
         {
           credentials: "same-origin",
           headers: {
@@ -1590,11 +1602,20 @@ export function BrowserGatewayApp({
     generation = selectedTabGenerationRef.current,
   ): Promise<void> {
     try {
-      const response = await fetch(buildApiPath("/api/modes", instanceId), {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
+      const projectId =
+        snapshot?.session.foreground?.project.projectId ??
+        snapshot?.session.defaultProjectId;
+      const response = await fetch(
+        buildApiPath(
+          `/api/modes${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+          instanceId,
+        ),
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
         },
-      });
+      );
       if (!response.ok) {
         setModeStatus(`Mode list unavailable (${response.status})`);
         return;
@@ -2161,6 +2182,7 @@ export function BrowserGatewayApp({
     }>,
     origin: "user" | "autoContinue" = "user",
     targetForeground?: GatewaySnapshot["session"]["foreground"],
+    interject = false,
   ): Promise<boolean> {
     const activeForeground =
       targetForeground ?? (await ensureAskAgentForeground());
@@ -2292,6 +2314,7 @@ export function BrowserGatewayApp({
         model: activeForeground.model,
         reasoningEffort: effectiveReasoningEffort,
         origin,
+        interject,
       });
       const sendPath = isAskAgentSelected
         ? "/api/ask-agent/send"
@@ -2307,6 +2330,9 @@ export function BrowserGatewayApp({
           text: trimmed,
           id: userMessageId,
           sessionId: activeForeground.sessionId,
+          projectId: isAskAgentSelected
+            ? undefined
+            : snapshot?.session.foreground?.project.projectId,
           mode: activeForeground.mode,
           reasoningEffort: effectiveReasoningEffort,
           thinkingEnabled: effectiveReasoningEffort !== "none",
@@ -2316,11 +2342,13 @@ export function BrowserGatewayApp({
           displayText: displayWithMedia,
           slashCommandLabel,
           isSlashCommand: Boolean(slashCommandLabel),
+          interject,
         }),
       });
       const body = (await response.json()) as {
         ok?: boolean;
         queued?: boolean;
+        interjected?: boolean;
         error?: string;
         snapshot?: GatewaySnapshot;
       };
@@ -2332,6 +2360,7 @@ export function BrowserGatewayApp({
         sessionId: activeForeground.sessionId,
         ok: Boolean(body.ok),
         queued: Boolean(body.queued),
+        interjected: Boolean(body.interjected),
         status: response.status,
         error: body.error ?? null,
         messageCount:
@@ -2339,9 +2368,11 @@ export function BrowserGatewayApp({
       });
       setSendStatus(
         body.ok
-          ? body.queued
-            ? "Queued."
-            : "Sent"
+          ? body.interjected
+            ? "Ready to interject at the next break."
+            : body.queued
+              ? "Queued."
+              : "Sent"
           : body.error === "queue_full"
             ? "A message is already queued. Wait for it to send or remove it first."
             : `Send failed: ${body.error ?? response.status}`,
@@ -2357,6 +2388,30 @@ export function BrowserGatewayApp({
       return false;
     }
   }
+
+  const handleInterject = (
+    text: string,
+    attachments: string[],
+    displayText?: string,
+    slashCommandLabel?: string,
+    media?: Array<{
+      name: string;
+      mimeType: string;
+      base64: string;
+      kind: "image" | "document";
+    }>,
+  ): void => {
+    void handleSend(
+      text,
+      attachments,
+      displayText,
+      slashCommandLabel,
+      media,
+      "user",
+      foreground ?? undefined,
+      true,
+    );
+  };
 
   const handleStop = (): void => {
     if (!foreground?.sessionId) return;
@@ -2552,7 +2607,9 @@ export function BrowserGatewayApp({
     });
   };
 
-  async function createNewSession(): Promise<GatewaySnapshot | null> {
+  async function createNewSession(
+    projectId?: string,
+  ): Promise<GatewaySnapshot | null> {
     try {
       const response = await fetch(
         isAskAgentSelected
@@ -2567,6 +2624,9 @@ export function BrowserGatewayApp({
           },
           body: JSON.stringify({
             mode: isAskAgentSelected ? "ask" : (foreground?.mode ?? "code"),
+            projectId: isAskAgentSelected
+              ? undefined
+              : (projectId ?? snapshot?.session.defaultProjectId),
           }),
         },
       );
@@ -2589,6 +2649,31 @@ export function BrowserGatewayApp({
 
   const handleNewSession = (): void => {
     void createNewSession();
+  };
+
+  const handleSelectProject = (projectId: string): void => {
+    if (isAskAgentSelected) return;
+    void (async () => {
+      const response = await fetch(buildApiPath("/api/project/default"), {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ projectId }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        snapshot?: GatewaySnapshot;
+      };
+      if (!response.ok || !body.ok) {
+        setSendStatus("Project selection is stale. Refresh and try again.");
+        return;
+      }
+      if (body.snapshot) setSnapshot(body.snapshot);
+      await createNewSession(projectId);
+    })();
   };
 
   const handleShowHistory = (): void => {
@@ -2622,7 +2707,14 @@ export function BrowserGatewayApp({
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify({ sessionId }),
+          body: JSON.stringify({
+            sessionId,
+            projectId: isAskAgentSelected
+              ? undefined
+              : snapshot?.session.sessions.find(
+                  (session) => session.id === sessionId,
+                )?.project?.projectId,
+          }),
         },
       );
       const body = (await response.json().catch(() => ({}))) as {
@@ -2749,13 +2841,18 @@ export function BrowserGatewayApp({
           type: "mode",
           mode: slug,
         });
+        const projectId = foreground?.project.projectId;
         const response = await fetch(buildApiPath(selectionRequest.path), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
-          body: JSON.stringify(selectionRequest.body),
+          body: JSON.stringify({
+            ...selectionRequest.body,
+            projectId,
+            sessionId: foreground?.sessionId,
+          }),
         });
         const body = (await response.json()) as {
           approved?: boolean;
@@ -3618,8 +3715,10 @@ export function BrowserGatewayApp({
           });
           return;
         }
+        const projectId =
+          foreground?.project.projectId ?? snapshot?.session.defaultProjectId;
         const url = buildApiPath(
-          `/api/search-files?query=${encodeURIComponent(query)}`,
+          `/api/search-files?query=${encodeURIComponent(query)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}`,
         );
         void fetch(url, {
           headers: {
@@ -3666,8 +3765,14 @@ export function BrowserGatewayApp({
         void fetch(buildApiPath("/api/attach-file"), {
           method: "POST",
           headers: {
+            "Content-Type": "application/json",
             Authorization: `Bearer ${authToken}`,
           },
+          body: JSON.stringify({
+            projectId:
+              foreground?.project.projectId ??
+              snapshot?.session.defaultProjectId,
+          }),
         })
           .then(async (response) => {
             if (!response.ok) {
@@ -3907,6 +4012,7 @@ export function BrowserGatewayApp({
             },
             body: JSON.stringify({
               sessionId,
+              projectId: foreground?.project.projectId,
               queueId,
               text: typeof data.text === "string" ? data.text : "",
               displayText:
@@ -4474,6 +4580,9 @@ export function BrowserGatewayApp({
                     onDelete={handleDeleteSession}
                     onRename={handleRenameSession}
                     onCopyFirstPrompt={handleCopyFirstPrompt}
+                    onNewInProject={
+                      isAskAgentSelected ? undefined : handleSelectProject
+                    }
                     onClose={() => setShowHistory(false)}
                   />
                 </>
@@ -5004,6 +5113,9 @@ export function BrowserGatewayApp({
                 <div class="browser-chat-composer">
                   <InputArea
                     onSend={handleSend}
+                    onInterject={
+                      isAskAgentSelected ? undefined : handleInterject
+                    }
                     onComposerEvent={
                       isAskAgentSelected
                         ? (event, fields) =>
@@ -5021,6 +5133,20 @@ export function BrowserGatewayApp({
                     injection={null}
                     onInjectionConsumed={() => undefined}
                     slashCommands={slashCommands}
+                    projects={
+                      isAskAgentSelected
+                        ? []
+                        : (snapshot?.session.projects ?? [])
+                    }
+                    currentProjectId={
+                      isAskAgentSelected
+                        ? undefined
+                        : (foreground?.project.projectId ??
+                          snapshot?.session.defaultProjectId)
+                    }
+                    onSelectProject={
+                      isAskAgentSelected ? undefined : handleSelectProject
+                    }
                     onExecuteBuiltinCommand={
                       isAskAgentSelected
                         ? handleAskAgentExecuteBuiltinCommand
@@ -5079,6 +5205,20 @@ export function BrowserGatewayApp({
                     allowThinkingToggle={true}
                     allowExportTranscript={isAskAgentSelected}
                     allowFileMentions={!isAskAgentSelected}
+                    disabled={
+                      !isAskAgentSelected &&
+                      (snapshot?.session.projects.length === 0 ||
+                        foreground?.project.availability === "unavailable")
+                    }
+                    disabledReason={
+                      !isAskAgentSelected &&
+                      snapshot?.session.projects.length === 0
+                        ? "Open a folder to enable local execution."
+                        : !isAskAgentSelected &&
+                            foreground?.project.availability === "unavailable"
+                          ? `Project unavailable: ${foreground.project.displayName}`
+                          : undefined
+                    }
                   />
                 </div>
               )}

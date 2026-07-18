@@ -48,6 +48,8 @@ export interface SpawnBackgroundRequest {
   forbiddenPaths?: string[];
   permissionProfile?: "review-only" | "workspace-safe" | "interactive";
   worktree?: "shared" | "isolated";
+  /** Resolved session images copied into the background agent's first user turn. */
+  images?: Array<{ name: string; mimeType: string; base64: string }>;
   /** Review target captured by the runtime when the background agent is spawned. */
   reviewScope?: ReviewScope;
   expectedResult?: "text" | "review_findings" | "patch" | "verification";

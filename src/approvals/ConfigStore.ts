@@ -64,33 +64,33 @@ export class ConfigStore {
   }
 
   getProjectConfig(workspaceFolder: string): Readonly<AgentLinkConfig> {
-    return this.projectConfigs.get(workspaceFolder) ?? { ...EMPTY_CONFIG };
+    return (
+      this.projectConfigs.get(this.canonicalProjectRoot(workspaceFolder)) ?? {
+        ...EMPTY_CONFIG,
+      }
+    );
+  }
+
+  getProjectRoots(): string[] {
+    return [...this.projectConfigs.keys()];
   }
 
   updateProjectConfig(
     workspaceFolder: string,
     updater: (config: AgentLinkConfig) => void,
   ): boolean {
+    const projectRoot = this.canonicalProjectRoot(workspaceFolder);
     const config = structuredClone(
-      this.projectConfigs.get(workspaceFolder) ?? { ...EMPTY_CONFIG },
+      this.projectConfigs.get(projectRoot) ?? { ...EMPTY_CONFIG },
     );
     updater(config);
-    const configPath = path.join(workspaceFolder, PROJECT_CONFIG_RELATIVE);
+    const configPath = path.join(projectRoot, PROJECT_CONFIG_RELATIVE);
     if (this.writeConfig(configPath, config)) {
-      this.projectConfigs.set(workspaceFolder, config);
+      this.projectConfigs.set(projectRoot, config);
       this._onDidChange.fire();
       return true;
     }
     return false;
-  }
-
-  /**
-   * Get the project config for the first workspace root, or null if no workspace is open.
-   */
-  getProjectConfigForFirstRoot(): Readonly<AgentLinkConfig> | null {
-    const folders = vscode.workspace.workspaceFolders;
-    if (!folders || folders.length === 0) return null;
-    return this.getProjectConfig(folders[0].uri.fsPath);
   }
 
   dispose(): void {
@@ -114,10 +114,21 @@ export class ConfigStore {
 
   private loadProjectConfigs(): void {
     const folders = vscode.workspace.workspaceFolders;
-    if (!folders) return;
-    for (const folder of folders) {
-      const configPath = path.join(folder.uri.fsPath, PROJECT_CONFIG_RELATIVE);
-      this.projectConfigs.set(folder.uri.fsPath, this.readConfig(configPath));
+    const nextConfigs = new Map<string, AgentLinkConfig>();
+    for (const folder of folders ?? []) {
+      const projectRoot = this.canonicalProjectRoot(folder.uri.fsPath);
+      const configPath = path.join(projectRoot, PROJECT_CONFIG_RELATIVE);
+      nextConfigs.set(projectRoot, this.readConfig(configPath));
+    }
+    this.projectConfigs = nextConfigs;
+  }
+
+  private canonicalProjectRoot(workspaceFolder: string): string {
+    const resolved = path.resolve(workspaceFolder);
+    try {
+      return fs.realpathSync.native(resolved);
+    } catch {
+      return resolved;
     }
   }
 

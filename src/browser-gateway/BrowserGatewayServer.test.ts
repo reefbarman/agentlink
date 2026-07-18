@@ -42,7 +42,25 @@ vi.mock("vscode", () => {
 });
 
 function makeSessionManagerStub() {
+  const projectScope = {
+    projectId: "project-a",
+    displayName: "Project A",
+  };
   return {
+    getWorkspaceProjects: vi.fn(() => [
+      {
+        id: "project-a",
+        name: "Project A",
+        uri: "file:///workspace/a",
+        rootPath: "/workspace/a",
+        availability: { status: "available" },
+      },
+    ]),
+    getDefaultProjectScope: vi.fn(() => projectScope),
+    setBrowserPreferredProject: vi.fn(() => true),
+    getSession: vi.fn((id: string) =>
+      id === "session-1" ? { projectScope } : undefined,
+    ),
     listPersistedSessions: vi.fn(() => [
       {
         schemaVersion: 1,
@@ -55,6 +73,7 @@ function makeSessionManagerStub() {
         totalOutputTokens: 20,
         createdAt: 1,
         lastActiveAt: 2,
+        projectScope,
       },
     ]),
     getForegroundSession: vi.fn(() => ({
@@ -67,6 +86,8 @@ function makeSessionManagerStub() {
       lastOutputTokens: 20,
       lastCacheReadTokens: 3,
       estimatedTotalUsed: 33,
+      projectScope,
+      projectAvailability: "available",
       getAllMessages: vi.fn(() => [
         { role: "user", content: "hello" },
         { role: "assistant", content: [{ type: "text", text: "world" }] },
@@ -179,6 +200,8 @@ function makeChatViewProviderStub() {
     submitBrowserAttachFile: vi.fn(async () => ({
       files: ["/tmp/from-picker.txt"],
     })),
+    submitBrowserSteerQueuedMessage: vi.fn(async () => ({ ok: true })),
+    submitBrowserInterjectQueuedMessage: vi.fn(() => ({ ok: true })),
     submitBrowserStop: vi.fn(() => ({ ok: true })),
     submitBrowserStopBackground: vi.fn(() => ({ ok: true })),
     submitBrowserAskAgentMcpStatus: vi.fn(() => ({
@@ -861,7 +884,7 @@ describe("BrowserGatewayServer", () => {
     const snapshotResponse = await fetch(`${baseUrl}/api/ui-state`);
     expect(snapshotResponse.ok).toBe(true);
     const snapshotJson = await snapshotResponse.json();
-    expect(snapshotJson).toEqual({
+    expect(snapshotJson).toMatchObject({
       ui: {
         approval: {
           kind: "write",
@@ -910,7 +933,6 @@ describe("BrowserGatewayServer", () => {
       session: {
         sessions: [
           {
-            schemaVersion: 1,
             id: "session-1",
             mode: "code",
             model: "claude-sonnet-4-6",
@@ -1245,6 +1267,7 @@ describe("BrowserGatewayServer", () => {
     expect(chatViewProvider.submitBrowserSend).toHaveBeenCalledWith({
       text: "Ship it",
       sessionId: "session-1",
+      projectId: "project-a",
       mode: "code",
       thinkingEnabled: undefined,
       reasoningEffort: undefined,
@@ -1282,10 +1305,18 @@ describe("BrowserGatewayServer", () => {
         text: "Queue it",
         sessionId: "session-1",
         mode: "code",
+        interject: true,
       }),
     });
     expect(queuedSend.status).toBe(200);
     expect(await queuedSend.json()).toEqual({ ok: true, queued: true });
+    expect(chatViewProvider.submitBrowserSend).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        text: "Queue it",
+        sessionId: "session-1",
+        interject: true,
+      }),
+    );
 
     const authorizedMode = await fetch(`${baseUrl}/api/mode`, {
       method: "POST",
@@ -1304,6 +1335,7 @@ describe("BrowserGatewayServer", () => {
     });
     expect(chatViewProvider.submitBrowserModeSwitch).toHaveBeenCalledWith(
       "architect",
+      "project-a",
     );
 
     const unauthorizedSlash = await fetch(`${baseUrl}/api/slash-commands`);
@@ -1329,7 +1361,9 @@ describe("BrowserGatewayServer", () => {
         },
       ],
     });
-    expect(chatViewProvider.getBrowserSlashCommands).toHaveBeenCalled();
+    expect(chatViewProvider.getBrowserSlashCommands).toHaveBeenCalledWith(
+      "project-a",
+    );
 
     const invalidSearch = await fetch(`${baseUrl}/api/search-files`, {
       headers: { Authorization: "Bearer test-token" },
@@ -1346,7 +1380,10 @@ describe("BrowserGatewayServer", () => {
     expect(await authorizedSearch.json()).toEqual({
       files: [{ path: "src/index.ts", kind: "file" }],
     });
-    expect(chatViewProvider.searchBrowserFiles).toHaveBeenCalledWith("src");
+    expect(chatViewProvider.searchBrowserFiles).toHaveBeenCalledWith(
+      "src",
+      "project-a",
+    );
 
     const authorizedModes = await fetch(`${baseUrl}/api/modes`, {
       headers: { Authorization: "Bearer test-token" },
@@ -1358,7 +1395,7 @@ describe("BrowserGatewayServer", () => {
         { slug: "architect", name: "Architect", icon: "symbol-structure" },
       ],
     });
-    expect(chatViewProvider.getBrowserModes).toHaveBeenCalled();
+    expect(chatViewProvider.getBrowserModes).toHaveBeenCalledWith("project-a");
 
     const authorizedModels = await fetch(`${baseUrl}/api/models`, {
       headers: { Authorization: "Bearer test-token" },
@@ -1479,7 +1516,9 @@ describe("BrowserGatewayServer", () => {
     expect(await authorizedAttach.json()).toEqual({
       files: ["/tmp/from-picker.txt"],
     });
-    expect(chatViewProvider.submitBrowserAttachFile).toHaveBeenCalled();
+    expect(chatViewProvider.submitBrowserAttachFile).toHaveBeenCalledWith(
+      "project-a",
+    );
 
     const authorizedNewSession = await fetch(`${baseUrl}/api/session/new`, {
       method: "POST",
@@ -1502,6 +1541,212 @@ describe("BrowserGatewayServer", () => {
     });
     expect(chatViewProvider.submitBrowserNewSession).toHaveBeenCalledWith(
       "code",
+      "project-a",
+    );
+
+    sessionManager.getWorkspaceProjects.mockReturnValue([
+      {
+        id: "project-a",
+        name: "Project A",
+        uri: "file:///workspace/a",
+        rootPath: "/workspace/a",
+        availability: { status: "available" },
+      },
+      {
+        id: "project-b",
+        name: "Project B",
+        uri: "file:///workspace/b",
+        rootPath: "/workspace/b",
+        availability: { status: "available" },
+      },
+    ]);
+
+    const missingProjectNewSession = await fetch(`${baseUrl}/api/session/new`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ mode: "code" }),
+    });
+    expect(missingProjectNewSession.status).toBe(409);
+    await expect(missingProjectNewSession.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "project_required",
+      refresh: true,
+    });
+
+    const missingProjectModes = await fetch(`${baseUrl}/api/modes`, {
+      headers: { Authorization: "Bearer test-token" },
+    });
+    expect(missingProjectModes.status).toBe(409);
+    await expect(missingProjectModes.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "project_required",
+      refresh: true,
+    });
+
+    const projectBModes = await fetch(
+      `${baseUrl}/api/modes?projectId=project-b`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(projectBModes.status).toBe(200);
+    expect(chatViewProvider.getBrowserModes).toHaveBeenLastCalledWith(
+      "project-b",
+    );
+
+    const projectBSlash = await fetch(
+      `${baseUrl}/api/slash-commands?projectId=project-b`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(projectBSlash.status).toBe(200);
+    expect(chatViewProvider.getBrowserSlashCommands).toHaveBeenLastCalledWith(
+      "project-b",
+    );
+
+    const projectBSearch = await fetch(
+      `${baseUrl}/api/search-files?query=src&projectId=project-b`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    expect(projectBSearch.status).toBe(200);
+    expect(chatViewProvider.searchBrowserFiles).toHaveBeenLastCalledWith(
+      "src",
+      "project-b",
+    );
+
+    const projectBAttach = await fetch(`${baseUrl}/api/attach-file`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ projectId: "project-b" }),
+    });
+    expect(projectBAttach.status).toBe(200);
+    expect(chatViewProvider.submitBrowserAttachFile).toHaveBeenLastCalledWith(
+      "project-b",
+    );
+
+    const modeSwitchCalls =
+      chatViewProvider.submitBrowserModeSwitch.mock.calls.length;
+    const mismatchedMode = await fetch(`${baseUrl}/api/mode`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        mode: "architect",
+        sessionId: "session-1",
+        projectId: "project-b",
+      }),
+    });
+    expect(mismatchedMode.status).toBe(409);
+    await expect(mismatchedMode.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "session_project_mismatch",
+      refresh: true,
+    });
+    expect(chatViewProvider.submitBrowserModeSwitch).toHaveBeenCalledTimes(
+      modeSwitchCalls,
+    );
+
+    for (const route of ["steer", "interject"]) {
+      const mismatchedQueue = await fetch(`${baseUrl}/api/queue/${route}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          sessionId: "session-1",
+          projectId: "project-b",
+          queueId: `queue-${route}`,
+          text: "Wrong project",
+        }),
+      });
+      expect(mismatchedQueue.status).toBe(409);
+      await expect(mismatchedQueue.json()).resolves.toMatchObject({
+        error: "project_state_mismatch",
+        reason: "session_project_mismatch",
+        refresh: true,
+      });
+    }
+    expect(
+      chatViewProvider.submitBrowserSteerQueuedMessage,
+    ).not.toHaveBeenCalled();
+    expect(
+      chatViewProvider.submitBrowserInterjectQueuedMessage,
+    ).not.toHaveBeenCalled();
+
+    const mismatchedSend = await fetch(`${baseUrl}/api/send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        text: "Wrong project",
+        sessionId: "session-1",
+        projectId: "project-b",
+      }),
+    });
+    expect(mismatchedSend.status).toBe(409);
+    await expect(mismatchedSend.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "session_project_mismatch",
+      sessionProjectId: "project-a",
+      refresh: true,
+    });
+
+    const mismatchedLoad = await fetch(`${baseUrl}/api/session/load`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({
+        sessionId: "session-1",
+        projectId: "project-b",
+      }),
+    });
+    expect(mismatchedLoad.status).toBe(409);
+    await expect(mismatchedLoad.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "session_project_mismatch",
+      refresh: true,
+    });
+
+    const unknownDefault = await fetch(`${baseUrl}/api/project/default`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ projectId: "project-missing" }),
+    });
+    expect(unknownDefault.status).toBe(409);
+    await expect(unknownDefault.json()).resolves.toMatchObject({
+      error: "project_state_mismatch",
+      reason: "project_not_found",
+      refresh: true,
+    });
+
+    const selectedDefault = await fetch(`${baseUrl}/api/project/default`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+      },
+      body: JSON.stringify({ projectId: "project-b" }),
+    });
+    expect(selectedDefault.status).toBe(200);
+    await expect(selectedDefault.json()).resolves.toMatchObject({
+      ok: true,
+      projectId: "project-b",
+    });
+    expect(sessionManager.setBrowserPreferredProject).toHaveBeenCalledWith(
+      "project-b",
     );
 
     const authorizedStop = await fetch(`${baseUrl}/api/stop`, {

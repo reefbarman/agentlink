@@ -40,7 +40,10 @@ vi.mock("vscode", () => ({
 }));
 
 vi.mock("../util/paths.js", () => ({
+  canonicalizePath: (inputPath: string) => inputPath,
   getWorkspaceRoots,
+  isPathWithinRoot: (filePath: string, rootPath: string) =>
+    filePath === rootPath || filePath.startsWith(`${rootPath}/`),
   tryGetFirstWorkspaceRoot,
 }));
 
@@ -109,6 +112,31 @@ describe("handleExecuteCommand", () => {
       error:
         "Command execution is unavailable in this runtime. Provide a TerminalProvider to enable execute_command.",
       command: "go test ./...",
+    });
+  });
+
+  it("blocks statically resolved cross-project command targets before execution", async () => {
+    getWorkspaceRoots.mockReturnValue(["/workspace/project-a"]);
+    tryGetFirstWorkspaceRoot.mockReturnValue("/workspace/project-a");
+    const { handleExecuteCommand } = await import("./executeCommand.js");
+
+    const result = await handleExecuteCommand(
+      { command: "touch ../project-b/output.txt" },
+      { isCommandApproved: () => true } as never,
+      { isRecentlyApproved: () => true } as never,
+      "session-a",
+      undefined,
+      {
+        terminalProvider,
+        projectRoot: "/workspace/project-a",
+        workspaceProjectRoots: ["/workspace/project-a", "/workspace/project-b"],
+      },
+    );
+
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(textPayload(result)).toMatchObject({
+      status: "rejected",
+      reason: expect.stringContaining("Cross-project mutation is blocked"),
     });
   });
 
@@ -686,7 +714,7 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result).approval).toEqual({ by: "explicit_rule" });
   });
 
-  it("records recent approval", async () => {
+  it("records an attributed recent approval returned by the panel", async () => {
     getConfiguration.mockReturnValue({
       get: vi.fn((key: string, fallback?: unknown) => {
         if (key === "masterBypass") return false;
@@ -702,8 +730,12 @@ describe("handleExecuteCommand", () => {
         findMatchingCommandRule: () => undefined,
       } as never,
       {
-        isRecentlyApproved: () => true,
-        enqueueCommandApproval: vi.fn(),
+        enqueueCommandApproval: vi.fn(() => ({
+          promise: Promise.resolve({
+            decision: "run-once",
+            recentApproval: true,
+          }),
+        })),
       } as never,
       "session-recent",
       undefined,

@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => {
         fallbackUsed: false,
       }),
     ),
-    createSession: vi.fn(async (opts: any) => {
+    createSession: vi.fn(async (opts: any): Promise<any> => {
       seq += 1;
       let pendingModeResume: {
         mode: string;
@@ -43,6 +43,9 @@ const mocks = vi.hoisted(() => {
         model: opts.config.model,
         reasoningEffort: "high",
         providerId: opts.providerId,
+        projectScope: opts.projectScope,
+        projectAvailability: opts.projectAvailability ?? "available",
+        requireProjectRoot: vi.fn(() => opts.projectScope.rootPath),
         title: "New Chat",
         background: Boolean(opts.background),
         status: "idle",
@@ -100,6 +103,10 @@ const mocks = vi.hoisted(() => {
         getLastAssistantText: vi.fn(() => assistantText),
         getLastFinalMarker: vi.fn(() => undefined),
         getFullAssistantTranscript: vi.fn(() => assistantText),
+        trackFileRead: vi.fn(),
+        getAdvertisedSkills: vi.fn(() => []),
+        getAdvertisedRules: vi.fn(() => []),
+        trackLoadedSkill: vi.fn(),
       };
       return mockSession;
     }),
@@ -162,7 +169,7 @@ describe("AgentSessionManager background agents", () => {
   };
 
   const toolCtx: ToolDispatchContext = {
-    approvalManager: {} as any,
+    approvalManager: { bindSessionProject: vi.fn() } as any,
     approvalPanel: {} as any,
     extensionUri: {} as any,
     sessionId: "fg",
@@ -224,6 +231,30 @@ describe("AgentSessionManager background agents", () => {
     const spawned = await mgr.spawnBackground({ task: "t", message: "m" });
     expect(mgr.getBackgroundStatus(spawned.sessionId)).toEqual(
       expect.objectContaining({ status: "queued", done: false }),
+    );
+  });
+
+  it("attaches inherited images to the native background prompt", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+    const images = [
+      {
+        name: "feature-ui.png",
+        mimeType: "image/png",
+        base64: "screenshot",
+      },
+    ];
+
+    const spawned = await mgr.spawnBackground({
+      task: "review UI",
+      message: "Review the supplied screenshot",
+      images,
+    });
+    const session = (mgr as any).sessions.get(spawned.sessionId);
+
+    expect(session.addUserMessage).toHaveBeenCalledWith(
+      "Review the supplied screenshot",
+      { images },
     );
   });
 

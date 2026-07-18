@@ -30,6 +30,7 @@ export type ActivityTraceKind =
 export interface ActivityTraceEvent {
   id: string;
   sessionId: string;
+  projectId?: string;
   timestamp: number;
   sequence: number;
   kind: ActivityTraceKind;
@@ -40,6 +41,7 @@ export interface ActivityTraceEvent {
 
 export interface ActivityTraceSummary {
   sessionId: string;
+  projectId?: string;
   eventCount: number;
   recordedEventCount: number;
   droppedEventCount: number;
@@ -102,16 +104,21 @@ export class ActivityTraceRecorder {
 
   appendAgentEvent(
     sessionId: string,
+    projectId: string,
     event: AgentEvent,
     source: ActivityTraceSource,
   ): ActivityTraceEvent | null {
     const draft = this.convertAgentEvent(sessionId, event, source);
     if (!draft) return null;
-    return this.append(draft);
+    return this.append(projectId, draft);
   }
 
   append(
-    event: Omit<ActivityTraceEvent, "id" | "timestamp" | "sequence"> & {
+    projectId: string,
+    event: Omit<
+      ActivityTraceEvent,
+      "id" | "projectId" | "timestamp" | "sequence"
+    > & {
       id?: string;
       timestamp?: number;
       sequence?: number;
@@ -124,6 +131,7 @@ export class ActivityTraceRecorder {
     const normalized: ActivityTraceEvent = {
       id: event.id ?? randomUUID(),
       sessionId: event.sessionId,
+      projectId,
       timestamp: event.timestamp ?? this.now(),
       sequence,
       kind: event.kind,
@@ -137,7 +145,7 @@ export class ActivityTraceRecorder {
         : {}),
     };
 
-    const summary = this.getOrCreateSummary(event.sessionId);
+    const summary = this.getOrCreateSummary(event.sessionId, projectId);
     const shouldRecordEvent =
       summary.recordedEventCount < this.maxEventsPerSession;
 
@@ -180,7 +188,10 @@ export class ActivityTraceRecorder {
     event: AgentEvent,
     source: ActivityTraceSource,
   ):
-    | (Omit<ActivityTraceEvent, "id" | "timestamp" | "sequence"> & {
+    | (Omit<
+        ActivityTraceEvent,
+        "id" | "projectId" | "timestamp" | "sequence"
+      > & {
         id?: string;
         timestamp?: number;
         sequence?: number;
@@ -367,18 +378,25 @@ export class ActivityTraceRecorder {
     }
   }
 
-  private getOrCreateSummary(sessionId: string): ActivityTraceSummary {
+  private getOrCreateSummary(
+    sessionId: string,
+    projectId?: string,
+  ): ActivityTraceSummary {
     const existing = this.summaries.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      if (projectId) existing.projectId = projectId;
+      return existing;
+    }
     const loaded = this.loadSummary(sessionId);
     if (loaded) {
-      const normalized = normalizeSummary(loaded);
+      const normalized = normalizeSummary(loaded, projectId);
       this.summaries.set(sessionId, normalized);
       this.sequences.set(sessionId, normalized.eventCount);
       return normalized;
     }
     const summary: ActivityTraceSummary = {
       sessionId,
+      ...(projectId ? { projectId } : {}),
       eventCount: 0,
       recordedEventCount: 0,
       droppedEventCount: 0,
@@ -403,7 +421,7 @@ export class ActivityTraceRecorder {
   }
 
   private updateSummary(event: ActivityTraceEvent, recorded: boolean): void {
-    const summary = this.getOrCreateSummary(event.sessionId);
+    const summary = this.getOrCreateSummary(event.sessionId, event.projectId);
     summary.eventCount += 1;
     if (recorded) {
       summary.recordedEventCount += 1;
@@ -485,9 +503,13 @@ export class ActivityTraceRecorder {
   }
 }
 
-function normalizeSummary(summary: ActivityTraceSummary): ActivityTraceSummary {
+function normalizeSummary(
+  summary: ActivityTraceSummary,
+  projectId?: string,
+): ActivityTraceSummary {
   return {
     ...summary,
+    ...(projectId ? { projectId } : {}),
     toolCallsByName: summary.toolCallsByName ?? {},
     totalToolResultTextChars: summary.totalToolResultTextChars ?? 0,
     toolResultTextCharsByName: summary.toolResultTextCharsByName ?? {},

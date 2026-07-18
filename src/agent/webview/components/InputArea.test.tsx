@@ -52,6 +52,57 @@ function renderInputArea(
   );
 }
 
+describe("InputArea project availability", () => {
+  it("disables composing and sending when the project is unavailable", () => {
+    const onSend = vi.fn();
+    const { container, getByRole, getByText } = renderInputArea([], {
+      onSend,
+      disabled: true,
+      disabledReason: "Project unavailable: Project B",
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    expect(input.disabled).toBe(true);
+    expect(getByText("Project unavailable: Project B")).toBeTruthy();
+    expect(
+      (
+        getByRole("button", {
+          name: "Project unavailable: Project B",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("InputArea interjections", () => {
+  it("submits the current message as an interjection while streaming", () => {
+    const onSend = vi.fn();
+    const onInterject = vi.fn();
+    const { container, getByRole } = renderInputArea([], {
+      onSend,
+      onInterject,
+      streaming: true,
+    });
+    const input = container.querySelector(".chat-input") as HTMLTextAreaElement;
+
+    input.value = "Please change course";
+    fireEvent.input(input);
+    fireEvent.click(getByRole("button", { name: "Interject at next break" }));
+
+    expect(onInterject).toHaveBeenCalledWith(
+      "Please change course",
+      [],
+      undefined,
+      undefined,
+      undefined,
+    );
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+  });
+});
+
 describe("InputArea slash popup", () => {
   it("keeps popup visible when exact match is a prefix of other commands", () => {
     const slashCommands: SlashCommandInfo[] = [

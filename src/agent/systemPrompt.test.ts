@@ -292,6 +292,33 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("web: /work/web");
   });
 
+  it("currently keeps prompt instructions rooted at cwd when the active file is in another listed workspace", async () => {
+    const secondaryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-secondary-root-"),
+    );
+    try {
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "PRIMARY ROOT RULES");
+      fs.writeFileSync(
+        path.join(secondaryRoot, "AGENTS.md"),
+        "SECONDARY ROOT RULES",
+      );
+
+      const result = await buildSystemPrompt("code", tmpDir, {
+        activeFilePath: path.join(secondaryRoot, "src", "index.ts"),
+        workspaceFolders: [
+          { name: "primary", path: tmpDir },
+          { name: "secondary", path: secondaryRoot },
+        ],
+      });
+
+      expect(result).toContain("PRIMARY ROOT RULES");
+      expect(result).not.toContain("SECONDARY ROOT RULES");
+      expect(result).toContain(`- The project root directory is: ${tmpDir}`);
+    } finally {
+      fs.rmSync(secondaryRoot, { recursive: true, force: true });
+    }
+  });
+
   it("lists workspace folders in lightweight background review prompts", async () => {
     const result = await buildSystemPrompt("review", tmpDir, {
       isBackground: true,
@@ -321,6 +348,43 @@ describe("buildSystemPrompt", () => {
   it("does not include dev feedback section by default", async () => {
     const result = await buildSystemPrompt("code", tmpDir);
     expect(result).not.toContain("Tool Feedback (Dev Mode)");
+  });
+
+  it("includes project custom mode role and instructions", async () => {
+    const result = await buildSystemPrompt("security", tmpDir, {
+      agentMode: {
+        slug: "security",
+        name: "Security Review",
+        icon: "shield",
+        roleDefinition: "Review changes as a security specialist.",
+        toolGroups: ["read", "search"],
+        customInstructions: "Prioritize trust boundaries and data exposure.",
+      },
+    });
+
+    expect(result).toContain("## Security Review Mode");
+    expect(result).toContain("Review changes as a security specialist.");
+    expect(result).toContain("Prioritize trust boundaries and data exposure.");
+    expect(result).not.toContain("## Code Mode");
+  });
+
+  it("adds project customization without removing built-in mode safeguards", async () => {
+    const result = await buildSystemPrompt("code", tmpDir, {
+      agentMode: {
+        slug: "code",
+        name: "Repository Code",
+        icon: "code",
+        roleDefinition: "Implement changes for this repository.",
+        toolGroups: ["read"],
+        customInstructions: "Use the repository-specific deployment flow.",
+      },
+    });
+
+    expect(result).toContain("## Code Mode");
+    expect(result).toContain("### Task Alignment");
+    expect(result).toContain("### Project Mode Customization");
+    expect(result).toContain("Implement changes for this repository.");
+    expect(result).toContain("Use the repository-specific deployment flow.");
   });
 
   it("includes dev feedback section when devMode is true", async () => {
@@ -434,6 +498,37 @@ describe("buildSystemPrompt", () => {
         (section) => section.label === "rule catalog (deferred)",
       ),
     ).toBe(false);
+  });
+
+  it("rejects symlink-escaped active files before rule glob partitioning", async () => {
+    const outsideDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "agentlink-outside-"),
+    );
+    const linkedDir = path.join(tmpDir, "src");
+    const ruleDir = path.join(tmpDir, ".agentlink", "rules");
+    fs.mkdirSync(ruleDir, { recursive: true });
+    fs.symlinkSync(outsideDir, linkedDir, "dir");
+    fs.writeFileSync(
+      path.join(ruleDir, "typescript.md"),
+      "---\ndescription: TypeScript edit standards\nglobs: src/**/*.ts\n---\nSYMLINK ESCAPE MUST NOT INLINE",
+    );
+
+    try {
+      const artifacts = await buildPromptArtifacts("code", tmpDir, {
+        activeFilePath: path.join(linkedDir, "index.ts"),
+      });
+
+      expect(artifacts.activeFileContext).toEqual({
+        status: "ignored",
+        reason: "symlink_escape",
+      });
+      expect(artifacts.systemPrompt).toContain("## Rule Catalog");
+      expect(artifacts.systemPrompt).not.toContain(
+        "SYMLINK ESCAPE MUST NOT INLINE",
+      );
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 
   it("exposes the same active-file glob partitioning decision for debug metadata", () => {

@@ -29,6 +29,10 @@
     {
       "pattern": "npx @vscode/vsce ls",
       "mode": "prefix"
+    },
+    {
+      "pattern": "npm run fmt:check",
+      "mode": "prefix"
     }
   ],
   "pathRules": [

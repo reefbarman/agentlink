@@ -13,6 +13,7 @@ export interface ToolUsageEvent {
   params?: Record<string, unknown>;
   source: ToolUsageSource;
   mode?: string;
+  projectId?: string;
   outcome: ToolUsageOutcome;
   durationMs?: number;
   metrics?: Record<string, number | string | boolean>;
@@ -23,6 +24,7 @@ interface ToolUsageBucket {
   outcomes: Partial<Record<ToolUsageOutcome, number>>;
   sources: Partial<Record<ToolUsageSource, number>>;
   modes: Record<string, number>;
+  projects?: Record<string, number>;
   parameters: Record<string, number>;
   totalDurationMs: number;
   maxDurationMs: number;
@@ -136,6 +138,12 @@ export class ToolUsageTelemetry {
     const mode = event.mode?.trim();
     if (mode) bucket.modes[mode] = (bucket.modes[mode] ?? 0) + 1;
 
+    const projectId = event.projectId?.trim();
+    if (projectId) {
+      bucket.projects ??= {};
+      bucket.projects[projectId] = (bucket.projects[projectId] ?? 0) + 1;
+    }
+
     if (event.params && typeof event.params === "object") {
       for (const key of Object.keys(event.params).sort()) {
         bucket.parameters[key] = (bucket.parameters[key] ?? 0) + 1;
@@ -230,6 +238,10 @@ export class ToolUsageTelemetry {
       }
       for (const [key, value] of Object.entries(failed.modes)) {
         current.modes[key] = (current.modes[key] ?? 0) + value;
+      }
+      for (const [key, value] of Object.entries(failed.projects ?? {})) {
+        current.projects ??= {};
+        current.projects[key] = (current.projects[key] ?? 0) + value;
       }
       for (const [key, value] of Object.entries(failed.parameters)) {
         current.parameters[key] = (current.parameters[key] ?? 0) + value;
