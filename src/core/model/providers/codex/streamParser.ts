@@ -349,17 +349,28 @@ export async function* parseCodexResponseStreamEvents(
           (usage.cache_read_input_tokens as number) ??
           0;
 
-        cacheCreationTokens =
+        const detailedCacheCreationTokens =
           (inputDetails?.cache_creation_tokens as number) ??
           (inputDetails?.cache_write_tokens as number) ??
           (promptDetails?.cache_creation_tokens as number) ??
-          (promptDetails?.cache_write_tokens as number) ??
+          (promptDetails?.cache_write_tokens as number);
+        cacheCreationTokens =
+          detailedCacheCreationTokens ??
           (usage.cache_creation_input_tokens as number) ??
           (usage.cache_write_input_tokens as number) ??
           (usage.cache_write_tokens as number) ??
           0;
 
-        inputTokens = Math.max(0, totalInputTokens - cacheReadTokens);
+        // OpenAI Responses detail fields partition input_tokens. The core usage
+        // contract keeps uncached input separate so AgentSession can reconstruct
+        // context occupancy without double-counting. Top-level compatibility
+        // counters may be additive, so only subtract nested detail values here.
+        inputTokens = Math.max(
+          0,
+          totalInputTokens -
+            cacheReadTokens -
+            (detailedCacheCreationTokens ?? 0),
+        );
       }
 
       if (responseOutput) {

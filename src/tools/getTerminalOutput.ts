@@ -177,12 +177,6 @@ export async function handleGetTerminalOutput(
     );
 
     result.output = filtered;
-    if (state.terminal_raw_output) {
-      result.terminal_raw_output = filterOutput(
-        state.terminal_raw_output,
-        filterOptions,
-      ).filtered;
-    }
     result.total_lines = totalLines;
     result.lines_shown = linesShown;
 

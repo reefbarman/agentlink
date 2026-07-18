@@ -430,6 +430,11 @@ export async function handleExecuteCommand(
         onCommandFinalized: inlineRun ? cleanupInlineRun : undefined,
       });
 
+      // Raw shell-integration output duplicates `output` and includes ANSI/control
+      // sequences. Keep it inside the terminal provider instead of sending both
+      // representations through the model-facing tool result.
+      delete result.terminal_raw_output;
+
       // Apply output filtering and temp file saving
       if (result.output_captured && result.output) {
         const filterOptions = {
@@ -458,12 +463,6 @@ export async function handleExecuteCommand(
         }
 
         result.output = filtered;
-        if (result.terminal_raw_output) {
-          result.terminal_raw_output = filterOutput(
-            result.terminal_raw_output,
-            filterOptions,
-          ).filtered;
-        }
       } else if (!result.output_captured && !result.output) {
         result.output =
           "Command execution was sent to the terminal, but no output was captured.";

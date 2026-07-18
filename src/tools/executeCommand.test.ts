@@ -358,7 +358,7 @@ describe("handleExecuteCommand", () => {
     expect(textPayload(result)).toMatchObject({ status: "rejected" });
   });
 
-  it("filters terminal raw output with the same output window", async () => {
+  it("omits duplicate terminal raw output from the model-facing result", async () => {
     executeCommand.mockResolvedValue({
       exit_code: 0,
       output: "one\ntwo\nthree",
@@ -383,9 +383,7 @@ describe("handleExecuteCommand", () => {
 
     const payload = textPayload(result);
     expect(payload.output).toBe("two\nthree");
-    expect(payload.terminal_raw_output).toBe(
-      "\u001b[32mtwo\u001b[0m\n\u001b[33mthree\u001b[0m",
-    );
+    expect(payload.terminal_raw_output).toBeUndefined();
   });
 
   it("rejects malformed shell commands before masterBypass and force handling", async () => {

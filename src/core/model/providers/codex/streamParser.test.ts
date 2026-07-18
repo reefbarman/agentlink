@@ -110,7 +110,7 @@ describe("parseCodexResponseStreamEvents", () => {
       { type: "thinking_end", thinkingId: "thinking-fixed" },
       {
         type: "usage",
-        inputTokens: 13,
+        inputTokens: 10,
         outputTokens: 4,
         cacheReadTokens: 7,
         cacheCreationTokens: 3,
@@ -148,6 +148,31 @@ describe("parseCodexResponseStreamEvents", () => {
       },
       { type: "done" },
     ]);
+  });
+
+  it("keeps top-level cache creation counters additive to reported input", async () => {
+    const events = await collect([
+      {
+        type: "response.done",
+        response: {
+          id: "resp_compat",
+          usage: {
+            input_tokens: 20,
+            output_tokens: 4,
+            cache_creation_input_tokens: 3,
+          },
+        },
+      },
+    ]);
+
+    expect(events).toContainEqual({
+      type: "usage",
+      inputTokens: 20,
+      outputTokens: 4,
+      cacheReadTokens: undefined,
+      cacheCreationTokens: 3,
+      providerResponseId: "resp_compat",
+    });
   });
 
   it("normalizes hosted search activity, citations, usage, and exact replay", async () => {

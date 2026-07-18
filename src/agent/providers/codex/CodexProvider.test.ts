@@ -464,7 +464,7 @@ describe("CodexProvider.complete", () => {
     expect(result).toEqual({
       text: "api",
       usage: {
-        inputTokens: 80,
+        inputTokens: 50,
         outputTokens: 10,
         cacheReadTokens: 120,
         cacheCreationTokens: 30,

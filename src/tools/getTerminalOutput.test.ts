@@ -80,6 +80,26 @@ describe("handleGetTerminalOutput", () => {
     expect(payload.verification_hint).toContain("rather than re-running it");
   });
 
+  it("omits duplicate terminal raw output from the model-facing result", async () => {
+    vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
+      is_running: false,
+      exit_code: 0,
+      output: "one\ntwo\nthree",
+      terminal_raw_output:
+        "\u001b[31mone\u001b[0m\n\u001b[32mtwo\u001b[0m\n\u001b[33mthree\u001b[0m",
+      output_captured: true,
+    });
+
+    const result = await handleGetTerminalOutput(
+      { terminal_id: "term_42", output_tail: 2 },
+      { terminalProvider },
+    );
+    const payload = textPayload(result);
+
+    expect(payload.output).toBe("two\nthree");
+    expect(payload.terminal_raw_output).toBeUndefined();
+  });
+
   it("interrupts the terminal when kill is requested", async () => {
     vi.mocked(terminalProvider.getBackgroundState).mockReturnValue({
       is_running: false,
