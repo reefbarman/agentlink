@@ -1318,6 +1318,77 @@ describe("AgentEngine", () => {
       });
     });
 
+    it("injects a pending interjection instead of ending the turn at set_task_status", async () => {
+      const requests: StreamRequest[] = [];
+      let callCount = 0;
+      const provider = makeMockProvider();
+      provider.stream = async function* (request: StreamRequest) {
+        requests.push(request);
+        callCount += 1;
+        if (callCount === 1) {
+          yield {
+            type: "content_blocks",
+            blocks: [
+              { type: "text", text: "All done." },
+              {
+                type: "tool_use",
+                id: "call_final",
+                name: "set_task_status",
+                input: { status: "completed" },
+              },
+            ],
+          };
+          yield { type: "usage", inputTokens: 20, outputTokens: 5 };
+          yield { type: "done" };
+          return;
+        }
+        yield* makeProviderStream({ text: "continuing with follow up" });
+      };
+
+      const session = await makeSession();
+      session.addUserMessage("do the task");
+      const engine = new AgentEngine(makeRegistry(provider));
+      const toolCtx: ToolDispatchContext = {
+        approvalManager: {} as ToolDispatchContext["approvalManager"],
+        approvalPanel: {} as ToolDispatchContext["approvalPanel"],
+        sessionId: "seed-session",
+        extensionUri: {} as ToolDispatchContext["extensionUri"],
+      };
+      setEngineToolContext(
+        engine,
+        toolCtx,
+        async (request: AgentToolExecutionRequest) => {
+          if (request.name === "set_task_status") {
+            // Simulate a message queued while the final tool was executing.
+            session.setPendingInterjection("also fix the tests", "queue-1");
+            request.context.onFinalStatus?.({
+              status: "completed",
+              source: "tool",
+            });
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+          };
+        },
+      );
+
+      const events = await collectEvents(engine.run(session));
+
+      // The final marker is still applied, but the turn continues with the
+      // queued user message instead of stopping.
+      expect(events.find((e) => e.type === "final_marker")).toBeDefined();
+      const interjections = events.filter(
+        (e): e is Extract<AgentEvent, { type: "user_interjection" }> =>
+          e.type === "user_interjection",
+      );
+      expect(interjections.map((e) => e.queueId)).toEqual(["queue-1"]);
+      expect(requests).toHaveLength(2);
+      expect(requests[1].messages.at(-1)).toEqual({
+        role: "user",
+        content: "also fix the tests",
+      });
+    });
+
     it("emits completed todos when set_task_status requests todo completion", async () => {
       const provider = makeMockProvider();
       provider.stream = async function* () {

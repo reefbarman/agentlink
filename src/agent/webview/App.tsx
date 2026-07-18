@@ -1639,6 +1639,20 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     }
   }, [autoContinueEnabled, state.chatState.sessionId]);
 
+  // Keep the extension informed of how many locally queued (non-browser)
+  // messages are waiting so the agent can skip the todo auto-continue and let
+  // the queue flush instead. Browser-sourced entries are already tracked
+  // extension-side via the foreground projection.
+  useEffect(() => {
+    const sessionId = state.chatState.sessionId;
+    if (!sessionId) return;
+    vscodeApi.postMessage({
+      command: "agentQueuedMessageCount",
+      sessionId,
+      count: state.messageQueue.filter((q) => q.source !== "browser").length,
+    });
+  }, [state.messageQueue, state.chatState.sessionId]);
+
   useEffect(() => {
     if (!autoContinueEnabled || state.streaming) return;
     if (!state.chatState.sessionId) return;

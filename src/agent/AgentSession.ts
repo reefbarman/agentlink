@@ -177,6 +177,10 @@ export class AgentSession {
   private _abortSignal: AbortSignal | undefined;
   private _abortGeneration = 0;
   private _pendingInterjections: PendingInterjection[] = [];
+  // Transient per-surface counts of messages sitting in UI send queues
+  // (VS Code webview / browser remote). Not persisted; used to give queued
+  // user messages priority over the todo auto-continue prompt.
+  private _queuedUiMessageCounts = new Map<string, number>();
   private _pendingModeResume: {
     mode: string;
     reason?: string;
@@ -818,6 +822,25 @@ export class AgentSession {
    */
   consumePendingInterjection(): PendingInterjection | null {
     return this._pendingInterjections.shift() ?? null;
+  }
+
+  get hasPendingInterjections(): boolean {
+    return this._pendingInterjections.length > 0;
+  }
+
+  /**
+   * Record how many messages a UI surface currently holds in its send queue.
+   * Queued messages take priority over the todo auto-continue prompt: when any
+   * surface reports a non-zero count at turn end, the manager emits `done`
+   * instead of auto-continuing so the queue can flush.
+   */
+  setQueuedUiMessageCount(surface: "vscode" | "browser", count: number): void {
+    if (count <= 0) this._queuedUiMessageCounts.delete(surface);
+    else this._queuedUiMessageCounts.set(surface, count);
+  }
+
+  get hasQueuedUiMessages(): boolean {
+    return this._queuedUiMessageCounts.size > 0;
   }
 
   /**

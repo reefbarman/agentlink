@@ -2842,6 +2842,100 @@ describe("AgentSessionManager background agents", () => {
     expect(fg.consumePendingModeResume()).toBeNull();
   });
 
+  it("auto-continues when pending todos remain at natural done", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const fg = await mgr.createSession("code");
+    const addUserMessageSpy = vi.spyOn(fg, "addUserMessage");
+
+    mocks.runBehavior
+      .mockReturnValueOnce(
+        (async function* () {
+          yield {
+            type: "todo_update",
+            todos: [{ id: "1", content: "finish it", status: "pending" }],
+          };
+          yield { type: "done" };
+        })(),
+      )
+      .mockReturnValueOnce(
+        (async function* () {
+          yield {
+            type: "todo_update",
+            todos: [{ id: "1", content: "finish it", status: "completed" }],
+          };
+          yield { type: "done" };
+        })(),
+      );
+
+    await mgr.sendMessage(fg.id, "work on the task", fg.mode);
+
+    expect(mocks.runBehavior).toHaveBeenCalledTimes(2);
+    expect(addUserMessageSpy).toHaveBeenCalledWith(
+      "You stopped but there are still pending tasks. Continue with the remaining items.",
+    );
+  });
+
+  it("skips auto-continue when a UI surface has queued messages", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const fg = await mgr.createSession("code");
+    (fg as any).hasQueuedUiMessages = true;
+    const addUserMessageSpy = vi.spyOn(fg, "addUserMessage");
+    const events: Array<{ type: string }> = [];
+    mgr.onEvent = (_sessionId, event) => {
+      events.push(event as { type: string });
+    };
+
+    mocks.runBehavior.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "todo_update",
+          todos: [{ id: "1", content: "finish it", status: "pending" }],
+        };
+        yield { type: "done" };
+      })(),
+    );
+
+    await mgr.sendMessage(fg.id, "work on the task", fg.mode);
+
+    // The queued message takes priority: no synthetic continue prompt, and
+    // done is emitted so the UI can flush its queue.
+    expect(mocks.runBehavior).toHaveBeenCalledTimes(1);
+    expect(addUserMessageSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("You stopped but there are still pending tasks."),
+    );
+    expect(events.filter((event) => event.type === "done")).toHaveLength(1);
+  });
+
+  it("skips auto-continue when an interjection is still pending", async () => {
+    const mgr = new AgentSessionManager(config, "/tmp");
+    mgr.setToolContext(toolCtx);
+
+    const fg = await mgr.createSession("code");
+    (fg as any).hasPendingInterjections = true;
+    const addUserMessageSpy = vi.spyOn(fg, "addUserMessage");
+
+    mocks.runBehavior.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "todo_update",
+          todos: [{ id: "1", content: "finish it", status: "pending" }],
+        };
+        yield { type: "done" };
+      })(),
+    );
+
+    await mgr.sendMessage(fg.id, "work on the task", fg.mode);
+
+    expect(mocks.runBehavior).toHaveBeenCalledTimes(1);
+    expect(addUserMessageSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("You stopped but there are still pending tasks."),
+    );
+  });
+
   it("resumes after a queued mode switch when retrying a session", async () => {
     const mgr = new AgentSessionManager(config, "/tmp");
     mgr.setToolContext(toolCtx);

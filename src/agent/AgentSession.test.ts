@@ -769,5 +769,31 @@ describe("AgentSession", () => {
       expect(session.consumePendingInterjection()?.queueId).toBe("q3");
       expect(session.consumePendingInterjection()).toBeNull();
     });
+
+    it("hasPendingInterjections reflects the queue state", async () => {
+      const session = await makeSession();
+      expect(session.hasPendingInterjections).toBe(false);
+      session.setPendingInterjection("first", "q1");
+      expect(session.hasPendingInterjections).toBe(true);
+      session.consumePendingInterjection();
+      expect(session.hasPendingInterjections).toBe(false);
+    });
+  });
+
+  describe("queued UI messages", () => {
+    it("tracks per-surface counts and clears on zero", async () => {
+      const session = await makeSession();
+      expect(session.hasQueuedUiMessages).toBe(false);
+
+      session.setQueuedUiMessageCount("vscode", 2);
+      expect(session.hasQueuedUiMessages).toBe(true);
+
+      session.setQueuedUiMessageCount("browser", 1);
+      session.setQueuedUiMessageCount("vscode", 0);
+      expect(session.hasQueuedUiMessages).toBe(true);
+
+      session.setQueuedUiMessageCount("browser", 0);
+      expect(session.hasQueuedUiMessages).toBe(false);
+    });
   });
 });

@@ -2158,9 +2158,26 @@ export class AgentSessionManager {
             continue;
           }
 
+          // Queued user messages take priority over auto-continue: emit the
+          // deferred done instead so the UI surfaces flush their queues (and
+          // any not-yet-drained interjection is sent on the next run).
+          const hasQueuedUserMessages =
+            session.hasPendingInterjections === true ||
+            session.hasQueuedUiMessages === true;
+          if (
+            naturalDone &&
+            hasQueuedUserMessages &&
+            hasPendingTodos(lastTodos)
+          ) {
+            this.log?.(
+              "[agent] skipping auto-continue: a queued user message takes priority",
+            );
+          }
+
           // Check if we should auto-continue due to pending todos
           if (
             naturalDone &&
+            !hasQueuedUserMessages &&
             autoContinueCount < MAX_AUTO_CONTINUE &&
             hasPendingTodos(lastTodos)
           ) {

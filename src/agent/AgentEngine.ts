@@ -1896,7 +1896,13 @@ export class AgentEngine {
         const successfulFinalMarker = toolResults.some(
           (tr) => tr.toolName === "set_task_status" && finalMarkerForTurn,
         );
-        if (successfulFinalMarker) {
+        // A queued interjection takes priority over ending the turn: fall
+        // through to the drain below so the user's message is injected and the
+        // model responds to it, instead of stopping at set_task_status.
+        if (
+          successfulFinalMarker &&
+          (signal.aborted || !session.hasPendingInterjections)
+        ) {
           break;
         }
         if (successfulModeSwitch) {

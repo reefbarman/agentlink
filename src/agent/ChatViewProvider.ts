@@ -4828,6 +4828,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "agentQueuedMessageCount": {
+        // The webview reports its local (non-browser) send-queue size so
+        // queued messages can take priority over the todo auto-continue.
+        const sessionId = msg.sessionId as string;
+        const count = msg.count;
+        if (sessionId && typeof count === "number" && this.sessionManager) {
+          this.sessionManager
+            .getSession(sessionId)
+            ?.setQueuedUiMessageCount("vscode", count);
+        }
+        break;
+      }
+
       case "agentRetry": {
         const sessionId = msg.sessionId as string;
         if (sessionId) {
@@ -5811,6 +5824,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private applyProjectedAction(action: Parameters<typeof reducer>[1]): void {
     this.projectedForegroundStore.apply(action);
+    if (
+      action.type === "ENQUEUE_MESSAGE" ||
+      action.type === "REMOVE_FROM_QUEUE" ||
+      action.type === "SET_STATE"
+    ) {
+      this.syncBrowserQueuedMessageCount();
+    }
+  }
+
+  /**
+   * Mirror the projection's browser-sourced queue size onto the foreground
+   * session so queued browser messages take priority over auto-continue.
+   * (VS Code webview entries are reported separately via
+   * "agentQueuedMessageCount" — they never appear in the projection queue.)
+   */
+  private syncBrowserQueuedMessageCount(): void {
+    const fg = this.sessionManager?.getForegroundSession();
+    if (!fg) return;
+    fg.setQueuedUiMessageCount?.(
+      "browser",
+      this.projectedForegroundState.messageQueue.filter(
+        (entry) => entry.source === "browser",
+      ).length,
+    );
   }
 
   private maybeStartProjectedDetectedQuestionRequest(): void {
