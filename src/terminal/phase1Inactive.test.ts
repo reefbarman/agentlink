@@ -42,6 +42,10 @@ describe("Phase 1 inactive boundary", () => {
   it("does not import or register custom terminal runtime components at activation", () => {
     for (const forbiddenReference of [
       "node-pty",
+      "nodePtyFactory",
+      "shellIntegration",
+      "hostTerminalBlocks",
+      "alternateScreenTracker",
       "TerminalSessionService",
       "AgentTerminalViewProvider",
       "agentTerminalProvider",
