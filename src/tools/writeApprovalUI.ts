@@ -53,11 +53,18 @@ export function saveWriteTrustRules(opts: {
   approvalManager: ApprovalManager;
   sessionId: string;
   scope?: RuleScope;
+  absolutePath: string;
   relPath: string;
   inWorkspace: boolean;
 }): void {
-  const { panelResponse, approvalManager, sessionId, relPath, inWorkspace } =
-    opts;
+  const {
+    panelResponse,
+    approvalManager,
+    sessionId,
+    absolutePath,
+    relPath,
+    inWorkspace,
+  } = opts;
   const scope = opts.scope ?? decisionToScope(panelResponse?.decision);
   if (!scope) return;
 
@@ -67,13 +74,14 @@ export function saveWriteTrustRules(opts: {
       approvalManager,
       sessionId,
       scope,
+      absolutePath,
       relPath,
       inWorkspace,
     );
   } else {
     // Title bar / legacy inline acceptance — no trust scope UI was shown,
     // so default to blanket "all-files" write approval at the chosen scope.
-    approvalManager.setAgentWriteApproval(sessionId, scope);
+    approvalManager.setAgentWriteApproval(sessionId, scope, absolutePath);
   }
 }
 
@@ -81,6 +89,7 @@ export function saveInlineWriteTrustRules(opts: {
   response: RawInlineApprovalResponse;
   approvalManager: ApprovalManager;
   sessionId: string;
+  absolutePath: string;
   relPath: string;
   inWorkspace?: boolean;
 }): void {
@@ -89,6 +98,7 @@ export function saveInlineWriteTrustRules(opts: {
       panelResponse: { decision: opts.response },
       approvalManager: opts.approvalManager,
       sessionId: opts.sessionId,
+      absolutePath: opts.absolutePath,
       relPath: opts.relPath,
       inWorkspace: opts.inWorkspace ?? true,
     });
@@ -108,6 +118,7 @@ export function saveInlineWriteTrustRules(opts: {
     },
     approvalManager: opts.approvalManager,
     sessionId: opts.sessionId,
+    absolutePath: opts.absolutePath,
     relPath: opts.relPath,
     inWorkspace: opts.inWorkspace ?? true,
   });
@@ -134,14 +145,15 @@ export function applyInlineTrustScope(
   approvalManager: ApprovalManager,
   sessionId: string,
   scope: RuleScope,
+  absolutePath: string,
   relPath: string,
   inWorkspace = true,
 ): void {
   if (panelResponse.trustScope === "all-files") {
-    approvalManager.setAgentWriteApproval(sessionId, scope);
+    approvalManager.setAgentWriteApproval(sessionId, scope, absolutePath);
   } else if (panelResponse.trustScope === "this-file") {
     const rule = { pattern: relPath, mode: "exact" as const };
-    approvalManager.addWriteRule(sessionId, rule, scope);
+    approvalManager.addWriteRule(sessionId, rule, scope, absolutePath);
     if (!inWorkspace) {
       approvalManager.addPathRule(sessionId, rule, scope);
     }
@@ -154,7 +166,7 @@ export function applyInlineTrustScope(
       pattern: panelResponse.rulePattern,
       mode: panelResponse.ruleMode,
     };
-    approvalManager.addWriteRule(sessionId, rule, scope);
+    approvalManager.addWriteRule(sessionId, rule, scope, absolutePath);
     if (!inWorkspace) {
       approvalManager.addPathRule(sessionId, rule, scope);
     }

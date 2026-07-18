@@ -608,6 +608,63 @@ function formatInstructionBlock(block: InstructionBlock): string {
   return `# Instructions (${block.source}):\n${block.content}`;
 }
 
+async function loadWorkspaceInstructionBlocks(
+  cwd: string,
+  workspaceFolders: WorkspaceFolderInfo[] | undefined,
+  activeFilePath: string | undefined,
+): Promise<InstructionBlock[]> {
+  if (!workspaceFolders || workspaceFolders.length <= 1) {
+    return loadAllInstructionBlocks(cwd, { activeFilePath });
+  }
+
+  const roots = workspaceFolders.map((folder) => path.resolve(folder.path));
+  const loaded = await Promise.all(
+    workspaceFolders.map(async (folder) => {
+      const root = path.resolve(folder.path);
+      const folderActiveFile =
+        activeFilePath &&
+        (activeFilePath === root ||
+          activeFilePath.startsWith(`${root}${path.sep}`))
+          ? activeFilePath
+          : undefined;
+      return {
+        folder,
+        blocks: await loadAllInstructionBlocks(root, {
+          activeFilePath: folderActiveFile,
+        }),
+      };
+    }),
+  );
+
+  const seenGlobalSources = new Set<string>();
+  return loaded.flatMap(({ folder, blocks }) =>
+    blocks.flatMap((block) => {
+      const isGlobal =
+        block.source.startsWith("~/") ||
+        Boolean(
+          block.filePath &&
+          !roots.some(
+            (root) =>
+              block.filePath === root ||
+              block.filePath!.startsWith(`${root}${path.sep}`),
+          ),
+        );
+      if (isGlobal) {
+        if (seenGlobalSources.has(block.source)) return [];
+        seenGlobalSources.add(block.source);
+        return [block];
+      }
+      return [
+        {
+          ...block,
+          source: `${folder.name}/${block.source}`,
+          projectRoot: path.resolve(folder.path),
+        },
+      ];
+    }),
+  );
+}
+
 export function formatRuleCatalogPath(
   block: InstructionBlock,
   cwd: string,
@@ -638,7 +695,10 @@ function ruleMatchesActiveFile(
   if (!activeFilePath || !block.globs?.length) return false;
 
   const activeAbsolutePath = path.resolve(activeFilePath);
-  const relativePath = path.relative(cwd, activeAbsolutePath);
+  const relativePath = path.relative(
+    block.projectRoot ?? cwd,
+    activeAbsolutePath,
+  );
   const candidates = [normalizePathForGlob(activeAbsolutePath)];
   if (
     relativePath &&
@@ -694,7 +754,7 @@ function buildInstructionSections(
       return {
         source: block.source,
         filePath: block.filePath,
-        loadPath: formatRuleCatalogPath(block, cwd),
+        loadPath: formatRuleCatalogPath(block, block.projectRoot ?? cwd),
         ...(summary ? { summary } : {}),
         ...(block.globs?.length ? { globs: block.globs } : {}),
       };
@@ -946,7 +1006,11 @@ export async function buildPromptArtifacts(
   const devFeedback = options?.devMode ? getDevFeedbackPrompt() : "";
 
   const [instructionBlocks, memory, modeRules, skills] = await Promise.all([
-    loadAllInstructionBlocks(cwd, { activeFilePath }),
+    loadWorkspaceInstructionBlocks(
+      cwd,
+      options?.workspaceFolders,
+      options?.activeFilePath,
+    ),
     loadMemory(cwd),
     loadModeRules(cwd, mode),
     loadSkills(cwd, mode),

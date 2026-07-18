@@ -4,7 +4,10 @@ import * as vscode from "vscode";
 import picomatch from "picomatch";
 
 import { parseMcpToolName } from "../agent/mcpToolNames.js";
-import type { SessionProjectScope } from "../core/workspaceProjects.js";
+import {
+  createWorkspaceProjectId,
+  type SessionProjectScope,
+} from "../core/workspaceProjects.js";
 import { scanShellLexWords } from "../util/shellLex.js";
 import type { ConfigStore } from "./ConfigStore.js";
 import { CommandRuleStore, type CommandRule } from "./CommandRuleStore.js";
@@ -235,8 +238,8 @@ export class ApprovalManager {
     if (this.configStore.getGlobalConfig().writeApproved) {
       return true;
     }
-    // Project blanket approval
-    const projectConfig = this.getProjectConfig(sessionId);
+    // Project blanket approval follows the target file's owning workspace root.
+    const projectConfig = this.getProjectConfig(sessionId, filePath);
     if (projectConfig?.writeApproved) {
       return true;
     }
@@ -318,8 +321,8 @@ export class ApprovalManager {
     if (this.configStore.getGlobalConfig().agentWriteApproved) {
       return true;
     }
-    // Project blanket approval
-    const projectConfig = this.getProjectConfig(sessionId);
+    // Project blanket approval follows the target file's owning workspace root.
+    const projectConfig = this.getProjectConfig(sessionId, filePath);
     if (projectConfig?.agentWriteApproved) {
       return true;
     }
@@ -335,13 +338,17 @@ export class ApprovalManager {
     return false;
   }
 
-  setAgentWriteApproval(sessionId: string, scope: RuleScope): void {
+  setAgentWriteApproval(
+    sessionId: string,
+    scope: RuleScope,
+    targetPath?: string,
+  ): void {
     if (scope === "global") {
       this.configStore.updateGlobalConfig((c) => {
         c.agentWriteApproved = true;
       });
     } else if (scope === "project") {
-      const projectRoot = this.getProjectRoot(sessionId);
+      const projectRoot = this.getProjectRoot(sessionId, targetPath);
       if (!projectRoot) return;
       this.configStore.updateProjectConfig(projectRoot, (c) => {
         c.agentWriteApproved = true;
@@ -559,7 +566,7 @@ export class ApprovalManager {
   // --- File-level write approval ---
 
   isFileWriteApproved(sessionId: string, filePath: string): boolean {
-    const projectBinding = this.getProjectBinding(sessionId);
+    const projectBinding = this.getProjectBinding(sessionId, filePath);
     const relPath = projectBinding
       ? this.getProjectRelativePath(projectBinding.rootPath, filePath)
       : filePath;
@@ -590,13 +597,18 @@ export class ApprovalManager {
     );
   }
 
-  addWriteRule(sessionId: string, rule: PathRule, scope: RuleScope): void {
+  addWriteRule(
+    sessionId: string,
+    rule: PathRule,
+    scope: RuleScope,
+    targetPath?: string,
+  ): void {
     if (
       this.writeRuleStore.add(
         sessionId,
         rule,
         scope,
-        this.getProjectRoot(sessionId),
+        this.getProjectRoot(sessionId, targetPath),
       )
     ) {
       this._onDidChange.fire();
@@ -653,8 +665,8 @@ export class ApprovalManager {
 
   // --- Command approval ---
 
-  isCommandApproved(sessionId: string, command: string): boolean {
-    return this.findMatchingCommandRule(sessionId, command) !== null;
+  isCommandApproved(sessionId: string, command: string, cwd?: string): boolean {
+    return this.findMatchingCommandRule(sessionId, command, cwd) !== null;
   }
 
   /**
@@ -665,12 +677,13 @@ export class ApprovalManager {
   findMatchingCommandRule(
     sessionId: string,
     command: string,
+    cwd?: string,
   ): { rule: CommandRule; scope: RuleScope } | null {
     const trimmed = command.trim();
 
     const rulesByScope = this.commandRuleStore.get(
       sessionId,
-      this.getProjectRoot(sessionId),
+      this.getProjectRoot(sessionId, cwd),
     );
     for (const scope of ["session", "project", "global"] as const) {
       for (const rule of rulesByScope[scope]) {
@@ -681,13 +694,18 @@ export class ApprovalManager {
     return null;
   }
 
-  addCommandRule(sessionId: string, rule: CommandRule, scope: RuleScope): void {
+  addCommandRule(
+    sessionId: string,
+    rule: CommandRule,
+    scope: RuleScope,
+    cwd?: string,
+  ): void {
     if (
       this.commandRuleStore.add(
         sessionId,
         rule,
         scope,
-        this.getProjectRoot(sessionId),
+        this.getProjectRoot(sessionId, cwd),
       )
     ) {
       this._onDidChange.fire();
@@ -769,7 +787,34 @@ export class ApprovalManager {
 
   private getProjectBinding(
     sessionId: string | undefined,
+    targetPath?: string,
   ): SessionProjectBinding | undefined {
+    if (targetPath && path.isAbsolute(targetPath)) {
+      const resolvedTarget = path.resolve(targetPath);
+      const folder = (vscode.workspace.workspaceFolders ?? [])
+        .filter((candidate) => {
+          const root = path.resolve(candidate.uri.fsPath);
+          const relative = path.relative(root, resolvedTarget);
+          return (
+            relative === "" ||
+            (!relative.startsWith(`..${path.sep}`) &&
+              relative !== ".." &&
+              !path.isAbsolute(relative))
+          );
+        })
+        .sort(
+          (left, right) => right.uri.fsPath.length - left.uri.fsPath.length,
+        )[0];
+      if (folder) {
+        const rootPath = path.resolve(folder.uri.fsPath);
+        const workspaceFolderUri = folder.uri.toString();
+        return {
+          projectId: createWorkspaceProjectId(workspaceFolderUri),
+          workspaceFolderUri,
+          rootPath,
+        };
+      }
+    }
     if (sessionId) {
       const binding = this.sessionProjects.get(sessionId);
       if (binding) return binding;
@@ -784,14 +829,18 @@ export class ApprovalManager {
     };
   }
 
-  private getProjectRoot(sessionId: string | undefined): string | undefined {
-    return this.getProjectBinding(sessionId)?.rootPath;
+  private getProjectRoot(
+    sessionId: string | undefined,
+    targetPath?: string,
+  ): string | undefined {
+    return this.getProjectBinding(sessionId, targetPath)?.rootPath;
   }
 
   private getProjectConfig(
     sessionId: string,
+    targetPath?: string,
   ): Readonly<import("./ConfigStore.js").AgentLinkConfig> | undefined {
-    const projectRoot = this.getProjectRoot(sessionId);
+    const projectRoot = this.getProjectRoot(sessionId, targetPath);
     return projectRoot
       ? this.configStore.getProjectConfig(projectRoot)
       : undefined;

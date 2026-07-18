@@ -3,12 +3,7 @@ import * as os from "os";
 
 import { getConfiguredMasterBypass } from "../adapters/vscode/agentLinkConfig.js";
 
-import {
-  canonicalizePath,
-  getWorkspaceRoots,
-  isPathWithinRoot,
-  tryGetFirstWorkspaceRoot,
-} from "../util/paths.js";
+import { getWorkspaceRoots, tryGetFirstWorkspaceRoot } from "../util/paths.js";
 import type {
   CommandExecutionPolicy,
   TerminalProvider,
@@ -87,8 +82,6 @@ export interface ExecuteCommandProviders {
   getUserObjective?: (sessionId: string) => string | undefined;
   getReviewContext?: (sessionId: string) => CommandReviewContextEntry[];
   commandExecutionPolicy?: CommandExecutionPolicy;
-  projectRoot?: string;
-  workspaceProjectRoots?: readonly string[];
 }
 
 function unavailableExecuteCommandResult(command: string): ToolResult {
@@ -227,19 +220,6 @@ export async function handleExecuteCommand(
             commandTemplate: params.command,
           }),
         });
-      }
-
-      const crossProjectTarget = findCrossProjectCommandTarget(
-        commandToRun,
-        cwd,
-        providers.projectRoot,
-        providers.workspaceProjectRoots,
-      );
-      if (crossProjectTarget) {
-        return rejectedCommandResult(
-          commandToRun,
-          `Cross-project mutation is blocked until target-project checkpoint coverage is available: ${crossProjectTarget}`,
-        );
       }
 
       // Reject protected instruction/memory writes before masterBypass or force=true
@@ -533,64 +513,6 @@ export async function handleExecuteCommand(
   }
 }
 
-function findCrossProjectCommandTarget(
-  command: string,
-  cwd: string,
-  projectRoot: string | undefined,
-  workspaceProjectRoots: readonly string[] | undefined,
-): string | undefined {
-  if (!projectRoot || !workspaceProjectRoots?.length) return undefined;
-  const sourceRoot = canonicalizePath(projectRoot);
-  const otherRoots = workspaceProjectRoots
-    .map(canonicalizePath)
-    .filter((root) => root !== sourceRoot)
-    .sort((left, right) => right.length - left.length);
-  if (otherRoots.length === 0) return undefined;
-
-  const commands = expandSubCommands(splitCompoundCommand(command));
-  for (const subCommand of commands) {
-    const { tokens } = scanShellLexTokens(subCommand, {
-      operators: [">>", ">", "<"],
-    });
-    for (const rawToken of tokens) {
-      if (
-        !rawToken ||
-        rawToken === ">" ||
-        rawToken === ">>" ||
-        rawToken === "<"
-      )
-        continue;
-      const token =
-        rawToken.startsWith("-") && rawToken.includes("=")
-          ? rawToken.slice(rawToken.indexOf("=") + 1)
-          : rawToken;
-      if (
-        !path.isAbsolute(token) &&
-        !token.startsWith("./") &&
-        !token.startsWith("../") &&
-        !token.includes("/")
-      ) {
-        continue;
-      }
-      if (
-        token.includes("$") ||
-        token.includes("*") ||
-        token.includes("{") ||
-        token.includes("`")
-      )
-        continue;
-      const targetPath = canonicalizePath(
-        path.isAbsolute(token) ? token : path.resolve(cwd, token),
-      );
-      if (isPathWithinRoot(targetPath, sourceRoot)) continue;
-      if (otherRoots.some((root) => isPathWithinRoot(targetPath, root))) {
-        return token;
-      }
-    }
-  }
-  return undefined;
-}
-
 function getReadOnlyCommandRejectionReason(
   params: Parameters<typeof handleExecuteCommand>[0],
   cwd: string,
@@ -734,7 +656,7 @@ async function approveSubCommands(
   // Check if all expanded sub-commands are already approved. Recent one-time
   // approvals are checked after project attribution is captured by enqueue.
   const allApproved = expanded.every((sub) =>
-    approvalManager.isCommandApproved(sessionId, sub),
+    approvalManager.isCommandApproved(sessionId, sub, cwd),
   );
   if (!options?.requireHumanApproval && allApproved) {
     return { approved: true, approval: { by: "explicit_rule" } };
@@ -839,7 +761,7 @@ async function approveSubCommands(
 
   // Build enriched entries for ALL sub-commands (even already-approved ones)
   const entries: SubCommandEntry[] = expanded.map((cmd) => {
-    const match = approvalManager.findMatchingCommandRule(sessionId, cmd);
+    const match = approvalManager.findMatchingCommandRule(sessionId, cmd, cwd);
     if (match) {
       return {
         command: cmd,
@@ -892,6 +814,7 @@ async function approveSubCommands(
           mode: rule.mode as "prefix" | "exact" | "regex",
         },
         scope,
+        cwd,
       );
     }
   }

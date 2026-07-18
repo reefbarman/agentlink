@@ -2085,7 +2085,7 @@ describe("AgentSessionManager checkpoints", () => {
     });
   });
 
-  it("isolates checkpoint creation, preview, diff, and revert by session project", async () => {
+  it("creates, previews, diffs, and reverts one checkpoint across all workspace roots", async () => {
     const workspace = fs.mkdtempSync(
       path.join(os.tmpdir(), "agentlink-checkpoint-projects-"),
     );
@@ -2109,10 +2109,10 @@ describe("AgentSessionManager checkpoints", () => {
         rootPath: rootB,
         availability: { status: "available" as const },
       };
-      let projects = [projectA, projectB];
+      const projects = [projectA, projectB];
       const projectCatalog = {
         listProjects: () => projects,
-        resolveProjectForResource: () => projects[0],
+        resolveProjectForResource: () => projectA,
         resolvePersistedScope: (scope: { projectId: string }) => {
           const project = [projectA, projectB].find(
             (candidate) => candidate.id === scope.projectId,
@@ -2199,64 +2199,79 @@ describe("AgentSessionManager checkpoints", () => {
         replaceMessages: vi.fn(),
         status: "idle" as const,
       });
-      const sessionA = createSession(projectA, "session-a");
-      const sessionB = createSession(projectB, "session-b");
-      (mgr as any).sessions.set(sessionA.id, sessionA);
-      (mgr as any).sessions.set(sessionB.id, sessionB);
+      const session = createSession(projectA, "session-a");
+      (mgr as any).sessions.set(session.id, session);
 
-      mgr.switchTo(sessionA.id);
-      const checkpointA = await mgr.createManualCheckpoint();
-      projects = [projectB, projectA];
-      mgr.switchTo(sessionB.id);
-      const checkpointB = await mgr.createManualCheckpoint();
+      mgr.switchTo(session.id);
+      const checkpoint = await mgr.createManualCheckpoint();
 
       expect(
         createCheckpointManager.mock.calls.map(
           ([options]) => options.workspaceDir,
         ),
       ).toEqual([rootA, rootB]);
-      expect(checkpointA).toMatchObject({
-        id: "checkpoint-a",
+      expect(checkpoint).toMatchObject({
         projectId: projectA.id,
+        commitHash: "commit-a",
+        createdAt: 200,
+        projectSnapshots: [
+          { projectId: projectA.id, commitHash: "commit-a", createdAt: 100 },
+          { projectId: projectB.id, commitHash: "commit-b", createdAt: 200 },
+        ],
       });
-      expect(checkpointB).toMatchObject({
-        id: "checkpoint-b",
-        projectId: projectB.id,
-      });
+      expect(checkpoint?.id).toEqual(expect.any(String));
 
       await expect(
-        mgr.previewRevert(sessionA.id, "checkpoint-a"),
+        mgr.previewRevert(session.id, checkpoint!.id),
       ).resolves.toMatchObject({
         projectId: projectA.id,
-        preview: { modified: ["a.ts"] },
+        preview: {
+          modified: ["Project A/a.ts", "Project B/b.ts"],
+          deleted: [],
+          restored: [],
+        },
       });
       await expect(
-        mgr.previewRevert(sessionB.id, "checkpoint-b"),
-      ).resolves.toMatchObject({
-        projectId: projectB.id,
-        preview: { modified: ["b.ts"] },
-      });
+        mgr.getCheckpointDiff(session.id, checkpoint!.id, "all"),
+      ).resolves.toBe(
+        "## Project A\n\na:base-a:commit-a\n\n## Project B\n\nb:base-b:commit-b",
+      );
       await expect(
-        mgr.getCheckpointDiff(sessionA.id, "checkpoint-a", "all"),
-      ).resolves.toBe("a:base-a:commit-a");
-      await expect(
-        mgr.getCheckpointDiff(sessionB.id, "checkpoint-b", "all"),
-      ).resolves.toBe("b:base-b:commit-b");
-      await expect(
-        mgr.revertToCheckpoint(sessionA.id, "checkpoint-a"),
-      ).resolves.toMatchObject({ ok: true });
-      await expect(
-        mgr.revertToCheckpoint(sessionB.id, "checkpoint-b"),
+        mgr.revertToCheckpoint(session.id, checkpoint!.id),
       ).resolves.toMatchObject({ ok: true });
 
       const managerA = managers.get(rootA)!;
       const managerB = managers.get(rootB)!;
       expect(managerA.createCheckpoint).toHaveBeenCalledWith(1);
       expect(managerB.createCheckpoint).toHaveBeenCalledWith(1);
-      expect(managerA.previewRevert).toHaveBeenCalledWith(checkpointA);
-      expect(managerB.previewRevert).toHaveBeenCalledWith(checkpointB);
-      expect(managerA.revertToCheckpoint).toHaveBeenCalledWith(checkpointA);
-      expect(managerB.revertToCheckpoint).toHaveBeenCalledWith(checkpointB);
+      expect(managerA.previewRevert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkpoint!.id,
+          projectId: projectA.id,
+          commitHash: "commit-a",
+        }),
+      );
+      expect(managerB.previewRevert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkpoint!.id,
+          projectId: projectB.id,
+          commitHash: "commit-b",
+        }),
+      );
+      expect(managerA.revertToCheckpoint).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkpoint!.id,
+          projectId: projectA.id,
+          commitHash: "commit-a",
+        }),
+      );
+      expect(managerB.revertToCheckpoint).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkpoint!.id,
+          projectId: projectB.id,
+          commitHash: "commit-b",
+        }),
+      );
       expect(managerA.getDiffBetween).toHaveBeenCalledWith(
         "base-a",
         "commit-a",
@@ -2265,10 +2280,6 @@ describe("AgentSessionManager checkpoints", () => {
         "base-b",
         "commit-b",
       );
-      expect(managerA.previewRevert).not.toHaveBeenCalledWith(checkpointB);
-      expect(managerA.revertToCheckpoint).not.toHaveBeenCalledWith(checkpointB);
-      expect(managerB.previewRevert).not.toHaveBeenCalledWith(checkpointA);
-      expect(managerB.revertToCheckpoint).not.toHaveBeenCalledWith(checkpointA);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }

@@ -73,7 +73,7 @@ const ALLOWLIST: Record<string, InventoryEntry> = {
     classification: "compatibility_only",
     ownerSlices: ["G", "H"],
     rationale:
-      "The first-root fallback is retained for direct legacy callers; request-scoped runtimes pin command cwd and apply cross-project mutation barriers.",
+      "The first-root fallback is retained for direct legacy callers; request-scoped runtimes expose every declared workspace root and commands honor their explicit cwd.",
   },
   "src/tools/findAndReplace.ts": {
     counts: { tryGetFirstWorkspaceRoot: 2 },

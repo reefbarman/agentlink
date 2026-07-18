@@ -299,7 +299,7 @@ export class AgentSessionManager {
     string,
     CheckpointManagerLike
   >();
-  /** Checkpoints per session: sessionId → Checkpoint[] */
+  /** Checkpoints per session: sessionId → logical multi-project checkpoints. */
   private checkpoints = new Map<string, Checkpoint[]>();
   /** Pending waiters for background session completion: sessionId → resolvers */
   private bgResultWaiters = new Map<string, Array<(result: string) => void>>();
@@ -617,6 +617,7 @@ export class AgentSessionManager {
         configurable: false,
         writable: false,
       });
+
       Object.defineProperty(session, "projectAvailability", {
         value: "available",
         enumerable: true,
@@ -729,11 +730,16 @@ export class AgentSessionManager {
     return resolution.scope.rootPath;
   }
 
-  private getCheckpointManagerForSession(
-    session: AgentSession,
+  private getCheckpointManagerForProject(
+    project: WorkspaceProject,
   ): CheckpointManagerLike {
-    const projectRoot = this.requireSessionExecution(session);
-    const projectId = session.projectScope.projectId;
+    const projectRoot = project.rootPath;
+    if (project.availability.status !== "available" || !projectRoot) {
+      throw new Error(
+        `Project '${project.name}' is unavailable for checkpointing.`,
+      );
+    }
+    const projectId = project.id;
     if (
       this.projectCatalog.listProjects().length === 1 &&
       this.checkpointManager
@@ -756,6 +762,21 @@ export class AgentSessionManager {
     return manager;
   }
 
+  private getCheckpointManagerForSession(
+    session: AgentSession,
+  ): CheckpointManagerLike {
+    this.requireSessionExecution(session);
+    const project = this.projectCatalog
+      .listProjects()
+      .find((candidate) => candidate.id === session.projectScope.projectId);
+    if (!project) {
+      throw new Error(
+        `Project '${session.projectScope.displayName}' is unavailable for checkpointing.`,
+      );
+    }
+    return this.getCheckpointManagerForProject(project);
+  }
+
   private peekCheckpointManagerForSession(
     session: AgentSession,
   ): CheckpointManagerLike | undefined {
@@ -771,6 +792,43 @@ export class AgentSessionManager {
     const manager = this.getCheckpointManagerForSession(session);
     if (typeof manager.initialize !== "function") return manager;
     return (await manager.initialize()) === false ? null : manager;
+  }
+
+  private async prepareSessionProjectMutation(
+    session: AgentSession,
+  ): Promise<void> {
+    const availableProjects = this.projectCatalog
+      .listProjects()
+      .filter(
+        (project): project is WorkspaceProject & { rootPath: string } =>
+          project.availability.status === "available" &&
+          project.rootPath !== undefined,
+      );
+    if (availableProjects.length === 0) return;
+
+    for (const project of availableProjects) {
+      const manager = this.getCheckpointManagerForProject(project);
+      const initialized =
+        typeof manager.initialize === "function"
+          ? await manager.initialize()
+          : true;
+      if (initialized === false) {
+        this.log?.(
+          `[checkpoint] Skipping unavailable checkpoint protection for project '${project.name}'.`,
+        );
+      }
+    }
+
+    const currentTurnIndex = session
+      .getAllMessages()
+      .filter(
+        (message) =>
+          message.role === "user" && typeof message.content === "string",
+      ).length;
+    const previousBoundary = currentTurnIndex - 1;
+    if (previousBoundary > 0) {
+      await this.ensureCheckpointForTurn(session, previousBoundary);
+    }
   }
 
   private captureSessionToolContext(
@@ -821,6 +879,8 @@ export class AgentSessionManager {
         workspaceProjectRoots: this.projectCatalog
           .listProjects()
           .flatMap((project) => (project.rootPath ? [project.rootPath] : [])),
+        prepareWorkspaceMutation: () =>
+          this.prepareSessionProjectMutation(session),
         ...(mcpHubLease ? { mcpHub: mcpHubLease.hub, mcpHubLease } : {}),
         onFileRead: (filePath: string) => session.trackFileRead(filePath),
         getAdvertisedSkills: () => session.getAdvertisedSkills(),
@@ -1331,46 +1391,98 @@ export class AgentSessionManager {
   ): Promise<Checkpoint | null> {
     if (turnIndex <= 0) return null;
 
-    const existingBefore = this.checkpoints.get(session.id) ?? [];
-    const existingMatch = existingBefore.find(
+    const primaryProjectId = session.projectScope.projectId;
+    const projectIds = new Set(
+      this.projectCatalog
+        .listProjects()
+        .filter(
+          (project) =>
+            project.availability.status === "available" && project.rootPath,
+        )
+        .map((project) => project.id),
+    );
+
+    const existing = this.checkpoints.get(session.id) ?? [];
+    const existingIndex = existing.findIndex(
       (checkpoint) => checkpoint.turnIndex === turnIndex,
     );
-    if (existingMatch && !opts?.refreshExisting) {
-      return null;
+    const existingCheckpoint = existing[existingIndex];
+    const existingSnapshots = new Map(
+      (existingCheckpoint?.projectSnapshots ?? []).map((snapshot) => [
+        snapshot.projectId,
+        snapshot,
+      ]),
+    );
+    if (
+      existingCheckpoint?.projectId &&
+      !existingSnapshots.has(existingCheckpoint.projectId)
+    ) {
+      existingSnapshots.set(existingCheckpoint.projectId, {
+        projectId: existingCheckpoint.projectId,
+        commitHash: existingCheckpoint.commitHash,
+        createdAt: existingCheckpoint.createdAt,
+      });
     }
 
-    const checkpointManager = this.getCheckpointManagerForSession(session);
-    const createdCheckpoint =
-      await checkpointManager.createCheckpoint(turnIndex);
-    if (!createdCheckpoint) return null;
+    let changed = false;
+    let createdCheckpointId: string | undefined;
+    for (const projectId of projectIds) {
+      if (existingSnapshots.has(projectId) && !opts?.refreshExisting) continue;
+      const project = this.projectCatalog
+        .listProjects()
+        .find((candidate) => candidate.id === projectId);
+      if (!project) continue;
+      const manager = this.getCheckpointManagerForProject(project);
+      const initialized =
+        typeof manager.initialize === "function"
+          ? await manager.initialize()
+          : true;
+      if (initialized === false) {
+        this.log?.(
+          `[checkpoint] Skipping unavailable checkpoint protection for project '${project.name}'.`,
+        );
+        continue;
+      }
+      const created = await manager.createCheckpoint(turnIndex);
+      if (!created) {
+        this.log?.(
+          `[checkpoint] Failed to capture project '${project.name}'; continuing without checkpoint coverage for that root.`,
+        );
+        continue;
+      }
+      if (projectId === primaryProjectId || createdCheckpointId === undefined) {
+        createdCheckpointId = created.id;
+      }
+      existingSnapshots.set(projectId, {
+        projectId,
+        commitHash: created.commitHash,
+        createdAt: created.createdAt,
+      });
+      changed = true;
+    }
+
+    if (!changed && existingCheckpoint) return null;
+    const snapshots = [...existingSnapshots.values()];
+    const primarySnapshot =
+      existingSnapshots.get(primaryProjectId) ?? snapshots[0];
+    if (!primarySnapshot) return null;
     const checkpoint: Checkpoint = {
-      ...createdCheckpoint,
-      projectId: session.projectScope.projectId,
+      id: existingCheckpoint?.id ?? createdCheckpointId ?? crypto.randomUUID(),
+      projectId: primaryProjectId,
+      commitHash: primarySnapshot.commitHash,
+      turnIndex,
+      createdAt: Math.max(...snapshots.map((snapshot) => snapshot.createdAt)),
+      projectSnapshots: snapshots,
     };
 
-    const existingAfter = this.checkpoints.get(session.id) ?? [];
-    const existingIndex = existingAfter.findIndex(
-      (candidate) => candidate.turnIndex === turnIndex,
-    );
-
     if (existingIndex !== -1) {
-      if (!opts?.refreshExisting) {
-        return null;
-      }
-      const refreshed: Checkpoint = {
-        ...existingAfter[existingIndex],
-        projectId: session.projectScope.projectId,
-        commitHash: checkpoint.commitHash,
-        createdAt: checkpoint.createdAt,
-      };
-      const next = [...existingAfter];
-      next[existingIndex] = refreshed;
+      const next = [...existing];
+      next[existingIndex] = checkpoint;
       this.checkpoints.set(session.id, next);
-      return refreshed;
+      return checkpoint;
     }
 
-    const next = [...existingAfter, checkpoint];
-    this.checkpoints.set(session.id, next);
+    this.checkpoints.set(session.id, [...existing, checkpoint]);
     this.recordAndEmitEvent(session.id, {
       type: "checkpoint_created",
       checkpointId: checkpoint.id,
@@ -3021,6 +3133,49 @@ export class AgentSessionManager {
     });
   }
 
+  private getCheckpointProjectSnapshots(checkpoint: Checkpoint): Array<{
+    project: WorkspaceProject & { rootPath: string };
+    snapshot: { projectId: string; commitHash: string; createdAt: number };
+  }> {
+    const snapshots = checkpoint.projectSnapshots?.length
+      ? checkpoint.projectSnapshots
+      : checkpoint.projectId
+        ? [
+            {
+              projectId: checkpoint.projectId,
+              commitHash: checkpoint.commitHash,
+              createdAt: checkpoint.createdAt,
+            },
+          ]
+        : [];
+    const projects = new Map(
+      this.projectCatalog
+        .listProjects()
+        .filter(
+          (project): project is WorkspaceProject & { rootPath: string } =>
+            project.availability.status === "available" &&
+            project.rootPath !== undefined,
+        )
+        .map((project) => [project.id, project]),
+    );
+    return snapshots.flatMap((snapshot) => {
+      const project = projects.get(snapshot.projectId);
+      return project ? [{ project, snapshot }] : [];
+    });
+  }
+
+  private prefixRevertPreview(
+    projectName: string,
+    preview: RevertPreview,
+  ): RevertPreview {
+    const prefix = (filePath: string) => `${projectName}/${filePath}`;
+    return {
+      modified: preview.modified.map(prefix),
+      deleted: preview.deleted.map(prefix),
+      restored: preview.restored.map(prefix),
+    };
+  }
+
   /**
    * Preview the files that would be affected by reverting to a checkpoint.
    */
@@ -3032,11 +3187,31 @@ export class AgentSessionManager {
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
     if (!session || !checkpoint) return null;
     this.requireSessionExecution(session);
-    const checkpointManager =
-      await this.getInitializedCheckpointManagerForSession(session);
-    if (!checkpointManager) return null;
-    const preview = await checkpointManager.previewRevert(checkpoint);
-    if (!preview) return null;
+    const preview: RevertPreview = { modified: [], deleted: [], restored: [] };
+    const projectSnapshots = this.getCheckpointProjectSnapshots(checkpoint);
+    const labelProjects = projectSnapshots.length > 1;
+    for (const { project, snapshot } of projectSnapshots) {
+      const manager = this.getCheckpointManagerForProject(project);
+      if (
+        typeof manager.initialize === "function" &&
+        (await manager.initialize()) === false
+      ) {
+        return null;
+      }
+      const projectPreview = await manager.previewRevert({
+        ...checkpoint,
+        projectId: project.id,
+        commitHash: snapshot.commitHash,
+        createdAt: snapshot.createdAt,
+      });
+      if (!projectPreview) return null;
+      const visiblePreview = labelProjects
+        ? this.prefixRevertPreview(project.name, projectPreview)
+        : projectPreview;
+      preview.modified.push(...visiblePreview.modified);
+      preview.deleted.push(...visiblePreview.deleted);
+      preview.restored.push(...visiblePreview.restored);
+    }
     return {
       projectId: session.projectScope.projectId,
       checkpointId,
@@ -3137,15 +3312,25 @@ export class AgentSessionManager {
       };
     }
 
-    const checkpointManager =
-      await this.getInitializedCheckpointManagerForSession(session);
-    if (!checkpointManager) {
-      return { ok: false, reason: "workspace_revert_failed" };
-    }
-    const workspaceReverted =
-      await checkpointManager.revertToCheckpoint(checkpoint);
-    if (!workspaceReverted) {
-      return { ok: false, reason: "workspace_revert_failed" };
+    for (const { project, snapshot } of this.getCheckpointProjectSnapshots(
+      checkpoint,
+    )) {
+      const manager = this.getCheckpointManagerForProject(project);
+      if (
+        typeof manager.initialize === "function" &&
+        (await manager.initialize()) === false
+      ) {
+        return { ok: false, reason: "workspace_revert_failed" };
+      }
+      const workspaceReverted = await manager.revertToCheckpoint({
+        ...checkpoint,
+        projectId: project.id,
+        commitHash: snapshot.commitHash,
+        createdAt: snapshot.createdAt,
+      });
+      if (!workspaceReverted) {
+        return { ok: false, reason: "workspace_revert_failed" };
+      }
     }
 
     const saveResult = await this.saveCheckpointRevertResult(
@@ -3321,22 +3506,38 @@ export class AgentSessionManager {
     const session = this.sessions.get(sessionId);
     const checkpoint = this.findCheckpoint(sessionId, checkpointId);
     if (!session || !checkpoint) return "";
-    const checkpointManager =
-      await this.getInitializedCheckpointManagerForSession(session);
-    if (!checkpointManager) return "";
-
-    const baseHash = checkpointManager.baseCommit;
-    if (!baseHash) return "";
-
-    if (scope === "all") {
-      return checkpointManager.getDiffBetween(baseHash, checkpoint.commitHash);
-    }
-
-    // "turn" scope: diff from the previous checkpoint to this one
     const all = this.checkpoints.get(sessionId) ?? [];
-    const idx = all.findIndex((c) => c.id === checkpointId);
-    const fromHash = idx > 0 ? all[idx - 1].commitHash : baseHash;
-    return checkpointManager.getDiffBetween(fromHash, checkpoint.commitHash);
+    const idx = all.findIndex((candidate) => candidate.id === checkpointId);
+    const previous = idx > 0 ? all[idx - 1] : undefined;
+    const previousSnapshots = new Map(
+      (previous?.projectSnapshots ?? []).map((snapshot) => [
+        snapshot.projectId,
+        snapshot,
+      ]),
+    );
+    const sections: string[] = [];
+    const projectSnapshots = this.getCheckpointProjectSnapshots(checkpoint);
+    const labelProjects = projectSnapshots.length > 1;
+    for (const { project, snapshot } of projectSnapshots) {
+      const manager = this.getCheckpointManagerForProject(project);
+      if (
+        typeof manager.initialize === "function" &&
+        (await manager.initialize()) === false
+      ) {
+        continue;
+      }
+      const fromHash =
+        scope === "all"
+          ? manager.baseCommit
+          : (previousSnapshots.get(project.id)?.commitHash ??
+            manager.baseCommit);
+      if (!fromHash) continue;
+      const diff = await manager.getDiffBetween(fromHash, snapshot.commitHash);
+      if (diff.trim()) {
+        sections.push(labelProjects ? `## ${project.name}\n\n${diff}` : diff);
+      }
+    }
+    return sections.join("\n\n");
   }
 
   private findCheckpoint(
@@ -3438,16 +3639,15 @@ export class AgentSessionManager {
     const session = await this.createRestoredSession({ summary, metadata });
     const projectId = session.projectScope.projectId;
     const checkpointState = metadata.checkpointState;
-    this.checkpoints.set(
-      sessionId,
+    const restoredCheckpoints =
       checkpointState?.projectId !== undefined &&
-        checkpointState.projectId !== projectId
+      checkpointState.projectId !== projectId
         ? []
         : (checkpointState?.checkpoints ?? []).map((checkpoint) => ({
             ...checkpoint,
             projectId: checkpoint.projectId ?? projectId,
-          })),
-    );
+          }));
+    this.checkpoints.set(sessionId, restoredCheckpoints);
     if (
       metadata.revertPending &&
       (metadata.revertPending.projectId === undefined ||

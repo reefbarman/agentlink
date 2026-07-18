@@ -187,6 +187,7 @@ describe("handleApplyDiff", () => {
     expect(policy.recordDecision).toHaveBeenCalledWith({
       decision: "accept-session",
       sessionId: "session-1",
+      absolutePath: expect.any(String),
       relativePath: "src/example.ts",
       inWorkspace: true,
       writeApprovalResponse: { decision: "accept-session" },

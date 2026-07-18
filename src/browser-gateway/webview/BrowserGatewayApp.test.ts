@@ -26,11 +26,9 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     onExportTranscript,
     onInterject,
     onSelectModel,
-    onSelectProject,
     onSend,
     onSetReasoningEffort,
     onStop,
-    projects,
     slashCommands,
     submitOnEnter,
   }: {
@@ -40,11 +38,9 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
     onExportTranscript?: () => void;
     onInterject?: (text: string, attachments: string[]) => void;
     onSelectModel?: (modelId: string) => void;
-    onSelectProject?: (projectId: string) => void;
     onSend?: (text: string, attachments: string[]) => void;
     onSetReasoningEffort?: (effort: "none" | "low" | "medium" | "high") => void;
     onStop?: () => void;
-    projects?: Array<{ projectId: string }>;
     slashCommands?: Array<{ name: string }>;
     submitOnEnter?: boolean;
   }) =>
@@ -105,17 +101,7 @@ vi.mock("../../agent/webview/components/InputArea", () => ({
         },
         "Trigger model",
       ),
-      projects && projects.length > 1
-        ? h(
-            "button",
-            {
-              type: "button",
-              "data-testid": "trigger-select-project",
-              onClick: () => onSelectProject?.(projects[1]!.projectId),
-            },
-            "Trigger project",
-          )
-        : null,
+
       h(
         "button",
         {
@@ -3723,7 +3709,9 @@ describe("BrowserGatewayApp /mcp behavior", () => {
 
     await selectWorkspaceTab();
     fireEvent.click(await screen.findByText(/Agent Fleet/));
-    fireEvent.click(await screen.findByTitle("View transcript"));
+    fireEvent.click(
+      await screen.findByTitle("Open this agent's full transcript"),
+    );
     await screen.findByText("web_search");
 
     const unrelatedSnapshot = createSnapshot();
@@ -4043,85 +4031,6 @@ describe("BrowserGatewayApp /mcp behavior", () => {
         String(input).includes("/api/send"),
       ),
     ).toBe(false);
-  });
-
-  it("persists a selected project before creating a new project session", async () => {
-    const snapshot = createSnapshot();
-    snapshot.session.projects.push({
-      projectId: "project-2",
-      displayName: "Project Two",
-      availability: "available",
-    });
-    const selectedSnapshot = createSnapshot();
-    selectedSnapshot.session.projects = snapshot.session.projects;
-    selectedSnapshot.session.defaultProjectId = "project-2";
-    selectedSnapshot.session.foreground.project = {
-      projectId: "project-2",
-      displayName: "Project Two",
-      availability: "available",
-    };
-
-    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/ui-state")) return jsonResponse(snapshot);
-      if (url.includes("/api/project/default")) {
-        return jsonResponse({ ok: true, snapshot: selectedSnapshot });
-      }
-      if (url.includes("/api/session/new")) {
-        return jsonResponse({ ok: true, snapshot: selectedSnapshot });
-      }
-      if (url.includes("/api/instances")) {
-        return jsonResponse({
-          currentInstanceId: "instance-1",
-          instances: [
-            {
-              instanceId: "instance-1",
-              workspaceName: "Workspace",
-              workspacePath: "/workspace",
-              url: "http://127.0.0.1:3333",
-              status: { kind: "idle", label: "Idle" },
-            },
-          ],
-        });
-      }
-      if (url.includes("/api/slash-commands"))
-        return jsonResponse({ commands: [] });
-      if (url.includes("/api/modes")) return jsonResponse({ modes: [] });
-      if (url.includes("/api/models")) return jsonResponse({ models: [] });
-      if (url.includes("/api/sessions")) return jsonResponse({ sessions: [] });
-      if (url.includes("/api/debug/refresh")) return jsonResponse({ ok: true });
-      return jsonResponse({ error: "not_found" }, 404);
-    });
-
-    render(
-      h(BrowserGatewayApp, {
-        authToken: "test-token",
-        currentInstanceId: "instance-1",
-        workspaceName: "Workspace",
-        routeByInstance: true,
-      }),
-    );
-
-    await selectWorkspaceTab();
-    fireEvent.click(await screen.findByTestId("trigger-select-project"));
-
-    await waitFor(() => {
-      const projectDefaultCallIndex = fetchMock.mock.calls.findIndex(
-        ([input]) => String(input).includes("/api/project/default"),
-      );
-      const sessionNewCallIndex = fetchMock.mock.calls.findIndex(([input]) =>
-        String(input).includes("/api/session/new"),
-      );
-      expect(projectDefaultCallIndex).toBeGreaterThanOrEqual(0);
-      expect(sessionNewCallIndex).toBeGreaterThan(projectDefaultCallIndex);
-      for (const callIndex of [projectDefaultCallIndex, sessionNewCallIndex]) {
-        const body = JSON.parse(
-          String((fetchMock.mock.calls[callIndex]![1] as RequestInit).body),
-        );
-        expect(body.projectId).toBe("project-2");
-      }
-    });
   });
 
   it("optimistically dismisses visible approval card after submitting a decision", async () => {

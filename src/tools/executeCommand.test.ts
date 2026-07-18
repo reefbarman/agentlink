@@ -115,29 +115,33 @@ describe("handleExecuteCommand", () => {
     });
   });
 
-  it("blocks statically resolved cross-project command targets before execution", async () => {
-    getWorkspaceRoots.mockReturnValue(["/workspace/project-a"]);
+  it("allows commands to run from a sibling workspace root", async () => {
+    getWorkspaceRoots.mockReturnValue([
+      "/workspace/project-a",
+      "/workspace/project-b",
+    ]);
     tryGetFirstWorkspaceRoot.mockReturnValue("/workspace/project-a");
     const { handleExecuteCommand } = await import("./executeCommand.js");
 
     const result = await handleExecuteCommand(
-      { command: "touch ../project-b/output.txt" },
+      {
+        command: "touch output.txt",
+        cwd: "/workspace/project-b",
+      },
       { isCommandApproved: () => true } as never,
       { isRecentlyApproved: () => true } as never,
       "session-a",
       undefined,
-      {
-        terminalProvider,
-        projectRoot: "/workspace/project-a",
-        workspaceProjectRoots: ["/workspace/project-a", "/workspace/project-b"],
-      },
+      { terminalProvider },
     );
 
-    expect(executeCommand).not.toHaveBeenCalled();
-    expect(textPayload(result)).toMatchObject({
-      status: "rejected",
-      reason: expect.stringContaining("Cross-project mutation is blocked"),
-    });
+    expect(textPayload(result)).toMatchObject({ exit_code: 0 });
+    expect(executeCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "touch output.txt",
+        cwd: "/workspace/project-b",
+      }),
+    );
   });
 
   it("forwards env map to TerminalProvider.executeCommand", async () => {

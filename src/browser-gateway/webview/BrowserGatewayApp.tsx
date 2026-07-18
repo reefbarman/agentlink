@@ -2718,31 +2718,6 @@ export function BrowserGatewayApp({
     void createNewSession();
   };
 
-  const handleSelectProject = (projectId: string): void => {
-    if (isAskAgentSelected) return;
-    void (async () => {
-      const response = await fetch(buildApiPath("/api/project/default"), {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({ projectId }),
-      });
-      const body = (await response.json().catch(() => ({}))) as {
-        ok?: boolean;
-        snapshot?: GatewaySnapshot;
-      };
-      if (!response.ok || !body.ok) {
-        setSendStatus("Project selection is stale. Refresh and try again.");
-        return;
-      }
-      if (body.snapshot) setSnapshot(body.snapshot);
-      await createNewSession(projectId);
-    })();
-  };
-
   const handleShowHistory = (): void => {
     setShowHistory((prev) => !prev);
     setShowAskAgentMemory(false);
@@ -4654,9 +4629,6 @@ export function BrowserGatewayApp({
                     onDelete={handleDeleteSession}
                     onRename={handleRenameSession}
                     onCopyFirstPrompt={handleCopyFirstPrompt}
-                    onNewInProject={
-                      isAskAgentSelected ? undefined : handleSelectProject
-                    }
                     onClose={() => setShowHistory(false)}
                   />
                 </>
@@ -5178,9 +5150,6 @@ export function BrowserGatewayApp({
                   onResume={(sessionId) =>
                     handleBackgroundAction("resume", sessionId)
                   }
-                  onMarkRead={(sessionId) =>
-                    handleBackgroundAction("mark_read", sessionId)
-                  }
                 />
               )}
               {!mobileReviewOpen && (
@@ -5207,20 +5176,6 @@ export function BrowserGatewayApp({
                     injection={null}
                     onInjectionConsumed={() => undefined}
                     slashCommands={slashCommands}
-                    projects={
-                      isAskAgentSelected
-                        ? []
-                        : (snapshot?.session.projects ?? [])
-                    }
-                    currentProjectId={
-                      isAskAgentSelected
-                        ? undefined
-                        : (foreground?.project.projectId ??
-                          snapshot?.session.defaultProjectId)
-                    }
-                    onSelectProject={
-                      isAskAgentSelected ? undefined : handleSelectProject
-                    }
                     onExecuteBuiltinCommand={
                       isAskAgentSelected
                         ? handleAskAgentExecuteBuiltinCommand

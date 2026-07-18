@@ -147,6 +147,7 @@ export interface WriteApprovalPolicyProvider {
   recordDecision(params: {
     decision: EditReviewDecision;
     sessionId: string;
+    absolutePath: string;
     relativePath: string;
     inWorkspace: boolean;
     writeApprovalResponse?: unknown;

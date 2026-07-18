@@ -5,7 +5,6 @@ import {
 } from "./AttachmentChip";
 import type {
   ModeInfo,
-  ProjectInfo,
   ReasoningEffort,
   SlashCommandInfo,
   WebviewModelInfo,
@@ -46,7 +45,6 @@ import { FilePicker } from "./FilePicker";
 import type { Injection } from "../App";
 import { ModeSelector } from "./ModeSelector";
 import { ModelSelector } from "./ModelSelector";
-import { ProjectSelector } from "./ProjectSelector";
 import { ReasoningEffortSelector } from "./ReasoningEffortSelector";
 import { SlashCommandPopup } from "./SlashCommandPopup";
 import { ToolbarControlButton } from "../../../shared/ui/ToolbarSelector";
@@ -167,9 +165,6 @@ interface InputAreaProps {
   onInjectionConsumed: () => void;
   slashCommands?: SlashCommandInfo[];
   onExecuteBuiltinCommand?: (name: string, args: string) => void;
-  projects?: ProjectInfo[];
-  currentProjectId?: string | null;
-  onSelectProject?: (projectId: string) => void;
   modes?: ModeInfo[];
   currentMode?: string;
   onSwitchMode?: (slug: string) => void;
@@ -218,9 +213,6 @@ export function InputArea({
   onInjectionConsumed,
   slashCommands = [],
   onExecuteBuiltinCommand,
-  projects = [],
-  currentProjectId,
-  onSelectProject,
   modes = [],
   currentMode = "code",
   onSwitchMode,
@@ -1162,13 +1154,6 @@ export function InputArea({
   return (
     <div class="input-area">
       <div class="input-toolbar">
-        {projects.length > 1 && onSelectProject && (
-          <ProjectSelector
-            currentProjectId={currentProjectId}
-            projects={projects}
-            onSelect={onSelectProject}
-          />
-        )}
         {modes.length > 0 && onSwitchMode && (
           <ModeSelector
             currentMode={currentMode}

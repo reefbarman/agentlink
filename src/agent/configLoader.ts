@@ -18,6 +18,8 @@ export interface InstructionBlock {
   description?: string;
   /** Optional frontmatter glob hints describing when a rule applies. */
   globs?: string[];
+  /** Workspace root that owns this project instruction or rule. */
+  projectRoot?: string;
 }
 
 export interface MemoryBlock extends InstructionBlock {

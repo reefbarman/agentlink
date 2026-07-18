@@ -121,4 +121,78 @@ describe("BackgroundSessionStrip defaults", () => {
       screen.getByText("Waiting for provider · request 1:05"),
     ).toBeTruthy();
   });
+
+  it("hides unread event counts and explains every row action", () => {
+    const { container } = render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          {
+            id: "active",
+            task: "Active review",
+            status: "streaming",
+            parentSessionId: "parent",
+            unreadEventCount: 2,
+          },
+        ],
+        onStop: vi.fn(),
+        onOpenTranscript: vi.fn(),
+        onSteer: vi.fn(),
+        onDetach: vi.fn(),
+        onPause: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+
+    expect(container.querySelector(".bg-session-unread")).toBeNull();
+    expect(
+      screen.getByTitle("Stop this agent and keep its partial output"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle("Send new instructions to this running agent"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle("Pause this agent so it can be resumed later"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        "Detach this agent and its descendants from the current task",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTitle("Open this agent's full transcript")).toBeTruthy();
+  });
+
+  it("explains finished and paused agent actions", () => {
+    render(
+      h(BackgroundSessionStrip, {
+        sessions: [
+          { id: "done", task: "Finished review", status: "idle" },
+          {
+            id: "paused",
+            task: "Paused review",
+            status: "idle",
+            lifecycle: "paused",
+          },
+        ],
+        onStop: vi.fn(),
+        onOpenTranscript: vi.fn(),
+        onRetry: vi.fn(),
+        onArchive: vi.fn(),
+        onResume: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Agent Fleet/ }));
+    fireEvent.click(screen.getByRole("button", { name: "completed" }));
+
+    expect(
+      screen.getAllByTitle("Start a new agent with the same task"),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByTitle("Hide this finished agent from the fleet"),
+    ).toHaveLength(2);
+    expect(
+      screen.getByTitle("Restart agent from its saved task and transcript"),
+    ).toBeTruthy();
+  });
 });

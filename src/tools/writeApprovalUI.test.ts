@@ -48,6 +48,7 @@ describe("saveWriteTrustRules", () => {
       panelResponse: { decision: "accept-session" },
       approvalManager: approvalManager as ApprovalManager,
       sessionId: "session-1",
+      absolutePath: "/workspace/project-b/src/file.ts",
       relPath: "src/file.ts",
       inWorkspace: true,
     });
@@ -55,6 +56,7 @@ describe("saveWriteTrustRules", () => {
     expect(approvalManager.setAgentWriteApproval).toHaveBeenCalledWith(
       "session-1",
       "session",
+      "/workspace/project-b/src/file.ts",
     );
     expect(approvalManager.addWriteRule).not.toHaveBeenCalled();
   });
@@ -66,12 +68,14 @@ describe("saveWriteTrustRules", () => {
       response: { decision: "accept-session", trustScope: "all-files" },
       approvalManager: approvalManager as ApprovalManager,
       sessionId: "session-1",
+      absolutePath: "/workspace/project-b/src/file.ts",
       relPath: "src/file.ts",
     });
 
     expect(approvalManager.setAgentWriteApproval).toHaveBeenCalledWith(
       "session-1",
       "session",
+      "/workspace/project-b/src/file.ts",
     );
   });
 
@@ -87,6 +91,7 @@ describe("saveWriteTrustRules", () => {
       },
       approvalManager: approvalManager as ApprovalManager,
       sessionId: "session-1",
+      absolutePath: "/workspace/project-b/src/file.ts",
       relPath: "src/file.ts",
     });
 
@@ -94,6 +99,7 @@ describe("saveWriteTrustRules", () => {
       "session-1",
       { pattern: "src/**/*.ts", mode: "glob" },
       "project",
+      "/workspace/project-b/src/file.ts",
     );
     expect(approvalManager.setAgentWriteApproval).not.toHaveBeenCalled();
   });

@@ -1801,13 +1801,6 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
     },
     [vscodeApi],
   );
-  const handleMarkBackgroundRead = useCallback(
-    (sessionId: string) => {
-      vscodeApi.postMessage({ command: "markBgEventsRead", sessionId });
-    },
-    [vscodeApi],
-  );
-
   const handleNewSession = useCallback(
     (projectId?: string) => {
       startupRestorePendingRef.current = false;
@@ -2762,7 +2755,6 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onArchive={handleArchiveBackground}
           onPause={handlePauseBackground}
           onResume={handleResumeBackground}
-          onMarkRead={handleMarkBackgroundRead}
         />
         <InputArea
           onSend={handleSend}
@@ -2781,12 +2773,6 @@ export function App({ vscodeApi }: { vscodeApi: VsCodeApi }) {
           onInjectionConsumed={() => setInjection(null)}
           slashCommands={state.slashCommands}
           onExecuteBuiltinCommand={handleExecuteBuiltinCommand}
-          projects={state.chatState.projects}
-          currentProjectId={
-            state.chatState.project?.projectId ??
-            state.chatState.defaultProjectId
-          }
-          onSelectProject={handleNewSession}
           modes={state.modes}
           currentMode={state.chatState.mode}
           currentModel={state.chatState.model}

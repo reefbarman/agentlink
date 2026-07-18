@@ -1305,36 +1305,36 @@ describe("dispatchToolCall", () => {
     });
   });
 
-  it("blocks cross-project mutations before invoking tool handlers", async () => {
+  it("dispatches sibling-root mutations with workspace-wide checkpoint preparation", async () => {
     const { handleWriteFile } = await import("../tools/writeFile.js");
     const { handleExecuteCommand } = await import("../tools/executeCommand.js");
     vi.mocked(handleWriteFile).mockClear();
     vi.mocked(handleExecuteCommand).mockClear();
+    const prepareWorkspaceMutation = vi.fn().mockResolvedValue(undefined);
     const runtime = createAgentToolRuntime({
       ...mockCtx,
       projectRoot: "/workspace/project-a",
       workspaceProjectRoots: ["/workspace/project-a", "/workspace/project-b"],
+      prepareWorkspaceMutation,
     });
 
-    await expect(
-      runtime.executeTool({
-        name: "write_file",
-        input: {
-          path: "/workspace/project-b/src/index.ts",
-          content: "blocked",
-        },
-        context: { sessionId: "session-a", mode: "code" },
-      }),
-    ).rejects.toThrow(/Cross-project mutation is blocked/);
-    await expect(
-      runtime.executeTool({
-        name: "execute_command",
-        input: { command: "touch output.txt", cwd: "/workspace/project-b" },
-        context: { sessionId: "session-a", mode: "code" },
-      }),
-    ).rejects.toThrow(/Cross-project mutation is blocked/);
-    expect(handleWriteFile).not.toHaveBeenCalled();
-    expect(handleExecuteCommand).not.toHaveBeenCalled();
+    await runtime.executeTool({
+      name: "write_file",
+      input: {
+        path: "/workspace/project-b/src/index.ts",
+        content: "allowed",
+      },
+      context: { sessionId: "session-a", mode: "code" },
+    });
+    await runtime.executeTool({
+      name: "execute_command",
+      input: { command: "touch output.txt", cwd: "/workspace/project-b" },
+      context: { sessionId: "session-a", mode: "code" },
+    });
+
+    expect(prepareWorkspaceMutation).toHaveBeenCalledTimes(2);
+    expect(handleWriteFile).toHaveBeenCalledTimes(1);
+    expect(handleExecuteCommand).toHaveBeenCalledTimes(1);
   });
 
   it("searches and hydrates the current session transcript with append-safe snapshots", async () => {
@@ -2102,6 +2102,7 @@ describe("dispatchToolCall", () => {
 
   it("dispatches execute_command to handleExecuteCommand", async () => {
     const { handleExecuteCommand } = await import("../tools/executeCommand.js");
+    vi.mocked(handleExecuteCommand).mockClear();
     const result = await dispatchToolCall(
       "execute_command",
       { command: "ls" },
@@ -2115,7 +2116,6 @@ describe("dispatchToolCall", () => {
       mockCtx.trackerCtx,
       expect.objectContaining({
         terminalProvider: mockCtx.terminalProvider,
-        projectRoot: mockCtx.projectRoot,
       }),
     );
     expect(result.content[0]).toMatchObject({ type: "text", text: "output" });

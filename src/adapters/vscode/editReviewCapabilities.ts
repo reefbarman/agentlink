@@ -361,6 +361,7 @@ export function createVscodeMultiFileEditReviewProvider(
               response: approvalResponse,
               approvalManager,
               sessionId: params.sessionId,
+              absolutePath: params.files[0]?.absolutePath ?? params.find,
               relPath:
                 filesPreview.length > 0
                   ? filesPreview[0].path
@@ -404,6 +405,7 @@ export function createVscodeMultiFileEditReviewProvider(
               panelResponse: response,
               approvalManager,
               sessionId: params.sessionId,
+              absolutePath: params.files[0]?.absolutePath ?? params.find,
               relPath:
                 filesPreview.length > 0
                   ? filesPreview[0].path
@@ -664,6 +666,7 @@ export function createVscodeRenameSymbolProvider(
             response: result,
             approvalManager,
             sessionId: params.sessionId,
+            absolutePath: entries[0]![0].fsPath,
             relPath,
           });
         } else {
@@ -699,6 +702,7 @@ export function createVscodeRenameSymbolProvider(
             panelResponse: response,
             approvalManager,
             sessionId: params.sessionId,
+            absolutePath: entries[0]![0].fsPath,
             relPath,
             inWorkspace: true,
           });
@@ -779,6 +783,7 @@ export function createVscodeWriteApprovalPolicyProvider(
         approvalManager,
         sessionId: params.sessionId,
         scope,
+        absolutePath: params.absolutePath,
         relPath: params.relativePath,
         inWorkspace: params.inWorkspace,
       });

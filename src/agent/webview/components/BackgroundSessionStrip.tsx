@@ -151,7 +151,6 @@ interface Props {
   onArchive?: (sessionId: string) => void;
   onPause?: (sessionId: string) => void;
   onResume?: (sessionId: string) => void;
-  onMarkRead?: (sessionId: string) => void;
 }
 
 const ACTIVE_STATUSES = new Set<BgSessionInfoProps["status"]>([
@@ -235,7 +234,6 @@ export function BackgroundSessionStrip({
   onArchive,
   onPause,
   onResume,
-  onMarkRead,
 }: Props) {
   const [collapsed, setCollapsed] = useState(true);
   const [filter, setFilter] = useState<
@@ -322,8 +320,10 @@ export function BackgroundSessionStrip({
   return (
     <div class="bg-session-strip">
       <button
+        type="button"
         class="bg-session-strip-header"
         onClick={() => setCollapsed(!collapsed)}
+        title={`${collapsed ? "Expand" : "Collapse"} agent fleet`}
       >
         <i class="codicon codicon-server-process" />
         <span class="bg-session-strip-title">
@@ -347,17 +347,20 @@ export function BackgroundSessionStrip({
               ["all", "active", "attention", "completed", "archived"] as const
             ).map((value) => (
               <button
+                type="button"
                 key={value}
                 class={`bg-session-filter${filter === value ? " active" : ""}`}
                 onClick={() => setFilter(value)}
+                title={`Show ${value} agents`}
               >
                 {value}
               </button>
             ))}
             <button
+              type="button"
               class="bg-session-filter"
               onClick={() => setViewMode(viewMode === "tree" ? "flat" : "tree")}
-              title="Toggle tree or flat view"
+              title={`Switch to ${viewMode === "tree" ? "flat" : "tree"} view`}
             >
               {viewMode}
             </button>
@@ -484,15 +487,6 @@ export function BackgroundSessionStrip({
               <span class="bg-session-task" title={s.task}>
                 {s.task}
               </span>
-              {(s.unreadEventCount ?? 0) > 0 && (
-                <button
-                  class="bg-session-unread"
-                  onClick={() => onMarkRead?.(s.id)}
-                  title="Mark fleet events read"
-                >
-                  {s.unreadEventCount}
-                </button>
-              )}
               <span
                 class="bg-session-status"
                 title={[
@@ -529,9 +523,11 @@ export function BackgroundSessionStrip({
               )}
               {(s.canKill ?? ACTIVE_STATUSES.has(s.status)) && (
                 <button
+                  type="button"
                   class="icon-button bg-session-stop"
                   onClick={() => onStop(s.id)}
-                  title="Stop background agent"
+                  title="Stop this agent and keep its partial output"
+                  aria-label="Stop this agent and keep its partial output"
                 >
                   <i class="codicon codicon-close" />
                 </button>
@@ -542,65 +538,79 @@ export function BackgroundSessionStrip({
                   s.status === "awaiting_approval")) &&
                 onSteer && (
                   <button
+                    type="button"
                     class="icon-button bg-session-action"
                     onClick={() => {
                       const message = window.prompt("Steer this agent:");
                       if (message?.trim()) onSteer(s.id, message.trim());
                     }}
-                    title="Steer agent"
+                    title="Send new instructions to this running agent"
+                    aria-label="Send new instructions to this running agent"
                   >
                     <i class="codicon codicon-debug-step-over" />
                   </button>
                 )}
               {ACTIVE_STATUSES.has(s.status) && onPause && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onPause(s.id)}
-                  title="Pause agent"
+                  title="Pause this agent so it can be resumed later"
+                  aria-label="Pause this agent so it can be resumed later"
                 >
                   <i class="codicon codicon-debug-pause" />
                 </button>
               )}
               {s.lifecycle === "paused" && onResume && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onResume(s.id)}
                   title="Restart agent from its saved task and transcript"
+                  aria-label="Restart agent from its saved task and transcript"
                 >
                   <i class="codicon codicon-debug-start" />
                 </button>
               )}
               {s.parentSessionId && onDetach && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onDetach(s.id)}
-                  title="Detach subtree"
+                  title="Detach this agent and its descendants from the current task"
+                  aria-label="Detach this agent and its descendants from the current task"
                 >
                   <i class="codicon codicon-link" />
                 </button>
               )}
               {!ACTIVE_STATUSES.has(s.status) && onRetry && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onRetry(s.id)}
-                  title="Retry agent"
+                  title="Start a new agent with the same task"
+                  aria-label="Start a new agent with the same task"
                 >
                   <i class="codicon codicon-refresh" />
                 </button>
               )}
               {!ACTIVE_STATUSES.has(s.status) && !s.archivedAt && onArchive && (
                 <button
+                  type="button"
                   class="icon-button bg-session-action"
                   onClick={() => onArchive(s.id)}
-                  title="Archive agent"
+                  title="Hide this finished agent from the fleet"
+                  aria-label="Hide this finished agent from the fleet"
                 >
                   <i class="codicon codicon-archive" />
                 </button>
               )}
               <button
+                type="button"
                 class="icon-button bg-session-transcript"
                 onClick={() => onOpenTranscript?.(s.id)}
-                title="View transcript"
+                title="Open this agent's full transcript"
+                aria-label="Open this agent's full transcript"
               >
                 <i class="codicon codicon-open-preview" />
               </button>

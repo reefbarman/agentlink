@@ -520,6 +520,7 @@ describe("createVscodeRenameSymbolProvider", () => {
     expect(approvalManager.setAgentWriteApproval).toHaveBeenCalledWith(
       "session-1",
       "session",
+      filePath,
     );
     const text = (result.content[0] as { type: "text"; text: string }).text;
     expect(JSON.parse(text)).toMatchObject({
@@ -688,6 +689,7 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
     provider.recordDecision({
       decision: "accept-session",
       sessionId: "session-1",
+      absolutePath: "/workspace/project-b/src/file.ts",
       relativePath: "src/file.ts",
       inWorkspace: true,
     });
@@ -695,6 +697,7 @@ describe("createVscodeWriteApprovalPolicyProvider", () => {
     expect(approvalManager.setAgentWriteApproval).toHaveBeenCalledWith(
       "session-1",
       "session",
+      "/workspace/project-b/src/file.ts",
     );
   });
 });

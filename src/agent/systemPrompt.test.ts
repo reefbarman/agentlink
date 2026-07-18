@@ -301,7 +301,7 @@ describe("buildSystemPrompt", () => {
     expect(result).toContain("web: /work/web");
   });
 
-  it("currently keeps prompt instructions rooted at cwd when the active file is in another listed workspace", async () => {
+  it("loads labeled instructions and matching nested rules from every workspace root", async () => {
     const secondaryRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "agentlink-secondary-root-"),
     );
@@ -310,6 +310,11 @@ describe("buildSystemPrompt", () => {
       fs.writeFileSync(
         path.join(secondaryRoot, "AGENTS.md"),
         "SECONDARY ROOT RULES",
+      );
+      fs.mkdirSync(path.join(secondaryRoot, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(secondaryRoot, "src", "AGENTS.md"),
+        "SECONDARY NESTED RULES",
       );
 
       const result = await buildSystemPrompt("code", tmpDir, {
@@ -320,8 +325,12 @@ describe("buildSystemPrompt", () => {
         ],
       });
 
+      expect(result).toContain("# Instructions (primary/AGENTS.md):");
       expect(result).toContain("PRIMARY ROOT RULES");
-      expect(result).not.toContain("SECONDARY ROOT RULES");
+      expect(result).toContain("# Instructions (secondary/AGENTS.md):");
+      expect(result).toContain("SECONDARY ROOT RULES");
+      expect(result).toContain("# Instructions (secondary/src/AGENTS.md):");
+      expect(result).toContain("SECONDARY NESTED RULES");
       expect(result).toContain(`- The project root directory is: ${tmpDir}`);
     } finally {
       fs.rmSync(secondaryRoot, { recursive: true, force: true });

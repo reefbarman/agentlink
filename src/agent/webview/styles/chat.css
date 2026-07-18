@@ -5577,17 +5577,6 @@ body.approval-resizing {
   min-width: 0;
 }
 
-.bg-session-unread {
-  border: 0;
-  border-radius: 8px;
-  min-width: 16px;
-  padding: 0 4px;
-  color: var(--vscode-badge-foreground);
-  background: var(--vscode-badge-background);
-  font: inherit;
-  cursor: pointer;
-}
-
 .bg-session-status {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;

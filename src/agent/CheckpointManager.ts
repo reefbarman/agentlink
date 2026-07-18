@@ -3,16 +3,25 @@ import * as fs from "fs";
 import * as path from "path";
 import simpleGit, { type SimpleGit } from "simple-git";
 
+export interface CheckpointProjectSnapshot {
+  projectId: string;
+  commitHash: string;
+  createdAt: number;
+}
+
 /**
- * A single checkpoint — maps to one shadow git commit.
+ * A logical session checkpoint. Legacy fields anchor the primary project while
+ * projectSnapshots captures every workspace project participating in the turn.
  */
 export interface Checkpoint {
-  /** Unique ID for this checkpoint */
+  /** Unique logical checkpoint ID shown in the transcript. */
   id: string;
-  /** Project that owns this checkpoint. Missing only on legacy persisted records. */
+  /** Primary project anchor. Missing only on legacy persisted records. */
   projectId?: string;
-  /** The shadow repo commit SHA at this point */
+  /** Primary project shadow-repo commit SHA. */
   commitHash: string;
+  /** Per-project shadow commits for workspace-wide turns. */
+  projectSnapshots?: CheckpointProjectSnapshot[];
   /**
    * Number of visible user turns already in the transcript at this snapshot.
    *

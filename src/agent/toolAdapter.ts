@@ -1585,8 +1585,10 @@ export interface ToolDispatchContext {
   >;
   /** Available local root captured with projectScope; absent for projectless runtimes. */
   projectRoot?: string;
-  /** All available local project roots captured for cross-project ownership checks. */
+  /** All available local project roots in the logical workspace. */
   workspaceProjectRoots?: readonly string[];
+  /** Prepares checkpoint coverage for every workspace root before mutation. */
+  prepareWorkspaceMutation?: () => Promise<void>;
   /** Resolves the active session command policy at dispatch time. */
   getCommandApprovalPolicy?: (sessionId: string) => CommandApprovalPolicy;
   /** Restricts execute_command independently of user approval settings. */
@@ -1809,7 +1811,25 @@ export function createAgentToolRuntime(
           request.input,
           ctx.delegationPolicy,
         );
-        enforceCrossProjectMutationPolicy(request.name, request.input, ctx);
+        const mutationTarget = resolveWorkspaceMutationTarget(
+          request.name,
+          request.input,
+          ctx,
+        );
+        if (PATH_MUTATING_TOOLS.has(request.name)) {
+          await ctx.prepareWorkspaceMutation?.();
+        }
+        const operationRoots = mutationTarget
+          ? [
+              mutationTarget.projectRoot,
+              ...(ctx.workspaceProjectRoots ?? []).filter(
+                (root) =>
+                  canonicalizePath(root) !==
+                  canonicalizePath(mutationTarget.projectRoot),
+              ),
+            ]
+          : (ctx.workspaceProjectRoots ??
+            (ctx.projectRoot ? [ctx.projectRoot] : undefined));
         if (request.context.interactionPolicy === "deny") {
           const enforceReadPathPolicy = () =>
             enforceNonInteractiveReadPathPolicy(
@@ -1817,8 +1837,8 @@ export function createAgentToolRuntime(
               request.context.sessionId,
               ctx.approvalManager,
             );
-          const denied = ctx.projectRoot
-            ? withWorkspaceRoots([ctx.projectRoot], enforceReadPathPolicy)
+          const denied = operationRoots
+            ? withWorkspaceRoots(operationRoots, enforceReadPathPolicy)
             : enforceReadPathPolicy();
           if (denied) return denied;
         }
@@ -1865,8 +1885,8 @@ export function createAgentToolRuntime(
                 getSessionImages: request.context.getSessionImages,
                 getSessionTranscript: request.context.getSessionTranscript,
               });
-        const result = ctx.projectRoot
-          ? await withWorkspaceRoots([ctx.projectRoot], execute)
+        const result = operationRoots
+          ? await withWorkspaceRoots(operationRoots, execute)
           : await execute();
         const composeTrace = result.uiMeta?.composeTrace;
         ctx.toolUsageTelemetry?.record({
@@ -1961,14 +1981,18 @@ const PATH_MUTATING_TOOLS = new Set([
   "apply_code_action",
 ]);
 
-function enforceCrossProjectMutationPolicy(
+function getMutationInputPaths(
   toolName: string,
   input: Record<string, unknown>,
-  ctx: ToolDispatchContext,
-): void {
-  if (!ctx.projectRoot || !PATH_MUTATING_TOOLS.has(toolName)) return;
-  const inputPaths = Object.entries(input)
-    .filter(([key]) => /(^|_)(path|file|directory|cwd)$/i.test(key))
+): string[] {
+  const keys =
+    toolName === "generate_image"
+      ? new Set(["output_path"])
+      : toolName === "execute_command"
+        ? new Set(["cwd"])
+        : new Set(["path", "file", "directory"]);
+  return Object.entries(input)
+    .filter(([key]) => keys.has(key))
     .flatMap(([, value]) =>
       typeof value === "string"
         ? [value]
@@ -1976,28 +2000,30 @@ function enforceCrossProjectMutationPolicy(
           ? value.filter((item): item is string => typeof item === "string")
           : [],
     );
-  if (inputPaths.length === 0) return;
+}
 
-  const sourceRoot = canonicalizePath(ctx.projectRoot);
-  const workspaceRoots = (ctx.workspaceProjectRoots ?? [ctx.projectRoot]).map(
-    canonicalizePath,
-  );
-  for (const inputPath of inputPaths) {
+function resolveWorkspaceMutationTarget(
+  toolName: string,
+  input: Record<string, unknown>,
+  ctx: ToolDispatchContext,
+): { targetPath: string; projectRoot: string } | undefined {
+  if (!ctx.projectRoot || !PATH_MUTATING_TOOLS.has(toolName)) return undefined;
+  const workspaceRoots = (ctx.workspaceProjectRoots ?? [ctx.projectRoot])
+    .map(canonicalizePath)
+    .sort((left, right) => right.length - left.length);
+
+  for (const inputPath of getMutationInputPaths(toolName, input)) {
     const targetPath = canonicalizePath(
       path.isAbsolute(inputPath)
         ? inputPath
         : path.resolve(ctx.projectRoot, inputPath),
     );
-    if (isPathWithinRoot(targetPath, sourceRoot)) continue;
-    const targetRoot = workspaceRoots
-      .filter((root) => root !== sourceRoot)
-      .sort((left, right) => right.length - left.length)
-      .find((root) => isPathWithinRoot(targetPath, root));
-    if (!targetRoot) continue;
-    throw new Error(
-      `Cross-project mutation is blocked until target-project checkpoint coverage is available: ${inputPath}`,
+    const projectRoot = workspaceRoots.find((root) =>
+      isPathWithinRoot(targetPath, root),
     );
+    if (projectRoot) return { targetPath, projectRoot };
   }
+  return undefined;
 }
 
 function enforceDelegatedPathPolicy(
@@ -2653,8 +2679,6 @@ export async function dispatchToolCall(
           commandExecutionPolicy:
             ctx.commandExecutionPolicy ??
             (ctx.mode === "ask" ? "read-only" : undefined),
-          projectRoot: ctx.projectRoot,
-          workspaceProjectRoots: ctx.workspaceProjectRoots,
         },
       );
     case "get_terminal_output":
