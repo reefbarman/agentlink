@@ -2,11 +2,11 @@
 
 ## Status
 
-Phases 1–5 are complete for the scoped remediation backlog. The review began with 61 feedback entries and expanded to 74 before the final Phase 5 snapshot on 2026-07-18.
+Phases 1–5 are complete for the scoped remediation backlog. The review began with 61 feedback entries and expanded to 75 by the final installed-verification pass on 2026-07-18.
 
-- Source validation and installed-extension verification completed through v1.17.5.
-- 71 entries were deliberately closed after verified fixes, explicit no-defect/out-of-scope classification, documented by-design decisions, or a strict current-evidence review.
-- 3 entries remain open pending packaged verification; their concrete failure-reporting gaps are now implemented and fully source-validated.
+- Source validation and installed-extension verification completed through v1.17.6.
+- All 75 entries were deliberately closed after verified fixes, explicit no-defect/out-of-scope classification, documented by-design decisions, or a strict current-evidence review.
+- No feedback entries remain open.
 - Four former residual records were closed after failing a 90% confidence threshold for further engineering: two requested semantic filename guessing, and two older background-reload reports are covered by current restoration code/tests without a current reproduction.
 
 ## Recommendation
@@ -29,7 +29,7 @@ Each phase should include focused tests, full repository verification for produc
 | Background result loss, expected envelopes, reload authorization |       9 | **Implemented; feedback closed**                 | **P0.** Native, ACP, and worktree backends preserve bounded partial/final output, explicit terminal states/retryability, and required-envelope failures. Current foreground restoration reloads durable ancestry, repopulates parent links, and has focused status/result authorization coverage. Two reports from older builds were closed without a current reproduction.      |
 | Terminal exit/output durability and close race                   |       4 | **Implemented; feedback closed**                 | **P0/P1.** Numeric shell-end/marker evidence is preserved, code-less markers use bounded exact-event grace, the 20 most recent closed terminals retain bounded output/status, and pending-disposal tombstones prevent stale re-adoption. Source/full validation passed and the original feedback was deliberately closed during Phase 5.                                         |
 | `read_file` secret exposure                                      |       1 | **Implemented; feedback closed**                 | **P0 security/privacy.** Shared targeted JSON/JSONC redaction protects eligible settings/config reads in `read_file`, `get_context`, and Browser Ask Agent. Malformed eligible content fails closed; metadata does not expose key names; raw-byte hashes/metadata are preserved. Independent review and full validation passed; the original feedback was closed during Phase 5. |
-| `apply_diff` ambiguity and partial application                   |       8 | **Implemented and installed-verified**           | **P1.** Ambiguous failures include bounded candidate locations; accepted results include final-content SHA-256 and conservative ranges. Per-block occurrence, exact-only replace-all, and opt-in atomic validation use lock-bound reapplication. The newer save-error-detail entry is implemented in source and awaits packaged verification.                                    |
+| `apply_diff` ambiguity and partial application                   |       8 | **Implemented and installed-verified**           | **P1.** Ambiguous failures include bounded candidate locations; accepted results include final-content SHA-256 and conservative ranges. Per-block occurrence, exact-only replace-all, and opt-in atomic validation use lock-bound reapplication. Installed v1.17.6 dogfood verified structured save-failure recovery diagnostics.                                                |
 | `get_context` recovery and metadata                              |       6 | **Implemented; feedback closed**                 | **P1.** Empty/EOF/out-of-range requests return valid ranges; high-confidence path suggestions are bounded and multi-root aware; Git status selects the deepest containing repository. Two broader requests were declined because guessing different conceptual filenames belongs to semantic search and would weaken explicit-file recovery precision.                           |
 | Multi-root delegated/review paths                                |       2 | **Implemented and installed-verified**           | **P1.** Delegated and review paths canonicalize across all open workspace roots. Equivalent relative/absolute paths and sibling roots work while outside-root and forbidden-path protections remain. Exact file scopes may span roots; Git scopes provide recovery guidance. Feedback closed.                                                                                    |
 | `read_file(query=...)` fallback                                  |       1 | **Implemented and installed-verified**           | **P2.** Failed semantic lookup reports an explicit not-found/default-offset state with literal-anchor guidance; explicit offsets and successful anchors remain authoritative. Original feedback closed.                                                                                                                                                                          |
@@ -365,7 +365,7 @@ Implementation and validation evidence:
 
 ## Phase 5 — Packaged Verification and Feedback Closure
 
-Status: **complete through installed v1.17.5; 3 source-implemented residual entries retained pending packaged verification**.
+Status: **complete through installed v1.17.6; no residual entries remain**.
 
 Before closing actioned feedback:
 
@@ -407,12 +407,13 @@ Completion evidence:
 - only that verified `execute_command` feedback record was closed, leaving 7 residual entries;
 - a subsequent strict-value review closed 4 more records and retained only the 3 current defects below.
 
-Residual feedback backlog:
+Final feedback closures:
 
-| Entries | Theme                                              | Why retained                                                                                                                                                                                                                                                                  |
-| ------: | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|       2 | `generate_image` no payload/refusal classification | **Implemented in source; packaged verification pending.** Terminal SSE refusal, provider-error, incomplete, and generic no-image states now return structured classification, bounded provider evidence, explicit-or-unknown quota state, and bounded partial-image metadata. |
-|       1 | `apply_diff` save failure detail                   | **Implemented in source; packaged verification pending.** Interactive and auto-approved save failures now preserve review state and return bounded document/disk/concurrency/retry diagnostics without exposing file content or claiming unavailable VS Code error detail.    |
+| Entries | Theme                                              | Closure evidence                                                                                                                                                                                                                                                                                                                                                                            |
+| ------: | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|       2 | `generate_image` no payload/refusal classification | **Installed-verified and closed.** Installed v1.17.6 contains the structured terminal classifier; deterministic tests cover refusal, provider-error, incomplete, generic no-image, partial-image, and OAuth-refresh paths. A live installed request confirmed the packaged image path; inducing a nondeterministic provider refusal repeatedly was intentionally avoided to conserve quota. |
+|       1 | `apply_diff` save failure detail                   | **Installed-dogfood verified and closed.** A disposable read-only file reproduced `save_failed` and returned `document_dirty`, `disk_state: "unchanged"`, `concurrent_change: false`, `review_state: "dirty_document_preserved"`, `vscode_error_detail: "unavailable"`, `retryable: true`, and bounded next steps.                                                                          |
+|       1 | Unity MCP test-job timeout                         | **Closed out of scope.** `unityMCP.get_test_job` returned MCP server error `-32001` for a 60-second wait. The error originates from the upstream Unity MCP bridge/server; there is not at least 90% confidence that an AgentLink change is warranted.                                                                                                                                       |
 
 Strict-threshold closures:
 
@@ -423,7 +424,7 @@ Strict-threshold closures:
 
 ## Next Remediation Batch — Image and Edit Failure Diagnostics
 
-Status: **implemented and fully source-validated; packaged verification and feedback closure pending**.
+Status: **implemented, installed-verified on v1.17.6, and feedback closed**.
 
 Implementation and validation evidence:
 
@@ -441,7 +442,10 @@ Implementation and validation evidence:
 - `npm test` passed: 283 files, 3,814 tests;
 - `npm run fmt:check`, scoped and whole-worktree `git diff --check`, and scoped Oxfmt passed;
 - `npm run telemetry:tools -- --top 60` reported 50,995 calls and 0 invalid records;
-- the 2 `generate_image` and 1 `apply_diff` feedback records remain open until packaged behavior is verified.
+- installed v1.17.6 bundle inspection confirmed both public failure contracts are packaged;
+- live installed `apply_diff` dogfood reproduced and verified the structured save-failure payload;
+- a live installed `generate_image` request returned one image through the packaged path; deterministic terminal-failure regressions cover refusal/no-payload outcomes without repeatedly consuming quota to induce a nondeterministic provider event;
+- the 2 `generate_image` and 1 `apply_diff` feedback records were closed after this verification.
 
 ## Next Remediation Batch — Nested-Shell Filter Suggestions
 
@@ -471,4 +475,4 @@ The original review used source inspection, tests, Git history, packaging inspec
 - malformed beyond-EOF `get_context` ranges;
 - old installed `search_files(path=<file>)` behavior despite a source fix.
 
-No feedback was deleted during the original review. Phase 5 later closed 66 entries only after installed verification or explicit disposition; installed v1.17.5 verification closed the nested-shell filter-hint entry. A subsequent 90% confidence review closed four low-confidence/likely-addressed reports. The remaining 3 records have source-implemented fixes and remain open pending packaged verification.
+No feedback was deleted during the original review. Phase 5 later closed 66 entries only after installed verification or explicit disposition; installed v1.17.5 verification closed the nested-shell filter-hint entry. A subsequent 90% confidence review closed four low-confidence/likely-addressed reports. Installed v1.17.6 verification closed the final three AgentLink defects, and one concurrent Unity MCP timeout report was closed as upstream/out of scope. No feedback records remain.
