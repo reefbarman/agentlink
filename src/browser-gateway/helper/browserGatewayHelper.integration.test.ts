@@ -4075,6 +4075,84 @@ describe("BrowserGatewayHelper proxy routing", () => {
     await expect(sendPromise).resolves.toMatchObject({ ok: true });
   });
 
+  it("returns self-contained context guidance for invalid Ask Agent questions", async () => {
+    let callCount = 0;
+    const seenToolMessages: CoreModelMessage[][] = [];
+    const modelClient = makeAskAgentToolLoopClient(async ({ toolMessages }) => {
+      callCount++;
+      seenToolMessages.push([...(toolMessages ?? [])]);
+      if (callCount === 1) {
+        return {
+          text: "I described the choice above.",
+          toolCalls: [
+            {
+              id: "call_invalid_question",
+              name: "ask_user",
+              input: {
+                questions: [
+                  {
+                    id: "continue",
+                    type: "yes_no",
+                    question: "Continue?",
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      return {
+        text: "I need to include context in the question call.",
+        toolCalls: [],
+      };
+    });
+    const harness = await makeAskAgentToolLoopTestHarness({ modelClient });
+    helper = harness.helper;
+    servers.push(harness.helperServer);
+
+    const send = await fetch(`${harness.helperBase}/api/ask-agent/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: harness.cookie },
+      body: JSON.stringify({ text: "Ask me something" }),
+    });
+    const body = (await send.json()) as {
+      snapshot: {
+        ui: { question: unknown };
+        session: { foreground: { projectedMessages: ChatMessage[] } };
+      };
+    };
+    const assistant = body.snapshot.session.foreground.projectedMessages.find(
+      (message) => message.role === "assistant",
+    );
+    const errorToolMessage = seenToolMessages[1]?.[0];
+    const errorResult =
+      errorToolMessage && Array.isArray(errorToolMessage.content)
+        ? errorToolMessage.content.find((block) => block.type === "tool_result")
+        : undefined;
+
+    expect(send.ok).toBe(true);
+    expect(callCount).toBe(2);
+    expect(body.snapshot.ui.question).toBeNull();
+    expect(assistant?.content).toBe(
+      "I need to include context in the question call.",
+    );
+    expect(errorResult).toMatchObject({
+      type: "tool_result",
+      tool_use_id: "call_invalid_question",
+      is_error: true,
+    });
+    expect(
+      errorResult && errorResult.type === "tool_result"
+        ? String(errorResult.content)
+        : "",
+    ).toContain("visible context in this tool call");
+    expect(
+      errorResult && errorResult.type === "tool_result"
+        ? String(errorResult.content)
+        : "",
+    ).toContain("Preceding assistant messages are intentionally not used");
+  });
+
   it("surfaces safe Ask Agent ask_user tool calls and resumes after submitted answers", async () => {
     let callCount = 0;
     const seenToolMessages: CoreModelMessage[][] = [];

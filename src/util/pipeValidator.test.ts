@@ -390,6 +390,18 @@ describe("validateCommand", () => {
       expect(result!.message).toContain("search_files");
     });
 
+    it("explains how to inspect an exact ignored file", () => {
+      const result = validateCommand("grep -E '^DEV_BUILD=' .env.local");
+      expect(result).not.toBeNull();
+      expect(result!.message).toContain(
+        'search_files with path: ".env.local" and regex: "^DEV_BUILD="',
+      );
+      expect(result!.message).toContain(
+        "An exact file path works even when the file is ignored",
+      );
+      expect(result!.message).toContain('read_file with path: ".env.local"');
+    });
+
     it("rejects grep with only a pattern", () => {
       const result = validateCommand("grep TODO");
       expect(result).not.toBeNull();

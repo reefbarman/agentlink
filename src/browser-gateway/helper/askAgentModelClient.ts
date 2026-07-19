@@ -130,7 +130,7 @@ export const ASK_AGENT_SAFE_PROJECTLESS_TOOLS: CoreModelToolDefinition[] = [
   {
     name: "ask_user",
     description:
-      "Ask the user one or more structured questions and pause the Ask Agent turn until the browser user responds. Ask Agent is projectless/read-only, so mode switching and workspace actions are unavailable.",
+      "Ask the user one or more structured questions and pause the Ask Agent turn until the browser user responds. Include visible context in this tool call through top-level context or questions[].context; preceding assistant messages do not satisfy the requirement because the question card must remain self-contained. Ask Agent is projectless/read-only, so mode switching and workspace actions are unavailable.",
     input_schema: {
       type: "object",
       properties: {

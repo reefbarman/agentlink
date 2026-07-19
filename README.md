@@ -1035,7 +1035,7 @@ Run a command in VS Code's integrated terminal. Output is captured when shell in
 
 By default, AgentLink reuses an existing idle terminal for sequential commands. Omit `terminal_name` and `terminal_id` unless you intentionally need a separate terminal (parallel work, long-running background process, or temporary environment isolation).
 
-**Interactive command validation:** Commands that require interactive input are automatically rejected with a helpful suggestion.
+**Interactive command validation:** Commands that require interactive input are automatically rejected with a helpful suggestion. Direct file-reading commands such as `grep file` are also redirected to structured tools. Use `search_files` with an exact `path` and `regex` even for a known ignored file, or `read_file` to inspect the whole file; use `force` only for a genuine validator false positive.
 
 **Ask/read-only background policy:** Ask mode and agents using the authoritative `review` or `readonly-research` tool profiles receive a reduced, fail-closed version of this tool, even if the background route overrides the resolved mode. This lets read-only background agents use shell commands to inspect the workspace while preserving their non-mutating boundary. It runs only commands that the static classifier recognizes as safe and read-only, synchronously, with a working directory inside the workspace. Unknown or path-qualified executables, mutations, redirection, network/external effects, privileged or opaque shell syntax, mixed compound commands, environment overrides, inline files, `force`, background execution, timeouts, and terminal selection/splitting are rejected before normal approval handling. User approval, command rules, model review, and master bypass cannot escalate a rejected readonly command. The restricted schema exposes only `command`, `cwd`, output filtering, and `reason`. This is a conservative classifier-enforced policy, not an OS-level sandbox; commands with configurable execution hooks require explicit disabling flags or are rejected.
 
@@ -1253,15 +1253,16 @@ For non-trivial completed work, prefer 3-6 concise bullets or 1-2 short paragrap
 
 ### ask_user
 
-Ask the user one or more structured questions and wait for responses before continuing.
+Ask the user one or more structured questions and wait for responses before continuing. Every call must include visible context in top-level `context` or at least one `questions[].context`. Preceding assistant messages are intentionally not considered: the rendered question card and restored session must remain understandable on their own.
 
-| Parameter   | Type       | Description                                    |
-| ----------- | ---------- | ---------------------------------------------- |
-| `questions` | question[] | Questions shown to the user in a structured UI |
+| Parameter   | Type       | Description                                                                       |
+| ----------- | ---------- | --------------------------------------------------------------------------------- |
+| `context`   | string?    | Brief shared context that applies to every question                               |
+| `questions` | question[] | Questions shown to the user in a structured UI; prefer per-question context below |
 
 `question` objects support:
 
-- `id`, `type`, `question`
+- `id`, `type`, `question`, and optional visible `context`
 - `options` and `recommended` for choice questions
 - `scale_min`, `scale_max`, `scale_min_label`, `scale_max_label` for scale questions
 - `allowBlank` for `text` questions when an intentionally empty response should be submittable

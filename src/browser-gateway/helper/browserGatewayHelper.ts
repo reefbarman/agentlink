@@ -4166,7 +4166,7 @@ export class BrowserGatewayHelper {
       if (!questionRequest) {
         const content = JSON.stringify({
           error:
-            "ask_user requires at least one question with visible context in context or questions[].context",
+            "ask_user requires at least one question and visible context in this tool call through top-level context or questions[].context. Preceding assistant messages are intentionally not used because the question card must remain self-contained.",
         });
         return {
           content,

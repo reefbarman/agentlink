@@ -305,6 +305,17 @@ describe("BrowserGatewayAskAgentModelClient", () => {
       "search_files",
       "generate_image",
     ]);
+    const askUserTool = (
+      (body.tools as
+        | Array<{ name?: string; description?: string }>
+        | undefined) ?? []
+    ).find((tool) => tool.name === "ask_user");
+    expect(askUserTool?.description).toContain(
+      "preceding assistant messages do not satisfy the requirement",
+    );
+    expect(askUserTool?.description).toContain(
+      "question card must remain self-contained",
+    );
     const generateImageTool = (
       (body.tools as Array<{ name?: string }> | undefined) ?? []
     ).find((tool) => tool.name === "generate_image");

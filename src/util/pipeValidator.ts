@@ -318,6 +318,11 @@ function checkDirectFileCommands(command: string): ValidationResult | null {
       lines.push(
         `\nUse: ${info.tool} with${file ? ` path: "${file}" and` : ""} regex: "${pattern ?? "..."}"`,
       );
+      if (file) {
+        lines.push(
+          `An exact file path works even when the file is ignored. To inspect the whole known file instead, use read_file with path: "${file}".`,
+        );
+      }
     }
 
     return { type: "direct", message: lines.join("\n") };

@@ -356,7 +356,7 @@ const MCP_META_TOOLS: ToolDefinition[] = MCP_META_TOOL_DEFINITIONS;
 const ASK_USER_TOOL: ToolDefinition = {
   name: "ask_user",
   description:
-    "Ask the user one or more structured questions and wait for their responses before continuing. Prefer `questions[].context`: visible user-facing text for that specific question explaining why input is needed, the relevant trade-off/options, and your recommendation. Use top-level `context` only for a brief shared intro that applies to every question. For multi-question asks, split context across the individual questions instead of delivering one large block. Questions must be self-contained and must not rely on hidden thinking or prior invisible rationale. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
+    "Ask the user one or more structured questions and wait for their responses before continuing. Prefer `questions[].context`: visible user-facing text for that specific question explaining why input is needed, the relevant trade-off/options, and your recommendation. Use top-level `context` only for a brief shared intro that applies to every question. For multi-question asks, split context across the individual questions instead of delivering one large block. Questions must be self-contained and must not rely on hidden thinking or prior messages; preceding assistant text does not satisfy the context requirement. For multiple_choice and multiple_select questions, always include `recommended`. To combine a user choice with a mode change (e.g. 'plan first → architect, just implement → code'), use a `multiple_choice` question with a `modeSwitch` map instead of calling `switch_mode` separately — this avoids a redundant approval. Only one question per call may include `modeSwitch`.",
   input_schema: {
     type: "object",
     properties: {
@@ -3244,7 +3244,7 @@ export async function dispatchToolCall(
               type: "text",
               text: JSON.stringify({
                 error:
-                  "ask_user requires visible context, either top-level context or questions[].context, so the user can answer without relying on hidden thinking.",
+                  "ask_user requires visible context in this tool call, either top-level context or questions[].context. Preceding assistant messages are intentionally not used because the question card must remain self-contained.",
               }),
             },
           ],

@@ -2710,6 +2710,9 @@ describe("dispatchToolCall", () => {
       expect(askUserTool?.description).toContain(
         "split context across the individual questions",
       );
+      expect(askUserTool?.description).toContain(
+        "preceding assistant text does not satisfy the context requirement",
+      );
       expect(askUserTool?.input_schema.required).toEqual(["questions"]);
     });
 
@@ -2890,7 +2893,15 @@ describe("dispatchToolCall", () => {
       const parsed = JSON.parse(
         (result.content[0] as { type: "text"; text: string }).text,
       );
-      expect(parsed.error).toContain("requires visible context");
+      expect(parsed.error).toContain(
+        "requires visible context in this tool call",
+      );
+      expect(parsed.error).toContain(
+        "Preceding assistant messages are intentionally not used",
+      );
+      expect(parsed.error).toContain(
+        "question card must remain self-contained",
+      );
     });
 
     it("performs a silent mode switch through modeSwitchProvider when the user's answer is mapped", async () => {
